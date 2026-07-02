@@ -165,6 +165,9 @@ class CudaBackend:
             kind = cudart.cudaMemcpyKind.cudaMemcpyHostToHost
         _check(cudart.cudaMemcpyAsync(dst.ptr, src.ptr, size_bytes, kind, stream.raw))
 
+    def memset_async(self, buffer: Buffer, value: int, stream: Stream) -> None:
+        _check(cudart.cudaMemsetAsync(buffer.ptr, value, buffer.size_bytes, stream.raw))
+
     def advance_stream(self, stream: Stream, duration_us: float) -> tuple[float, float]:
         raise CudaError(
             "advance_stream models virtual time and is fake-backend-only; real "

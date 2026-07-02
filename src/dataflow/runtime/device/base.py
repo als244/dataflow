@@ -60,6 +60,9 @@ class Buffer:
     size_bytes: int
     ptr: int = 0             # device/pinned pointer (fake: synthetic)
     raw: Any = None
+    # set when the buffer's bytes were touched after release (debug poison);
+    # a reusing stream must wait on it before writing
+    guard_event: Any = None
 
 
 class DeviceBackend(Protocol):
@@ -112,6 +115,10 @@ class DeviceBackend(Protocol):
         """Enqueue an async copy. `duration_us` models the copy on the fake
         backend (which returns virtual (start_us, end_us)); real backends
         ignore it and return None — real intervals come from event timings."""
+        ...
+
+    def memset_async(self, buffer: Buffer, value: int, stream: Stream) -> None:
+        """Fill a buffer with a byte value (debug poison). Fake: no-op."""
         ...
 
     def advance_stream(self, stream: Stream, duration_us: float) -> tuple[float, float]:

@@ -67,6 +67,9 @@ class FakeBackend:
             raise ValueError("fake backend requires duration_us for memcpy_async")
         return self.advance_stream(stream, duration_us)
 
+    def memset_async(self, buffer: Buffer, value: int, stream: Stream) -> None:
+        return  # bytes are notional
+
     def advance_stream(self, stream: Stream, duration_us: float) -> tuple[float, float]:
         start = max(stream.clock_us, self._host_us)
         stream.clock_us = start + duration_us

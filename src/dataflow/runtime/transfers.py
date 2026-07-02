@@ -71,6 +71,7 @@ class TransferEngine:
     table: ObjectTable
     trace: RunTrace
     bandwidth: int | None
+    poison: object = None  # optional debug hook: poison(buffer) before pooling
     queue: deque[TransferJob] = field(default_factory=deque)
     inflight: TransferJob | None = None
     _name_seq: dict[str, int] = field(default_factory=dict)
@@ -157,6 +158,11 @@ class TransferEngine:
         self.backend.stream_wait_event(self.stream, job.anchor_event)
         if src_ready is not None:
             self.backend.stream_wait_event(self.stream, src_ready)
+        if dst_buffer.guard_event is not None:
+            # a debug poison touched these bytes on another stream; the copy
+            # must not race it
+            self.backend.stream_wait_event(self.stream, dst_buffer.guard_event)
+            dst_buffer.guard_event = None
         self.backend.align_stream_to_host(self.stream)
         job.start_event = self.backend.record_event(self.stream)
         duration = self.transfer_runtime_us(job.size_bytes, job.runtime_override)
@@ -184,6 +190,8 @@ class TransferEngine:
             fast = rec.fast
             assert fast is not None and fast.state == "outbound"
             self.ledger.release("fast", job.size_bytes)
+            if self.poison is not None:
+                self.poison(fast.buffer)  # type: ignore[operator]
             self.pool.put(fast.buffer)
             rec.fast = None
             backing = rec.backing

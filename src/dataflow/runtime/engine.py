@@ -64,6 +64,9 @@ class RunResult:
     # exact (location, size) -> count buffer demand of this run; feed it to a
     # subsequent run's `pool_prewarm` (e.g. fake dry run -> real run)
     pool_demand: dict[tuple[str, int], int] = None  # type: ignore[assignment]
+    # final object table: records with live slots/buffers so callers can read
+    # results (losses, updated params) after the run
+    objects: ObjectTable = None  # type: ignore[assignment]
 
 
 @dataclass
@@ -71,6 +74,11 @@ class Engine:
     backend: DeviceBackend
     validate: bool = True
     strict_final_locations: bool = True
+    # debug: fill freed buffers with 0xFF (NaN in bf16/fp32) at retirement so
+    # any use-after-release surfaces as a NaN explosion instead of silent
+    # corruption. The memset enqueues on the compute stream; h2d reuse waits
+    # on the recorded guard event.
+    poison_on_free: bool = False
 
     def execute(
         self,
@@ -111,29 +119,43 @@ class Engine:
                 pool.add_slab("backing", program.backing_memory_capacity)
         table = ObjectTable()
 
+        poison = None
+        if self.poison_on_free:
+            def poison(buffer: Buffer) -> None:  # noqa: F811
+                if buffer.location != "fast":
+                    return
+                self.backend.memset_async(buffer, 0xFF, compute)
+                buffer.guard_event = self.backend.record_event(compute)
+
         h2d = TransferEngine(
             direction="from_slow", backend=self.backend, stream=h2d_stream,
             ledger=ledger, pool=pool, table=table, trace=trace,
-            bandwidth=program.bandwidth_from_slow,
+            bandwidth=program.bandwidth_from_slow, poison=poison,
         )
         d2h = TransferEngine(
             direction="to_slow", backend=self.backend, stream=d2h_stream,
             ledger=ledger, pool=pool, table=table, trace=trace,
-            bandwidth=program.bandwidth_to_slow,
+            bandwidth=program.bandwidth_to_slow, poison=poison,
         )
         deferred_prefetches: dict[str, list[TransferJob]] = {}
 
         # --- setup: prewarm pool + load initial memory, then zero the clock ----
         if pool_prewarm:
             pool.prewarm(dict(pool_prewarm))
+        setup_copies: list[tuple[Buffer, Buffer, int]] = []  # (dst_fast, src_backing, size)
         for spec in program.initial_objects:
-            self._load_initial(spec, table, ledger, pool, initial_buffers)
+            self._load_initial(spec, table, ledger, pool, initial_buffers, setup_copies)
+        if setup_copies and getattr(self.backend, "physical", False):
+            # upload provided initial values into pre-placed fast copies
+            for dst, src, size in setup_copies:
+                self.backend.memcpy_async(dst, src, size, h2d_stream)
+            self.backend.sync_all()
         self.backend.mark_origin()
 
         # --- dispatch loop -----------------------------------------------------
         state = _RunState(
             engine=self, table=table, ledger=ledger, pool=pool, trace=trace,
-            h2d=h2d, d2h=d2h, deferred=deferred_prefetches,
+            h2d=h2d, d2h=d2h, deferred=deferred_prefetches, poison=poison,
         )
         for task in program.tasks:
             fast_out = sum(o.size_bytes for o in task.outputs if o.location == "fast")
@@ -245,6 +267,7 @@ class Engine:
             buffers_reused=pool.reused_count,
             slab_overflows=pool.slab_overflows,
             pool_demand=dict(pool.allocated_by_key),
+            objects=table,
         )
 
     # ------------------------------------------------------------------------
@@ -256,6 +279,7 @@ class Engine:
         ledger: Ledger,
         pool: BufferPool,
         initial_buffers: Mapping[str, Buffer],
+        setup_copies: list[tuple[Buffer, Buffer, int]],
     ) -> None:
         rec = table.add(ObjectRecord(
             id=spec.id, size_bytes=spec.size_bytes, role=spec.role, tensor=spec.tensor,
@@ -266,15 +290,18 @@ class Engine:
             )
         ledger.charge(spec.location, spec.size_bytes)
         provided = initial_buffers.get(spec.id)
+        if provided is not None and provided.size_bytes < spec.size_bytes:
+            raise ExecutionError(
+                f"initial buffer for {spec.id!r} is {provided.size_bytes} bytes; "
+                f"object needs {spec.size_bytes}"
+            )
         if provided is not None and provided.location == spec.location:
-            if provided.size_bytes < spec.size_bytes:
-                raise ExecutionError(
-                    f"initial buffer for {spec.id!r} is {provided.size_bytes} bytes; "
-                    f"object needs {spec.size_bytes}"
-                )
             buf = provided
         else:
             buf = pool.get(spec.location, spec.size_bytes)
+            if provided is not None and spec.location == "fast" and provided.location == "backing":
+                # provided pinned values feed a pre-placed fast copy at setup
+                setup_copies.append((buf, provided, spec.size_bytes))
         rec.set_slot(spec.location, Slot(buffer=buf, state="live", version=0))
 
     def _final_location_violations(self, program: Program, table: ObjectTable) -> list[str]:
@@ -304,6 +331,7 @@ class _RunState:
     h2d: TransferEngine
     d2h: TransferEngine
     deferred: dict[str, list[TransferJob]]
+    poison: object = None
     outstanding_task: str | None = None
 
     def step(self, waiting_reason: str) -> None:
@@ -369,6 +397,8 @@ class _RunState:
                     f"task {task.id!r} cannot release {obj!r}: fast state={state!r} (must be live)"
                 )
             self.ledger.release("fast", rec.size_bytes)
+            if self.poison is not None:
+                self.poison(slot.buffer)  # type: ignore[operator]
             self.pool.put(slot.buffer)
             rec.fast = None
             self.trace.events.append(TraceEvent(t=now, kind="release", object_id=obj, task_id=task.id))
