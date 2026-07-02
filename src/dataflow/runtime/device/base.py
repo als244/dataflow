@@ -66,6 +66,9 @@ class DeviceBackend(Protocol):
     """Minimal vendor-runtime surface. See module docstring."""
 
     name: str
+    # True when allocations consume real device/host memory (drives slab
+    # sub-allocation); the fake backend's notional allocations set False.
+    physical: bool
 
     # --- streams & events ---------------------------------------------------
     def create_stream(self, kind: StreamKind) -> Stream: ...
@@ -74,6 +77,18 @@ class DeviceBackend(Protocol):
 
     def stream_wait_event(self, stream: Stream, event: Event) -> None:
         """Make future work on `stream` wait for `event` (device-side)."""
+        ...
+
+    def align_stream_to_host(self, stream: Stream) -> None:
+        """Fake backend: clamp the stream's virtual clock to the host clock
+        (work enqueued now cannot start in the past). Real backends: no-op."""
+        ...
+
+    def event_time_us(self, event: Event) -> float:
+        """Timestamp of a COMPLETED event on the run's shared timebase.
+        Fake: the virtual completion time. Real: elapsed time from the run's
+        origin event. Only valid once the event has completed (i.e. from a
+        token handler at or after its completion)."""
         ...
 
     # --- memory ---------------------------------------------------------------
@@ -119,6 +134,12 @@ class DeviceBackend(Protocol):
         ...
 
     def host_now_us(self) -> float: ...
+
+    def mark_origin(self) -> None:
+        """Reset the run timebase to 'now' — called by the engine after setup
+        (pool prewarm, initial-object load) so traces measure execution, not
+        allocation. Fake backend: no-op (setup takes zero virtual time)."""
+        ...
 
     def sync_all(self) -> None:
         """Drain everything (shutdown/error paths only)."""

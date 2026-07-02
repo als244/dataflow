@@ -49,7 +49,9 @@ class TransferJob:
     runtime_override: float | None
     anchor_event: Event                 # task-end event that fired the directive
     fired_by_task: str
+    start_event: Event | None = None
     done_event: Event | None = None
+    interval_name: str = ""
     version: int = 0                    # source version captured at start
 
 
@@ -155,20 +157,14 @@ class TransferEngine:
         self.backend.stream_wait_event(self.stream, job.anchor_event)
         if src_ready is not None:
             self.backend.stream_wait_event(self.stream, src_ready)
+        self.backend.align_stream_to_host(self.stream)
+        job.start_event = self.backend.record_event(self.stream)
         duration = self.transfer_runtime_us(job.size_bytes, job.runtime_override)
-        times = self.backend.memcpy_async(
+        self.backend.memcpy_async(
             dst_buffer, src_buffer, job.size_bytes, self.stream, duration_us=duration
         )
         job.done_event = self.backend.record_event(self.stream)
-        if times is not None:
-            self.trace.intervals.append(
-                Interval(
-                    task_id=self._interval_name(job.object_id),
-                    start=times[0],
-                    end=times[1],
-                    track=self.direction,
-                )
-            )
+        job.interval_name = self._interval_name(job.object_id)
         priority = PRIORITY_H2D_DONE if self.direction == "from_slow" else PRIORITY_D2H_DONE
         self.backend.notify_after(
             self.stream, job.done_event, TransferDone(self.direction, job), priority=priority
@@ -195,6 +191,15 @@ class TransferEngine:
             backing.state = "live"
             backing.ready_event = job.done_event
         self.inflight = None
+        assert job.start_event is not None and job.done_event is not None
+        self.trace.intervals.append(
+            Interval(
+                task_id=job.interval_name,
+                start=self.backend.event_time_us(job.start_event),
+                end=self.backend.event_time_us(job.done_event),
+                track=self.direction,
+            )
+        )
         self.trace.events.append(
             TraceEvent(
                 t=self.backend.host_now_us(),

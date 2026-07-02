@@ -48,8 +48,8 @@ class DeadlockError(RuntimeError):
 @dataclass(frozen=True)
 class _TaskDone:
     task: TaskSpec
+    start_event: Event
     done_event: Event
-    start_us: float
 
 
 @dataclass(frozen=True)
@@ -60,6 +60,10 @@ class RunResult:
     final_location_violations: tuple[str, ...]
     buffers_allocated: int
     buffers_reused: int
+    slab_overflows: int
+    # exact (location, size) -> count buffer demand of this run; feed it to a
+    # subsequent run's `pool_prewarm` (e.g. fake dry run -> real run)
+    pool_demand: dict[tuple[str, int], int] = None  # type: ignore[assignment]
 
 
 @dataclass
@@ -74,6 +78,7 @@ class Engine:
         resolver: ExecutableResolver | None = None,
         *,
         initial_buffers: Mapping[str, Buffer] | None = None,
+        pool_prewarm: Mapping[tuple[str, int], int] | None = None,
     ) -> RunResult:
         if self.validate:
             validate_program(program)
@@ -96,6 +101,14 @@ class Engine:
 
         ledger.on_change = _on_ledger_change
         pool = BufferPool(self.backend)
+        if getattr(self.backend, "physical", False):
+            # one upfront device allocation sized to the budget (+headroom):
+            # physical usage then tracks the ledger instead of summing
+            # per-size-class maxima over time (see pool/slab docstrings)
+            if program.fast_memory_capacity is not None:
+                pool.add_slab("fast", program.fast_memory_capacity)
+            if program.backing_memory_capacity is not None:
+                pool.add_slab("backing", program.backing_memory_capacity)
         table = ObjectTable()
 
         h2d = TransferEngine(
@@ -110,9 +123,12 @@ class Engine:
         )
         deferred_prefetches: dict[str, list[TransferJob]] = {}
 
-        # --- initial memory ----------------------------------------------------
+        # --- setup: prewarm pool + load initial memory, then zero the clock ----
+        if pool_prewarm:
+            pool.prewarm(dict(pool_prewarm))
         for spec in program.initial_objects:
             self._load_initial(spec, table, ledger, pool, initial_buffers)
+        self.backend.mark_origin()
 
         # --- dispatch loop -----------------------------------------------------
         state = _RunState(
@@ -175,19 +191,20 @@ class Engine:
                     t=self.backend.host_now_us(), kind="reserve", object_id=out.id, task_id=task.id,
                 ))
 
-            # 5. launch
+            # 5. launch (start/done timestamps come from the events themselves,
+            # resolved in the token handler — identical mechanism on fake and
+            # real backends)
             in_buffers = {obj: table.get(obj).fast.buffer for obj in task.inputs}  # type: ignore[union-attr]
             mut_buffers = {obj: in_buffers[obj] for obj in task.mutates}
-            clock_before = compute.clock_us
-            host_at_launch = self.backend.host_now_us()
+            self.backend.align_stream_to_host(compute)
+            start_ev = self.backend.record_event(compute)
             resolver(task).launch(TaskContext(
                 task=task, stream=compute, inputs=in_buffers, outputs=out_buffers,
                 mutates=mut_buffers, backend=self.backend,
             ))
             done = self.backend.record_event(compute)
-            start_us = max(clock_before, host_at_launch)
             self.backend.notify_after(
-                compute, done, _TaskDone(task=task, done_event=done, start_us=start_us),
+                compute, done, _TaskDone(task=task, start_event=start_ev, done_event=done),
                 priority=PRIORITY_TASK_DONE,
             )
             state.outstanding_task = task.id
@@ -226,6 +243,8 @@ class Engine:
             final_location_violations=tuple(violations),
             buffers_allocated=pool.allocated_count,
             buffers_reused=pool.reused_count,
+            slab_overflows=pool.slab_overflows,
+            pool_demand=dict(pool.allocated_by_key),
         )
 
     # ------------------------------------------------------------------------
@@ -332,7 +351,12 @@ class _RunState:
             self.trace.events.append(TraceEvent(t=now, kind="mutate", object_id=obj, task_id=task.id))
 
         self.trace.intervals.append(
-            Interval(task_id=task.id, start=tok.start_us, end=tok.done_event.time_us, track="compute")
+            Interval(
+                task_id=task.id,
+                start=self.engine.backend.event_time_us(tok.start_event),
+                end=self.engine.backend.event_time_us(tok.done_event),
+                track="compute",
+            )
         )
 
         # releases: instantaneous at task end; state must be live

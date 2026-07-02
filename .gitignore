@@ -10,3 +10,4 @@ dist/
 *.nsys-rep
 *.sqlite
 artifacts/local/
+artifacts/

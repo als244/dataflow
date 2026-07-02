@@ -17,6 +17,7 @@ from .base import Buffer, Event, Location, Stream, StreamKind
 @dataclass
 class FakeBackend:
     name: str = "fake"
+    physical: bool = False
     _host_us: float = 0.0
     _seq: int = 0
     _pending: list[tuple[float, int, int, Any]] = field(default_factory=list)
@@ -34,6 +35,12 @@ class FakeBackend:
 
     def stream_wait_event(self, stream: Stream, event: Event) -> None:
         stream.clock_us = max(stream.clock_us, event.time_us)
+
+    def align_stream_to_host(self, stream: Stream) -> None:
+        stream.clock_us = max(stream.clock_us, self._host_us)
+
+    def event_time_us(self, event: Event) -> float:
+        return event.time_us
 
     # --- memory ---------------------------------------------------------------
     def alloc(self, location: Location, size_bytes: int) -> Buffer:
@@ -79,6 +86,9 @@ class FakeBackend:
 
     def host_now_us(self) -> float:
         return self._host_us
+
+    def mark_origin(self) -> None:
+        return  # setup is instantaneous in virtual time
 
     def sync_all(self) -> None:
         while self._pending:
