@@ -1,0 +1,13 @@
+{
+  "name": "llama3-shaped-32L-d4096-s4096-b1-r1-steps1",
+  "fast_memory_capacity_bytes": 17179869184,
+  "task_count": 103,
+  "object_count": 205,
+  "makespan_us": 2441826.5827940064,
+  "peak_fast_bytes": 16932962304,
+  "peak_fast_gib": 15.770050048828125,
+  "recompute_levels_chosen": 0,
+  "recompute_total_options": 32,
+  "planning_time_s": 0.13610785093624145,
+  "tokens_per_second": 1677.4327992257508
+}

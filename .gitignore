@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+.venv/
+.idea/
+.vscode/
+*.nsys-rep
+*.sqlite
+artifacts/local/

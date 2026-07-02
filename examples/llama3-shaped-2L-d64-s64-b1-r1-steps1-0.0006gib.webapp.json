@@ -1,0 +1,655 @@
+{
+  "schema_version": "dataflow/v1",
+  "name": "llama3-shaped-2L-d64-s64-b1-r1-steps1",
+  "description": "",
+  "metadata": {
+    "family": "llama3-shaped",
+    "config": {
+      "n_layers": 2,
+      "d_model": 64,
+      "n_heads": 4,
+      "n_kv_heads": 2,
+      "d_ff": 160,
+      "vocab_size": 512,
+      "seq_len": 64,
+      "batch": 1,
+      "grad_accum_rounds": 1,
+      "num_steps": 1
+    }
+  },
+  "metrics": {
+    "primary_unit": "tokens",
+    "primary_count": 64.0,
+    "metadata": {}
+  },
+  "objects": [
+    {
+      "id": "W_embed",
+      "size_bytes": 65536,
+      "initial_location": "backing",
+      "role": "parameter"
+    },
+    {
+      "id": "O_embed",
+      "size_bytes": 131072,
+      "initial_location": "backing",
+      "role": "optimizer_state"
+    },
+    {
+      "id": "W_0",
+      "size_bytes": 86272,
+      "initial_location": "backing",
+      "role": "parameter"
+    },
+    {
+      "id": "O_0",
+      "size_bytes": 172544,
+      "initial_location": "backing",
+      "role": "optimizer_state"
+    },
+    {
+      "id": "W_1",
+      "size_bytes": 86272,
+      "initial_location": "backing",
+      "role": "parameter"
+    },
+    {
+      "id": "O_1",
+      "size_bytes": 172544,
+      "initial_location": "backing",
+      "role": "optimizer_state"
+    },
+    {
+      "id": "W_head",
+      "size_bytes": 65536,
+      "initial_location": "backing",
+      "role": "parameter"
+    },
+    {
+      "id": "O_head",
+      "size_bytes": 131072,
+      "initial_location": "backing",
+      "role": "optimizer_state"
+    },
+    {
+      "id": "tokens_0_0",
+      "size_bytes": 256,
+      "initial_location": "fast",
+      "role": "input"
+    },
+    {
+      "id": "targets_0_0",
+      "size_bytes": 256,
+      "initial_location": "backing",
+      "role": "input"
+    }
+  ],
+  "compute_blocks": [
+    {
+      "key": "embed_fwd",
+      "name": "embed_fwd",
+      "category": "forward",
+      "subops": [
+        {
+          "kind": "roofline",
+          "name": "gather",
+          "runtime_us": null,
+          "flops": 0,
+          "memory_bytes": 16640,
+          "efficiency": "memory",
+          "count": 1,
+          "effective_flops": null,
+          "compute_eff": null,
+          "mem_eff": null,
+          "terms": []
+        }
+      ],
+      "metadata": {}
+    },
+    {
+      "key": "block_fwd",
+      "name": "block_fwd",
+      "category": "forward",
+      "subops": [
+        {
+          "kind": "roofline",
+          "name": "block_matmuls",
+          "runtime_us": null,
+          "flops": 5505024,
+          "memory_bytes": 151552,
+          "efficiency": "matmul",
+          "count": 1,
+          "effective_flops": null,
+          "compute_eff": null,
+          "mem_eff": null,
+          "terms": []
+        },
+        {
+          "kind": "roofline",
+          "name": "attention",
+          "runtime_us": null,
+          "flops": 524288,
+          "memory_bytes": 24576,
+          "efficiency": "attention",
+          "count": 1,
+          "effective_flops": null,
+          "compute_eff": null,
+          "mem_eff": null,
+          "terms": []
+        }
+      ],
+      "metadata": {}
+    },
+    {
+      "key": "head_fwd",
+      "name": "head_fwd",
+      "category": "forward",
+      "subops": [
+        {
+          "kind": "roofline",
+          "name": "lm_head",
+          "runtime_us": null,
+          "flops": 4194304,
+          "memory_bytes": 139264,
+          "efficiency": "matmul",
+          "count": 1,
+          "effective_flops": null,
+          "compute_eff": null,
+          "mem_eff": null,
+          "terms": []
+        }
+      ],
+      "metadata": {}
+    },
+    {
+      "key": "loss_bwd",
+      "name": "loss_bwd",
+      "category": "backward",
+      "subops": [
+        {
+          "kind": "roofline",
+          "name": "ce_loss_bwd",
+          "runtime_us": null,
+          "flops": 0,
+          "memory_bytes": 131072,
+          "efficiency": "memory",
+          "count": 1,
+          "effective_flops": null,
+          "compute_eff": null,
+          "mem_eff": null,
+          "terms": []
+        }
+      ],
+      "metadata": {}
+    },
+    {
+      "key": "head_bwd",
+      "name": "head_bwd",
+      "category": "backward",
+      "subops": [
+        {
+          "kind": "roofline",
+          "name": "lm_head_bwd",
+          "runtime_us": null,
+          "flops": 8388608,
+          "memory_bytes": 278528,
+          "efficiency": "matmul",
+          "count": 1,
+          "effective_flops": null,
+          "compute_eff": null,
+          "mem_eff": null,
+          "terms": []
+        }
+      ],
+      "metadata": {}
+    },
+    {
+      "key": "block_bwd",
+      "name": "block_bwd",
+      "category": "backward",
+      "subops": [
+        {
+          "kind": "roofline",
+          "name": "block_matmuls_bwd",
+          "runtime_us": null,
+          "flops": 11010048,
+          "memory_bytes": 303104,
+          "efficiency": "matmul",
+          "count": 1,
+          "effective_flops": null,
+          "compute_eff": null,
+          "mem_eff": null,
+          "terms": []
+        },
+        {
+          "kind": "roofline",
+          "name": "attention_bwd",
+          "runtime_us": null,
+          "flops": 1310720,
+          "memory_bytes": 49152,
+          "efficiency": "attention",
+          "count": 1,
+          "effective_flops": null,
+          "compute_eff": null,
+          "mem_eff": null,
+          "terms": []
+        }
+      ],
+      "metadata": {}
+    },
+    {
+      "key": "embed_bwd",
+      "name": "embed_bwd",
+      "category": "backward",
+      "subops": [
+        {
+          "kind": "roofline",
+          "name": "scatter_accum",
+          "runtime_us": null,
+          "flops": 0,
+          "memory_bytes": 33280,
+          "efficiency": "memory",
+          "count": 1,
+          "effective_flops": null,
+          "compute_eff": null,
+          "mem_eff": null,
+          "terms": []
+        }
+      ],
+      "metadata": {}
+    },
+    {
+      "key": "optimizer_embed",
+      "name": "optimizer_embed",
+      "category": "optimizer",
+      "subops": [
+        {
+          "kind": "roofline",
+          "name": "adamw",
+          "runtime_us": null,
+          "flops": 0,
+          "memory_bytes": 458752,
+          "efficiency": "memory",
+          "count": 1,
+          "effective_flops": null,
+          "compute_eff": null,
+          "mem_eff": null,
+          "terms": []
+        }
+      ],
+      "metadata": {}
+    },
+    {
+      "key": "optimizer_block",
+      "name": "optimizer_block",
+      "category": "optimizer",
+      "subops": [
+        {
+          "kind": "roofline",
+          "name": "adamw",
+          "runtime_us": null,
+          "flops": 0,
+          "memory_bytes": 603904,
+          "efficiency": "memory",
+          "count": 1,
+          "effective_flops": null,
+          "compute_eff": null,
+          "mem_eff": null,
+          "terms": []
+        }
+      ],
+      "metadata": {}
+    },
+    {
+      "key": "optimizer_head",
+      "name": "optimizer_head",
+      "category": "optimizer",
+      "subops": [
+        {
+          "kind": "roofline",
+          "name": "adamw",
+          "runtime_us": null,
+          "flops": 0,
+          "memory_bytes": 458752,
+          "efficiency": "memory",
+          "count": 1,
+          "effective_flops": null,
+          "compute_eff": null,
+          "mem_eff": null,
+          "terms": []
+        }
+      ],
+      "metadata": {}
+    }
+  ],
+  "tasks": [
+    {
+      "id": "embed_fwd_0_0",
+      "label": null,
+      "group": "forward",
+      "compute_block_key": "embed_fwd",
+      "inputs": [
+        "tokens_0_0",
+        "W_embed"
+      ],
+      "outputs": [
+        {
+          "id": "y_embed_0_0",
+          "size_bytes": 8192,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        }
+      ],
+      "mutates": [],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "block_fwd_0_0_0",
+      "label": null,
+      "group": "forward",
+      "compute_block_key": "block_fwd",
+      "inputs": [
+        "y_embed_0_0",
+        "W_0"
+      ],
+      "outputs": [
+        {
+          "id": "y_0_0_0",
+          "size_bytes": 8192,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        },
+        {
+          "id": "A_0_0_0",
+          "size_bytes": 90624,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        }
+      ],
+      "mutates": [],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "block_fwd_0_0_1",
+      "label": null,
+      "group": "forward",
+      "compute_block_key": "block_fwd",
+      "inputs": [
+        "y_0_0_0",
+        "W_1"
+      ],
+      "outputs": [
+        {
+          "id": "y_0_0_1",
+          "size_bytes": 8192,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        },
+        {
+          "id": "A_0_0_1",
+          "size_bytes": 90624,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        }
+      ],
+      "mutates": [],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "head_fwd_0_0",
+      "label": null,
+      "group": "forward",
+      "compute_block_key": "head_fwd",
+      "inputs": [
+        "y_0_0_1",
+        "W_head"
+      ],
+      "outputs": [
+        {
+          "id": "logits_0_0",
+          "size_bytes": 65536,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        }
+      ],
+      "mutates": [],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "loss_bwd_0_0",
+      "label": null,
+      "group": "backward",
+      "compute_block_key": "loss_bwd",
+      "inputs": [
+        "logits_0_0",
+        "targets_0_0"
+      ],
+      "outputs": [
+        {
+          "id": "dlogits_0_0",
+          "size_bytes": 65536,
+          "location": "fast",
+          "role": "gradient",
+          "metadata": {}
+        },
+        {
+          "id": "loss_0_0",
+          "size_bytes": 4,
+          "location": "fast",
+          "role": "output",
+          "metadata": {}
+        }
+      ],
+      "mutates": [],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "head_bwd_0_0",
+      "label": null,
+      "group": "backward",
+      "compute_block_key": "head_bwd",
+      "inputs": [
+        "dlogits_0_0",
+        "y_0_0_1",
+        "W_head"
+      ],
+      "outputs": [
+        {
+          "id": "dy_0_0_1",
+          "size_bytes": 8192,
+          "location": "fast",
+          "role": "gradient",
+          "metadata": {}
+        },
+        {
+          "id": "dW_head_0",
+          "size_bytes": 65536,
+          "location": "fast",
+          "role": "gradient",
+          "metadata": {}
+        }
+      ],
+      "mutates": [],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "block_bwd_0_0_1",
+      "label": null,
+      "group": "backward",
+      "compute_block_key": "block_bwd",
+      "inputs": [
+        "dy_0_0_1",
+        "A_0_0_1",
+        "y_0_0_0",
+        "W_1"
+      ],
+      "outputs": [
+        {
+          "id": "dy_0_0_0",
+          "size_bytes": 8192,
+          "location": "fast",
+          "role": "gradient",
+          "metadata": {}
+        },
+        {
+          "id": "dW_0_1",
+          "size_bytes": 86272,
+          "location": "fast",
+          "role": "gradient",
+          "metadata": {}
+        }
+      ],
+      "mutates": [],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "block_bwd_0_0_0",
+      "label": null,
+      "group": "backward",
+      "compute_block_key": "block_bwd",
+      "inputs": [
+        "dy_0_0_0",
+        "A_0_0_0",
+        "y_embed_0_0",
+        "W_0"
+      ],
+      "outputs": [
+        {
+          "id": "dy_embed_0_0",
+          "size_bytes": 8192,
+          "location": "fast",
+          "role": "gradient",
+          "metadata": {}
+        },
+        {
+          "id": "dW_0_0",
+          "size_bytes": 86272,
+          "location": "fast",
+          "role": "gradient",
+          "metadata": {}
+        }
+      ],
+      "mutates": [],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "embed_bwd_0_0",
+      "label": null,
+      "group": "backward",
+      "compute_block_key": "embed_bwd",
+      "inputs": [
+        "dy_embed_0_0",
+        "tokens_0_0"
+      ],
+      "outputs": [
+        {
+          "id": "dW_embed_0",
+          "size_bytes": 65536,
+          "location": "fast",
+          "role": "gradient",
+          "metadata": {}
+        }
+      ],
+      "mutates": [],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "optimizer_embed_0",
+      "label": null,
+      "group": "optimizer",
+      "compute_block_key": "optimizer_embed",
+      "inputs": [
+        "W_embed",
+        "dW_embed_0",
+        "O_embed"
+      ],
+      "outputs": [],
+      "mutates": [
+        "W_embed",
+        "O_embed"
+      ],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "optimizer_0_0",
+      "label": null,
+      "group": "optimizer",
+      "compute_block_key": "optimizer_block",
+      "inputs": [
+        "W_0",
+        "dW_0_0",
+        "O_0"
+      ],
+      "outputs": [],
+      "mutates": [
+        "W_0",
+        "O_0"
+      ],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "optimizer_0_1",
+      "label": null,
+      "group": "optimizer",
+      "compute_block_key": "optimizer_block",
+      "inputs": [
+        "W_1",
+        "dW_0_1",
+        "O_1"
+      ],
+      "outputs": [],
+      "mutates": [
+        "W_1",
+        "O_1"
+      ],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "optimizer_head_0",
+      "label": null,
+      "group": "optimizer",
+      "compute_block_key": "optimizer_head",
+      "inputs": [
+        "W_head",
+        "dW_head_0",
+        "O_head"
+      ],
+      "outputs": [],
+      "mutates": [
+        "W_head",
+        "O_head"
+      ],
+      "cost": null,
+      "metadata": {}
+    }
+  ],
+  "final_locations": {
+    "W_embed": "backing",
+    "O_embed": "backing",
+    "W_0": "backing",
+    "O_0": "backing",
+    "W_1": "backing",
+    "O_1": "backing",
+    "W_head": "backing",
+    "O_head": "backing",
+    "loss_0_0": "backing"
+  }
+}
