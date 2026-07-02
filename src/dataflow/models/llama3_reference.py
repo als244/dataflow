@@ -90,7 +90,7 @@ class GoldenLlama3:
         x = self.w_embed[tokens.long()]
         for flat in self.w_blocks:
             x = self.block_forward(x, self._block_views(flat))
-        logits = x @ self.w_head.T
+        logits = ops.rmsnorm_noweight_reference(x) @ self.w_head.T
         return ops.ce_loss_reference(logits, targets)
 
     # --- training -------------------------------------------------------------

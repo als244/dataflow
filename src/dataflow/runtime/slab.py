@@ -46,7 +46,10 @@ class SlabAllocator:
     used_bytes: int = 0
 
     def __post_init__(self) -> None:
-        padded = int(self.capacity_bytes * (1.0 + self.headroom_factor))
+        # absolute cap on headroom: at large budgets a proportional pad would
+        # consume the VRAM the torch scratch lane and overflow fallback need
+        headroom = min(int(self.capacity_bytes * self.headroom_factor), 2 * 1024**3)
+        padded = self.capacity_bytes + headroom
         self.capacity_bytes = (padded + _ALIGN - 1) // _ALIGN * _ALIGN
         self.base = self.backend.alloc(self.location, self.capacity_bytes)
         self._hole_offsets = [0]

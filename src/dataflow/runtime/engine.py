@@ -70,6 +70,60 @@ class RunResult:
 
 
 @dataclass
+class Session:
+    """Long-lived device state reused across Engine.execute() calls.
+
+    Multi-step training replays the same annotated chain once per optimizer
+    step; re-creating the pool each step would re-allocate the device slab
+    and re-pin tens of GB of host memory. A Session owns the backend and the
+    BufferPool (with its slabs) so steady-state steps perform zero vendor
+    allocations. Slabs are keyed to the first program's capacities; reusing a
+    session across programs with different budgets raises.
+    """
+
+    backend: DeviceBackend
+    pool: "BufferPool | None" = None
+    slab_caps: dict[str, int] | None = None
+    # streams created once and reused every execute(): torch's caching
+    # allocator keys cached blocks per-stream, so per-execute stream churn
+    # multiplies the scratch cache by the number of steps
+    streams: tuple | None = None
+
+    def streams_for(self) -> tuple:
+        if self.streams is None:
+            self.streams = (
+                self.backend.create_stream("compute"),
+                self.backend.create_stream("h2d"),
+                self.backend.create_stream("d2h"),
+            )
+        return self.streams
+
+    def pool_for(self, program: Program) -> "BufferPool":
+        caps = {}
+        if program.fast_memory_capacity is not None:
+            caps["fast"] = program.fast_memory_capacity
+        if program.backing_memory_capacity is not None:
+            caps["backing"] = program.backing_memory_capacity
+        if self.pool is None:
+            self.pool = BufferPool(self.backend)
+            if getattr(self.backend, "physical", False):
+                for location, cap in caps.items():
+                    self.pool.add_slab(location, cap)
+            self.slab_caps = caps
+        elif caps != self.slab_caps:
+            raise ValueError(
+                f"session slabs sized for {self.slab_caps}; program needs {caps} — "
+                f"use a fresh Session per budget"
+            )
+        return self.pool
+
+    def close(self) -> None:
+        if self.pool is not None:
+            self.pool.drain()
+            self.pool = None
+
+
+@dataclass
 class Engine:
     backend: DeviceBackend
     validate: bool = True
@@ -79,6 +133,8 @@ class Engine:
     # corruption. The memset enqueues on the compute stream; h2d reuse waits
     # on the recorded guard event.
     poison_on_free: bool = False
+    # long-lived pool/slab state for repeated execute() calls (multi-step)
+    session: Session | None = None
 
     def execute(
         self,
@@ -93,9 +149,12 @@ class Engine:
         resolver = resolver or synthetic_resolver
         initial_buffers = dict(initial_buffers or {})
 
-        compute = self.backend.create_stream("compute")
-        h2d_stream = self.backend.create_stream("h2d")
-        d2h_stream = self.backend.create_stream("d2h")
+        if self.session is not None:
+            compute, h2d_stream, d2h_stream = self.session.streams_for()
+        else:
+            compute = self.backend.create_stream("compute")
+            h2d_stream = self.backend.create_stream("h2d")
+            d2h_stream = self.backend.create_stream("d2h")
 
         trace = RunTrace()
         ledger = Ledger(
@@ -108,15 +167,20 @@ class Engine:
                 trace.memory_trace.append((self.backend.host_now_us(), used))
 
         ledger.on_change = _on_ledger_change
-        pool = BufferPool(self.backend)
-        if getattr(self.backend, "physical", False):
-            # one upfront device allocation sized to the budget (+headroom):
-            # physical usage then tracks the ledger instead of summing
-            # per-size-class maxima over time (see pool/slab docstrings)
-            if program.fast_memory_capacity is not None:
-                pool.add_slab("fast", program.fast_memory_capacity)
-            if program.backing_memory_capacity is not None:
-                pool.add_slab("backing", program.backing_memory_capacity)
+        if self.session is not None:
+            if self.session.backend is not self.backend:
+                raise ValueError("session backend differs from engine backend")
+            pool = self.session.pool_for(program)
+        else:
+            pool = BufferPool(self.backend)
+            if getattr(self.backend, "physical", False):
+                # one upfront device allocation sized to the budget (+headroom):
+                # physical usage then tracks the ledger instead of summing
+                # per-size-class maxima over time (see pool/slab docstrings)
+                if program.fast_memory_capacity is not None:
+                    pool.add_slab("fast", program.fast_memory_capacity)
+                if program.backing_memory_capacity is not None:
+                    pool.add_slab("backing", program.backing_memory_capacity)
         table = ObjectTable()
 
         poison = None
@@ -256,6 +320,18 @@ class Engine:
             raise ExecutionError(
                 "final_locations violated: " + "; ".join(violations)
             )
+
+        # End-of-run reclamation: the program is over, so every pool-owned
+        # buffer still held by an object returns to the pool (essential when a
+        # Session reuses the pool across steps — otherwise the slab bleeds).
+        # Caller-provided initial buffers are not pool-owned and stay out.
+        # Contents remain readable until a later run reuses the buffer:
+        # read results BEFORE the next execute().
+        provided = {id(b) for b in initial_buffers.values()}
+        for rec in table.records.values():
+            for slot in (rec.fast, rec.backing):
+                if slot is not None and id(slot.buffer) not in provided:
+                    pool.put(slot.buffer)
 
         trace.peak_fast_bytes = ledger.peak_fast_bytes
         return RunResult(

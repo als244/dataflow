@@ -195,7 +195,8 @@ class HeadFwd(_Base):
             y = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
             wh = torch_view(self._in(ctx, 1), (d.vocab_size, d.d_model), torch.bfloat16)
             logits = torch_view(self._out(ctx, 0), (d.tokens, d.vocab_size), torch.bfloat16)
-            torch.matmul(y, wh.T, out=logits)
+            yn, _rstd = ops.rmsnorm_noweight(y)  # final model norm
+            torch.matmul(yn, wh.T, out=logits)
 
 
 @dataclass(frozen=True)
@@ -220,14 +221,18 @@ class HeadBwd(_Base):
             wh = torch_view(self._in(ctx, 2), (d.vocab_size, d.d_model), torch.bfloat16)
             accum = bool(ctx.task.mutates)
             dy = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
-            torch.matmul(dlogits, wh, out=dy)
-            dwh_new = dlogits.T @ y
+            # final-norm recompute (cheap: one reduce over y) + backward
+            yn, rstd = ops.rmsnorm_noweight(y)
+            dyn = dlogits @ wh
+            ones = torch.ones(d.d_model, device=dyn.device, dtype=torch.bfloat16)
+            dy_val, _dw_ones = ops.rmsnorm_bwd(dyn, y, rstd, ones)
+            dy.copy_(dy_val)
             if accum:
                 dwh = torch_view(ctx.mutates[ctx.task.mutates[0]], (d.vocab_size, d.d_model), torch.bfloat16)
-                dwh.add_(dwh_new)
+                dwh.add_(dlogits.T @ yn)
             else:
                 dwh = torch_view(self._out(ctx, 1), (d.vocab_size, d.d_model), torch.bfloat16)
-                dwh.copy_(dwh_new)
+                torch.matmul(dlogits.T, yn, out=dwh)  # write straight into dW
 
 
 @dataclass(frozen=True)

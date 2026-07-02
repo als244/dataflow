@@ -31,56 +31,6 @@ from dataflow.training.shaped_llama3 import ShapedHardware, ShapedLlamaConfig, b
 GIB = 1024**3
 
 
-def _replay_gap(program, result) -> float:
-    """Re-simulate with measured durations as overrides; return the pct gap
-    between the real makespan and that replay's makespan."""
-    from dataflow.core import TransferDirective
-    from dataflow_sim.engine.simulator import run as sim_run
-
-    measured_compute = {
-        iv.task_id: iv.end - iv.start
-        for iv in result.trace.intervals if iv.track == "compute"
-    }
-    # transfer intervals are named "dir:obj" / "dir:obj#N" in start order,
-    # matching directive firing order per (direction, object)
-    seen: dict[tuple[str, str], int] = {}
-    measured_xfer: dict[tuple[str, str, int], float] = {}
-    for iv in sorted(
-        (iv for iv in result.trace.intervals if iv.track != "compute"),
-        key=lambda iv: iv.start,
-    ):
-        obj = iv.task_id.split(":", 1)[1].split("#", 1)[0]
-        n = seen.get((iv.track, obj), 0)
-        seen[(iv.track, obj)] = n + 1
-        measured_xfer[(iv.track, obj, n)] = iv.end - iv.start
-
-    fired: dict[tuple[str, str], int] = {}
-
-    def override(direction: str, object_id: str) -> float:
-        n = fired.get((direction, object_id), 0)
-        fired[(direction, object_id)] = n + 1
-        return measured_xfer[(direction, object_id, n)]
-
-    new_tasks = []
-    for t in program.tasks:
-        new_tasks.append(replace(
-            t,
-            runtime_us=measured_compute[t.id],
-            offload_after=tuple(
-                TransferDirective(object_id=x.object_id, runtime_us=override("to_slow", x.object_id))
-                for x in t.offload_after
-            ),
-            prefetch_after=tuple(
-                TransferDirective(object_id=x.object_id, runtime_us=override("from_slow", x.object_id))
-                for x in t.prefetch_after
-            ),
-        ))
-    replay = replace(program, tasks=tuple(new_tasks))
-    log = sim_run(to_sim_chain(replay), snapshots=False)
-    replay_makespan = max(iv.end for iv in log.task_intervals)
-    return (result.makespan_us - replay_makespan) / replay_makespan * 100
-
-
 def build_config(name: str) -> ShapedLlamaConfig:
     if name == "8b":
         return ShapedLlamaConfig.llama3_8b()
@@ -160,7 +110,9 @@ def main() -> None:
     # an override (tasks and transfers alike). If the runtime schedules like
     # the simulator, makespans match up to dispatch overhead — bandwidth-model
     # error is factored out entirely.
-    replay_gap_pct = _replay_gap(program, result)
+    from dataflow.training.replay import replay_gap_pct as _rg
+
+    replay_gap_pct = _rg(program, result.trace, result.makespan_us)
 
     compute = sorted((iv for iv in result.trace.intervals if iv.track == "compute"),
                      key=lambda iv: iv.start)

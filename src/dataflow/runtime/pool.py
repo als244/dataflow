@@ -59,17 +59,18 @@ class BufferPool:
     def _carve(self, slab: SlabAllocator, location: Location, size_bytes: int) -> Buffer:
         offset = slab.allocate(size_bytes)
         if offset is None:
-            # fragmentation: flush every pooled free buffer of this location
-            # back into the slab (coalesces holes) and retry once
+            # fragmentation: flush pooled SLAB-BACKED free buffers back into
+            # the slab (coalesces holes) and retry once. Overflow buffers stay
+            # pooled — freeing them mid-run would call the vendor allocator
+            # (sync risk) and forfeit their reuse.
             for (loc, _size), stack in self.free_lists.items():
                 if loc != location:
                     continue
-                while stack:
-                    buf = stack.pop()
+                keep = [b for b in stack if not (isinstance(b.raw, tuple) and b.raw[0] == "slab")]
+                for buf in stack:
                     if isinstance(buf.raw, tuple) and buf.raw[0] == "slab":
                         slab.free(buf.raw[1], buf.size_bytes)
-                    else:
-                        self.backend.free(buf)  # overflow buffer: return to vendor
+                stack[:] = keep
             offset = slab.allocate(size_bytes)
         if offset is None:
             # Last resort: overflow to a direct vendor allocation (counted —

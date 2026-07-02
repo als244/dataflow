@@ -57,6 +57,21 @@ def rmsnorm_reference(x: torch.Tensor, w: torch.Tensor) -> torch.Tensor:
     return (xf * rstd).to(x.dtype) * w
 
 
+def rmsnorm_noweight(x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """The model's FINAL norm before the LM head (weightless here; llama
+    initializes that weight to 1 — adequate for runtime work, documented).
+    Returns (normalized bf16, rstd fp32)."""
+    xf = x.float()
+    rstd = torch.rsqrt(xf.pow(2).mean(-1) + RMS_EPS)
+    return (xf * rstd.unsqueeze(-1)).to(x.dtype), rstd
+
+
+def rmsnorm_noweight_reference(x: torch.Tensor) -> torch.Tensor:
+    xf = x.float()
+    rstd = torch.rsqrt(xf.pow(2).mean(-1, keepdim=True) + RMS_EPS)
+    return (xf * rstd).to(x.dtype)
+
+
 # --- rope (llama rotate-half) ----------------------------------------------------
 
 def _rope_cos_sin(seq_len: int, head_dim: int, base: float, device, dtype=torch.float32):
@@ -166,21 +181,33 @@ def swiglu_bwd(ds: torch.Tensor, x1: torch.Tensor, x3: torch.Tensor) -> tuple[to
 
 # --- fused cross-entropy loss ------------------------------------------------------
 
+CE_CHUNK_ROWS = 1024  # bounds fp32 softmax temporaries to ~2 x chunk x vocab
+
+
 def ce_loss_fwd_bwd(
     logits: torch.Tensor, targets: torch.Tensor, loss_out: torch.Tensor, dlogits_out: torch.Tensor,
 ) -> None:
-    """Mean CE over tokens; writes fp32 scalar loss and bf16 dlogits."""
-    lf = logits.float()
-    lse = torch.logsumexp(lf, dim=-1, keepdim=True)
+    """Mean CE over tokens; writes fp32 scalar loss and bf16 dlogits.
+
+    Row-chunked: per-row math (logsumexp/softmax) is unchanged; only the
+    final mean accumulates across chunks. Unchunked, the fp32 temporaries
+    are ~2 x tokens x vocab x 4 bytes (4+ GB at llama vocab)."""
     t = logits.shape[0]
-    nll = (lse.squeeze(-1) - lf.gather(1, targets.long().unsqueeze(1)).squeeze(1)).mean()
-    loss_out.copy_(nll.reshape(loss_out.shape))
-    soft = torch.exp(lf - lse)
-    soft.scatter_add_(
-        1, targets.long().unsqueeze(1),
-        torch.full((t, 1), -1.0, device=logits.device, dtype=torch.float32),
-    )
-    dlogits_out.copy_((soft / t).to(dlogits_out.dtype))
+    nll_sum = torch.zeros((), device=logits.device, dtype=torch.float32)
+    tl = targets.long()
+    for lo in range(0, t, CE_CHUNK_ROWS):
+        hi = min(lo + CE_CHUNK_ROWS, t)
+        lf = logits[lo:hi].float()
+        lse = torch.logsumexp(lf, dim=-1, keepdim=True)
+        tc = tl[lo:hi]
+        nll_sum += (lse.squeeze(-1) - lf.gather(1, tc.unsqueeze(1)).squeeze(1)).sum()
+        soft = torch.exp(lf - lse)
+        soft.scatter_add_(
+            1, tc.unsqueeze(1),
+            torch.full((hi - lo, 1), -1.0, device=logits.device, dtype=torch.float32),
+        )
+        dlogits_out[lo:hi].copy_((soft / t).to(dlogits_out.dtype))
+    loss_out.copy_((nll_sum / t).reshape(loss_out.shape))
 
 
 def ce_loss_reference(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
@@ -189,24 +216,35 @@ def ce_loss_reference(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tens
 
 # --- adamw ---------------------------------------------------------------------
 
+ADAMW_CHUNK_ELEMS = 1 << 24  # 16.7M elems -> ~400MB of fp32 temporaries max
+
+
 def adamw_step(
     w: torch.Tensor, g: torch.Tensor, m: torch.Tensor, v: torch.Tensor,
     *, lr: float, beta1: float, beta2: float, eps: float, weight_decay: float, step: int,
 ) -> None:
     """In-place AdamW on flat views. States bf16, math fp32 (the golden
     reference implements the identical update, incl. the bf16 state
-    round-trip, so parity is exact in structure)."""
-    gf = g.float()
-    mf = m.float().mul_(beta1).add_(gf, alpha=1 - beta1)
-    vf = v.float().mul_(beta2).addcmul_(gf, gf, value=1 - beta2)
-    m.copy_(mf.to(m.dtype))
-    v.copy_(vf.to(v.dtype))
-    # bias-corrected using the ROUND-TRIPPED states (what the next step sees)
-    mhat = m.float() / (1 - beta1 ** step)
-    vhat = v.float() / (1 - beta2 ** step)
-    wf = w.float()
-    wf -= lr * (mhat / (vhat.sqrt() + eps) + weight_decay * wf)
-    w.copy_(wf.to(w.dtype))
+    round-trip, so parity is exact in structure).
+
+    Chunked: the update is elementwise, so processing the flat parameter in
+    chunks is bit-identical while bounding fp32 temporaries (an unchunked
+    embed/head update materializes ~6x param bytes — 12+ GB at vocab scale)."""
+    n = w.numel()
+    for lo in range(0, n, ADAMW_CHUNK_ELEMS):
+        hi = min(lo + ADAMW_CHUNK_ELEMS, n)
+        wc, gc, mc, vc = w[lo:hi], g[lo:hi], m[lo:hi], v[lo:hi]
+        gf = gc.float()
+        mf = mc.float().mul_(beta1).add_(gf, alpha=1 - beta1)
+        vf = vc.float().mul_(beta2).addcmul_(gf, gf, value=1 - beta2)
+        mc.copy_(mf.to(mc.dtype))
+        vc.copy_(vf.to(vc.dtype))
+        # bias-corrected using the ROUND-TRIPPED states (what the next step sees)
+        mhat = mc.float() / (1 - beta1 ** step)
+        vhat = vc.float() / (1 - beta2 ** step)
+        wf = wc.float()
+        wf -= lr * (mhat / (vhat.sqrt() + eps) + weight_decay * wf)
+        wc.copy_(wf.to(wc.dtype))
 
 
 # --- embedding ---------------------------------------------------------------------
