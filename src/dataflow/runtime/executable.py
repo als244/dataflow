@@ -1,0 +1,54 @@
+"""Task-executable contract (runtime side).
+
+The runtime hands an executable everything it may touch and nothing else:
+buffers for declared inputs/outputs/mutates (+ optional workspace), the
+compute stream, and the backend. The executable must only enqueue
+device work on `ctx.stream` — no allocation, no synchronization, no globals.
+
+The tasks layer (M3) provides real implementations resolved by
+`(compute_block_key, block_params)`. `SyntheticExecutable` models a task of
+known duration and is the workhorse for parity gates (fake backend) and,
+later, calibrated spin kernels (cuda backend, M2).
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Callable, Mapping, Protocol
+
+from dataflow.core import TaskSpec
+from .device.base import Buffer, DeviceBackend, Stream
+
+
+@dataclass(frozen=True)
+class TaskContext:
+    task: TaskSpec
+    stream: Stream
+    inputs: Mapping[str, Buffer]
+    outputs: Mapping[str, Buffer]
+    mutates: Mapping[str, Buffer]
+    backend: DeviceBackend
+    workspace: Buffer | None = None
+
+
+class Executable(Protocol):
+    def launch(self, ctx: TaskContext) -> None:
+        """Enqueue this task's device work on ctx.stream. Never synchronize."""
+        ...
+
+
+@dataclass(frozen=True)
+class SyntheticExecutable:
+    """Models a task as `runtime_us` of opaque stream work (fake backend)."""
+
+    runtime_us: float
+
+    def launch(self, ctx: TaskContext) -> None:
+        ctx.backend.advance_stream(ctx.stream, self.runtime_us)
+
+
+ExecutableResolver = Callable[[TaskSpec], Executable]
+
+
+def synthetic_resolver(task: TaskSpec) -> Executable:
+    """Default resolver: every task modeled by its planned runtime."""
+    return SyntheticExecutable(task.runtime_us)
