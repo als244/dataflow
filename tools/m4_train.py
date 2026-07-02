@@ -39,6 +39,10 @@ GIB = 1024**3
 
 CONFIGS = {
     "8b": ShapedLlamaConfig.llama3_8b(),
+    # same effective 65,536 tokens/step, different chunking — amortizes the
+    # per-step optimizer/transfer overhead over more math
+    "8b-bs4ga4": ShapedLlamaConfig.llama3_8b(batch=4, grad_accum_rounds=4),
+    "8b-ga16": ShapedLlamaConfig.llama3_8b(batch=1, grad_accum_rounds=16),
     "baseline1b": ShapedLlamaConfig(
         n_layers=16, d_model=2048, n_heads=16, n_kv_heads=4, d_ff=8192,
         vocab_size=32768, seq_len=4096, batch=1,
@@ -57,6 +61,12 @@ def main() -> None:
     parser.add_argument("--steps", type=int, default=4)
     parser.add_argument("--recompute", action="store_true")
     parser.add_argument("--baseline", action="store_true", help="also time the plain-torch golden model")
+    parser.add_argument(
+        "--backing-gib", type=float, default=None,
+        help="cap pinned-host bytes; sim verification then rejects plans whose "
+             "offload footprint exceeds host RAM (essential at high grad-accum: "
+             "save-all context across rounds can exceed system memory)",
+    )
     parser.add_argument("--out", type=Path, default=Path("artifacts/m4"))
     args = parser.parse_args()
 
@@ -73,6 +83,7 @@ def main() -> None:
             lower_llama3(cfg, recompute_levels=levels),
             bandwidth_from_slow=pcie.bidi_h2d,
             bandwidth_to_slow=pcie.bidi_d2h,
+            backing_memory_capacity=int(args.backing_gib * GIB) if args.backing_gib else None,
         )
 
     program = build_raw()

@@ -29,19 +29,30 @@ from .slab import SlabAllocator, SlabError
 class BufferPool:
     backend: DeviceBackend
     slabs: dict[str, SlabAllocator] = field(default_factory=dict)
+    overflow_slabs: dict[str, SlabAllocator] = field(default_factory=dict)
     free_lists: dict[tuple[str, int], list[Buffer]] = field(default_factory=dict)
     allocated_count: int = 0
     reused_count: int = 0
-    slab_overflows: int = 0
+    slab_overflows: int = 0  # requests that escaped to the vendor allocator
+    arena_carves: int = 0    # requests served by the pre-reserved overflow arena
     _seq: int = 0
     # (location, size) -> total buffers ever created: a completed run's map is
     # the exact prewarm demand for a repeat run (direct regime only).
     allocated_by_key: dict[tuple[str, int], int] = field(default_factory=dict)
 
-    def add_slab(self, location: Location, capacity_bytes: int) -> None:
+    def add_slab(
+        self, location: Location, capacity_bytes: int, *, overflow_bytes: int = 0
+    ) -> None:
         self.slabs[location] = SlabAllocator(
             backend=self.backend, location=location, capacity_bytes=capacity_bytes
         )
+        if overflow_bytes > 0:
+            # reserved UP FRONT, before any op scratch can claim the VRAM:
+            # fragmentation overflow then never competes with the torch cache
+            self.overflow_slabs[location] = SlabAllocator(
+                backend=self.backend, location=location,
+                capacity_bytes=overflow_bytes, headroom_factor=0.0,
+            )
 
     def get(self, location: Location, size_bytes: int) -> Buffer:
         stack = self.free_lists.get((location, size_bytes))
@@ -69,14 +80,23 @@ class BufferPool:
                 keep = [b for b in stack if not (isinstance(b.raw, tuple) and b.raw[0] == "slab")]
                 for buf in stack:
                     if isinstance(buf.raw, tuple) and buf.raw[0] == "slab":
-                        slab.free(buf.raw[1], buf.size_bytes)
+                        buf.raw[2].free(buf.raw[1], buf.size_bytes)
                 stack[:] = keep
             offset = slab.allocate(size_bytes)
         if offset is None:
-            # Last resort: overflow to a direct vendor allocation (counted —
-            # nonzero overflow means the headroom heuristic was beaten; the
-            # static-assignment mode replaces this with a planning-time
-            # placement proof).
+            # Fragmentation beat the headroom heuristic (the static-assignment
+            # mode replaces all of this with a planning-time placement proof).
+            # An overflow-ARENA carve is cheap and safe (pre-reserved VRAM,
+            # host-side offset math) and is counted separately; only escaping
+            # to a VENDOR allocation counts as slab_overflows — the metric the
+            # steady-state zero-alloc invariant asserts on.
+            over = self.overflow_slabs.get(location)
+            if over is not None:
+                over_offset = over.allocate(size_bytes)
+                if over_offset is not None:
+                    self.arena_carves += 1
+                    self._seq += 1
+                    return over.make_buffer(over_offset, size_bytes, self._seq)
             self.slab_overflows += 1
             return self.backend.alloc(location, size_bytes)
         self._seq += 1
@@ -104,12 +124,14 @@ class BufferPool:
         for (location, _size), stack in self.free_lists.items():
             while stack:
                 buf = stack.pop()
-                slab = self.slabs.get(location)
-                if slab is not None and isinstance(buf.raw, tuple) and buf.raw[0] == "slab":
-                    slab.free(buf.raw[1], buf.size_bytes)
+                if isinstance(buf.raw, tuple) and buf.raw[0] == "slab":
+                    buf.raw[2].free(buf.raw[1], buf.size_bytes)
                 else:
                     self.backend.free(buf)
         self.free_lists.clear()
         for slab in self.slabs.values():
             slab.close()
+        for slab in self.overflow_slabs.values():
+            slab.close()
         self.slabs.clear()
+        self.overflow_slabs.clear()

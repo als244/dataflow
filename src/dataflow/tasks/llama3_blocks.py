@@ -95,14 +95,16 @@ class BlockFwd(_Base):
         q = ops.rope_fwd(h1 @ w["wq"], d.seq_len, d.n_heads, d.head_dim, d.rope_base)
         k = ops.rope_fwd(h1 @ w["wk"], d.seq_len, d.n_kv_heads, d.head_dim, d.rope_base)
         v = h1 @ w["wv"]
-        attn_out, lse = ops.flash_fwd(q, k, v, d.n_heads, d.n_kv_heads, d.head_dim)
+        attn_out, lse = ops.flash_fwd(q, k, v, d.n_heads, d.n_kv_heads, d.head_dim, d.seq_len)
         h_mid = x + attn_out @ w["wo"]
         h2 = torch.empty_like(h_mid)
         rstd_ffn = torch.empty(d.tokens, dtype=torch.float32, device=x.device)
         ops.rmsnorm_fwd(h_mid, w["ffn_norm_w"], h2, rstd_ffn)
         x1 = h2 @ w["w1"]
         x3 = h2 @ w["w3"]
-        y.copy_(h_mid + ops.swiglu_fwd(x1, x3) @ w["w2"])
+        s = torch.empty_like(x1)
+        ops.swiglu_fwd_out(x1, x3, s)
+        y.copy_(h_mid + s @ w["w2"])
         if a is not None:
             a["rstd_attn"].copy_(rstd_attn)
             a["q"].copy_(q)
@@ -157,10 +159,12 @@ class BlockBwd(_Base):
 
         # --- mlp ---
         h2 = ops.rmsnorm_apply(a["h_mid"], a["rstd_ffn"], w["ffn_norm_w"])
-        s = ops.swiglu_fwd(a["x1"], a["x3"])
+        s = torch.empty_like(a["x1"])
+        ops.swiglu_fwd_out(a["x1"], a["x3"], s)
         ds = dy @ w["w2"].T
         acc("w2", s.T @ dy)
         dx1, dx3 = ops.swiglu_bwd(ds, a["x1"], a["x3"])
+        del s
         acc("w1", h2.T @ dx1)
         acc("w3", h2.T @ dx3)
         dh2 = dx1 @ w["w1"].T + dx3 @ w["w3"].T
@@ -173,7 +177,7 @@ class BlockBwd(_Base):
         acc("wo", a["attn_out"].T @ dh_mid)
         dq, dk, dv = ops.flash_bwd(
             d_attn, a["q"], a["k"], a["v"], a["attn_out"], a["lse"],
-            d.n_heads, d.n_kv_heads, d.head_dim,
+            d.n_heads, d.n_kv_heads, d.head_dim, d.seq_len,
         )
         dq = ops.rope_bwd(dq, d.seq_len, d.n_heads, d.head_dim, d.rope_base)
         dk = ops.rope_bwd(dk, d.seq_len, d.n_kv_heads, d.head_dim, d.rope_base)

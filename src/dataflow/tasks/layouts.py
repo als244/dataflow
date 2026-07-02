@@ -133,7 +133,7 @@ def context_layout(dims: LlamaDims) -> PackedLayout:
         ("q", (t, d), "bf16"),
         ("k", (t, kv), "bf16"),
         ("v", (t, kv), "bf16"),
-        ("lse", (h, t), "fp32"),
+        ("lse", ((t // dims.seq_len) * h, dims.seq_len), "fp32"),
         ("attn_out", (t, d), "bf16"),
         ("h_mid", (t, d), "bf16"),
         ("rstd_ffn", (t,), "fp32"),

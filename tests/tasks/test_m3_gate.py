@@ -51,6 +51,9 @@ def _run(engine_kwargs=None, resolver_wrapper=None, program_transform=None, seed
         out[obj_id] = torch_view(slot.buffer, (rec.size_bytes // 2,), torch.bfloat16).clone()
     loss_rec = result.objects.get("loss_0_0")
     out["loss"] = float(torch_view((loss_rec.backing or loss_rec.fast).buffer, (1,), torch.float32)[0])
+    result.close()
+    for buf in values.values():
+        backend.free(buf)
     return out
 
 
@@ -123,4 +126,5 @@ def test_measured_costs_replan_still_golden():
     )
     rec = result.objects.get("loss_0_0")
     loss = float(torch_view((rec.backing or rec.fast).buffer, (1,), torch.float32)[0])
+    result.close()
     assert abs(loss - base["loss"]) / max(abs(base["loss"]), 1e-9) < 1e-3

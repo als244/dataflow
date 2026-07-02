@@ -194,4 +194,8 @@ def check_model_step(
     for i in range(cfg.n_layers):
         errors[f"W_{i}"] = rel_l2(final_bytes(f"W_{i}"), golden.w_blocks[i].detach().reshape(-1))
     errors["W_head"] = rel_l2(final_bytes("W_head"), golden.w_head.detach().to(torch.bfloat16).reshape(-1))
+    result.close()  # release the engine-local slab/arena for the next check
+    dry.close()
+    for buf in values.values():
+        backend.free(buf)
     return CheckReport(errors=errors, tol=tol)

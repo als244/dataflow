@@ -66,56 +66,59 @@ def profile_program(
 
     stream = backend.create_stream("compute")
     profiles: dict[tuple, TaskProfile] = {}
-    cache: dict[int, object] = {}  # size -> device Buffer (reused across tasks)
-
-    def buf(size: int, tag: int):
-        key = (size, tag)
-        if key not in cache:
-            cache[key] = backend.alloc("fast", size)
-        return cache[key]
 
     for task in program.tasks:
         sig = _signature(task, sizes)
         if sig in profiles:
             continue
-        # distinct buffers per role slot; int32-tensor objects filled with a
-        # valid index so gathers don't read out of bounds
-        in_buffers = {}
-        for slot, obj in enumerate(task.inputs):
-            b = buf(sizes[obj], 100 + slot)
-            meta = metas.get(obj)
-            if meta is not None and meta.dtype == "int32":
-                torch_view(b, (sizes[obj] // 4,), torch.int32).fill_(int32_fill)
-            in_buffers[obj] = b
-        out_buffers = {o.id: buf(o.size_bytes, 200 + i) for i, o in enumerate(task.outputs)}
-        mut_buffers = {m: in_buffers[m] for m in task.mutates}
-        ctx = TaskContext(
-            task=task, stream=stream, inputs=in_buffers, outputs=out_buffers,
-            mutates=mut_buffers, backend=backend,
-        )
-        executable = resolver(task)
+        # Distinct buffers per role slot, allocated for THIS signature and
+        # freed right after: caching across signatures accumulated more than
+        # VRAM once grad-accum variants and batched sizes appeared.
+        local: list = []
 
-        # workspace: allocator peak delta around one launch
-        torch.cuda.synchronize()
-        torch.cuda.reset_peak_memory_stats()
-        base = torch.cuda.memory_allocated()
-        executable.launch(ctx)
-        torch.cuda.synchronize()
-        workspace = max(0, torch.cuda.max_memory_allocated() - base)
+        def buf(size: int):
+            b = backend.alloc("fast", size)
+            local.append(b)
+            return b
 
-        times = []
-        for i in range(warmup + repeats):
-            a = backend.record_event(stream)
+        try:
+            in_buffers = {}
+            for obj in task.inputs:
+                b = buf(sizes[obj])
+                meta = metas.get(obj)
+                if meta is not None and meta.dtype == "int32":
+                    torch_view(b, (sizes[obj] // 4,), torch.int32).fill_(int32_fill)
+                in_buffers[obj] = b
+            out_buffers = {o.id: buf(o.size_bytes) for o in task.outputs}
+            mut_buffers = {m: in_buffers[m] for m in task.mutates}
+            ctx = TaskContext(
+                task=task, stream=stream, inputs=in_buffers, outputs=out_buffers,
+                mutates=mut_buffers, backend=backend,
+            )
+            executable = resolver(task)
+
+            # workspace: allocator peak delta around one launch
+            torch.cuda.synchronize()
+            torch.cuda.reset_peak_memory_stats()
+            base = torch.cuda.memory_allocated()
             executable.launch(ctx)
-            b = backend.record_event(stream)
-            _check(cudart.cudaEventSynchronize(b.raw))
-            if i >= warmup:
-                times.append(backend.event_time_us(b) - backend.event_time_us(a))
-        profiles[sig] = TaskProfile(
-            runtime_us=statistics.median(times), workspace_bytes=workspace, repeats=repeats,
-        )
-    for b in cache.values():
-        backend.free(b)
+            torch.cuda.synchronize()
+            workspace = max(0, torch.cuda.max_memory_allocated() - base)
+
+            times = []
+            for i in range(warmup + repeats):
+                a = backend.record_event(stream)
+                executable.launch(ctx)
+                b = backend.record_event(stream)
+                _check(cudart.cudaEventSynchronize(b.raw))
+                if i >= warmup:
+                    times.append(backend.event_time_us(b) - backend.event_time_us(a))
+            profiles[sig] = TaskProfile(
+                runtime_us=statistics.median(times), workspace_bytes=workspace, repeats=repeats,
+            )
+        finally:
+            for b in local:
+                backend.free(b)
     return profiles
 
 

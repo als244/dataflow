@@ -80,14 +80,21 @@ def train(
 
     token_stream = token_stream or default_stream
     report = TrainReport()
-    tokens_view = torch_view(values["tokens_0_0"], (dims.tokens,), torch.int32)
-    targets_view = torch_view(values["targets_0_0"], (dims.tokens,), torch.int32)
+    rounds = cfg.grad_accum_rounds
+    round_views = [
+        (
+            torch_view(values[f"tokens_0_{r}"], (dims.tokens,), torch.int32),
+            torch_view(values[f"targets_0_{r}"], (dims.tokens,), torch.int32),
+        )
+        for r in range(rounds)
+    ]
 
     try:
         for step in range(steps):
-            tokens, targets = token_stream(step)
-            tokens_view.copy_(tokens)
-            targets_view.copy_(targets)
+            for r, (tokens_view, targets_view) in enumerate(round_views):
+                tokens, targets = token_stream(step * rounds + r)
+                tokens_view.copy_(tokens)
+                targets_view.copy_(targets)
             # optimizer bias correction advances with the global step
             stepped = _with_step(annotated, step)
 
@@ -107,6 +114,7 @@ def train(
             report.last_trace = result.trace
     finally:
         session.close()
+        dry.close()
         if owns_values:
             for buf in values.values():
                 backend.free(buf)

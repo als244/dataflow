@@ -107,3 +107,4 @@ def test_mini_program_end_to_end():
     assert result.makespan_us == pytest.approx(planned.makespan_us, rel=0.25)
     # transfers really happened
     assert any(iv.track != "compute" for iv in result.trace.intervals)
+    result.close()

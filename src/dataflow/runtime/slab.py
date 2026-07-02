@@ -102,7 +102,9 @@ class SlabAllocator:
             location=self.location,
             size_bytes=size_bytes,
             ptr=self.base.ptr + offset,
-            raw=("slab", offset),
+            # carry the OWNING allocator: with a main slab and an overflow
+            # arena in play, frees must land in the right one
+            raw=("slab", offset, self),
         )
 
     def close(self) -> None:

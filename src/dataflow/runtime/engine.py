@@ -67,6 +67,14 @@ class RunResult:
     # final object table: records with live slots/buffers so callers can read
     # results (losses, updated params) after the run
     objects: ObjectTable = None  # type: ignore[assignment]
+    # engine-local pool (None when a Session owns it): call close() after
+    # readback to release the slab/arena — tests and one-shot runs that skip
+    # this leak the reservations for the process lifetime
+    _owned_pool: BufferPool = None  # type: ignore[assignment]
+
+    def close(self) -> None:
+        if self._owned_pool is not None:
+            self._owned_pool.drain()
 
 
 @dataclass
@@ -108,7 +116,10 @@ class Session:
             self.pool = BufferPool(self.backend)
             if getattr(self.backend, "physical", False):
                 for location, cap in caps.items():
-                    self.pool.add_slab(location, cap)
+                    self.pool.add_slab(
+                        location, cap,
+                        overflow_bytes=(3 * 1024**3 if location == "fast" else 0),
+                    )
             self.slab_caps = caps
         elif caps != self.slab_caps:
             raise ValueError(
@@ -174,11 +185,14 @@ class Engine:
         else:
             pool = BufferPool(self.backend)
             if getattr(self.backend, "physical", False):
-                # one upfront device allocation sized to the budget (+headroom):
-                # physical usage then tracks the ledger instead of summing
-                # per-size-class maxima over time (see pool/slab docstrings)
+                # one upfront device allocation sized to the budget (+headroom
+                # +overflow arena): physical usage then tracks the ledger
+                # instead of summing per-size-class maxima over time
                 if program.fast_memory_capacity is not None:
-                    pool.add_slab("fast", program.fast_memory_capacity)
+                    pool.add_slab(
+                        "fast", program.fast_memory_capacity,
+                        overflow_bytes=3 * 1024**3,
+                    )
                 if program.backing_memory_capacity is not None:
                     pool.add_slab("backing", program.backing_memory_capacity)
         table = ObjectTable()
@@ -217,9 +231,28 @@ class Engine:
         self.backend.mark_origin()
 
         # --- dispatch loop -----------------------------------------------------
+        # Last chain position referencing each object (inputs or transfer
+        # directives): a release at-or-after it, for an object with no
+        # final_locations entry, frees the BACKING copy too — mirroring the
+        # simulator's dead-everywhere rule (essential at high grad-accum where
+        # per-round context would otherwise pile up dead pinned copies).
+        last_ref: dict[str, int] = {}
+        task_index: dict[str, int] = {}
+        for idx, t in enumerate(program.tasks):
+            task_index[t.id] = idx
+            for obj_id in t.inputs:
+                last_ref[obj_id] = idx
+            for trig in t.offload_after:
+                last_ref[trig.object_id] = idx
+            for trig in t.prefetch_after:
+                last_ref[trig.object_id] = idx
+
         state = _RunState(
             engine=self, table=table, ledger=ledger, pool=pool, trace=trace,
             h2d=h2d, d2h=d2h, deferred=deferred_prefetches, poison=poison,
+            last_ref=last_ref, task_index=task_index,
+            final_locations=dict(program.final_locations),
+            provided_buffer_ids={id(b) for b in initial_buffers.values()},
         )
         for task in program.tasks:
             fast_out = sum(o.size_bytes for o in task.outputs if o.location == "fast")
@@ -344,6 +377,7 @@ class Engine:
             slab_overflows=pool.slab_overflows,
             pool_demand=dict(pool.allocated_by_key),
             objects=table,
+            _owned_pool=None if self.session is not None else pool,
         )
 
     # ------------------------------------------------------------------------
@@ -408,6 +442,10 @@ class _RunState:
     d2h: TransferEngine
     deferred: dict[str, list[TransferJob]]
     poison: object = None
+    last_ref: dict[str, int] = None  # type: ignore[assignment]
+    task_index: dict[str, int] = None  # type: ignore[assignment]
+    final_locations: dict[str, str] = None  # type: ignore[assignment]
+    provided_buffer_ids: set[int] = None  # type: ignore[assignment]
     outstanding_task: str | None = None
 
     def step(self, waiting_reason: str) -> None:
@@ -477,6 +515,21 @@ class _RunState:
                 self.poison(slot.buffer)  # type: ignore[operator]
             self.pool.put(slot.buffer)
             rec.fast = None
+            # dead everywhere: no later reference + no terminal placement ->
+            # the backing copy frees too (mirrors the simulator's rule)
+            if (
+                self.task_index[task.id] >= self.last_ref.get(obj, -1)
+                and obj not in self.final_locations
+                and rec.backing is not None
+                and rec.backing.state == "live"
+            ):
+                self.ledger.release("backing", rec.size_bytes)
+                backing_buf = rec.backing.buffer
+                rec.backing = None
+                # caller-provided buffers (initial values) are not pool-owned:
+                # dropping the slot suffices, ownership stays with the caller
+                if id(backing_buf) not in self.provided_buffer_ids:
+                    self.pool.put(backing_buf)
             self.trace.events.append(TraceEvent(t=now, kind="release", object_id=obj, task_id=task.id))
 
         # offloads: enqueue to_slow (no backing bytes charged until start)

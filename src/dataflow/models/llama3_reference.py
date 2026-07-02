@@ -79,7 +79,7 @@ class GoldenLlama3:
         q = ops.rope_fwd(h1 @ w["wq"], d.seq_len, d.n_heads, d.head_dim, d.rope_base)
         k = ops.rope_fwd(h1 @ w["wk"], d.seq_len, d.n_kv_heads, d.head_dim, d.rope_base)
         v = h1 @ w["wv"]
-        attn = ops.attention_reference(q, k, v, d.n_heads, d.n_kv_heads, d.head_dim)
+        attn = ops.attention_reference(q, k, v, d.n_heads, d.n_kv_heads, d.head_dim, d.seq_len)
         h_mid = x + attn @ w["wo"]
         h2 = ops.rmsnorm_reference(h_mid, w["ffn_norm_w"])
         x1 = h2 @ w["w1"]
