@@ -164,21 +164,23 @@ class BlockFwd(_Base):
 
     @staticmethod
     def _stage_qkv_rope(kctx, K, d, st):
-        h1, w = st["h1"], st["w"]
+        # write-through: rope/GEMM outputs land DIRECTLY in the ctx views
+        # when a context is attached — no scratch double + no copy pass
+        h1, w, a = st["h1"], st["w"], st["a"]
         qm = h1 @ w["wq"]
-        q = torch.empty_like(qm)
+        q = a["q"] if a is not None else torch.empty_like(qm)
         pos = ops.positions_for(d.seq_spec, qm.shape[0], qm.device)
         K.rope_fwd(kctx, qm, q, pos, d.n_heads, d.head_dim, d.rope_base)
         km = h1 @ w["wk"]
-        k = torch.empty_like(km)
+        k = a["k"] if a is not None else torch.empty_like(km)
         K.rope_fwd(kctx, km, k, pos, d.n_kv_heads, d.head_dim, d.rope_base)
-        v = h1 @ w["wv"]
+        if a is not None:
+            v = a["v"]
+            torch.matmul(h1, w["wv"], out=v)
+        else:
+            v = h1 @ w["wv"]
         st.pop("h1")
         st.update(q=q, k=k, v=v)
-        if st["a"] is not None:
-            st["a"]["q"].copy_(q)
-            st["a"]["k"].copy_(k)
-            st["a"]["v"].copy_(v)
 
     @staticmethod
     def _stage_attn(kctx, K, d, st):
@@ -193,15 +195,19 @@ class BlockFwd(_Base):
 
     @staticmethod
     def _stage_resid1_norm2(kctx, K, d, st):
-        h_mid = st["x"] + st["attn_out"] @ st["w"]["wo"]
+        a = st["a"]
+        if a is not None:
+            h_mid = a["h_mid"]
+            torch.addmm(st["x"], st["attn_out"], st["w"]["wo"], out=h_mid)
+        else:
+            h_mid = st["x"] + st["attn_out"] @ st["w"]["wo"]
         h2 = torch.empty_like(h_mid)
         rstd = torch.empty(d.tokens, dtype=torch.float32, device=h_mid.device)
         K.rmsnorm_fwd(kctx, h_mid, st["w"]["ffn_norm_w"], h2, rstd)
         st.pop("attn_out")
         st.update(h_mid=h_mid, h2=h2)
-        if st["a"] is not None:
-            st["a"]["h_mid"].copy_(h_mid)
-            st["a"]["rstd_ffn"].copy_(rstd)
+        if a is not None:
+            a["rstd_ffn"].copy_(rstd)
 
     @staticmethod
     def _stage_up_proj(kctx, K, d, st):
@@ -224,7 +230,7 @@ class BlockFwd(_Base):
 
     @staticmethod
     def _stage_down_resid(kctx, K, d, st):
-        st["y"].copy_(torch.addmm(st["h_mid"], st.pop("s"), st["w"]["w2"]))
+        torch.addmm(st["h_mid"], st.pop("s"), st["w"]["w2"], out=st["y"])
         st.pop("h_mid")
 
     # (stage_name, fn, emitted context fields)
@@ -371,8 +377,7 @@ class BlockBwd(_Base):
         dx_n, dattn_norm = norm_bwd(dh1, x, a["rstd_attn"], w["attn_norm_w"])
         del dh1
         acc("attn_norm_w", dattn_norm)
-        dh_mid.add_(dx_n)
-        dx_out.copy_(dh_mid)
+        torch.add(dh_mid, dx_n, out=dx_out)
 
 
 HEAD_CHUNK_SCRATCH_BYTES = 512 << 20  # per (chunk, vocab) bf16 buffer

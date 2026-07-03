@@ -95,14 +95,18 @@ class Qwen35LinBlockFwd(BlockFwd):
 
     @staticmethod
     def _stage_proj(kctx, K, d, st):
-        h1, w = st["h1"], st["w"]
-        qkvz = h1 @ w["w_qkvz"]
-        ba = h1 @ w["w_ba"]
+        # write-through: the two projections land directly in the ctx views
+        # (768 MB scratch double + copy pass saved at bs32 otherwise)
+        h1, w, a = st["h1"], st["w"], st["a"]
+        if a is not None:
+            qkvz, ba = a["qkvz"], a["ba"]
+            torch.matmul(h1, w["w_qkvz"], out=qkvz)
+            torch.matmul(h1, w["w_ba"], out=ba)
+        else:
+            qkvz = h1 @ w["w_qkvz"]
+            ba = h1 @ w["w_ba"]
         st.pop("h1")
         st.update(qkvz=qkvz, ba=ba)
-        if st["a"] is not None:
-            st["a"]["qkvz"].copy_(qkvz)
-            st["a"]["ba"].copy_(ba)
 
     @staticmethod
     def _stage_conv(kctx, K, d, st):
@@ -161,12 +165,16 @@ class Qwen35LinBlockFwd(BlockFwd):
         y2 = torch.empty_like(o2)
         rstd = torch.empty(rows, dtype=torch.float32, device=o2.device)
         K.gated_rmsnorm_fwd(kctx, o2, z2, st["w"]["lin_norm_w"], y2, rstd)
-        xo = torch.addmm(st["x"], y2.view(t, d.value_dim), st["w"]["w_out"])
+        a = st["a"]
+        if a is not None:
+            xo = a["xo"]
+            torch.addmm(st["x"], y2.view(t, d.value_dim), st["w"]["w_out"], out=xo)
+        else:
+            xo = torch.addmm(st["x"], y2.view(t, d.value_dim), st["w"]["w_out"])
         st.pop("core_out"), st.pop("qkvz")
         st["h_mid"] = xo  # feeds the shared MLP-tail stages
-        if st["a"] is not None:
-            st["a"]["rstd_gate"].copy_(rstd)
-            st["a"]["xo"].copy_(xo)
+        if a is not None:
+            a["rstd_gate"].copy_(rstd)
 
     @staticmethod
     def _stage_ffn_norm(kctx, K, d, st):
@@ -392,8 +400,7 @@ class Qwen35LinBlockBwd(_Base):
         dx_n, dattn = norm_bwd(dh1, x, a["rstd_attn"], w["attn_norm_w"])
         del dh1
         acc("attn_norm_w", dattn)
-        dxo.add_(dx_n)
-        dx_out.copy_(dxo)
+        torch.add(dxo, dx_n, out=dx_out)
 
 
 # ---------------------------------------------------------------------------
@@ -434,18 +441,23 @@ class Qwen35AttnBlockFwd(BlockFwd):
 
     @staticmethod
     def _stage_qkv_gate(kctx, K, d, st):
-        h1, w = st["h1"], st["w"]
-        qg = h1 @ w["wq"]
-        qm, gate = qg[:, : d.attn_dim], qg[:, d.attn_dim :]
-        km = h1 @ w["wk"]
-        v = h1 @ w["wv"]
-        st.pop("h1")
-        st.update(qm=qm.contiguous(), gate=gate.contiguous(), km=km, v=v)
-        if st["a"] is not None:
-            st["a"]["qm"].copy_(qm)
-            st["a"]["km"].copy_(km)
-            st["a"]["gate"].copy_(gate)
-            st["a"]["v"].copy_(v)
+        h1, w, a = st["h1"], st["w"], st["a"]
+        qg = h1 @ w["wq"]  # ONE doubled GEMM: [Q_all | gate_all] — its two
+        qm, gate = qg[:, : d.attn_dim], qg[:, d.attn_dim :]  # ctx fields are
+        # slices of one output, so those copies stay (contiguity contract)
+        if a is not None:
+            km, v = a["km"], a["v"]
+            torch.matmul(h1, w["wk"], out=km)
+            torch.matmul(h1, w["wv"], out=v)
+            a["qm"].copy_(qm)
+            a["gate"].copy_(gate)
+            st.pop("h1")
+            st.update(qm=a["qm"], gate=a["gate"], km=km, v=v)
+        else:
+            km = h1 @ w["wk"]
+            v = h1 @ w["wv"]
+            st.pop("h1")
+            st.update(qm=qm.contiguous(), gate=gate.contiguous(), km=km, v=v)
 
     @staticmethod
     def _stage_qknorm_rope(kctx, K, d, st):
@@ -479,10 +491,13 @@ class Qwen35AttnBlockFwd(BlockFwd):
     def _stage_gate_o(kctx, K, d, st):
         t = st["x"].shape[0]
         gated = st.pop("attn_out") * torch.sigmoid(st.pop("gate").float()).to(torch.bfloat16)
-        xo = torch.addmm(st["x"], gated, st["w"]["wo"])
+        a = st["a"]
+        if a is not None:
+            xo = a["xo"]
+            torch.addmm(st["x"], gated, st["w"]["wo"], out=xo)
+        else:
+            xo = torch.addmm(st["x"], gated, st["w"]["wo"])
         st["h_mid"] = xo
-        if st["a"] is not None:
-            st["a"]["xo"].copy_(xo)
 
     _stage_ffn_norm = staticmethod(Qwen35LinBlockFwd._stage_ffn_norm)
 
@@ -642,8 +657,7 @@ class Qwen35AttnBlockBwd(_Base):
         dx_n, dattn_norm = norm_bwd(dh1, x, a["rstd_attn"], w["attn_norm_w"])
         del dh1
         acc("attn_norm_w", dattn_norm)
-        dxo.add_(dx_n)
-        dx_out.copy_(dxo)
+        torch.add(dxo, dx_n, out=dx_out)
 
 
 def _opt_block_layout(d, task, w_size):

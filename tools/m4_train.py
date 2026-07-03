@@ -18,9 +18,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
 from dataclasses import replace
 from pathlib import Path
+
+# Expandable segments measured strictly better on both families (A/B,
+# artifacts/m5/alloc-ab-*): torch reserved collapses to the single-task
+# allocated floor (qwen35 bs32: 6.95 -> 5.55 GiB vs 5.39 floor), device
+# peak -1.3..-2.0 GiB, wall +1.2%. Env wins if the caller sets it.
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 import torch
 

@@ -54,11 +54,19 @@ class Qwen3BlockFwd(BlockFwd):
 
     @staticmethod
     def _stage_qkv_qknorm(kctx, K, d, st):
-        h1, w = st["h1"], st["w"]
+        h1, w, a = st["h1"], st["w"], st["a"]
         t, h, kvh, hd = d.tokens, d.n_heads, d.n_kv_heads, d.head_dim
-        qm = h1 @ w["wq"]
-        km = h1 @ w["wk"]
-        v = h1 @ w["wv"]
+        # write-through: projections land directly in the ctx views when a
+        # context is attached (bwd reads PRE-norm qm/km from ctx)
+        if a is not None:
+            qm, km, v = a["qm"], a["km"], a["v"]
+            torch.matmul(h1, w["wq"], out=qm)
+            torch.matmul(h1, w["wk"], out=km)
+            torch.matmul(h1, w["wv"], out=v)
+        else:
+            qm = h1 @ w["wq"]
+            km = h1 @ w["wk"]
+            v = h1 @ w["wv"]
         qn = torch.empty_like(qm)
         rstd_q = torch.empty(t * h, dtype=torch.float32, device=qm.device)
         K.rmsnorm_fwd(kctx, qm.view(t * h, hd), w["q_norm_w"], qn.view(t * h, hd), rstd_q)
@@ -67,12 +75,9 @@ class Qwen3BlockFwd(BlockFwd):
         K.rmsnorm_fwd(kctx, km.view(t * kvh, hd), w["k_norm_w"], kn.view(t * kvh, hd), rstd_k)
         st.pop("h1")
         st.update(qn=qn, kn=kn, v=v)
-        if st["a"] is not None:
-            st["a"]["qm"].copy_(qm)
-            st["a"]["km"].copy_(km)
-            st["a"]["rstd_q"].copy_(rstd_q)
-            st["a"]["rstd_k"].copy_(rstd_k)
-            st["a"]["v"].copy_(v)
+        if a is not None:
+            a["rstd_q"].copy_(rstd_q)
+            a["rstd_k"].copy_(rstd_k)
 
     @staticmethod
     def _stage_rope(kctx, K, d, st):
@@ -226,8 +231,7 @@ class Qwen3BlockBwd(BlockBwd):
         dx_n, dattn_norm = norm_bwd(dh1, x, a["rstd_attn"], w["attn_norm_w"])
         del dh1
         acc("attn_norm_w", dattn_norm)
-        dh_mid.add_(dx_n)
-        dx_out.copy_(dh_mid)
+        torch.add(dh_mid, dx_n, out=dx_out)
 
 
 def build_qwen3_resolver(
