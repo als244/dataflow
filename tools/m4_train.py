@@ -33,6 +33,7 @@ from dataflow.training.profiling import apply_measured_costs, cached_pcie, load_
 from dataflow.training.replay import replay_gap_pct
 from dataflow.training.shaped_llama3 import ShapedLlamaConfig
 from dataflow.training.shaped_qwen3 import ShapedQwen3Config
+from dataflow.training.shaped_qwen35 import ShapedQwen35Config
 from dataflow.training.train_loop import train
 
 GIB = 1024**3
@@ -60,6 +61,12 @@ CONFIGS = {
     "qwen3-8b": ShapedQwen3Config.qwen3_8b(),
     "qwen3-8b-s1k-bs8ga8": ShapedQwen3Config.qwen3_8b(seq_len=1024, batch=8, grad_accum_rounds=8),
     "qwen3-8b-s1k-bs2ga32": ShapedQwen3Config.qwen3_8b(seq_len=1024, batch=2, grad_accum_rounds=32),
+    # Qwen3.5-dense family (hybrid: 3x DeltaNet + 1x gated attention per 4
+    # layers; tied embeddings — one W_embed serves embed AND head)
+    "qwen35-9b": ShapedQwen35Config.qwen35_9b(),
+    "qwen35-9b-s1k-bs8ga8": ShapedQwen35Config.qwen35_9b(
+        seq_len=1024, batch=8, grad_accum_rounds=8,
+    ),
 }
 
 
