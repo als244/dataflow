@@ -76,8 +76,10 @@ def main() -> None:
     parser.add_argument("--budgets", type=str, default=None,
                         help="LEDGER budgets in GiB (planned object bytes), e.g. 12,16,20. "
                              "Physical usage exceeds this by the geometry tax + op "
-                             "scratch + CUDA context — use --device-gib for a hard "
-                             "device envelope instead.")
+                             "scratch + CUDA context. QUOTING CONVENTION: headline "
+                             "sweeps use --device-gib instead, so a quoted 'N GiB' "
+                             "means verified device usage <= N GiB; --budgets remains "
+                             "for internal/ledger-space experiments.")
     parser.add_argument(
         "--device-gib", type=str, default=None,
         help="HARD device envelope(s) in GiB: everything — placed extent, "
@@ -159,7 +161,8 @@ def main() -> None:
         backend = CudaBackend()
         report = train(program, cfg, backend, steps=args.steps, seed=11)
         real_tok_s = tokens_per_step / (report.steady_state_makespan_us / 1e6)
-        steady_wall = sum(report.step_wall_s[1:]) / max(len(report.step_wall_s) - 1, 1)
+        wall_tail = report.step_wall_s[1:] or report.step_wall_s  # steps=1: no steady tail
+        steady_wall = sum(wall_tail) / len(wall_tail)
         wall_tok_s = tokens_per_step / steady_wall
         print(json.dumps({
             "annotated": str(args.annotated),
@@ -262,6 +265,9 @@ def main() -> None:
     else:
         budget_list = [float(x) for x in args.budgets.split(",")]
         device_meta = {}
+        print("NOTE: --budgets quotes LEDGER budgets (device usage runs higher "
+              "by geometry tax + scratch + context). Headline sweeps use "
+              "--device-gib so 'N GiB' means device usage <= N GiB.")
 
     if args.probe_max:
         from dataflow.runtime import Engine
@@ -295,6 +301,14 @@ def main() -> None:
 
     rows = []
     for gib in budget_list:
+        # QUOTING CONVENTION (Shein, 2026-07-03): sweeps are quoted in DEVICE
+        # budget — "28 GiB" means verified device usage <= 28 GiB. In
+        # --device-gib mode budget_gib is therefore the ENVELOPE; the derived
+        # ledger number stays in planned_budget_gib. --budgets (ledger) rows
+        # are labeled by their ledger number, as all pre-2026-07-03 results
+        # were; budget_semantics says which reading applies.
+        quoted_gib = device_meta[gib][0] if gib in device_meta else gib
+        semantics = "device" if gib in device_meta else "ledger"
         cap = int(gib * GIB)
 
         def plan_at(budget: int):
@@ -348,7 +362,8 @@ def main() -> None:
             # table stays comprehensive, and say why the real side is absent
             print(f"placement infeasible at {gib:g} GiB: {exc}")
             rows.append({
-                "budget_gib": gib,
+                "budget_gib": quoted_gib,
+                "budget_semantics": semantics,
                 "planned_budget_gib": eff / GIB,
                 "placement_mode": args.placement,
                 "extent_budget": args.extent_budget,
@@ -360,7 +375,8 @@ def main() -> None:
             continue
         steady_us = report.steady_state_makespan_us
         real_tok_s = tokens_per_step / (steady_us / 1e6)
-        steady_wall = sum(report.step_wall_s[1:]) / max(len(report.step_wall_s) - 1, 1)
+        wall_tail = report.step_wall_s[1:] or report.step_wall_s  # steps=1: no steady tail
+        steady_wall = sum(wall_tail) / len(wall_tail)
         wall_tok_s = tokens_per_step / steady_wall
         gap = replay_gap_pct(planned.program, report.last_trace, report.step_makespan_us[-1])
         if gib in device_meta:
@@ -373,7 +389,8 @@ def main() -> None:
                   f"{'<=' if actual <= env_b else 'EXCEEDS'} "
                   f"envelope {device_meta[gib][0]:g} GiB")
         row = {
-            "budget_gib": gib,
+            "budget_gib": quoted_gib,
+            "budget_semantics": semantics,
             "planned_budget_gib": eff / GIB,
             **({"device_envelope_gib": device_meta[gib][0],
                 "fixed_overhead_gib": device_meta[gib][2] / GIB,
@@ -447,7 +464,9 @@ def main() -> None:
         print(f"\nplain-torch golden baseline: {base_ms:.1f} ms/step "
               f"({result['baseline_tokens_per_s']:.0f} tok/s)")
 
-    tag = "_".join(f"{b:g}" for b in budget_list) + ("-rc" if args.recompute else "")
+    quoted_budgets = [device_meta[b][0] if b in device_meta else b for b in budget_list]
+    tag = "_".join(f"{b:g}" for b in quoted_budgets) \
+        + ("dev" if device_meta else "") + ("-rc" if args.recompute else "")
     (args.out / f"m4-{args.config}-{tag}.summary.json").write_text(json.dumps(result, indent=2) + "\n")
     print(f"\nwrote {args.out}/m4-{args.config}-{tag}.summary.json")
 

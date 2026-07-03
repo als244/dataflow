@@ -128,6 +128,21 @@ not percent-level); B=1 grid shapes for the fla scan kernels.
 - Design/spec: `docs/notes/qwen35-design.md` (§7 = status checklist).
   Family how-to: `docs/extending.md` §6.
 
+## Budget-quoting convention (Shein, 2026-07-03)
+
+Sweeps are quoted in **DEVICE budget**: a quoted "28 GiB" means verified
+device usage ≤ 28 GiB. Use `--device-gib 16,20,28` (NOT `--budgets`) for
+any headline sweep — it derives the internal ledger budget, post-run
+verifies the envelope, writes `budget_gib` = the envelope with
+`budget_semantics: "device"` (ledger detail stays in
+`planned_budget_gib`), and tags the summary filename `...-<N>dev`.
+`--budgets` remains for internal ledger-space experiments and prints a
+reminder. All pre-2026-07-03 result rows (llama3/qwen3 tables,
+results/m4/*, results/m5/qwen3-v1) are LEDGER-quoted — do not mix the
+two readings in one table; re-run under --device-gib when a comparison
+needs device terms. Wired in tools/m4_train.py (smoked both modes on
+mini; also fixed a --steps 1 ZeroDivisionError in wall averaging).
+
 ## Conventions reminders (for a fresh session)
 
 - Commits in BOTH repos as `als244 <andrew.sheinberg@gmail.com>`
