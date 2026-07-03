@@ -177,6 +177,42 @@ Re-running the full 11-point table (results/m4/eager-v1/ vs fused-v1/):
   gaps stay ≤1% (scheduling faithful); sustained-clock calibration remains
   the follow-up.
 
+## Known sources of sim-vs-real discrepancy (measured, bs4ga4 @ 18 GiB)
+
+The scheduling claim is strong; the absolute-throughput prediction carries a
+documented ±5% cost-model band. In decreasing order of magnitude:
+
+1. **DRAM contention from concurrent PCIe traffic (±4–5%, dominant).**
+   Profiling times kernels on an idle bus; a real step keeps DMA grinding
+   (~34% h2d / ~21% d2h duty here), which steals bandwidth from
+   memory-bound kernels. Bracketed experimentally: idle-bus profiling →
+   tasks run +5…7% slower in-run (sim optimistic, real −3.7% vs sim);
+   saturated-bidi profiling (`contend_pcie`) → tasks run 3…6% *faster*
+   in-run (sim pessimistic, real +5.3% vs sim). Truth tracks the plan's
+   duty cycle, between the bounds. Unbiased fix if ever needed:
+   duty-cycle-matched contention (profile → plan → re-profile at the
+   plan's duty cycle) — accepted as ±5% simplicity for now.
+2. **Transient boost clocks (~1.2%, fixed).** Cold profiling rode the
+   boost window; the 10s thermal soak before timing removed it
+   (−4.97% → −3.72% on the reference point). Amortized to ~zero by the
+   profile cache.
+3. **Placement offset-coupling (0–4.7%, config-dependent, replay gap).**
+   Assigned offsets stall transfers on their *specific* prior instance —
+   stricter than the sim's bytes-only stall. Peaks with offset churn:
+   ga16 @ 12 GiB 4.7%; ≤0.5% on 8b/bs4 configs. Removed entirely by VMM
+   chunk-backing (M5).
+4. **Transfer-time booking (pessimistic, mostly hidden).** Plans book
+   worst-case bidirectional bandwidth (25.5/25.7 GB/s); the run achieves a
+   duty-cycle blend (33.5/36.8). Impact bounded by the exposed-transfer
+   fraction (~8% of the lane here); kept deliberately conservative.
+5. **Pure scheduling infidelity (~0.4%).** Replay gap with measured
+   durations — dispatcher pacing, token latency, admission ordering. This
+   is the number the runtime's design is accountable for.
+
+The plan's *decisions* are insensitive to 1–2: cost shifts are near-uniform
+across families, so recompute choices did not change between the profiling
+environments (64/128 in all three reference runs).
+
 ## What M4 leaves open (→ M5)
 
 - Aggressive dispatch mode to close the small-task pacing gap.

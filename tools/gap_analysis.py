@@ -30,7 +30,7 @@ from dataflow.runtime.device.cuda import CudaBackend
 from dataflow.tasks.llama3_blocks import build_resolver
 from dataflow.training.llama3_lowering import dims_of, lower_llama3
 from dataflow.training.planning import plan_program
-from dataflow.training.profiling import apply_measured_costs, profile_program
+from dataflow.training.profiling import apply_measured_costs, load_or_profile
 from dataflow.training.replay import replay_gap_pct
 from dataflow.training.train_loop import train
 
@@ -67,11 +67,11 @@ def main() -> None:
         )
 
     program = build_raw()
-    profiles = profile_program(
+    profiles = load_or_profile(
         program, build_resolver(dims), backend, contend_pcie=args.contend,
     )
     rc_all = {rw.object_id: 1 for rw in program.recompute_rewrites}
-    profiles.update(profile_program(
+    profiles.update(load_or_profile(
         build_raw(rc_all), build_resolver(dims), backend, contend_pcie=args.contend,
     ))
     measured = apply_measured_costs(program, profiles)

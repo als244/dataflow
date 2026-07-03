@@ -30,7 +30,7 @@ from dataflow.runtime.device.cuda import CudaBackend
 from dataflow.tasks.llama3_blocks import build_resolver
 from dataflow.training.llama3_lowering import dims_of, lower_llama3
 from dataflow.training.planning import plan_program
-from dataflow.training.profiling import apply_measured_costs, profile_program
+from dataflow.training.profiling import apply_measured_costs, load_or_profile
 from dataflow.training.replay import replay_gap_pct
 from dataflow.training.shaped_llama3 import ShapedLlamaConfig
 from dataflow.training.train_loop import train
@@ -80,6 +80,8 @@ def main() -> None:
              "save-all context across rounds can exceed system memory)",
     )
     parser.add_argument("--out", type=Path, default=Path("artifacts/m4"))
+    parser.add_argument("--refresh-profiles", action="store_true",
+                        help="ignore the profile cache and re-measure")
     args = parser.parse_args()
 
     from dataflow.tasks.kernels import resolve_kernels
@@ -105,12 +107,17 @@ def main() -> None:
 
     program = build_raw()
     t0 = time.perf_counter()
-    profiles = profile_program(program, build_resolver(dims), backend)
+    profiles = load_or_profile(
+        program, build_resolver(dims), backend, refresh=args.refresh_profiles,
+    )
     if args.recompute:
         # recompute variants contain distinct signatures: block_fwd without a
         # context output, and block_recompute tasks — profile them too
         rc_all = {rw.object_id: 1 for rw in program.recompute_rewrites}
-        profiles.update(profile_program(build_raw(rc_all), build_resolver(dims), backend))
+        profiles.update(load_or_profile(
+            build_raw(rc_all), build_resolver(dims), backend,
+            refresh=args.refresh_profiles,
+        ))
     measured = apply_measured_costs(program, profiles)
     print(f"profiled {len(profiles)} unique task signatures in {time.perf_counter()-t0:.1f}s")
 

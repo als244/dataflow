@@ -226,3 +226,59 @@ def apply_measured_costs(program: Program, profiles: dict[tuple, TaskProfile]) -
             },
         ))
     return replace(program, tasks=tuple(new_tasks))
+
+
+def load_or_profile(
+    program: Program,
+    resolver,
+    backend,
+    *,
+    cache_dir=None,
+    kernel_set: dict[str, str] | None = None,
+    refresh: bool = False,
+    **kwargs,
+) -> dict[tuple, TaskProfile]:
+    """Disk-cached profile_program.
+
+    Costs are measurements of a specific (task signatures, kernel set,
+    profiling environment, device) — the cache key covers all four, so a
+    kernel swap or a contended-mode toggle re-measures instead of silently
+    reusing stale numbers. One cache hit skips soak + all timing: startup
+    becomes cheap for every repeat run of the same config.
+    """
+    import hashlib
+    import json
+    from pathlib import Path
+
+    import torch
+
+    sizes = program.object_sizes()
+    signatures = sorted({repr(_signature(t, sizes)) for t in program.tasks})
+    if kernel_set is None and hasattr(resolver, "kernel_set"):
+        kernel_set = resolver.kernel_set.describe()
+    env = {
+        "signatures": signatures,
+        "kernel_set": kernel_set or {},
+        "device": torch.cuda.get_device_name() if torch.cuda.is_available() else "cpu",
+        "soak_seconds": kwargs.get("soak_seconds", 10.0),
+        "contend_pcie": kwargs.get("contend_pcie", False),
+        "repeats": kwargs.get("repeats", 9),
+        "torch": torch.__version__,
+    }
+    key = hashlib.sha256(json.dumps(env, sort_keys=True).encode()).hexdigest()[:16]
+    cache_dir = Path(cache_dir) if cache_dir is not None else Path("artifacts/profile-cache")
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    path = cache_dir / f"profiles-{key}.json"
+
+    if path.exists() and not refresh:
+        raw = json.loads(path.read_text())
+        print(f"profile cache HIT {path.name} ({len(raw['profiles'])} signatures)")
+        return {eval(k): TaskProfile(**v) for k, v in raw["profiles"].items()}
+
+    profiles = profile_program(program, resolver, backend, **kwargs)
+    path.write_text(json.dumps({
+        "env": env,
+        "profiles": {repr(k): vars(v) for k, v in profiles.items()},
+    }, indent=2) + "\n")
+    print(f"profile cache MISS -> wrote {path.name}")
+    return profiles
