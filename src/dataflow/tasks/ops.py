@@ -310,13 +310,18 @@ CE_CHUNK_ROWS = 1024  # bounds fp32 softmax temporaries to ~2 x chunk x vocab
 
 def ce_loss_fwd_bwd(
     logits: torch.Tensor, targets: torch.Tensor, loss_out: torch.Tensor, dlogits_out: torch.Tensor,
+    *, total_rows: int | None = None,
 ) -> None:
-    """Mean CE over tokens; writes fp32 scalar loss and bf16 dlogits.
+    """CE over tokens; writes fp32 scalar loss and bf16 dlogits.
 
-    Row-chunked: per-row math (logsumexp/softmax) is unchanged; only the
-    final mean accumulates across chunks. Unchunked, the fp32 temporaries
-    are ~2 x tokens x vocab x 4 bytes (4+ GB at llama vocab)."""
+    ``total_rows`` is the normalization count (defaults to logits' rows =
+    plain mean CE); a chunked caller passes the FULL token count so partial
+    losses/grads sum to the true mean. Row-chunked internally: per-row math
+    (logsumexp/softmax) is unchanged; only the final mean accumulates
+    across chunks. Unchunked, the fp32 temporaries are ~2 x tokens x vocab
+    x 4 bytes (4+ GB at llama vocab)."""
     t = logits.shape[0]
+    total = int(total_rows) if total_rows is not None else t
     nll_sum = torch.zeros((), device=logits.device, dtype=torch.float32)
     tl = targets.long()
     for lo in range(0, t, CE_CHUNK_ROWS):
@@ -330,8 +335,8 @@ def ce_loss_fwd_bwd(
             1, tc.unsqueeze(1),
             torch.full((hi - lo, 1), -1.0, device=logits.device, dtype=torch.float32),
         )
-        dlogits_out[lo:hi].copy_((soft / t).to(dlogits_out.dtype))
-    loss_out.copy_((nll_sum / t).reshape(loss_out.shape))
+        dlogits_out[lo:hi].copy_((soft / total).to(dlogits_out.dtype))
+    loss_out.copy_((nll_sum / total).reshape(loss_out.shape))
 
 
 def ce_loss_reference(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:

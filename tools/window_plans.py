@@ -53,12 +53,12 @@ GIB = 1024**3
 # task-id shapes emitted by the lowering (step index is always the first
 # integer group); parsing asserts full coverage so renamed families fail loudly
 _TASK_RE = re.compile(
-    r"^(embed_fwd|block_fwd|head_fwd|loss_bwd|head_bwd|block_recompute|block_bwd"
+    r"^(embed_fwd|block_fwd|head_loss|block_recompute|block_bwd"
     r"|embed_bwd|optimizer_embed|optimizer_head|optimizer)_(\d+)((?:_\d+)*)$"
 )
 # step-scoped object families (second group = step index); W_*/O_* are global
 _OBJ_RE = re.compile(
-    r"^(tokens|targets|y_embed|y|A|logits|dlogits|dy_embed|dy|loss|dW_embed|dW_head|dW)"
+    r"^(tokens|targets|y_embed|y|A|dy_embed|dy|loss|dW_embed|dW_head|dW)"
     r"_(\d+)((?:_\d+)*)$"
 )
 

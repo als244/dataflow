@@ -1,8 +1,11 @@
 """Fused cross-entropy loss fwd+bwd: Triton (default) + eager fallback.
 
 Op signature:
-- ``ce_loss_fwd_bwd(kctx, logits, targets, loss_out, dlogits_out)``:
-  mean CE over rows; loss_out fp32 scalar, dlogits bf16.
+- ``ce_loss_fwd_bwd(kctx, logits, targets, loss_out, dlogits_out,
+  total_rows=None)``: loss_out fp32 scalar = sum(nll) / total_rows,
+  dlogits scaled 1/total_rows; total_rows defaults to logits' row count
+  (= plain mean CE). A CHUNKED caller (the fused head) passes the FULL
+  token count so per-chunk partial means sum to the true mean.
 
 The eager form materializes ~2 x chunk x vocab fp32 (~1 GB scratch at llama
 vocab) and makes ~5 passes over the model's largest tensor. The fused kernel
@@ -29,8 +32,8 @@ def _eager_hint(logits: torch.Tensor, *a) -> int:
 register(
     "ce_loss_fwd_bwd", "eager", deterministic=True, allocates="torch",
     workspace=internal(_eager_hint), priority=0,
-    fn=lambda kctx, logits, targets, loss, dlogits:
-        ops.ce_loss_fwd_bwd(logits, targets, loss, dlogits),
+    fn=lambda kctx, logits, targets, loss, dlogits, total_rows=None:
+        ops.ce_loss_fwd_bwd(logits, targets, loss, dlogits, total_rows=total_rows),
 )
 
 try:
@@ -44,7 +47,7 @@ if triton is not None:
     @triton.jit
     def _ce_kernel(
         logits_ptr, targets_ptr, dlogits_ptr, nll_ptr,
-        n_rows, vocab, BLOCK: tl.constexpr,
+        total_rows, vocab, BLOCK: tl.constexpr,
     ):
         # int64 row index: row * vocab overflows int32 once rows x vocab
         # crosses 2^31 elements (qwen3.5's 248,320 vocab hits it at 8,650
@@ -69,8 +72,8 @@ if triton is not None:
         x_t = tl.load(base + target).to(tl.float32)
         tl.store(nll_ptr + row, lse - x_t)
 
-        # pass 2: dlogits = (exp(x - lse) - onehot) / n_rows
-        inv_n = 1.0 / n_rows
+        # pass 2: dlogits = (exp(x - lse) - onehot) / total_rows
+        inv_n = 1.0 / total_rows
         for off in range(0, vocab, BLOCK):
             mask = off + cols < vocab
             lv = tl.load(base + off + cols, mask=mask, other=0).to(tl.float32)
@@ -88,11 +91,12 @@ if triton is not None:
     @register("ce_loss_fwd_bwd", "triton", deterministic=True, allocates="torch",
               workspace=internal(_hint),
               requires=lambda c: c.get("triton"), priority=10)
-    def _ce(kctx, logits, targets, loss_out, dlogits_out):
+    def _ce(kctx, logits, targets, loss_out, dlogits_out, total_rows=None):
         n_rows, vocab = logits.shape
+        total = int(total_rows) if total_rows is not None else n_rows
         assert logits.is_contiguous() and dlogits_out.is_contiguous()
         nll = torch.empty(n_rows, device=logits.device, dtype=torch.float32)
         _ce_kernel[(n_rows,)](
-            logits, targets.int(), dlogits_out, nll, n_rows, vocab, BLOCK=_BLOCK,
+            logits, targets.int(), dlogits_out, nll, total, vocab, BLOCK=_BLOCK,
         )
-        loss_out.copy_((nll.sum() / n_rows).reshape(loss_out.shape))
+        loss_out.copy_((nll.sum() / total).reshape(loss_out.shape))

@@ -15,8 +15,9 @@ generic builder):
     O_embed, O_{i}, O_head               AdamW state, 2x params (initial, backing)
     y_embed_{s}_{r}, y_{s}_{r}_{i}       block outputs (activations)
     A_{s}_{r}_{i}                        saved backward context per block
-    logits_{s}_{r}, dlogits_{s}_{r}      head output / loss gradient
-    dy_*                                 activation gradients
+    dy_*                                 activation gradients (logits/dlogits
+                                         DO NOT EXIST — head_loss is fused
+                                         + token-chunked)
     dW_embed_{s}, dW_{s}_{i}, dW_head_{s}  parameter gradients (accumulated over rounds)
     loss_{s}_{r}                         scalar loss (final: backing)
 """

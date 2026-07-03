@@ -1,8 +1,8 @@
 """Family-generic *shaped* training-program builder.
 
 ONE chain grammar serves every model family: rounds of [embed_fwd,
-{kind}_fwd x L, head_fwd, loss_bwd, head_bwd, ({kind}_recompute?,
-{kind}_bwd) x L reversed, embed_bwd] plus optimizer tasks (interleaved or
+{kind}_fwd x L, head_loss (fused head+CE+head-bwd, token-chunked),
+({kind}_recompute?, {kind}_bwd) x L reversed, embed_bwd] plus optimizer tasks (interleaved or
 tail placement), grad-accum mutation patterns, recompute rewrites, and
 tied-embedding wiring. Object ids and task ids are family-INVARIANT
 (``W_{i}``, ``A_{s}_{r}_{i}``, ``block_fwd_{s}_{r}_{i}``, ...) — the whole
@@ -109,10 +109,14 @@ class LooseCosts:
 
         head_flops = 2.0 * t * d * cfg.vocab_size
         head_bytes = BF16 * (d * cfg.vocab_size + t * (d + cfg.vocab_size))
-        self.head_fwd_us = hw.matmul_us(head_flops, head_bytes)
-        self.head_bwd_us = hw.matmul_us(2.0 * head_flops, 2.0 * head_bytes)
-
-        self.loss_bwd_us = hw.mem_us(BF16 * 2.0 * t * cfg.vocab_size)
+        # head_loss = fused final-norm + head GEMM + CE + head backward
+        # (3x the head GEMM flops: fwd + dW + dX) — one task, chunked over
+        # tokens so no (t, vocab) tensor is ever materialized
+        self.head_loss_us = (
+            hw.matmul_us(head_flops, head_bytes)
+            + hw.mem_us(BF16 * 2.0 * t * cfg.vocab_size)
+            + hw.matmul_us(2.0 * head_flops, 2.0 * head_bytes)
+        )
 
         def opt_us(params: int) -> float:
             # read W, dW, m, v; write W, m, v (all bf16 here)
@@ -126,9 +130,11 @@ class LooseCosts:
         self.subops = {
             "embed_fwd": [{"kind": "roofline", "name": "gather", "flops": 0, "memory_bytes": int(embed_bytes), "efficiency": "memory"}],
             "embed_bwd": [{"kind": "roofline", "name": "scatter_accum", "flops": 0, "memory_bytes": int(2 * embed_bytes), "efficiency": "memory"}],
-            "head_fwd": [{"kind": "roofline", "name": "lm_head", "flops": int(head_flops), "memory_bytes": int(head_bytes), "efficiency": "matmul"}],
-            "head_bwd": [{"kind": "roofline", "name": "lm_head_bwd", "flops": int(2 * head_flops), "memory_bytes": int(2 * head_bytes), "efficiency": "matmul"}],
-            "loss_bwd": [{"kind": "roofline", "name": "ce_loss_bwd", "flops": 0, "memory_bytes": int(BF16 * 2 * t * cfg.vocab_size), "efficiency": "memory"}],
+            "head_loss": [
+                {"kind": "roofline", "name": "lm_head", "flops": int(head_flops), "memory_bytes": int(head_bytes), "efficiency": "matmul"},
+                {"kind": "roofline", "name": "ce_loss", "flops": 0, "memory_bytes": int(BF16 * 2 * t * cfg.vocab_size), "efficiency": "memory"},
+                {"kind": "roofline", "name": "lm_head_bwd", "flops": int(2 * head_flops), "memory_bytes": int(2 * head_bytes), "efficiency": "matmul"},
+            ],
             "optimizer_embed": [{"kind": "roofline", "name": "adamw", "flops": 0, "memory_bytes": int(BF16 * 7 * cfg.embed_params), "efficiency": "memory"}],
             "optimizer_head": [{"kind": "roofline", "name": "adamw", "flops": 0, "memory_bytes": int(BF16 * 7 * cfg.head_params), "efficiency": "memory"}],
         }
@@ -208,7 +214,6 @@ def build_shaped_program(
     w_embed = bf16(cfg.embed_params)
     w_head = bf16(cfg.head_params)
     y_bytes = bf16(t * d)
-    logits_bytes = bf16(t * cfg.vocab_size)
     ids_bytes = dtype_nbytes((t,), "int32")
 
     if kind_of is None:
@@ -340,35 +345,31 @@ def build_shaped_program(
                     group_key=f"layer_{i}",
                 ))
             last_y = f"y_{s}_{r}_{cfg.n_layers - 1}"
-            task(f"head_fwd_{s}_{r}", "head_fwd", [last_y, "W_embed" if tied else "W_head"],
-                 [OutputSpec(id=f"logits_{s}_{r}", size_bytes=logits_bytes, role="activation",
-                             tensor=TensorMeta(dtype="bf16", shape=(t, cfg.vocab_size)))],
-                 loose.head_fwd_us, group="forward")
 
-            # ---- loss + backward ----
-            task(f"loss_bwd_{s}_{r}", "loss_bwd", [f"logits_{s}_{r}", f"targets_{s}_{r}"],
-                 [OutputSpec(id=f"dlogits_{s}_{r}", size_bytes=logits_bytes, role="gradient",
-                             tensor=TensorMeta(dtype="bf16", shape=(t, cfg.vocab_size))),
-                  OutputSpec(id=f"loss_{s}_{r}", size_bytes=4, role="output",
-                             tensor=TensorMeta(dtype="fp32", shape=(1,)))],
-                 loose.loss_bwd_us, group="backward")
-            final_locations[f"loss_{s}_{r}"] = "backing"
-
+            # ---- fused head + loss + head backward (ONE task) ----
+            # Chunked over tokens inside the executable: the (t, vocab)
+            # logits/dlogits never exist as IR objects (or at all) — the
+            # single biggest activation pair in a naive lowering.
             head_w = "W_embed" if tied else "W_head"
             head_dw = f"dW_embed_{s}" if tied else f"dW_head_{s}"
-            head_grad_inputs = [f"dlogits_{s}_{r}", last_y, head_w]
-            head_outs = [OutputSpec(id=f"dy_{s}_{r}_{cfg.n_layers - 1}", size_bytes=y_bytes, role="gradient",
-                                    tensor=TensorMeta(dtype="bf16", shape=(t, d)))]
+            head_inputs = [last_y, f"targets_{s}_{r}", head_w]
+            head_outs = [
+                OutputSpec(id=f"dy_{s}_{r}_{cfg.n_layers - 1}", size_bytes=y_bytes, role="gradient",
+                           tensor=TensorMeta(dtype="bf16", shape=(t, d))),
+                OutputSpec(id=f"loss_{s}_{r}", size_bytes=4, role="output",
+                           tensor=TensorMeta(dtype="fp32", shape=(1,))),
+            ]
             head_mutates: tuple[str, ...] = ()
             if first_round:
-                # tied: head_bwd runs before embed_bwd in the round, so IT
+                # tied: head_loss runs before embed_bwd in the round, so IT
                 # creates the shared dW_embed; embed_bwd then accumulates.
-                head_outs.append(OutputSpec(id=head_dw, size_bytes=w_head if tied else w_head, role="gradient"))
+                head_outs.append(OutputSpec(id=head_dw, size_bytes=w_head, role="gradient"))
             else:
-                head_grad_inputs.append(head_dw)
+                head_inputs.append(head_dw)
                 head_mutates = (head_dw,)
-            task(f"head_bwd_{s}_{r}", "head_bwd", head_grad_inputs, head_outs,
-                 loose.head_bwd_us, mutates=head_mutates, group="backward")
+            task(f"head_loss_{s}_{r}", "head_loss", head_inputs, head_outs,
+                 loose.head_loss_us, mutates=head_mutates, group="backward")
+            final_locations[f"loss_{s}_{r}"] = "backing"
             if interleaved and last_round:
                 opt_head()  # dW_head_{s} saw its final mutation just now
 

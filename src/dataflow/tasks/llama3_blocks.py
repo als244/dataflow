@@ -350,41 +350,33 @@ class BlockBwd(_Base):
         dx_out.copy_(dh_mid + dx_n)
 
 
-@dataclass(frozen=True)
-class HeadFwd(_Base):
-    @property
-    def hl(self) -> PackedLayout:
-        return head_weight_layout(self.dims)
+HEAD_CHUNK_SCRATCH_BYTES = 512 << 20  # per (chunk, vocab) bf16 buffer
 
-    def launch(self, ctx: TaskContext) -> None:
-        d = self.dims
-        es, kctx = self._stream_ctx(ctx)
-        with torch.cuda.stream(es):
-            y = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
-            wh = self.hl.views(self._in(ctx, 1))
-            logits = torch_view(self._out(ctx, 0), (d.tokens, d.vocab_size), torch.bfloat16)
-            yn = torch.empty_like(y)
-            rstd = torch.empty(d.tokens, dtype=torch.float32, device=y.device)
-            # final model norm: a REAL learned weight (packed with the table)
-            self.kernels.rmsnorm_fwd(kctx, y, wh["final_norm_w"], yn, rstd)
-            torch.matmul(yn, wh["w"].T, out=logits)
+
+def head_chunk_rows(vocab_size: int) -> int:
+    """Token-chunk size for the fused head: bounds each internal
+    (chunk, vocab) bf16 buffer (logits, dlogits) to
+    ~HEAD_CHUNK_SCRATCH_BYTES. Deterministic in the dims, so profiled
+    costs are stable."""
+    rows = HEAD_CHUNK_SCRATCH_BYTES // (2 * vocab_size)
+    return max(256, (rows // 256) * 256)
 
 
 @dataclass(frozen=True)
-class LossBwd(_Base):
-    def launch(self, ctx: TaskContext) -> None:
-        d = self.dims
-        es, kctx = self._stream_ctx(ctx)
-        with torch.cuda.stream(es):
-            logits = torch_view(self._in(ctx, 0), (d.tokens, d.vocab_size), torch.bfloat16)
-            targets = torch_view(self._in(ctx, 1), (d.tokens,), torch.int32)
-            dlogits = torch_view(self._out(ctx, 0), (d.tokens, d.vocab_size), torch.bfloat16)
-            loss = torch_view(self._out(ctx, 1), (1,), torch.float32)
-            self.kernels.ce_loss_fwd_bwd(kctx, logits, targets, loss, dlogits)
+class HeadLoss(_Base):
+    """Fused final-norm + LM head + CE loss + head backward, micro-chunked
+    over tokens (flextrain-inspired). HARD INVARIANT — the memory model's
+    point: no (tokens, vocab) tensor is EVER materialized; logits/dlogits
+    exist only as (chunk, vocab) scratch inside one loop iteration.
 
+    Buffer contract: inputs (y_last, targets, W_head-or-tied-W_embed
+    [, dW accum rounds]); outputs (dy_last, loss [, dW on round 0]).
+    Chunking numerics: per-row CE math is exact (rows are independent;
+    dlogits normalize by the FULL token count via total_rows); the head
+    dW accumulates across chunks in its grad STORAGE dtype — the same
+    convention as grad-accum rounds.
+    """
 
-@dataclass(frozen=True)
-class HeadBwd(_Base):
     @property
     def hl(self) -> PackedLayout:
         return head_weight_layout(self.dims)
@@ -398,29 +390,45 @@ class HeadBwd(_Base):
         es, kctx = self._stream_ctx(ctx)
         with torch.cuda.stream(es):
             K = self.kernels
-            dlogits = torch_view(self._in(ctx, 0), (d.tokens, d.vocab_size), torch.bfloat16)
-            y = torch_view(self._in(ctx, 1), (d.tokens, d.d_model), torch.bfloat16)
+            y = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
+            targets = torch_view(self._in(ctx, 1), (d.tokens,), torch.int32)
             wh = self.hl.views(self._in(ctx, 2))
             accum = bool(ctx.task.mutates)
             dy = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
-            # final-norm recompute (cheap: one reduce over y) + weighted backward
-            yn = torch.empty_like(y)
-            rstd = torch.empty(d.tokens, dtype=torch.float32, device=y.device)
-            K.rmsnorm_fwd(kctx, y, wh["final_norm_w"], yn, rstd)
-            dyn = dlogits @ wh["w"]
-            dnorm = torch.empty(d.d_model, dtype=torch.float32, device=y.device)
-            K.rmsnorm_bwd(kctx, dyn, y, rstd, wh["final_norm_w"], dy, dnorm)
-            if accum:
-                dwh = self.hgl.views(ctx.mutates[ctx.task.mutates[0]])
-                dwh["w"].add_(dlogits.T @ yn)
-                dwh["final_norm_w"].add_(dnorm.to(dwh["final_norm_w"].dtype))
-            else:
-                dwh = self.hgl.views(self._out(ctx, 1))
-                if dwh["w"].dtype == torch.bfloat16:
-                    torch.matmul(dlogits.T, yn, out=dwh["w"])  # write straight into dW
+            loss = torch_view(self._out(ctx, 1), (1,), torch.float32)
+            dwh = self.hgl.views(
+                ctx.mutates[ctx.task.mutates[0]] if accum else self._out(ctx, 2)
+            )
+            chunk = head_chunk_rows(d.vocab_size)
+            loss_acc = torch.zeros(1, dtype=torch.float32, device=y.device)
+            part = torch.empty(1, dtype=torch.float32, device=y.device)
+            dnorm_acc = torch.zeros(d.d_model, dtype=torch.float32, device=y.device)
+            dnorm_c = torch.empty(d.d_model, dtype=torch.float32, device=y.device)
+            for lo in range(0, d.tokens, chunk):
+                hi = min(lo + chunk, d.tokens)
+                y_c = y[lo:hi]
+                yn = torch.empty_like(y_c)
+                rstd = torch.empty(hi - lo, dtype=torch.float32, device=y.device)
+                K.rmsnorm_fwd(kctx, y_c, wh["final_norm_w"], yn, rstd)
+                logits = yn @ wh["w"].T                      # (c, V) — chunk scratch
+                dlogits = torch.empty_like(logits)
+                K.ce_loss_fwd_bwd(
+                    kctx, logits, targets[lo:hi], part, dlogits, total_rows=d.tokens,
+                )
+                loss_acc += part
+                dw_c = dlogits.T @ yn                        # (V, d)
+                if accum or lo > 0:
+                    dwh["w"].add_(dw_c.to(dwh["w"].dtype))
                 else:
-                    dwh["w"].copy_(dlogits.T @ yn)
-                dwh["final_norm_w"].copy_(dnorm.to(dwh["final_norm_w"].dtype))
+                    dwh["w"].copy_(dw_c.to(dwh["w"].dtype))
+                dyn = dlogits @ wh["w"]                      # (c, d)
+                K.rmsnorm_bwd(kctx, dyn, y_c, rstd, wh["final_norm_w"], dy[lo:hi], dnorm_c)
+                dnorm_acc += dnorm_c
+            if accum:
+                dwh["final_norm_w"].add_(dnorm_acc.to(dwh["final_norm_w"].dtype))
+            else:
+                dwh["final_norm_w"].copy_(dnorm_acc.to(dwh["final_norm_w"].dtype))
+            loss.copy_(loss_acc)
 
 
 @dataclass(frozen=True)
@@ -516,9 +524,7 @@ def build_resolver(
         "block_fwd": BlockFwd(dims, kernels),
         "block_recompute": BlockRecompute(dims, kernels),
         "block_bwd": BlockBwd(dims, kernels),
-        "head_fwd": HeadFwd(dims, kernels),
-        "loss_bwd": LossBwd(dims, kernels),
-        "head_bwd": HeadBwd(dims, kernels),
+        "head_loss": HeadLoss(dims, kernels),
         "embed_bwd": EmbedBwd(dims, kernels),
         "optimizer_block": AdamWStep(dims, kernels, hyper, kind="block"),
         "optimizer_embed": AdamWStep(dims, kernels, hyper, kind="embed"),

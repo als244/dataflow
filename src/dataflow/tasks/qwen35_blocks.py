@@ -55,9 +55,7 @@ from .llama3_blocks import (
     BlockFwd,
     EmbedBwd,
     EmbedFwd,
-    HeadBwd,
-    HeadFwd,
-    LossBwd,
+    HeadLoss,
     _Base,
 )
 
@@ -632,9 +630,7 @@ def build_qwen35_resolver(
         "gattn_fwd": Qwen35AttnBlockFwd(dims, kernels),
         "gattn_recompute": Qwen35AttnBlockRecompute(dims, kernels),
         "gattn_bwd": Qwen35AttnBlockBwd(dims, kernels),
-        "head_fwd": HeadFwd(dims, kernels),
-        "loss_bwd": LossBwd(dims, kernels),
-        "head_bwd": HeadBwd(dims, kernels),
+        "head_loss": HeadLoss(dims, kernels),
         "embed_bwd": EmbedBwd(dims, kernels),
         "optimizer_block": AdamWStep(dims, kernels, hyper, layout_for=_opt_block_layout),
         "optimizer_embed": AdamWStep(dims, kernels, hyper, layout_for=_opt_embed_layout),

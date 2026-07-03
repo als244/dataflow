@@ -177,9 +177,9 @@ def train(
 # GLOBAL step so profiler rows read block_fwd_{step}_{round}_{layer}. W_{i} /
 # O_{i} carry a LAYER index, not a step - deliberately absent from this list.
 _STEP0_ID = re.compile(
-    r"^(embed_fwd|block_fwd|head_fwd|loss_bwd|head_bwd|block_recompute|block_bwd"
+    r"^(embed_fwd|block_fwd|head_loss|block_recompute|block_bwd"
     r"|embed_bwd|optimizer_embed|optimizer_head|optimizer"
-    r"|tokens|targets|y_embed|y|A|dlogits|logits|dy_embed|dy|loss"
+    r"|tokens|targets|y_embed|y|A|dy_embed|dy|loss"
     r"|dW_embed|dW_head|dW)_0(?=_|$)"
 )
 

@@ -26,7 +26,7 @@ def test_canonicalization_strips_only_step_index():
     assert canon_obj("dW_2_5") == "dW_*_5"
     assert canon_obj("dW_head_2") == "dW_head_*"
     assert canon_obj("dy_embed_1_0") == "dy_embed_*_0"
-    assert canon_obj("dlogits_1_0") == "dlogits_*_0"
+    assert canon_task("head_loss_1_0") == "head_loss_*_0"
     assert canon_obj("W_5") == "W_5"       # global: untouched
     assert canon_obj("O_embed") == "O_embed"
 

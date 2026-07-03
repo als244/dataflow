@@ -28,9 +28,9 @@ def test_8b_shape_totals():
     assert a_bytes > 12 * GIB
     assert param_bytes + a_bytes > 24 * GIB
 
-    # task chain structure: embed + 32 fwd + head + loss + head_bwd + 32 bwd
-    # + embed_bwd + 34 optimizer tasks
-    assert len(program.tasks) == 1 + 32 + 1 + 1 + 1 + 32 + 1 + 34
+    # task chain structure: embed + 32 fwd + head_loss (fused head+CE+bwd)
+    # + 32 bwd + embed_bwd + 34 optimizer tasks
+    assert len(program.tasks) == 1 + 32 + 1 + 32 + 1 + 34
 
 
 def test_grad_accum_mutation_pattern():
@@ -87,7 +87,7 @@ def test_interleaved_optimizer_fires_at_final_grad_mutation():
     last = cfg.grad_accum_rounds - 1
     for i in range(cfg.n_layers):
         assert idx[f"optimizer_0_{i}"] == idx[f"block_bwd_0_{last}_{i}"] + 1
-    assert idx[f"optimizer_head_0"] == idx[f"head_bwd_0_{last}"] + 1
+    assert idx[f"optimizer_head_0"] == idx[f"head_loss_0_{last}"] + 1
     assert idx[f"optimizer_embed_0"] == idx[f"embed_bwd_0_{last}"] + 1
     # interleaved: no optimizer task may follow embed's (the chain's closer)
     assert order[-1] == "optimizer_embed_0"
@@ -118,7 +118,7 @@ def test_interleaved_optimizer_respects_reader_ordering():
 
 def test_tied_embeddings_chain_structure():
     """Config-gated tied embeddings: one W_embed/O_embed pair serves embed
-    AND head; head_bwd (which runs first in the round) creates the shared
+    AND head; head_loss (which runs first in the round) creates the shared
     dW_embed, embed_bwd accumulates; no head objects or optimizer_head."""
     from dataclasses import dataclass
     from dataflow.training.planning import plan_program, simulate_program
@@ -137,12 +137,12 @@ def test_tied_embeddings_chain_structure():
     assert "W_head" not in ids and "O_head" not in ids
     by_id = {t.id: t for t in program.tasks}
     assert "optimizer_head_0" not in by_id
-    assert by_id["head_fwd_0_0"].inputs[1] == "W_embed"
-    # round 0: head_bwd creates dW_embed, embed_bwd mutates it
-    assert any(o.id == "dW_embed_0" for o in by_id["head_bwd_0_0"].outputs)
+    assert by_id["head_loss_0_0"].inputs[2] == "W_embed"
+    # round 0: head_loss creates dW_embed, embed_bwd mutates it
+    assert any(o.id == "dW_embed_0" for o in by_id["head_loss_0_0"].outputs)
     assert by_id["embed_bwd_0_0"].mutates == ("dW_embed_0",)
     # round 1: both accumulate
-    assert by_id["head_bwd_0_1"].mutates == ("dW_embed_0",)
+    assert by_id["head_loss_0_1"].mutates == ("dW_embed_0",)
     assert by_id["embed_bwd_0_1"].mutates == ("dW_embed_0",)
     # optimizer_embed consumes the shared gradient and is the only embed/head opt
     assert by_id["optimizer_embed_0"].inputs == ("W_embed", "dW_embed_0", "O_embed")

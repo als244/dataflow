@@ -12,14 +12,16 @@ from dataflow.training.llama3 import ShapedLlamaConfig, lower_llama3
 from dataflow.training.qwen3 import ShapedQwen3Config, lower_qwen3
 from dataflow.training.qwen35 import ShapedQwen35Config, lower_qwen35
 
+# Constants last updated DELIBERATELY for the fused head_loss lowering
+# (head_fwd/loss_bwd/head_bwd -> ONE token-chunked task; logits/dlogits
+# objects removed from the grammar).
 EXPECTED = {
-    "llama3-tiny-ga2-s2": "67cbd6d2dbe6e6bd",
-    "llama3-tiny-tail": "ed3e3280fc2896eb",
-    "qwen3-tiny-ga3": "999478c9e65e3345",
-    # qwen35 pins added POST-reorg (the family predates the tripwire's
-    # coverage): heterogeneous kinds + both embedding modes
-    "qwen35-tiny-ga2": "1288ba63e6b6d22d",
-    "qwen35-tiny-tied": "a2c9b05ead71b948",
+    "llama3-tiny-ga2-s2": "77805909b52d6959",
+    "llama3-tiny-tail": "6eb2fdd93c7fd576",
+    "qwen3-tiny-ga3": "13c4203931442fd2",
+    # qwen35: heterogeneous kinds + both embedding modes
+    "qwen35-tiny-ga2": "860de9f8f7b91d4a",
+    "qwen35-tiny-tied": "ecd500539ee2e49d",
 }
 
 
