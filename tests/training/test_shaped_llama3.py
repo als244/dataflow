@@ -114,3 +114,77 @@ def test_interleaved_optimizer_respects_reader_ordering():
             for t in program.tasks[k_opt + 1 : step_end + 1]:
                 assert f"W_{i}" not in t.inputs, (t.id, f"reads W_{i} after optimizer_{s}_{i}")
                 assert f"dW_{s}_{i}" not in t.inputs, (t.id, "reads consumed grad")
+
+
+def test_tied_embeddings_chain_structure():
+    """Config-gated tied embeddings: one W_embed/O_embed pair serves embed
+    AND head; head_bwd (which runs first in the round) creates the shared
+    dW_embed, embed_bwd accumulates; no head objects or optimizer_head."""
+    from dataclasses import dataclass
+    from dataflow.training.planning import plan_program, simulate_program
+
+    @dataclass(frozen=True)
+    class TiedCfg(ShapedLlamaConfig):
+        tied_embeddings: bool = True
+
+    from dataclasses import replace as dc_replace
+
+    cfg = dc_replace(TiedCfg(**vars(ShapedLlamaConfig.tiny())), grad_accum_rounds=2)
+    program = build_shaped_llama3(cfg)
+    validate_program(program)
+
+    ids = {o.id for o in program.initial_objects}
+    assert "W_head" not in ids and "O_head" not in ids
+    by_id = {t.id: t for t in program.tasks}
+    assert "optimizer_head_0" not in by_id
+    assert by_id["head_fwd_0_0"].inputs[1] == "W_embed"
+    # round 0: head_bwd creates dW_embed, embed_bwd mutates it
+    assert any(o.id == "dW_embed_0" for o in by_id["head_bwd_0_0"].outputs)
+    assert by_id["embed_bwd_0_0"].mutates == ("dW_embed_0",)
+    # round 1: both accumulate
+    assert by_id["head_bwd_0_1"].mutates == ("dW_embed_0",)
+    assert by_id["embed_bwd_0_1"].mutates == ("dW_embed_0",)
+    # optimizer_embed consumes the shared gradient and is the only embed/head opt
+    assert by_id["optimizer_embed_0"].inputs == ("W_embed", "dW_embed_0", "O_embed")
+
+    # the annotated chain plans + simulates green
+    planned = plan_program(program, fast_memory_capacity=4 * 1024 * 1024)
+    log = simulate_program(planned.program)
+    assert max(iv.end for iv in log.task_intervals) > 0
+
+
+def test_heterogeneous_kinds_emit_per_kind_keys_and_sizes():
+    """LayerKindSpec table: task IDS stay uniform (tooling contract) while
+    compute_block_keys, W/A sizes, and rewrite keys follow the layer kind."""
+    from dataflow.training.shaped_llama3 import LayerKindSpec
+
+    cfg = ShapedLlamaConfig.tiny()  # 2 layers
+    sub = [{"kind": "roofline", "name": "x", "flops": 1, "memory_bytes": 1, "efficiency": "matmul"}]
+    kinds = {
+        "lin": LayerKindSpec(
+            key_prefix="linattn", w_bytes=1000, a_bytes=2000, fwd_us=10.0,
+            bwd_us=20.0, recompute_us=9.0, optimizer_us=3.0,
+            fwd_subops=sub, bwd_subops=sub, recompute_subops=sub, optimizer_subops=sub,
+        ),
+        "full": LayerKindSpec(
+            key_prefix="gattn", w_bytes=3000, a_bytes=4000, fwd_us=11.0,
+            bwd_us=21.0, recompute_us=8.0, optimizer_us=4.0,
+            fwd_subops=sub, bwd_subops=sub, recompute_subops=sub, optimizer_subops=sub,
+        ),
+    }
+    program = build_shaped_llama3(
+        cfg, kinds=kinds, kind_of=lambda i: "lin" if i == 0 else "full",
+    )
+    validate_program(program)
+    by_id = {t.id: t for t in program.tasks}
+    assert by_id["block_fwd_0_0_0"].compute_block_key == "linattn_fwd"
+    assert by_id["block_fwd_0_0_1"].compute_block_key == "gattn_fwd"
+    assert by_id["block_bwd_0_0_1"].compute_block_key == "gattn_bwd"
+    sizes = {o.id: o.size_bytes for o in program.initial_objects}
+    assert sizes["W_0"] == 1000 and sizes["W_1"] == 3000
+    assert sizes["O_0"] == 2000 and sizes["O_1"] == 6000
+    rw = {r.object_id: r for r in program.recompute_rewrites}
+    assert rw["A_0_0_0"].r_compute_block_key == "linattn_recompute"
+    assert rw["A_0_0_1"].r_compute_block_key == "gattn_recompute"
+    assert rw["A_0_0_0"].options[0].saved_bytes == 2000
+    assert rw["A_0_0_1"].options[0].saved_bytes == 4000

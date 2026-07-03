@@ -235,6 +235,31 @@ class _Costs:
         }
 
 
+@dataclass(frozen=True)
+class LayerKindSpec:
+    """Everything the chain builder needs about ONE layer kind.
+
+    Heterogeneous families (qwen3.5: DeltaNet + gated-attention layers)
+    pass a spec per kind + a ``kind_of(layer)`` table; uniform families
+    pass nothing and get the legacy single-kind path (bit-identical —
+    guarded by tests/training/test_lowering_stability.py). Task IDS are
+    kind-independent (``block_fwd_{s}_{r}_{i}``); only compute_block_keys
+    and sizes/costs vary, so planner/runtime/tooling conventions hold.
+    """
+
+    key_prefix: str          # compute_block_keys: {prefix}_fwd/_bwd/_recompute
+    w_bytes: int
+    a_bytes: int
+    fwd_us: float
+    bwd_us: float
+    recompute_us: float
+    optimizer_us: float
+    fwd_subops: list
+    bwd_subops: list
+    recompute_subops: list
+    optimizer_subops: list
+
+
 def build_shaped_llama3(
     cfg: ShapedLlamaConfig,
     *,
@@ -242,6 +267,8 @@ def build_shaped_llama3(
     fast_memory_capacity: int | None = None,
     recompute_levels: Mapping[str, int] | None = None,
     name: str | None = None,
+    kinds: Mapping[str, LayerKindSpec] | None = None,
+    kind_of=None,
 ) -> Program:
     """Build the (bare) shaped program for the given recompute levels.
 
@@ -258,13 +285,34 @@ def build_shaped_llama3(
     def bf16(n_elems: int) -> int:
         return BF16 * n_elems
 
-    w_block = bf16(cfg.block_params)
     w_embed = bf16(cfg.embed_params)
     w_head = bf16(cfg.head_params)
     y_bytes = bf16(t * d)
-    a_bytes = bf16(t * cfg.saved_ctx_width)
     logits_bytes = bf16(t * cfg.vocab_size)
     ids_bytes = dtype_nbytes((t,), "int32")
+
+    if kinds is None:
+        kinds = {
+            "block": LayerKindSpec(
+                key_prefix="block",
+                w_bytes=bf16(cfg.block_params),
+                a_bytes=bf16(t * cfg.saved_ctx_width),
+                fwd_us=costs.block_fwd_us,
+                bwd_us=costs.block_bwd_us,
+                recompute_us=costs.block_recompute_us,
+                optimizer_us=costs.optimizer_us["block"],
+                fwd_subops=costs.subops["block_fwd"],
+                bwd_subops=costs.subops["block_bwd"],
+                recompute_subops=costs.subops["block_recompute"],
+                optimizer_subops=costs.subops["optimizer_block"],
+            )
+        }
+        kind_of = None
+    if kind_of is None:
+        _default_kind = next(iter(kinds))
+        kind_of = lambda i: _default_kind  # noqa: E731
+    spec_of = lambda i: kinds[kind_of(i)]  # noqa: E731
+    tied = bool(getattr(cfg, "tied_embeddings", False))
 
     initial: list[ObjectSpec] = []
     final_locations: dict[str, str] = {}
@@ -274,15 +322,19 @@ def build_shaped_llama3(
         if persist:
             final_locations[oid] = "backing"
 
+    # tied embeddings (config choice): ONE W_embed/O_embed pair serves both
+    # the embedding and the LM head (the lowering sizes it as the packed
+    # head layout [table | final_norm_w]); no W_head/O_head objects exist.
     add_initial("W_embed", w_embed, "parameter", persist=True,
-                tensor=TensorMeta(dtype="bf16", shape=(cfg.vocab_size, d)))
+                tensor=None if tied else TensorMeta(dtype="bf16", shape=(cfg.vocab_size, d)))
     add_initial("O_embed", 2 * w_embed, "optimizer_state", persist=True)
     for i in range(cfg.n_layers):
-        add_initial(f"W_{i}", w_block, "parameter", persist=True)
-        add_initial(f"O_{i}", 2 * w_block, "optimizer_state", persist=True)
-    add_initial("W_head", w_head, "parameter", persist=True,
-                tensor=TensorMeta(dtype="bf16", shape=(cfg.vocab_size, d)))
-    add_initial("O_head", 2 * w_head, "optimizer_state", persist=True)
+        add_initial(f"W_{i}", spec_of(i).w_bytes, "parameter", persist=True)
+        add_initial(f"O_{i}", 2 * spec_of(i).w_bytes, "optimizer_state", persist=True)
+    if not tied:
+        add_initial("W_head", w_head, "parameter", persist=True,
+                    tensor=TensorMeta(dtype="bf16", shape=(cfg.vocab_size, d)))
+        add_initial("O_head", 2 * w_head, "optimizer_state", persist=True)
     for s in range(cfg.num_steps):
         for r in range(cfg.grad_accum_rounds):
             # The chain's very first task consumes tokens_0_0; following the
@@ -300,7 +352,8 @@ def build_shaped_llama3(
     rewrites: list[RecomputeRewrite] = []
 
     def task(tid: str, block: str, inputs: list[str], outputs: list[OutputSpec], runtime_us: float,
-             *, mutates: tuple[str, ...] = (), group: str = "compute", params: dict | None = None) -> None:
+             *, mutates: tuple[str, ...] = (), group: str = "compute", params: dict | None = None,
+             subops: list | None = None) -> None:
         tasks.append(TaskSpec(
             id=tid,
             inputs=tuple(inputs),
@@ -310,7 +363,7 @@ def build_shaped_llama3(
             group=group,
             compute_block_key=block,
             block_params=params or {},
-            metadata={"cost_subops": costs.subops[block]},
+            metadata={"cost_subops": costs.subops[block] if subops is None else subops},
         ))
 
     if cfg.optimizer_placement not in ("interleaved", "tail"):
@@ -333,12 +386,16 @@ def build_shaped_llama3(
                  group="optimizer")
 
         def opt_block(i: int, s: int = s) -> None:
+            sp = spec_of(i)
             task(f"optimizer_{s}_{i}", "optimizer_block",
                  [f"W_{i}", f"dW_{s}_{i}", f"O_{i}"], [],
-                 costs.optimizer_us["block"], mutates=(f"W_{i}", f"O_{i}"),
-                 group="optimizer", params={"layer": i})
+                 sp.optimizer_us, mutates=(f"W_{i}", f"O_{i}"),
+                 group="optimizer", params={"layer": i},
+                 subops=sp.optimizer_subops)
 
         def opt_head(s: int = s) -> None:
+            if tied:
+                return  # optimizer_embed covers the shared W_embed/O_embed
             task(f"optimizer_head_{s}", "optimizer_head",
                  ["W_head", f"dW_head_{s}", "O_head"], [],
                  costs.optimizer_us["head"], mutates=("W_head", "O_head"),
@@ -356,29 +413,31 @@ def build_shaped_llama3(
                 costs.embed_fwd_us, group="forward",
             )
             for i in range(cfg.n_layers):
+                sp = spec_of(i)
                 a_id = f"A_{s}_{r}_{i}"
                 level = levels.get(a_id, 0)
                 x_id = f"y_embed_{s}_{r}" if i == 0 else f"y_{s}_{r}_{i - 1}"
                 outs = [OutputSpec(id=f"y_{s}_{r}_{i}", size_bytes=y_bytes, role="activation",
                                    tensor=TensorMeta(dtype="bf16", shape=(t, d)))]
                 if level == 0:
-                    outs.append(OutputSpec(id=a_id, size_bytes=a_bytes, role="activation"))
-                task(f"block_fwd_{s}_{r}_{i}", "block_fwd", [x_id, f"W_{i}"], outs,
-                     costs.block_fwd_us, group="forward", params={"layer": i})
+                    outs.append(OutputSpec(id=a_id, size_bytes=sp.a_bytes, role="activation"))
+                task(f"block_fwd_{s}_{r}_{i}", f"{sp.key_prefix}_fwd", [x_id, f"W_{i}"], outs,
+                     sp.fwd_us, group="forward", params={"layer": i},
+                     subops=sp.fwd_subops)
                 rewrites.append(RecomputeRewrite(
                     object_id=a_id,
                     f_task_id=f"block_fwd_{s}_{r}_{i}",
                     r_task_id=f"block_recompute_{s}_{r}_{i}",
                     options=(
-                        RecomputeOption(level=0, saved_bytes=a_bytes, recompute_us=0.0, label="save"),
-                        RecomputeOption(level=1, saved_bytes=0, recompute_us=costs.block_recompute_us, label="recompute"),
+                        RecomputeOption(level=0, saved_bytes=sp.a_bytes, recompute_us=0.0, label="save"),
+                        RecomputeOption(level=1, saved_bytes=0, recompute_us=sp.recompute_us, label="recompute"),
                     ),
-                    f_compute_block_key="block_fwd",
-                    r_compute_block_key="block_recompute",
+                    f_compute_block_key=f"{sp.key_prefix}_fwd",
+                    r_compute_block_key=f"{sp.key_prefix}_recompute",
                     group_key=f"layer_{i}",
                 ))
             last_y = f"y_{s}_{r}_{cfg.n_layers - 1}"
-            task(f"head_fwd_{s}_{r}", "head_fwd", [last_y, "W_head"],
+            task(f"head_fwd_{s}_{r}", "head_fwd", [last_y, "W_embed" if tied else "W_head"],
                  [OutputSpec(id=f"logits_{s}_{r}", size_bytes=logits_bytes, role="activation",
                              tensor=TensorMeta(dtype="bf16", shape=(t, cfg.vocab_size)))],
                  costs.head_fwd_us, group="forward")
@@ -392,15 +451,19 @@ def build_shaped_llama3(
                  costs.loss_bwd_us, group="backward")
             final_locations[f"loss_{s}_{r}"] = "backing"
 
-            head_grad_inputs = [f"dlogits_{s}_{r}", last_y, "W_head"]
+            head_w = "W_embed" if tied else "W_head"
+            head_dw = f"dW_embed_{s}" if tied else f"dW_head_{s}"
+            head_grad_inputs = [f"dlogits_{s}_{r}", last_y, head_w]
             head_outs = [OutputSpec(id=f"dy_{s}_{r}_{cfg.n_layers - 1}", size_bytes=y_bytes, role="gradient",
                                     tensor=TensorMeta(dtype="bf16", shape=(t, d)))]
             head_mutates: tuple[str, ...] = ()
             if first_round:
-                head_outs.append(OutputSpec(id=f"dW_head_{s}", size_bytes=w_head, role="gradient"))
+                # tied: head_bwd runs before embed_bwd in the round, so IT
+                # creates the shared dW_embed; embed_bwd then accumulates.
+                head_outs.append(OutputSpec(id=head_dw, size_bytes=w_head if tied else w_head, role="gradient"))
             else:
-                head_grad_inputs.append(f"dW_head_{s}")
-                head_mutates = (f"dW_head_{s}",)
+                head_grad_inputs.append(head_dw)
+                head_mutates = (head_dw,)
             task(f"head_bwd_{s}_{r}", "head_bwd", head_grad_inputs, head_outs,
                  costs.head_bwd_us, mutates=head_mutates, group="backward")
             if interleaved and last_round:
@@ -409,29 +472,32 @@ def build_shaped_llama3(
             for i in reversed(range(cfg.n_layers)):
                 a_id = f"A_{s}_{r}_{i}"
                 x_id = f"y_embed_{s}_{r}" if i == 0 else f"y_{s}_{r}_{i - 1}"
+                sp = spec_of(i)
                 if levels.get(a_id, 0) == 1:
-                    task(f"block_recompute_{s}_{r}_{i}", "block_recompute", [x_id, f"W_{i}"],
-                         [OutputSpec(id=a_id, size_bytes=a_bytes, role="activation")],
-                         costs.block_recompute_us, group="recompute", params={"layer": i})
+                    task(f"block_recompute_{s}_{r}_{i}", f"{sp.key_prefix}_recompute", [x_id, f"W_{i}"],
+                         [OutputSpec(id=a_id, size_bytes=sp.a_bytes, role="activation")],
+                         sp.recompute_us, group="recompute", params={"layer": i},
+                         subops=sp.recompute_subops)
                 bwd_inputs = [f"dy_{s}_{r}_{i}", a_id, x_id, f"W_{i}"]
                 outs = [OutputSpec(id=(f"dy_embed_{s}_{r}" if i == 0 else f"dy_{s}_{r}_{i - 1}"),
                                    size_bytes=y_bytes, role="gradient",
                                    tensor=TensorMeta(dtype="bf16", shape=(t, d)))]
                 mutates: tuple[str, ...] = ()
                 if first_round:
-                    outs.append(OutputSpec(id=f"dW_{s}_{i}", size_bytes=w_block, role="gradient"))
+                    outs.append(OutputSpec(id=f"dW_{s}_{i}", size_bytes=sp.w_bytes, role="gradient"))
                 else:
                     bwd_inputs.append(f"dW_{s}_{i}")
                     mutates = (f"dW_{s}_{i}",)
-                task(f"block_bwd_{s}_{r}_{i}", "block_bwd", bwd_inputs, outs,
-                     costs.block_bwd_us, mutates=mutates, group="backward", params={"layer": i})
+                task(f"block_bwd_{s}_{r}_{i}", f"{sp.key_prefix}_bwd", bwd_inputs, outs,
+                     sp.bwd_us, mutates=mutates, group="backward", params={"layer": i},
+                     subops=sp.bwd_subops)
                 if interleaved and last_round:
                     opt_block(i)  # dW_{s}_{i} is final; W_i still resident from bwd
 
             embed_bwd_inputs = [f"dy_embed_{s}_{r}", f"tokens_{s}_{r}"]
             embed_outs: list[OutputSpec] = []
             embed_mutates: tuple[str, ...] = ()
-            if first_round:
+            if first_round and not tied:
                 embed_outs.append(OutputSpec(id=f"dW_embed_{s}", size_bytes=w_embed, role="gradient"))
             else:
                 embed_bwd_inputs.append(f"dW_embed_{s}")
