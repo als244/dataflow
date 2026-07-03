@@ -47,17 +47,17 @@ def _exact_sizes(cfg: ShapedLlamaConfig) -> dict[str, int]:
     wl = weight_layout(dims)
     el = embed_weight_layout(dims)
     cl = context_layout(dims)
-    w_elems = sum(
-        int(__import__("math").prod(f.shape)) for f in wl.fields
-    )
-    e_elems = dims.vocab_size * dims.d_model
-    sizes: dict[str, int] = {}
-    sizes["__W_block"] = wl.total_bytes
-    sizes["__W_embed"] = el.total_bytes
-    sizes["__A"] = cl.total_bytes
-    sizes["__O_block"] = adamw_state_layout(w_elems).total_bytes
-    sizes["__O_embed"] = adamw_state_layout(e_elems).total_bytes
-    return sizes
+    # optimizer state covers EVERY byte of the packed param object (padding
+    # included): the AdamW executable derives its element count from the W
+    # buffer's size, so the two must be sized from the same number. (Layouts
+    # whose fields all land 256-aligned have zero padding and are unaffected.)
+    return {
+        "__W_block": wl.total_bytes,
+        "__W_embed": el.total_bytes,
+        "__A": cl.total_bytes,
+        "__O_block": adamw_state_layout(wl.total_bytes // 2).total_bytes,
+        "__O_embed": adamw_state_layout(el.total_bytes // 2).total_bytes,
+    }
 
 
 def _mapped_size(object_id: str, sizes: dict[str, int]) -> int | None:
@@ -74,17 +74,10 @@ def _mapped_size(object_id: str, sizes: dict[str, int]) -> int | None:
     return None
 
 
-def lower_llama3(
-    cfg: ShapedLlamaConfig,
-    *,
-    hw: ShapedHardware | None = None,
-    recompute_levels: Mapping[str, int] | None = None,
-    fast_memory_capacity: int | None = None,
-) -> Program:
-    shaped = build_shaped_llama3(
-        cfg, hw=hw, recompute_levels=recompute_levels, fast_memory_capacity=fast_memory_capacity,
-    )
-    sizes = _exact_sizes(cfg)
+def apply_exact_sizes(shaped: Program, sizes: dict[str, int], lowering_tag: str) -> Program:
+    """Rewrite a shaped program's object sizes to packed-layout truth and
+    stamp optimizer tasks with their step index — shared by every family's
+    lowering (the size MAP is family-specific; the id families are not)."""
 
     def fix_obj(o: ObjectSpec) -> ObjectSpec:
         size = _mapped_size(o.id, sizes)
@@ -124,8 +117,21 @@ def lower_llama3(
             for t in shaped.tasks
         ),
         recompute_rewrites=new_rewrites,
-        metadata={**shaped.metadata, "lowering": "llama3-exact-v1"},
+        metadata={**shaped.metadata, "lowering": lowering_tag},
     )
+
+
+def lower_llama3(
+    cfg: ShapedLlamaConfig,
+    *,
+    hw: ShapedHardware | None = None,
+    recompute_levels: Mapping[str, int] | None = None,
+    fast_memory_capacity: int | None = None,
+) -> Program:
+    shaped = build_shaped_llama3(
+        cfg, hw=hw, recompute_levels=recompute_levels, fast_memory_capacity=fast_memory_capacity,
+    )
+    return apply_exact_sizes(shaped, _exact_sizes(cfg), "llama3-exact-v1")
 
 
 def initial_values(program: Program, cfg: ShapedLlamaConfig, backend, *, seed: int = 0):
@@ -135,18 +141,23 @@ def initial_values(program: Program, cfg: ShapedLlamaConfig, backend, *, seed: i
     tokens/targets: uniform ints. Returns {object_id: Buffer} for
     Engine.execute(initial_buffers=...).
     """
+    from dataflow.tasks.layouts import weight_layout as _wl
+
+    return fill_initial_values(program, dims_of(cfg), _wl(dims_of(cfg)), backend, seed=seed)
+
+
+def fill_initial_values(program: Program, dims, wl, backend, *, seed: int = 0):
+    """Family-generic buffer filling: weights N(0, 0.02) bf16 with every
+    ``*_norm_w`` layout field set to ones, optimizer state zeroed,
+    tokens/targets uniform ints. The generation order is part of golden
+    comparability — it follows the program's initial-object order."""
     import torch
 
     from dataflow.tasks.interop import torch_view
-    from dataflow.tasks.layouts import weight_layout as _wl
 
-    dims = dims_of(cfg)
     gen = torch.Generator().manual_seed(seed)
     buffers = {}
-    wl = _wl(dims)
     for spec in program.initial_objects:
-        if spec.location != "backing" and spec.id in buffers:
-            continue
         if spec.id in buffers:
             continue
         buf = backend.alloc("backing", spec.size_bytes)
@@ -154,11 +165,10 @@ def initial_values(program: Program, cfg: ShapedLlamaConfig, backend, *, seed: i
         if spec.id.startswith("W_") and spec.id not in ("W_embed", "W_head"):
             flat = torch_view(buf, (spec.size_bytes // 2,), torch.bfloat16)
             flat.copy_(torch.randn(spec.size_bytes // 2, generator=gen) * 0.02)
-            for name in ("attn_norm_w", "ffn_norm_w"):
-                f = wl.field(name)
-                start = f.offset_bytes // 2
-                n = f.shape[0]
-                flat[start : start + n] = 1.0
+            for f in wl.fields:
+                if f.name.endswith("_norm_w"):
+                    start = f.offset_bytes // 2
+                    flat[start : start + f.shape[0]] = 1.0
         elif spec.id in ("W_embed", "W_head"):
             flat = torch_view(buf, (spec.size_bytes // 2,), torch.bfloat16)
             flat.copy_(torch.randn(spec.size_bytes // 2, generator=gen) * 0.02)
@@ -168,26 +178,3 @@ def initial_values(program: Program, cfg: ShapedLlamaConfig, backend, *, seed: i
             ids = torch.randint(0, dims.vocab_size, (dims.tokens,), generator=gen, dtype=torch.int32)
             torch_view(buf, (dims.tokens,), torch.int32).copy_(ids)
     return buffers
-
-
-def host_embed_state(cfg: ShapedLlamaConfig, *, seed: int = 0):
-    """CPU-resident embedding state for cfg.embed_on_host mode.
-
-    The table itself is bf16 (model dtype); gradient accumulation and
-    optimizer moments use cfg.embed_host_accum — a training-spec choice
-    ("float32" or "bfloat16"), not a hardwired dtype. Seeded independently
-    of initial_values' order-dependent stream so it is stable across chain
-    variants."""
-    import torch
-
-    dims = dims_of(cfg)
-    accum = getattr(torch, cfg.embed_host_accum)
-    gen = torch.Generator().manual_seed(seed + 7919)
-    w = (torch.randn(dims.vocab_size, dims.d_model, generator=gen) * 0.02).to(torch.bfloat16)
-    return {
-        "W": w,
-        "M": torch.zeros(dims.vocab_size, dims.d_model, dtype=accum),
-        "V": torch.zeros(dims.vocab_size, dims.d_model, dtype=accum),
-        "dW": torch.zeros(dims.vocab_size, dims.d_model, dtype=accum),
-    }
-

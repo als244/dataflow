@@ -105,6 +105,33 @@ class LlamaDims:
         return self.n_kv_heads * self.head_dim
 
 
+@dataclass(frozen=True)
+class Qwen3Dims:
+    """Qwen3-dense dimensions. Differences from llama that matter here:
+    qk-norm (per-head RMSNorm on q/k between projection and rope, one shared
+    (head_dim,) weight each), rope theta 1e6, and head_dim DECOUPLED from
+    d_model/n_heads (Qwen3-4B/32B project q to n_heads*head_dim != d_model;
+    for 8B they coincide). No biases anywhere; embed/head untied at 8B."""
+
+    d_model: int
+    n_heads: int
+    n_kv_heads: int
+    head_dim: int
+    d_ff: int
+    vocab_size: int
+    tokens: int
+    seq_len: int
+    rope_base: float = 1_000_000.0
+
+    @property
+    def q_dim(self) -> int:
+        return self.n_heads * self.head_dim
+
+    @property
+    def kv_dim(self) -> int:
+        return self.n_kv_heads * self.head_dim
+
+
 def weight_layout(dims: LlamaDims) -> PackedLayout:
     d, kv, ff = dims.d_model, dims.kv_dim, dims.d_ff
     return PackedLayout.build([
@@ -142,7 +169,51 @@ def context_layout(dims: LlamaDims) -> PackedLayout:
     ])
 
 
-def embed_weight_layout(dims: LlamaDims) -> PackedLayout:
+def qwen3_weight_layout(dims: Qwen3Dims) -> PackedLayout:
+    d, q, kv, ff, hd = dims.d_model, dims.q_dim, dims.kv_dim, dims.d_ff, dims.head_dim
+    return PackedLayout.build([
+        ("attn_norm_w", (d,), "bf16"),
+        ("wq", (d, q), "bf16"),
+        ("wk", (d, kv), "bf16"),
+        ("wv", (d, kv), "bf16"),
+        ("q_norm_w", (hd,), "bf16"),
+        ("k_norm_w", (hd,), "bf16"),
+        ("wo", (q, d), "bf16"),
+        ("ffn_norm_w", (d,), "bf16"),
+        ("w1", (d, ff), "bf16"),
+        ("w3", (d, ff), "bf16"),
+        ("w2", (ff, d), "bf16"),
+    ])
+
+
+def qwen3_context_layout(dims: Qwen3Dims) -> PackedLayout:
+    """Saved backward context for one Qwen3 block forward.
+
+    qk-norm changes what is worth saving: instead of post-rope q/k we save
+    the PRE-norm projections (qm/km) plus the per-head rstds — backward then
+    re-applies norm+rope (cheap elementwise) to rebuild flash-bwd's q/k, and
+    has exactly the tensors rmsnorm_bwd needs for the qk-norm gradient. v,
+    lse, attn_out, h_mid, both block rstds and the MLP projections are saved
+    as in llama."""
+    t, d, q, kv, ff = dims.tokens, dims.d_model, dims.q_dim, dims.kv_dim, dims.d_ff
+    h, kvh = dims.n_heads, dims.n_kv_heads
+    return PackedLayout.build([
+        ("rstd_attn", (t,), "fp32"),
+        ("qm", (t, q), "bf16"),
+        ("km", (t, kv), "bf16"),
+        ("rstd_q", (t * h,), "fp32"),
+        ("rstd_k", (t * kvh,), "fp32"),
+        ("v", (t, kv), "bf16"),
+        ("lse", ((t // dims.seq_len) * h, dims.seq_len), "fp32"),
+        ("attn_out", (t, q), "bf16"),
+        ("h_mid", (t, d), "bf16"),
+        ("rstd_ffn", (t,), "fp32"),
+        ("x1", (t, ff), "bf16"),
+        ("x3", (t, ff), "bf16"),
+    ])
+
+
+def embed_weight_layout(dims) -> PackedLayout:
     return PackedLayout.build([("w", (dims.vocab_size, dims.d_model), "bf16")])
 
 

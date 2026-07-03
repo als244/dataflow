@@ -1,0 +1,241 @@
+"""Qwen3-dense block executables.
+
+Same buffer-order contract, staged-forward authoring, and kernel registry as
+llama3 (`llama3_blocks.py` — embed/head/loss/optimizer executables are reused
+verbatim); the transformer block differs by **qk-norm**: a per-head RMSNorm
+(one shared ``(head_dim,)`` weight for q, one for k) between the q/k
+projections and rope. No new kernels — the rmsnorm family runs at
+``head_dim``-wide rows (``tokens * heads`` of them) through reshaped views.
+
+Saved-context choice: instead of post-rope q/k we save the PRE-norm
+projections (``qm``/``km``) + per-head rstds; backward re-applies norm+rope
+(cheap elementwise) to rebuild flash-bwd's q/k and feeds ``rmsnorm_bwd``
+exactly the tensors it needs for dW_qnorm/dW_knorm and the projection grads.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import torch
+
+from dataflow.core import TaskSpec
+
+from . import ops
+from .kernels import KernelSet, resolve_kernels
+from .layouts import PackedLayout, Qwen3Dims, qwen3_context_layout, qwen3_weight_layout
+from .llama3_blocks import (
+    AdamWHyper,
+    AdamWStep,
+    BlockBwd,
+    BlockFwd,
+    BlockRecompute,
+    EmbedBwd,
+    EmbedFwd,
+    HeadBwd,
+    HeadFwd,
+    LossBwd,
+)
+
+
+@dataclass(frozen=True)
+class Qwen3BlockFwd(BlockFwd):
+    dims: Qwen3Dims = None  # type: ignore[assignment]
+
+    @property
+    def wl(self) -> PackedLayout:
+        return qwen3_weight_layout(self.dims)
+
+    @property
+    def cl(self) -> PackedLayout:
+        return qwen3_context_layout(self.dims)
+
+    # --- stages (see BlockFwd for the authoring contract) ---------------------
+
+    @staticmethod
+    def _stage_attn_norm(kctx, K, d, st):
+        BlockFwd._stage_attn_norm(kctx, K, d, st)
+
+    @staticmethod
+    def _stage_qkv_qknorm(kctx, K, d, st):
+        h1, w = st["h1"], st["w"]
+        t, h, kvh, hd = d.tokens, d.n_heads, d.n_kv_heads, d.head_dim
+        qm = h1 @ w["wq"]
+        km = h1 @ w["wk"]
+        v = h1 @ w["wv"]
+        qn = torch.empty_like(qm)
+        rstd_q = torch.empty(t * h, dtype=torch.float32, device=qm.device)
+        K.rmsnorm_fwd(kctx, qm.view(t * h, hd), w["q_norm_w"], qn.view(t * h, hd), rstd_q)
+        kn = torch.empty_like(km)
+        rstd_k = torch.empty(t * kvh, dtype=torch.float32, device=km.device)
+        K.rmsnorm_fwd(kctx, km.view(t * kvh, hd), w["k_norm_w"], kn.view(t * kvh, hd), rstd_k)
+        st.update(qn=qn, kn=kn, v=v)
+        if st["a"] is not None:
+            st["a"]["qm"].copy_(qm)
+            st["a"]["km"].copy_(km)
+            st["a"]["rstd_q"].copy_(rstd_q)
+            st["a"]["rstd_k"].copy_(rstd_k)
+            st["a"]["v"].copy_(v)
+
+    @staticmethod
+    def _stage_rope(kctx, K, d, st):
+        q = torch.empty_like(st["qn"])
+        K.rope_fwd(kctx, st["qn"], q, d.seq_len, d.n_heads, d.head_dim, d.rope_base)
+        k = torch.empty_like(st["kn"])
+        K.rope_fwd(kctx, st["kn"], k, d.seq_len, d.n_kv_heads, d.head_dim, d.rope_base)
+        st.update(q=q, k=k)
+
+    @staticmethod
+    def _stage_attn(kctx, K, d, st):
+        BlockFwd._stage_attn(kctx, K, d, st)
+
+    @staticmethod
+    def _stage_resid1_norm2(kctx, K, d, st):
+        BlockFwd._stage_resid1_norm2(kctx, K, d, st)
+
+    @staticmethod
+    def _stage_up_proj(kctx, K, d, st):
+        BlockFwd._stage_up_proj(kctx, K, d, st)
+
+    @staticmethod
+    def _stage_swiglu(kctx, K, d, st):
+        BlockFwd._stage_swiglu(kctx, K, d, st)
+
+    @staticmethod
+    def _stage_down_resid(kctx, K, d, st):
+        BlockFwd._stage_down_resid(kctx, K, d, st)
+
+    STAGES = (
+        ("attn_norm", _stage_attn_norm.__func__, ("rstd_attn",)),
+        ("qkv_qknorm", _stage_qkv_qknorm.__func__, ("qm", "km", "rstd_q", "rstd_k", "v")),
+        ("rope", _stage_rope.__func__, ()),
+        ("attn", _stage_attn.__func__, ("lse", "attn_out")),
+        ("resid1_norm2", _stage_resid1_norm2.__func__, ("h_mid", "rstd_ffn")),
+        ("up_proj", _stage_up_proj.__func__, ("x1", "x3")),
+        ("swiglu", _stage_swiglu.__func__, ()),
+        ("down_resid", _stage_down_resid.__func__, ()),
+    )
+
+
+@dataclass(frozen=True)
+class Qwen3BlockRecompute(Qwen3BlockFwd, BlockRecompute):
+    pass
+
+
+@dataclass(frozen=True)
+class Qwen3BlockBwd(BlockBwd):
+    dims: Qwen3Dims = None  # type: ignore[assignment]
+
+    @property
+    def wl(self) -> PackedLayout:
+        return qwen3_weight_layout(self.dims)
+
+    @property
+    def cl(self) -> PackedLayout:
+        return qwen3_context_layout(self.dims)
+
+    def _backward(self, kctx, dy, a, x, w, dx_out, dw, accum: bool) -> None:
+        d = self.dims
+        K = self.kernels
+        t, h, kvh, hd = d.tokens, d.n_heads, d.n_kv_heads, d.head_dim
+
+        def acc(name: str, value: torch.Tensor) -> None:
+            if accum:
+                dw[name].add_(value.to(dw[name].dtype))
+            else:
+                dw[name].copy_(value.to(dw[name].dtype))
+
+        def norm_bwd(dyv, xv, rstd, wv):
+            dxv = torch.empty_like(xv)
+            dwv = torch.empty(wv.numel(), dtype=torch.float32, device=xv.device)
+            K.rmsnorm_bwd(kctx, dyv, xv, rstd, wv, dxv, dwv)
+            return dxv, dwv
+
+        # --- mlp (identical to llama) ---
+        h2 = torch.empty_like(a["h_mid"])
+        K.rmsnorm_apply(kctx, a["h_mid"], a["rstd_ffn"], w["ffn_norm_w"], h2)
+        s = torch.empty_like(a["x1"])
+        K.swiglu_fwd_out(kctx, a["x1"], a["x3"], s)
+        ds = dy @ w["w2"].T
+        acc("w2", s.T @ dy)
+        dx1 = torch.empty_like(a["x1"])
+        dx3 = torch.empty_like(a["x3"])
+        K.swiglu_bwd(kctx, ds, a["x1"], a["x3"], dx1, dx3)
+        del s
+        acc("w1", h2.T @ dx1)
+        acc("w3", h2.T @ dx3)
+        dh2 = dx1 @ w["w1"].T + dx3 @ w["w3"].T
+        dh_mid_n, dffn_norm = norm_bwd(dh2, a["h_mid"], a["rstd_ffn"], w["ffn_norm_w"])
+        acc("ffn_norm_w", dffn_norm)
+        dh_mid = dy + dh_mid_n
+
+        # --- attention (qk-norm variant) ---
+        d_attn = dh_mid @ w["wo"].T
+        acc("wo", a["attn_out"].T @ dh_mid)
+
+        # rebuild flash-bwd's q/k from saved qm/km + rstds: norm re-apply + rope
+        qm2, km2 = a["qm"].view(t * h, hd), a["km"].view(t * kvh, hd)
+        qn = torch.empty_like(a["qm"])
+        K.rmsnorm_apply(kctx, qm2, a["rstd_q"], w["q_norm_w"], qn.view(t * h, hd))
+        kn = torch.empty_like(a["km"])
+        K.rmsnorm_apply(kctx, km2, a["rstd_k"], w["k_norm_w"], kn.view(t * kvh, hd))
+        q = torch.empty_like(qn)
+        K.rope_fwd(kctx, qn, q, d.seq_len, h, hd, d.rope_base)
+        k = torch.empty_like(kn)
+        K.rope_fwd(kctx, kn, k, d.seq_len, kvh, hd, d.rope_base)
+
+        dq, dk, dv = ops.flash_bwd(
+            d_attn, q, k, a["v"], a["attn_out"], a["lse"], h, kvh, hd, d.seq_len,
+        )
+        dqn = torch.empty_like(dq)
+        K.rope_bwd(kctx, dq, dqn, d.seq_len, h, hd, d.rope_base)
+        dkn = torch.empty_like(dk)
+        K.rope_bwd(kctx, dk, dkn, d.seq_len, kvh, hd, d.rope_base)
+
+        dqm, dq_norm = norm_bwd(dqn.view(t * h, hd), qm2, a["rstd_q"], w["q_norm_w"])
+        acc("q_norm_w", dq_norm)
+        dkm, dk_norm = norm_bwd(dkn.view(t * kvh, hd), km2, a["rstd_k"], w["k_norm_w"])
+        acc("k_norm_w", dk_norm)
+        dqm = dqm.view(t, d.q_dim)
+        dkm = dkm.view(t, d.kv_dim)
+
+        h1 = torch.empty_like(x)
+        K.rmsnorm_apply(kctx, x, a["rstd_attn"], w["attn_norm_w"], h1)
+        acc("wq", h1.T @ dqm)
+        acc("wk", h1.T @ dkm)
+        acc("wv", h1.T @ dv)
+        dh1 = dqm @ w["wq"].T + dkm @ w["wk"].T + dv @ w["wv"].T
+        dx_n, dattn_norm = norm_bwd(dh1, x, a["rstd_attn"], w["attn_norm_w"])
+        acc("attn_norm_w", dattn_norm)
+        dx_out.copy_(dh_mid + dx_n)
+
+
+def build_qwen3_resolver(
+    dims: Qwen3Dims,
+    hyper: AdamWHyper = AdamWHyper(),
+    kernels: KernelSet | None = None,
+):
+    """Executable resolver for the qwen3 family (same block keys as llama —
+    the resolver is built per config, so families never collide)."""
+    kernels = kernels if kernels is not None else resolve_kernels()
+    table = {
+        "embed_fwd": EmbedFwd(dims, kernels),
+        "block_fwd": Qwen3BlockFwd(dims, kernels),
+        "block_recompute": Qwen3BlockRecompute(dims, kernels),
+        "block_bwd": Qwen3BlockBwd(dims, kernels),
+        "head_fwd": HeadFwd(dims, kernels),
+        "loss_bwd": LossBwd(dims, kernels),
+        "head_bwd": HeadBwd(dims, kernels),
+        "embed_bwd": EmbedBwd(dims, kernels),
+        "optimizer_block": AdamWStep(dims, kernels, hyper),
+        "optimizer_embed": AdamWStep(dims, kernels, hyper),
+        "optimizer_head": AdamWStep(dims, kernels, hyper),
+    }
+
+    def resolver(task: TaskSpec):
+        key = task.compute_block_key
+        if key not in table:
+            raise KeyError(f"no executable for compute_block_key {key!r} (task {task.id!r})")
+        return table[key]
+
+    resolver.kernel_set = kernels
+    return resolver

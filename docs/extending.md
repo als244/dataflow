@@ -147,6 +147,9 @@ Gates, in order:
 
 ## 6. New model family checklist
 
+(Exercised end-to-end by the qwen3 family — `training/families.py` is the
+registry an addition plugs into; results/m5/qwen3-v1/ records what it took.)
+
 What adding a family (e.g. Qwen3) actually touches, in order:
 
 1. `tasks/ops.py` + `tasks/kernels/` — any op the family adds (QK-norm,

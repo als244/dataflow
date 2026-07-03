@@ -10,7 +10,10 @@ never imports the simulator.
 - **Executable**: `launch(TaskContext)` — enqueue device work on
   `ctx.stream` only; no synchronization; no globals; idempotent. Buffers
   arrive by object id; the positional order convention per block key is
-  documented in `llama3_blocks.py`.
+  documented in `llama3_blocks.py`. Families: llama3
+  (`llama3_blocks.py`) and qwen3 (`qwen3_blocks.py` — qk-norm via the
+  rmsnorm registry family at head_dim-wide rows; embed/head/loss/optimizer
+  executables shared).
 - **Op anatomy** (`ops.py`): every op has a launch form (writes into
   provided tensors where torch supports it) and a *reference* form — pure,
   autograd-able — used by gradcheck and golden models. Numerics discipline:

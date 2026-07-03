@@ -23,8 +23,8 @@ from dataflow.runtime import Engine
 from dataflow.runtime.device.fake import FakeBackend
 from dataflow.runtime.engine import Session
 from dataflow.tasks.interop import torch_view
-from dataflow.tasks.llama3_blocks import AdamWHyper, build_resolver
-from dataflow.training.llama3_lowering import dims_of, initial_values
+from dataflow.tasks.llama3_blocks import AdamWHyper
+from dataflow.training.families import resolve_family
 from dataflow.training.shaped_llama3 import ShapedLlamaConfig
 
 
@@ -76,11 +76,12 @@ def train(
     """
     from dataflow.runtime.placement import PlacementRecorder, compute_placement
 
-    dims = dims_of(cfg)
+    fam = resolve_family(cfg)
+    dims = fam.dims_of(cfg)
     owns_values = values is None
     if values is None:
-        values = initial_values(annotated, cfg, backend, seed=seed)
-    resolver = build_resolver(dims, hyper)
+        values = fam.initial_values(annotated, cfg, backend, seed=seed)
+    resolver = fam.build_resolver(dims, hyper)
     if placement is None and placement_mode == "static":
         # static placement (default): packing proven against physical VRAM at
         # planning time. placement_mode="dynamic" keeps the online slab+arena

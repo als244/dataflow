@@ -27,12 +27,12 @@ import torch
 from dataflow.core import save_program
 from dataflow.core.convert import to_webapp_program
 from dataflow.runtime.device.cuda import CudaBackend
-from dataflow.tasks.llama3_blocks import build_resolver
-from dataflow.training.llama3_lowering import dims_of, lower_llama3
+from dataflow.training.families import resolve_family
 from dataflow.training.planning import plan_program
 from dataflow.training.profiling import apply_measured_costs, cached_pcie, load_or_profile
 from dataflow.training.replay import replay_gap_pct
 from dataflow.training.shaped_llama3 import ShapedLlamaConfig
+from dataflow.training.shaped_qwen3 import ShapedQwen3Config
 from dataflow.training.train_loop import train
 
 GIB = 1024**3
@@ -56,6 +56,10 @@ CONFIGS = {
         n_layers=4, d_model=1024, n_heads=8, n_kv_heads=2, d_ff=4096,
         vocab_size=16384, seq_len=1024, batch=1,
     ),
+    # Qwen3-dense family (qk-norm; 36L, head_dim 128, ff 12288, vocab 151936)
+    "qwen3-8b": ShapedQwen3Config.qwen3_8b(),
+    "qwen3-8b-s1k-bs8ga8": ShapedQwen3Config.qwen3_8b(seq_len=1024, batch=8, grad_accum_rounds=8),
+    "qwen3-8b-s1k-bs2ga32": ShapedQwen3Config.qwen3_8b(seq_len=1024, batch=2, grad_accum_rounds=32),
 }
 
 
@@ -131,7 +135,8 @@ def main() -> None:
     from dataflow.tasks.kernels import resolve_kernels
 
     cfg = replace(CONFIGS[args.config], optimizer_placement=args.optimizer)
-    dims = dims_of(cfg)
+    fam = resolve_family(cfg)
+    dims = fam.dims_of(cfg)
     tokens_per_step = float(cfg.tokens * cfg.grad_accum_rounds)
 
     if args.annotated is not None:
@@ -171,7 +176,7 @@ def main() -> None:
 
     def build_raw(levels=None):
         return replace(
-            lower_llama3(cfg, recompute_levels=levels),
+            fam.lower(cfg, recompute_levels=levels),
             bandwidth_from_slow=pcie.bidi_h2d,
             bandwidth_to_slow=pcie.bidi_d2h,
             backing_memory_capacity=int(args.backing_gib * GIB) if args.backing_gib else None,
@@ -180,14 +185,14 @@ def main() -> None:
     program = build_raw()
     t0 = time.perf_counter()
     profiles = load_or_profile(
-        program, build_resolver(dims), backend, refresh=args.refresh_profiles,
+        program, fam.build_resolver(dims), backend, refresh=args.refresh_profiles,
     )
     if args.recompute:
         # recompute variants contain distinct signatures: block_fwd without a
         # context output, and block_recompute tasks — profile them too
         rc_all = {rw.object_id: 1 for rw in program.recompute_rewrites}
         profiles.update(load_or_profile(
-            build_raw(rc_all), build_resolver(dims), backend,
+            build_raw(rc_all), fam.build_resolver(dims), backend,
             refresh=args.refresh_profiles,
         ))
     measured = apply_measured_costs(program, profiles)
@@ -406,19 +411,17 @@ def main() -> None:
               "kernel_set": kernel_set, "sweep": rows}
 
     if args.baseline:
-        from dataflow.models.llama3_reference import GoldenLlama3
         from dataflow.runtime.device.base import Buffer  # noqa: F401
         from dataflow.tasks.interop import torch_view
-        from dataflow.training.llama3_lowering import initial_values
 
         planned = plan_program(measured, fast_memory_capacity=int(24 * GIB))
-        values = initial_values(planned.program, cfg, backend, seed=11)
+        values = fam.initial_values(planned.program, cfg, backend, seed=11)
 
         def pinned(name):
             buf = values[name]
             return torch_view(buf, (buf.size_bytes,), torch.uint8).clone()
 
-        golden = GoldenLlama3.from_packed_bytes(
+        golden = fam.golden().from_packed_bytes(
             dims, cfg.n_layers, pinned("W_embed"),
             [pinned(f"W_{i}") for i in range(cfg.n_layers)], pinned("W_head"),
         )

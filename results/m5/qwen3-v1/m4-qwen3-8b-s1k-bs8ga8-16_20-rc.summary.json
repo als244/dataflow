@@ -1,0 +1,108 @@
+{
+  "config": "qwen3-8b-s1k-bs8ga8",
+  "steps": 3,
+  "pcie": {
+    "uni_h2d": 35338,
+    "uni_d2h": 56756,
+    "bidi_h2d": 25529,
+    "bidi_d2h": 25783
+  },
+  "optimizer_placement": "interleaved",
+  "preplace": "task0",
+  "kernel_set": {
+    "adamw_step": "triton",
+    "ce_loss_fwd_bwd": "triton",
+    "rmsnorm_apply": "triton",
+    "rmsnorm_bwd": "triton",
+    "rmsnorm_fwd": "triton",
+    "rmsnorm_noweight": "triton",
+    "rope_bwd": "triton",
+    "rope_fwd": "triton",
+    "swiglu_bwd": "triton",
+    "swiglu_fwd_out": "triton"
+  },
+  "sweep": [
+    {
+      "budget_gib": 16.0,
+      "planned_budget_gib": 16.0,
+      "placement_mode": "static",
+      "extent_budget": false,
+      "sim_ms_per_step": 19063.005796875,
+      "real_ms_per_step_steady": 20304.9765625,
+      "sim_tokens_per_s": 3437.862879459614,
+      "real_tokens_per_s": 3227.5831394474185,
+      "wall_tokens_per_s": 3221.3866747665916,
+      "real_vs_sim_pct": -6.116583103664929,
+      "replay_fidelity_gap_pct": 1.5640332227101732,
+      "losses": [
+        12.766423225402832,
+        12.760985374450684,
+        12.72454833984375
+      ],
+      "peak_fast_gib": 15.85656738653779,
+      "peak_backing_gib": 69.25113201886415,
+      "pinned_host_gib": 147.76976585388184,
+      "step_makespans_ms": [
+        20356.853515625,
+        20267.685546875,
+        20342.267578125
+      ],
+      "step_wall_s": [
+        39.53975362703204,
+        20.30593597202096,
+        20.382132004015148
+      ],
+      "step_slab_overflows": [
+        0,
+        0,
+        0
+      ],
+      "placement_extent_gib": 18.24958324432373,
+      "placement_escapes": 0,
+      "pressure_evictions": 0,
+      "placement_overhead": 1.1509163868478627,
+      "recompute_chosen": 144
+    },
+    {
+      "budget_gib": 20.0,
+      "planned_budget_gib": 20.0,
+      "placement_mode": "static",
+      "extent_budget": false,
+      "sim_ms_per_step": 18791.8903359375,
+      "real_ms_per_step_steady": 19886.875,
+      "sim_tokens_per_s": 3487.461816157438,
+      "real_tokens_per_s": 3295.439831547189,
+      "wall_tokens_per_s": 3289.055758174102,
+      "real_vs_sim_pct": -5.50606701184827,
+      "replay_fidelity_gap_pct": 1.7249312750095125,
+      "losses": [
+        12.766423225402832,
+        12.762168884277344,
+        12.724767684936523
+      ],
+      "peak_fast_gib": 19.99578857794404,
+      "peak_backing_gib": 67.09478760510683,
+      "pinned_host_gib": 147.76976585388184,
+      "step_makespans_ms": [
+        19963.70703125,
+        19834.927734375,
+        19938.822265625
+      ],
+      "step_wall_s": [
+        39.10268184693996,
+        19.873438135022298,
+        19.977512908983044
+      ],
+      "step_slab_overflows": [
+        0,
+        0,
+        0
+      ],
+      "placement_extent_gib": 21.81247568130493,
+      "placement_escapes": 0,
+      "pressure_evictions": 0,
+      "placement_overhead": 1.090853486286845,
+      "recompute_chosen": 144
+    }
+  ]
+}

@@ -37,6 +37,12 @@ measurement (profiling), and the correctness harness (gradcheck).
   carries `step_wall_s` (FULL step: fill + execute + readback — quote wall
   tok/s, makespan-only numbers flatter the seam), `placement_escapes`, and
   `pressure_evictions` (both 0 in healthy runs).
+- `families.py` — the model-family registry: `resolve_family(cfg)` maps a
+  shaped config to its lowering, dims, resolver, golden, and gradcheck
+  bundle. The train loop, gradcheck, and sweep tools dispatch through it;
+  adding a family is one entry here (docs/extending.md §6). Families:
+  llama3 (`shaped_llama3` + `llama3_lowering`), qwen3 (`shaped_qwen3` +
+  `qwen3_lowering` — qk-norm, decoupled head_dim, vocab 151,936).
 - `replay.py` — `replay_gap_pct`: re-simulate with measured durations as
   overrides; isolates scheduling fidelity from cost-model error.
 - `testing/gradcheck.py` — the correctness ladder: `check_block_backward`

@@ -17,8 +17,7 @@ from dataclasses import dataclass
 
 import torch
 
-from dataflow.tasks.layouts import LlamaDims, context_layout, weight_layout
-from dataflow.tasks.llama3_blocks import AdamWHyper, BlockBwd, BlockFwd
+from dataflow.tasks.llama3_blocks import AdamWHyper  # noqa: F401 (re-export)
 
 
 def rel_l2(actual: torch.Tensor, expected: torch.Tensor) -> float:
@@ -49,9 +48,8 @@ class CheckReport:
             raise AssertionError(f"gradcheck failed (tol={self.tol}): {bad}")
 
 
-def _random_block_state(dims: LlamaDims, seed: int):
+def _random_block_state(dims, wl, seed: int):
     gen = torch.Generator(device="cuda").manual_seed(seed)
-    wl = weight_layout(dims)
     flat = torch.randn(wl.total_bytes // 2, generator=gen, device="cuda", dtype=torch.float32)
     flat = (flat * 0.02).to(torch.bfloat16)
     views = {}
@@ -61,52 +59,56 @@ def _random_block_state(dims: LlamaDims, seed: int):
             n *= int(d)
         start = f.offset_bytes // 2
         views[f.name] = flat[start : start + n].view(f.shape)
-    views["attn_norm_w"].fill_(1.0)
-    views["ffn_norm_w"].fill_(1.0)
+    for f in wl.fields:
+        if f.name.endswith("_norm_w"):
+            views[f.name].fill_(1.0)
     x = (torch.randn(dims.tokens, dims.d_model, generator=gen, device="cuda") * 0.5).to(torch.bfloat16)
     dy = (torch.randn(dims.tokens, dims.d_model, generator=gen, device="cuda") * 0.5).to(torch.bfloat16)
     return flat, views, x, dy
 
 
-def _ctx_tensors(dims: LlamaDims) -> dict[str, torch.Tensor]:
+def _ctx_tensors(cl) -> dict[str, torch.Tensor]:
     from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME
 
-    cl = context_layout(dims)
     return {
         f.name: torch.empty(f.shape, dtype=TORCH_DTYPE_BY_NAME[f.dtype], device="cuda")
         for f in cl.fields
     }
 
 
-def check_block_backward(dims: LlamaDims, *, seed: int = 0, tol: float = 3e-2) -> CheckReport:
-    """Ladder level 2 for the transformer block (fwd/bwd/recompute/accum)."""
-    from dataflow.models.llama3_reference import GoldenLlama3
+def check_block_backward(dims, *, family=None, seed: int = 0, tol: float = 3e-2) -> CheckReport:
+    """Ladder level 2 for the transformer block (fwd/bwd/recompute/accum).
 
+    ``family`` is a `dataflow.training.families.Family`; defaults to llama3
+    (back-compat for existing callers passing bare LlamaDims)."""
     from dataflow.tasks.kernels import KernelCtx, resolve_kernels
 
-    flat, w, x, dy = _random_block_state(dims, seed)
+    if family is None:
+        from dataflow.training.families import family as _fam
+
+        family = _fam("llama3")
+
+    flat, w, x, dy = _random_block_state(dims, family.weight_layout(dims), seed)
     kernels = resolve_kernels()
     kctx = KernelCtx()
-    fwd = BlockFwd(dims, kernels)
-    bwd = BlockBwd(dims, kernels)
+    fwd = family.block_fwd(dims, kernels)
+    bwd = family.block_bwd(dims, kernels)
 
     # our forward with saved context
-    a = _ctx_tensors(dims)
+    a = _ctx_tensors(family.context_layout(dims))
     y = torch.empty_like(x)
     fwd._forward(kctx, x, w, y, a)
 
     # recompute-path equivalence: the RECOMPUTE executable's truncated
     # forward must rebuild an identical context from the same x
-    from dataflow.tasks.llama3_blocks import BlockRecompute
-
-    a2 = _ctx_tensors(dims)
-    BlockRecompute(dims, kernels)._forward_context(kctx, x, w, a2)
+    a2 = _ctx_tensors(family.context_layout(dims))
+    family.block_recompute(dims, kernels)._forward_context(kctx, x, w, a2)
     # the truncated recompute intentionally does NOT produce y (the block
     # output is never a backward dependency) — context equality is the claim
     errors = {f"recompute:{k}": rel_l2(a2[k], a[k]) for k in a}
 
     # our backward
-    wl = weight_layout(dims)
+    wl = family.weight_layout(dims)
     dwflat = torch.zeros_like(flat)
     dw = {}
     for f in wl.fields:
@@ -119,7 +121,7 @@ def check_block_backward(dims: LlamaDims, *, seed: int = 0, tol: float = 3e-2) -
     bwd._backward(kctx, dy, a, x, w, dx, dw, accum=False)
 
     # golden: autograd through the reference block forward
-    golden = GoldenLlama3(dims=dims, n_layers=1)
+    golden = family.golden()(dims=dims, n_layers=1)
     flat_ref = flat.clone().requires_grad_()
     x_ref = x.clone().requires_grad_()
     y_ref = golden.block_forward(x_ref, golden._block_views(flat_ref))
@@ -148,28 +150,27 @@ def check_model_step(
 ) -> CheckReport:
     """Ladder level 3: full annotated program through the REAL engine vs the
     golden model — loss, final params, optimizer state."""
-    from dataflow.models.llama3_reference import GoldenLlama3
     from dataflow.runtime import Engine
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.runtime.device.fake import FakeBackend
     from dataflow.tasks.interop import torch_view
-    from dataflow.tasks.llama3_blocks import build_resolver
-    from dataflow.training.llama3_lowering import dims_of, initial_values, lower_llama3
+    from dataflow.training.families import resolve_family
     from dataflow.training.planning import plan_program
 
-    dims = dims_of(cfg)
-    program = lower_llama3(cfg, recompute_levels=recompute_levels)
+    fam = resolve_family(cfg)
+    dims = fam.dims_of(cfg)
+    program = fam.lower(cfg, recompute_levels=recompute_levels)
     planned = plan_program(program, fast_memory_capacity=fast_memory_capacity)
 
     backend = CudaBackend()
-    values = initial_values(planned.program, cfg, backend, seed=seed)
+    values = fam.initial_values(planned.program, cfg, backend, seed=seed)
 
     # golden model + inputs from the same bytes
     def pinned(name: str) -> torch.Tensor:
         buf = values[name]
         return torch_view(buf, (buf.size_bytes,), torch.uint8).clone()
 
-    golden = GoldenLlama3.from_packed_bytes(
+    golden = fam.golden().from_packed_bytes(
         dims, cfg.n_layers,
         pinned("W_embed"),
         [pinned(f"W_{i}") for i in range(cfg.n_layers)],
@@ -182,7 +183,7 @@ def check_model_step(
     dry = Engine(FakeBackend()).execute(planned.program, initial_buffers=values)
     result = Engine(backend).execute(
         planned.program,
-        resolver=build_resolver(dims),
+        resolver=fam.build_resolver(dims),
         initial_buffers=values,
         pool_prewarm=dry.pool_demand,
     )

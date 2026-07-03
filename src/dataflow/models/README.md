@@ -25,5 +25,7 @@ norm, optimizer-state drift) that per-op and per-block checks cannot.
 
 - `llama3_reference.py` — `GoldenLlama3` (`from_packed_bytes`,
   `train_step(tokens, targets) -> loss`).
+- `qwen3_reference.py` — `GoldenQwen3` (qk-norm block; reuses the llama
+  golden's packed-leaf handling and exact AdamW).
 
 Adding a family: see `docs/extending.md` §3 and §6.
