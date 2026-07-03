@@ -22,11 +22,21 @@ Cross-check: 662 boundaries × 815 µs ≈ 0.54 s/step ≈ the entire
 real-vs-sim deficit (−3…−4%) — the sim's unmodeled term is exactly this.
 
 **Remedies, in order:**
-- **Dispatch-ahead (in progress)**: plan-derived sync points; boundaries
-  whose admission doesn't depend on the previous task's completion enqueue
-  immediately — the tax still gets paid but under GPU execution
-  (flextrain pays the same ~17 µs/op rate; it is simply never exposed).
-  Includes the session view cache.
+- **Dispatch-ahead (BUILT — measured +1.4% at bs8/ga8@24, real-vs-sim
+  −0.87%)**: plan-derived sync points; free boundaries enqueue immediately,
+  hiding the tax under GPU execution. Two instructive failed versions:
+  v1 pre-charged the ledger at enqueue and STARVED transfer admission
+  (−20%: prefetches compete for the same ledger); v2 "drained
+  opportunistically" via next_completion, which BLOCKS while work is in
+  flight (−15%: serialized every boundary). v3: token-paced ledger in
+  placed mode (physical safety = the placement proof; transfers behave
+  exactly as strict) + a genuinely non-blocking poll_completion.
+  STRUCTURAL CEILING: tight packing reuses offsets densely, so ~50% of
+  boundaries must sync (free-running fraction 49.5% on the reference
+  plan) — packing tightness and dispatch-ahead are in direct tension.
+  Raising the ceiling needs slack-aware packing (trade extent for
+  anti-adjacency) or the graphs endgame below. Bitwise-equal to strict
+  (same chain order -> same pool sequence -> same buffers).
 - **CUDA-graph capture (endgame, M5)**: replaying a captured task span
   costs ~5–10 µs total vs ~510 µs of re-enqueue — a 50–100× reduction that
   also wins in small-task regimes (seq ≤ 512) where the tax grows.
