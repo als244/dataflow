@@ -196,10 +196,18 @@ fix is taken; the remaining levers are recorded, not built:
    transfer streams run hot) would let it optimize INTO the contention
    regime instead of stopping at its blind spot. This is a real
    planner-objective design item — flag for Shein before building.
-2. **Token-chunked head+loss lowering**: unlocks bs32ga2 (flextrain's
-   2-round shape), removes the 3.8-15.2 GiB monolithic logits object,
-   and shrinks head-task peak scratch. Mechanical but touches lowering
-   + goldens + tests of all three families.
+2. **Token-chunked head+loss lowering — DONE (a30681a, 2026-07-04)**:
+   head_fwd/loss_bwd/head_bwd fused into one token-chunked head_loss
+   task (flextrain's memory contract: no (t, vocab) tensor ever).
+   Results (artifacts/m5/head-loss, ledger-quoted):
+   bs32ga2 @14 = **3,001 wall tok/s — new qwen35 record, BEATS
+   flextrain's 2,981** at its own 2-round shape (fidelity 0.34%: the
+   2-round weight streaming is tiny, as §5b predicted); bs32ga2 @16 =
+   2,965; bs16ga4 @20 = 2,935 (was 2,897-2,908 pre-fusion). Honest
+   caveat: bs32's torch block-bwd scratch is ~4x bs8's (the ledger-20
+   attempt OOMed the card; 14-16 GiB ledgers fit), so DEVICE usage is
+   ~28-29 GiB vs flextrain's 24.7 — the del-at-last-use scratch fix
+   (M4.6 queue) is what converts this into a device-terms win too.
 3. **Window-oracle re-run for qwen35** (tools/window_plans.py, minutes):
    the "weight residency rejected / B0 optimal" verdict was computed on
    llama's traffic profile; qwen35's h2d-critical profile may flip it.
