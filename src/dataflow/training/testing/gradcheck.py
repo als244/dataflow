@@ -49,22 +49,25 @@ class CheckReport:
 
 
 def _random_block_state(dims, wl, seed: int):
+    """Per-field random weights at each field's OWN storage dtype."""
+    from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME
+
     gen = torch.Generator(device="cuda").manual_seed(seed)
-    flat = torch.randn(wl.total_bytes // 2, generator=gen, device="cuda", dtype=torch.float32)
-    flat = (flat * 0.02).to(torch.bfloat16)
     views = {}
     for f in wl.fields:
         n = 1
         for d in f.shape:
             n *= int(d)
-        start = f.offset_bytes // 2
-        views[f.name] = flat[start : start + n].view(f.shape)
-    for f in wl.fields:
+        dt = TORCH_DTYPE_BY_NAME[f.dtype]
         if f.name.endswith("_norm_w"):
-            views[f.name].fill_(1.0)
+            views[f.name] = torch.ones(f.shape, device="cuda", dtype=dt)
+        else:
+            views[f.name] = (
+                torch.randn(n, generator=gen, device="cuda") * 0.02
+            ).to(dt).view(f.shape)
     x = (torch.randn(dims.tokens, dims.d_model, generator=gen, device="cuda") * 0.5).to(torch.bfloat16)
     dy = (torch.randn(dims.tokens, dims.d_model, generator=gen, device="cuda") * 0.5).to(torch.bfloat16)
-    return flat, views, x, dy
+    return views, x, dy
 
 
 def _ctx_tensors(cl) -> dict[str, torch.Tensor]:
@@ -93,7 +96,7 @@ def check_block_backward(dims, *, family=None, seed: int = 0, tol: float = 3e-2)
             "bundle); its per-kind block ladders live in its own test module"
         )
 
-    flat, w, x, dy = _random_block_state(dims, family.weight_layout(dims), seed)
+    w, x, dy = _random_block_state(dims, family.weight_layout(dims), seed)
     kernels = resolve_kernels()
     kctx = KernelCtx()
     fwd = family.block_fwd(dims, kernels)
@@ -112,35 +115,34 @@ def check_block_backward(dims, *, family=None, seed: int = 0, tol: float = 3e-2)
     # output is never a backward dependency) — context equality is the claim
     errors = {f"recompute:{k}": rel_l2(a2[k], a[k]) for k in a}
 
-    # our backward
-    wl = family.weight_layout(dims)
-    dwflat = torch.zeros_like(flat)
-    dw = {}
-    for f in wl.fields:
-        n = 1
-        for d in f.shape:
-            n *= int(d)
-        start = f.offset_bytes // 2
-        dw[f.name] = dwflat[start : start + n].view(f.shape)
+    # our backward: per-field dW buffers at the policy's GRAD dtypes
+    from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME
+    from dataflow.tasks.layouts import grad_layout
+
+    gl = grad_layout(family.weight_layout(dims), dims.dtypes)
+    dw = {
+        f.name: torch.zeros(f.shape, device="cuda", dtype=TORCH_DTYPE_BY_NAME[f.dtype])
+        for f in gl.fields
+    }
     dx = torch.empty_like(x)
     bwd._backward(kctx, dy, a, x, w, dx, dw, accum=False)
 
-    # golden: autograd through the reference block forward
+    # golden: autograd through the reference block forward (per-field leaves)
     golden = family.golden()(dims=dims, n_layers=1)
-    flat_ref = flat.clone().requires_grad_()
+    leaves = {n: t.detach().clone().requires_grad_() for n, t in w.items()}
     x_ref = x.clone().requires_grad_()
-    y_ref = golden.block_forward(x_ref, golden._block_views(flat_ref))
+    y_ref = golden.block_forward(x_ref, leaves)
     y_ref.backward(dy)
 
     errors["fwd:y"] = rel_l2(y, y_ref)
     errors["bwd:dx"] = rel_l2(dx, x_ref.grad)
-    ref_dw = golden._block_views(flat_ref.grad)
     for name in dw:
-        errors[f"bwd:d{name}"] = rel_l2(dw[name], ref_dw[name])
+        errors[f"bwd:d{name}"] = rel_l2(dw[name], leaves[name].grad)
 
     # accumulation semantics: running backward again with accum=True doubles
     bwd._backward(kctx, dy, a, x, w, dx, dw, accum=True)
-    errors["accum:2x"] = rel_l2(dwflat, 2.0 * flat_ref.grad)
+    for name in dw:
+        errors[f"accum:2x:{name}"] = rel_l2(dw[name], 2.0 * leaves[name].grad)
 
     return CheckReport(errors=errors, tol=tol)
 
@@ -199,16 +201,28 @@ def check_model_step(
     run_loss = float(torch_view(loss_buf, (1,), torch.float32)[0])
     errors["loss"] = abs(run_loss - golden_loss) / max(abs(golden_loss), 1e-6)
 
-    def final_bytes(object_id: str) -> torch.Tensor:
+    def compare_fields(object_id: str) -> float:
+        """Worst per-field rel_l2 vs the golden leaves — dtype-true and
+        padding-blind (mixed layouts have alignment gaps nobody owns)."""
+        from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME
+
         rec = result.objects.get(object_id)
         slot = rec.backing or rec.fast
-        return torch_view(slot.buffer, (rec.size_bytes // 2,), torch.bfloat16)
+        layout, leaves = golden.final_leaves(object_id)
+        worst = 0.0
+        for f in layout.fields:
+            rt = torch_view(
+                slot.buffer, f.shape, TORCH_DTYPE_BY_NAME[f.dtype],
+                offset_bytes=f.offset_bytes,
+            )
+            worst = max(worst, rel_l2(rt, leaves[f.name]))
+        return worst
 
-    errors["W_embed"] = rel_l2(final_bytes("W_embed"), golden.w_embed.detach().to(torch.bfloat16).reshape(-1))
+    errors["W_embed"] = compare_fields("W_embed")
     for i in range(cfg.n_layers):
-        errors[f"W_{i}"] = rel_l2(final_bytes(f"W_{i}"), golden.w_blocks[i].detach().reshape(-1))
+        errors[f"W_{i}"] = compare_fields(f"W_{i}")
     if not tied:
-        errors["W_head"] = rel_l2(final_bytes("W_head"), golden.w_head.detach().to(torch.bfloat16).reshape(-1))
+        errors["W_head"] = compare_fields("W_head")
     result.close()  # release the engine-local slab/arena for the next check
     dry.close()
     from dataflow.tasks.interop import clear_view_cache

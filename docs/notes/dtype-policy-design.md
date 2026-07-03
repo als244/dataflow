@@ -2,7 +2,34 @@
 
 Requested by Shein 2026-07-03: stop assuming bf16 — users specify the
 dtype per parameter, per parameter-gradient, and per optimizer-state
-entry. Status: DESIGN (this doc), not yet implemented.
+entry.
+
+**Status: IMPLEMENTED (2026-07-03).** All three families; suite 153
+green including the mixed-policy E2E gates
+(tests/training/test_dtype_policy_e2e.py: fp32 norm weights + fp32
+moments + qwen35 fp32 A_log/dt_bias, real engine vs golden). Usage:
+
+```python
+from dataflow.tasks.layouts import DTypePolicy, ParamDTypes
+cfg = ShapedLlamaConfig(..., dtypes=DTypePolicy(
+    default=ParamDTypes(opt="fp32"),               # fp32 AdamW moments
+    overrides=(("*_norm_w", ParamDTypes(param="fp32", grad="fp32", opt="fp32")),),
+))
+```
+
+Field-name patterns are fnmatch, first match wins; embed/head tables are
+addressed "embed.w" / "head.w" / "head.final_norm_w" (both pack a field
+named "w"); qwen3.5 TIED embeddings pack the head layout into W_embed and
+stay addressed as head.*. v1 validated recipes: fp32 on elementwise
+fields (*_norm_w, A_log, dt_bias) and fp32 moments anywhere; fp32 on
+GEMM/table fields is NOT plumbed (matmul dtype mismatch raises loudly —
+the cast-at-use cost model needs its own decision). Grad-accum caveat:
+the runtime accumulates dW in grad STORAGE dtype every round; the golden
+accumulates in autograd (leaf) precision and rounds at the update — at
+ga>1 with grad="bf16" these differ within ladder tolerance (documented,
+tolerance-covered). The historical flat-O mapping is gone: O is
+per-field [m_f | v_f] pairs (padding never touched — this also retired
+the benign NaN-in-padding poison artifact).
 
 ## Where the bf16 assumption lives today (audit, 2026-07-03)
 

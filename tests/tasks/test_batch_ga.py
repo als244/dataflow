@@ -68,10 +68,10 @@ def test_batch_ga_model_step_matches_golden():
         total = loss_r if total is None else total + loss_r
     total.backward()
     golden.step_count = 1
-    golden._adamw("embed", golden.w_embed, golden.w_embed.grad.to(torch.bfloat16))
-    for i, flat in enumerate(golden.w_blocks):
-        golden._adamw(f"block_{i}", flat, flat.grad)
-    golden._adamw("head", golden.w_head, golden.w_head.grad.to(torch.bfloat16))
+    golden._adamw_obj("embed", golden.w_embed)
+    for i, leaves in enumerate(golden.w_blocks):
+        golden._adamw_obj(f"block_{i}", leaves)
+    golden._adamw_obj("head", golden.w_head)
 
     dry = Engine(FakeBackend()).execute(planned.program, initial_buffers=values)
     result = Engine(backend).execute(
@@ -79,13 +79,23 @@ def test_batch_ga_model_step_matches_golden():
         initial_buffers=values, pool_prewarm=dry.pool_demand,
     )
 
-    def final_w(object_id: str) -> torch.Tensor:
+    def worst_field_err(object_id: str) -> float:
+        from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME
+
         rec = result.objects.get(object_id)
         slot = rec.backing or rec.fast
-        return torch_view(slot.buffer, (rec.size_bytes // 2,), torch.bfloat16)
+        layout, leaves = golden.final_leaves(object_id)
+        return max(
+            rel_l2(
+                torch_view(slot.buffer, f.shape, TORCH_DTYPE_BY_NAME[f.dtype],
+                           offset_bytes=f.offset_bytes),
+                leaves[f.name],
+            )
+            for f in layout.fields
+        )
 
-    assert rel_l2(final_w("W_embed"), golden.w_embed.detach().to(torch.bfloat16).reshape(-1)) < 3e-2
+    assert worst_field_err("W_embed") < 3e-2
     for i in range(CFG.n_layers):
-        assert rel_l2(final_w(f"W_{i}"), golden.w_blocks[i].detach().reshape(-1)) < 3e-2, f"W_{i}"
-    assert rel_l2(final_w("W_head"), golden.w_head.detach().to(torch.bfloat16).reshape(-1)) < 3e-2
+        assert worst_field_err(f"W_{i}") < 3e-2, f"W_{i}"
+    assert worst_field_err("W_head") < 3e-2
     result.close()

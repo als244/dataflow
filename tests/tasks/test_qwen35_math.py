@@ -224,24 +224,29 @@ def _block_state(dims, wl, seed):
     # sits BELOW the bf16 chunk kernel's noise floor (~1e-6 abs, uniform,
     # no chunk structure — measured; not an fla or block bug). 0.06 makes
     # the gate observable so the ladder validates MATH, not noise.
+    from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME
+
     gen = torch.Generator(device="cuda").manual_seed(seed)
-    flat = (torch.randn(wl.total_bytes // 2, generator=gen, device="cuda") * 0.06).to(torch.bfloat16)
     views = {}
     for f in wl.fields:
         n = int(torch.tensor(f.shape).prod())
-        start = f.offset_bytes // 2
-        views[f.name] = flat[start : start + n].view(f.shape)
+        dt = TORCH_DTYPE_BY_NAME[f.dtype]
         if f.name.endswith("_norm_w"):
-            views[f.name].fill_(1.0)
+            views[f.name] = torch.ones(f.shape, device="cuda", dtype=dt)
         elif f.name == "A_log":
-            views[f.name].copy_(
-                torch.empty(n, device="cuda").uniform_(1.0, 16.0, generator=gen).log().to(torch.bfloat16)
+            views[f.name] = (
+                torch.empty(n, device="cuda").uniform_(1.0, 16.0, generator=gen)
+                .log().to(dt).view(f.shape)
             )
         elif f.name == "dt_bias":
-            views[f.name].zero_()
+            views[f.name] = torch.zeros(f.shape, device="cuda", dtype=dt)
+        else:
+            views[f.name] = (
+                torch.randn(n, generator=gen, device="cuda") * 0.06
+            ).to(dt).view(f.shape)
     x = (torch.randn(dims.tokens, dims.d_model, generator=gen, device="cuda") * 0.5).to(torch.bfloat16)
     dy = (torch.randn(dims.tokens, dims.d_model, generator=gen, device="cuda") * 0.5).to(torch.bfloat16)
-    return flat, views, x, dy
+    return views, x, dy
 
 
 def _ladder2(kind: str, tol: float = 4e-2):
@@ -268,7 +273,7 @@ def _ladder2(kind: str, tol: float = 4e-2):
     bwd = bwd_cls(dims, kernels)
     wl, cl = fwd.wl, fwd.cl
 
-    flat, w, x, dy = _block_state(dims, wl, seed=11 if kind == "lin" else 12)
+    w, x, dy = _block_state(dims, wl, seed=11 if kind == "lin" else 12)
     a = {
         f.name: torch.empty(f.shape, dtype=TORCH_DTYPE_BY_NAME[f.dtype], device="cuda")
         for f in cl.fields
@@ -284,37 +289,36 @@ def _ladder2(kind: str, tol: float = 4e-2):
     rc_cls(dims, kernels)._run_stages(kctx, x, w, a2, count=rc_cls.recompute_stage_count())
     errors = {f"recompute:{k}": rel_l2(a2[k], a[k]) for k in a}
 
-    # backward vs autograd through the golden block
-    dwflat = torch.zeros_like(flat)
-    dwv = {}
-    for f in wl.fields:
-        n = int(torch.tensor(f.shape).prod())
-        start = f.offset_bytes // 2
-        dwv[f.name] = dwflat[start : start + n].view(f.shape)
+    # backward vs autograd through the golden block: per-field dW at the
+    # policy's grad dtypes
+    from dataflow.tasks.layouts import grad_layout
+
+    gl = grad_layout(wl, dims.dtypes)
+    dwv = {
+        f.name: torch.zeros(f.shape, device="cuda", dtype=TORCH_DTYPE_BY_NAME[f.dtype])
+        for f in gl.fields
+    }
     dx = torch.empty_like(x)
     bwd._backward(kctx, dy, a, x, w, dx, dwv, accum=False)
 
     golden = GoldenQwen35(dims=dims)
-    flat_ref = flat.clone().requires_grad_()
+    leaves = {n: t.detach().clone().requires_grad_() for n, t in w.items()}
     x_ref = x.clone().requires_grad_()
-    from dataflow.models.qwen35_reference import _views as gviews
-
-    wref = gviews(wl, flat_ref)
     y_ref = (
-        golden.lin_block_forward(x_ref, wref) if kind == "lin"
-        else golden.full_block_forward(x_ref, wref)
+        golden.lin_block_forward(x_ref, leaves) if kind == "lin"
+        else golden.full_block_forward(x_ref, leaves)
     )
     y_ref.backward(dy)
 
     errors["fwd:y"] = rel_l2(y, y_ref)
     errors["bwd:dx"] = rel_l2(dx, x_ref.grad)
-    ref_dw = gviews(wl, flat_ref.grad)
     for name in dwv:
-        errors[f"bwd:d{name}"] = rel_l2(dwv[name], ref_dw[name])
+        errors[f"bwd:d{name}"] = rel_l2(dwv[name], leaves[name].grad)
 
     # accumulation: second backward doubles every field
     bwd._backward(kctx, dy, a, x, w, dx, dwv, accum=True)
-    errors["accum:2x"] = rel_l2(dwflat, 2.0 * flat_ref.grad)
+    for name in dwv:
+        errors[f"accum:2x:{name}"] = rel_l2(dwv[name], 2.0 * leaves[name].grad)
 
     bad = {k: round(v, 4) for k, v in errors.items() if v > tol}
     assert not bad, bad

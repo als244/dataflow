@@ -5,46 +5,58 @@ block forwards composed EXCLUSIVELY from the pinned reference ops
 (tasks/ops.py — the same functions the kernel-contract tests validate
 against fla) and the exact AdamW replica. Embeddings follow the config:
 UNTIED (the 9B) = bare-table w_embed + packed ``[table | final_norm_w]``
-w_head leaf; TIED (2B-style, ``w_head=None``) = the head layout rides the
-single w_embed leaf. The sequential delta-rule recurrence makes this
-golden slow and obviously correct; use tiny configs.
+w_head leaves; TIED (2B-style, ``w_head=None``) = the head layout rides
+the single w_embed object (policy-addressed as head.*). Parameters are
+PER-FIELD leaves at the dims' dtype-policy storage dtypes. The sequential
+delta-rule recurrence makes this golden slow and obviously correct; use
+tiny configs.
 """
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass, field
 
 import torch
 
 from dataflow.tasks import ops
+from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME
 from dataflow.tasks.layouts import (
+    PackedLayout,
     Qwen35Dims,
+    embed_weight_layout,
     head_weight_layout,
     qwen35_attn_weight_layout,
     qwen35_lin_weight_layout,
 )
 from dataflow.tasks.llama3_blocks import AdamWHyper
-
-
-def _views(layout, flat_bf16: torch.Tensor) -> dict[str, torch.Tensor]:
-    out: dict[str, torch.Tensor] = {}
-    for f in layout.fields:
-        n = int(math.prod(f.shape))
-        start = f.offset_bytes // 2
-        out[f.name] = flat_bf16[start : start + n].view(f.shape)
-    return out
+from dataflow.models.llama3_reference import Leaves, unpack_leaves
 
 
 @dataclass
 class GoldenQwen35:
     dims: Qwen35Dims
     hyper: AdamWHyper = field(default_factory=AdamWHyper)
-    w_embed: torch.Tensor = None  # tied: packed [table | final_norm_w]; untied: bare table
-    w_head: torch.Tensor = None   # untied only: packed [table | final_norm_w]
-    w_blocks: list[torch.Tensor] = field(default_factory=list)
+    # per-field typed leaves; tied: w_embed carries [w | final_norm_w]
+    w_embed: Leaves = None  # type: ignore[assignment]
+    w_head: Leaves = None   # untied only
+    w_blocks: list[Leaves] = field(default_factory=list)
     step_count: int = 0
     _adam_m: dict[str, torch.Tensor] = field(default_factory=dict)
     _adam_v: dict[str, torch.Tensor] = field(default_factory=dict)
+
+    @property
+    def tied(self) -> bool:
+        return self.w_head is None
+
+    def layer_layout(self, i: int) -> PackedLayout:
+        d = self.dims
+        return (
+            qwen35_attn_weight_layout(d) if d.kind_of(i) == "full"
+            else qwen35_lin_weight_layout(d)
+        )
+
+    def embed_layout(self) -> PackedLayout:
+        # tied packs the head layout into W_embed
+        return head_weight_layout(self.dims) if self.tied else embed_weight_layout(self.dims)
 
     @classmethod
     def from_packed_bytes(
@@ -55,25 +67,25 @@ class GoldenQwen35:
     ) -> "GoldenQwen35":
         assert n_layers == dims.n_layers == len(w_block_bytes)
         model = cls(dims=dims, hyper=hyper)
-        model.w_embed = w_embed_bytes.clone().view(torch.bfloat16).cuda().requires_grad_()
         if w_head_bytes is not None:
-            model.w_head = w_head_bytes.clone().view(torch.bfloat16).cuda().requires_grad_()
+            model.w_head = unpack_leaves(head_weight_layout(dims), w_head_bytes)
+        model.w_embed = unpack_leaves(model.embed_layout(), w_embed_bytes)
         model.w_blocks = [
-            b.clone().view(torch.bfloat16).cuda().requires_grad_() for b in w_block_bytes
+            unpack_leaves(model.layer_layout(i), b) for i, b in enumerate(w_block_bytes)
         ]
         return model
 
-    def _layer_views(self, i: int) -> dict[str, torch.Tensor]:
-        d = self.dims
-        layout = (
-            qwen35_attn_weight_layout(d) if d.kind_of(i) == "full"
-            else qwen35_lin_weight_layout(d)
-        )
-        return _views(layout, self.w_blocks[i])
+    def final_leaves(self, object_id: str) -> tuple[PackedLayout, Leaves]:
+        if object_id == "W_embed":
+            return self.embed_layout(), self.w_embed
+        if object_id == "W_head":
+            return head_weight_layout(self.dims), self.w_head
+        i = int(object_id.split("_")[1])
+        return self.layer_layout(i), self.w_blocks[i]
 
     # --- per-kind block forwards (pinned reference ops only) -------------------
 
-    def lin_block_forward(self, x: torch.Tensor, w: dict[str, torch.Tensor]) -> torch.Tensor:
+    def lin_block_forward(self, x: torch.Tensor, w: Leaves) -> torch.Tensor:
         d = self.dims
         t = x.shape[0]
         h1 = ops.rmsnorm_reference(x, w["attn_norm_w"])
@@ -97,7 +109,7 @@ class GoldenQwen35:
         h2 = ops.rmsnorm_reference(xo, w["ffn_norm_w"])
         return xo + ops.swiglu_fwd(h2 @ w["w1"], h2 @ w["w3"]) @ w["w2"]
 
-    def full_block_forward(self, x: torch.Tensor, w: dict[str, torch.Tensor]) -> torch.Tensor:
+    def full_block_forward(self, x: torch.Tensor, w: Leaves) -> torch.Tensor:
         d = self.dims
         t = x.shape[0]
         h1 = ops.rmsnorm_reference(x, w["attn_norm_w"])
@@ -123,15 +135,11 @@ class GoldenQwen35:
 
     def loss(self, tokens: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         d = self.dims
-        if self.w_head is None:  # tied: one leaf serves embed AND head
-            hv = _views(head_weight_layout(d), self.w_embed)
-            table = hv["w"]
-        else:
-            hv = _views(head_weight_layout(d), self.w_head)
-            table = self.w_embed.view(d.vocab_size, d.d_model)
+        hv = self.w_embed if self.tied else self.w_head
+        table = hv["w"] if self.tied else self.w_embed["w"]
         x = table[tokens.long()]
         for i in range(d.n_layers):
-            w = self._layer_views(i)
+            w = self.w_blocks[i]
             x = (
                 self.full_block_forward(x, w) if d.kind_of(i) == "full"
                 else self.lin_block_forward(x, w)
@@ -139,18 +147,26 @@ class GoldenQwen35:
         logits = ops.rmsnorm_reference(x, hv["final_norm_w"]) @ hv["w"].T
         return ops.ce_loss_reference(logits, targets)
 
-    def _adamw(self, name: str, w: torch.Tensor, g: torch.Tensor) -> None:
+    def _field_dtypes(self, ns: str | None, name: str):
+        return self.dims.dtypes.for_field(f"{ns}.{name}" if ns else name)
+
+    def _adamw_obj(self, obj: str, ns: str | None, leaves: Leaves) -> None:
         hp = self.hyper
-        if name not in self._adam_m:
-            self._adam_m[name] = torch.zeros_like(w, dtype=torch.bfloat16)
-            self._adam_v[name] = torch.zeros_like(w, dtype=torch.bfloat16)
-        m, v = self._adam_m[name], self._adam_v[name]
-        with torch.no_grad():
-            ops.adamw_step(
-                w.data.view(-1), g.view(-1), m.view(-1), v.view(-1),
-                lr=hp.lr, beta1=hp.beta1, beta2=hp.beta2, eps=hp.eps,
-                weight_decay=hp.weight_decay, step=self.step_count,
-            )
+        for name, w in leaves.items():
+            dts = self._field_dtypes(ns, name)
+            key = f"{obj}.{name}"
+            if key not in self._adam_m:
+                odt = TORCH_DTYPE_BY_NAME[dts.opt]
+                self._adam_m[key] = torch.zeros_like(w, dtype=odt)
+                self._adam_v[key] = torch.zeros_like(w, dtype=odt)
+            g = w.grad.to(TORCH_DTYPE_BY_NAME[dts.grad])
+            with torch.no_grad():
+                ops.adamw_step(
+                    w.data.view(-1), g.view(-1),
+                    self._adam_m[key].view(-1), self._adam_v[key].view(-1),
+                    lr=hp.lr, beta1=hp.beta1, beta2=hp.beta2, eps=hp.eps,
+                    weight_decay=hp.weight_decay, step=self.step_count,
+                )
 
     def train_step(self, tokens: torch.Tensor, targets: torch.Tensor) -> float:
         for p in self.parameters():
@@ -158,21 +174,18 @@ class GoldenQwen35:
         loss = self.loss(tokens, targets)
         loss.backward()
         self.step_count += 1
-        self._adamw("embed", self.w_embed, self.w_embed.grad)
+        # tied W_embed IS the head layout — policy-addressed as head.*
+        self._adamw_obj("embed", "head" if self.tied else "embed", self.w_embed)
         if self.w_head is not None:
-            self._adamw("head", self.w_head, self.w_head.grad)
-        for i, flat in enumerate(self.w_blocks):
-            self._adamw(f"block_{i}", flat, flat.grad)
+            self._adamw_obj("head", "head", self.w_head)
+        for i, leaves in enumerate(self.w_blocks):
+            self._adamw_obj(f"block_{i}", None, leaves)
         return float(loss.detach())
 
     def parameters(self) -> list[torch.Tensor]:
-        head = [] if self.w_head is None else [self.w_head]
-        return [self.w_embed, *head, *self.w_blocks]
-
-    def grads_packed(self) -> dict[str, torch.Tensor]:
-        out = {"dW_embed": self.w_embed.grad.reshape(-1)}
+        out = list(self.w_embed.values())
         if self.w_head is not None:
-            out["dW_head"] = self.w_head.grad.reshape(-1)
-        for i, flat in enumerate(self.w_blocks):
-            out[f"dW_{i}"] = flat.grad.reshape(-1)
+            out.extend(self.w_head.values())
+        for leaves in self.w_blocks:
+            out.extend(leaves.values())
         return out

@@ -60,7 +60,9 @@ def rmsnorm_bwd(
 def rmsnorm_reference(x: torch.Tensor, w: torch.Tensor) -> torch.Tensor:
     xf = x.float()
     rstd = torch.rsqrt(xf.pow(2).mean(-1, keepdim=True) + RMS_EPS)
-    return (xf * rstd).to(x.dtype) * w
+    # output stays at the ACTIVATION dtype (kernel semantics) even when the
+    # weight is stored wider (dtype-policy fp32 norm weights)
+    return ((xf * rstd).to(x.dtype) * w).to(x.dtype)
 
 
 def rmsnorm_noweight(x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:

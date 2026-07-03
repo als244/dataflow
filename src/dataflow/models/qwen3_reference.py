@@ -13,7 +13,7 @@ from dataclasses import dataclass
 import torch
 
 from dataflow.tasks import ops
-from dataflow.tasks.layouts import Qwen3Dims, qwen3_weight_layout
+from dataflow.tasks.layouts import PackedLayout, Qwen3Dims, qwen3_weight_layout
 from dataflow.models.llama3_reference import GoldenLlama3
 
 
@@ -21,16 +21,8 @@ from dataflow.models.llama3_reference import GoldenLlama3
 class GoldenQwen3(GoldenLlama3):
     dims: Qwen3Dims  # re-typed, position and (lack of) default inherited
 
-    def _block_views(self, flat_bf16: torch.Tensor) -> dict[str, torch.Tensor]:
-        wl = qwen3_weight_layout(self.dims)
-        out: dict[str, torch.Tensor] = {}
-        for f in wl.fields:
-            n = 1
-            for dim in f.shape:
-                n *= int(dim)
-            start = f.offset_bytes // 2
-            out[f.name] = flat_bf16[start : start + n].view(f.shape)
-        return out
+    def block_layout(self) -> PackedLayout:
+        return qwen3_weight_layout(self.dims)
 
     def block_forward(self, x: torch.Tensor, w: dict[str, torch.Tensor]) -> torch.Tensor:
         d = self.dims
