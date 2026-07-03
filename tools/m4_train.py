@@ -256,18 +256,21 @@ def main() -> None:
     if (args.budgets is None) == (args.device_gib is None):
         parser.error("exactly one of --budgets / --device-gib is required")
 
+    # fixed device overhead (CUDA context + resident pages) — measured for
+    # EVERY mode so each row can report its true device peak:
+    #   actual peak = fixed + placed extent (our cudaMalloc slab, non-torch)
+    #                 + torch allocator reserved peak (task scratch)
+    torch.cuda.empty_cache()  # drop profiling's cache pages first
+    _free_b, _total_b = torch.cuda.mem_get_info()
+    fixed = _total_b - _free_b
+
     if args.device_gib is not None:
         # device-envelope mode: derive the ledger budget so that
         #   fixed (context etc.) + max task scratch + packed extent <= envelope
-        import torch as _torch
-
         from dataflow.runtime import Engine
         from dataflow.runtime.device.fake import FakeBackend
         from dataflow.runtime.placement import PlacementRecorder, compute_placement
 
-        _torch.cuda.empty_cache()  # drop profiling's cache pages: 'fixed'
-        free_b, total_b = _torch.cuda.mem_get_info()  # = context + residents
-        fixed = total_b - free_b
         scratch = max(p.workspace_bytes for p in profiles.values()) + (256 << 20)
 
         def extent_of(planned_prog) -> int:
@@ -413,11 +416,17 @@ def main() -> None:
         steady_wall = sum(wall_tail) / len(wall_tail)
         wall_tok_s = tokens_per_step / steady_wall
         gap = replay_gap_pct(planned.program, report.last_trace, report.step_makespan_us[-1])
+        # measured device peak for EVERY row: fixed context + placed extent
+        # (our cudaMalloc slab, outside torch) + torch allocator reserved
+        # peak (task scratch; reset per budget). Slab overflows (0 in
+        # healthy runs) would add unmeasured backend allocations.
+        torch_scratch_peak = torch.cuda.max_memory_reserved()
+        actual = fixed + report.placement_extent_bytes + torch_scratch_peak
+        print(f"device peak (measured): {actual / GIB:.2f} GiB = "
+              f"fixed {fixed / GIB:.2f} + extent "
+              f"{report.placement_extent_bytes / GIB:.2f} + torch scratch "
+              f"{torch_scratch_peak / GIB:.2f}")
         if gib in device_meta:
-            # verify the envelope claim against reality: base extent (ours,
-            # non-torch) + torch cache peak + fixed context
-            actual = (device_meta[gib][2] + report.placement_extent_bytes
-                      + torch.cuda.max_memory_reserved())
             env_b = int(device_meta[gib][0] * GIB)
             print(f"device envelope check: actual peak {actual / GIB:.2f} GiB "
                   f"{'<=' if actual <= env_b else 'EXCEEDS'} "
@@ -426,12 +435,11 @@ def main() -> None:
             "budget_gib": quoted_gib,
             "budget_semantics": semantics,
             "planned_budget_gib": eff / GIB,
+            "actual_device_peak_gib": actual / GIB,
+            "fixed_overhead_gib": fixed / GIB,
+            "torch_scratch_peak_gib": torch_scratch_peak / GIB,
             **({"device_envelope_gib": device_meta[gib][0],
-                "fixed_overhead_gib": device_meta[gib][2] / GIB,
-                "scratch_reserve_gib": device_meta[gib][3] / GIB,
-                "actual_device_peak_gib": (device_meta[gib][2]
-                    + report.placement_extent_bytes
-                    + torch.cuda.max_memory_reserved()) / GIB} if gib in device_meta else {}),
+                "scratch_reserve_gib": device_meta[gib][3] / GIB} if gib in device_meta else {}),
             "placement_mode": args.placement,
             "extent_budget": args.extent_budget,
             "sim_ms_per_step": planned.makespan_us / 1e3,
