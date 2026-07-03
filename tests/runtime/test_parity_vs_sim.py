@@ -8,7 +8,7 @@ from dataflow.core.convert import to_sim_chain
 from dataflow.runtime import Engine, compare_to_sim_eventlog
 from dataflow.runtime.device.fake import FakeBackend
 from dataflow.training.planning import plan_program
-from dataflow.training.shaped_llama3 import (
+from dataflow.training.llama3 import (
     ShapedHardware,
     ShapedLlamaConfig,
     build_shaped_llama3,

@@ -221,10 +221,10 @@ def analyze_window(program, log) -> dict:
 def main() -> None:
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.tasks.llama3_blocks import build_resolver
-    from dataflow.training.llama3_lowering import dims_of, lower_llama3
+    from dataflow.training.llama3 import dims_of, lower_llama3
     from dataflow.training.planning import plan_program, simulate_program
     from dataflow.training.profiling import apply_measured_costs, cached_pcie, load_or_profile
-    from dataflow.training.shaped_llama3 import ShapedLlamaConfig
+    from dataflow.training.llama3 import ShapedLlamaConfig
 
     from m4_train import CONFIGS  # same config registry as the sweeps
 

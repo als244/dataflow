@@ -7,7 +7,7 @@ from dataflow.core import (
     save_program,
     validate_program,
 )
-from dataflow.training.shaped_llama3 import ShapedLlamaConfig, build_shaped_llama3
+from dataflow.training.llama3 import ShapedLlamaConfig, build_shaped_llama3
 
 
 def test_roundtrip_equality(tmp_path):

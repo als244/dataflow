@@ -42,8 +42,8 @@ def _llama3() -> Family:
         BlockRecompute,
         build_resolver,
     )
-    from .llama3_lowering import dims_of, initial_values, lower_llama3
-    from .shaped_llama3 import ShapedLlamaConfig
+    from .llama3 import dims_of, initial_values, lower_llama3
+    from .llama3 import ShapedLlamaConfig
 
     def golden():
         from dataflow.models.llama3_reference import GoldenLlama3
@@ -74,8 +74,8 @@ def _qwen3() -> Family:
         Qwen3BlockRecompute,
         build_qwen3_resolver,
     )
-    from .qwen3_lowering import dims_of_qwen3, initial_values_qwen3, lower_qwen3
-    from .shaped_qwen3 import ShapedQwen3Config
+    from .qwen3 import dims_of_qwen3, initial_values_qwen3, lower_qwen3
+    from .qwen3 import ShapedQwen3Config
 
     def golden():
         from dataflow.models.qwen3_reference import GoldenQwen3
@@ -100,8 +100,8 @@ def _qwen3() -> Family:
 
 def _qwen35() -> Family:
     from dataflow.tasks.qwen35_blocks import build_qwen35_resolver
-    from .qwen35_lowering import initial_values_qwen35, lower_qwen35
-    from .shaped_qwen35 import ShapedQwen35Config, dims_of_qwen35
+    from .qwen35 import initial_values_qwen35, lower_qwen35
+    from .qwen35 import ShapedQwen35Config, dims_of_qwen35
 
     def golden():
         from dataflow.models.qwen35_reference import GoldenQwen35

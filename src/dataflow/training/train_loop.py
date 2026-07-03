@@ -25,7 +25,7 @@ from dataflow.runtime.engine import Session
 from dataflow.tasks.interop import torch_view
 from dataflow.tasks.llama3_blocks import AdamWHyper
 from dataflow.training.families import resolve_family
-from dataflow.training.shaped_llama3 import ShapedLlamaConfig
+from dataflow.training.llama3 import ShapedLlamaConfig
 
 
 @dataclass

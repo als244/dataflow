@@ -123,13 +123,13 @@ Lowering emits the bare task chain plus the pieces planning needs:
   context; optimizer `step` in `block_params` and `group="optimizer"`.
   A family passes its config + explicit `kinds=` (one `LayerKindSpec`
   per layer kind; uniform dense families seed theirs with
-  `roofline_block_kind_spec`) — see `shaped_llama3.py` /
-  `shaped_qwen3.py` / `shaped_qwen35.py`, all three of which are thin
-  declarations. Sizes + initial values are generic too
+  `roofline_block_kind_spec`). Sizes + initial values are generic too
   (`training/lowering.py`): declare a `FamilyLayouts` (which packed
   layout backs each weight object, per layer; init specials) and call
-  `size_of_factory` / `initial_values_from_layouts` — a family lowering
-  module is ~70 lines of declarations.
+  `size_of_factory` / `initial_values_from_layouts`. ONE module per
+  family holds all of it — config, kind specs, dims mapping, layouts
+  declaration (`training/llama3.py` / `qwen3.py` / `qwen35.py`,
+  ~130-230 lines each, pure declarations).
 - **Optimizer placement**: emit each optimizer task immediately after the
   LAST mutation of its gradient (`optimizer_placement="interleaved"`, the
   default) — the legacy all-optimizers-at-the-end order costs a 1.5–2 s
@@ -188,10 +188,10 @@ What adding a family (e.g. Qwen3) actually touches, in order:
    bwd, layouts. Ladder 2 + structural stage tests.
 3. `models/<family>_reference.py` — golden autograd model,
    `from_packed_bytes`.
-4. `training/shaped_<family>.py` + `training/<family>_lowering.py` — chain
-   builder (§4 conventions) + layout-exact lowering + `initial_values`.
-   The recompute `build_variant` is just the builder re-invoked with
-   levels.
+4. `training/<family>.py` — ONE declaration module: the Shaped*Config,
+   the `LayerKindSpec`(s) into `build_shaped_program`, the config->dims
+   mapping, and the `FamilyLayouts` into the generic lowering (§4). The
+   recompute `build_variant` is just the builder re-invoked with levels.
 5. `tools/m4_train.py` `CONFIGS` — add named configs.
 6. Ladder 3 + gates (§5).
 

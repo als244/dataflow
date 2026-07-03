@@ -8,10 +8,10 @@ import json
 from dataclasses import replace
 
 from dataflow.core.jsonio import program_to_dict
-from dataflow.training.llama3_lowering import lower_llama3
-from dataflow.training.qwen3_lowering import lower_qwen3
-from dataflow.training.shaped_llama3 import ShapedLlamaConfig
-from dataflow.training.shaped_qwen3 import ShapedQwen3Config
+from dataflow.training.llama3 import lower_llama3
+from dataflow.training.qwen3 import lower_qwen3
+from dataflow.training.llama3 import ShapedLlamaConfig
+from dataflow.training.qwen3 import ShapedQwen3Config
 
 EXPECTED = {
     "llama3-tiny-ga2-s2": "67cbd6d2dbe6e6bd",

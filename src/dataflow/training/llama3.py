@@ -1,11 +1,11 @@
-"""Llama3 family: shaped config + kind spec for the generic builder.
+"""Llama3 family: config + declarations over the generic machinery.
 
-The chain grammar, costs plumbing, and Program assembly are family-generic
-and live in ``shaped_program.build_shaped_program`` — this module only
-declares WHAT llama3 is: its config (shapes + param counts) and its single
-dense-transformer layer kind (``roofline_block_kind_spec``). Every family
-follows this same contract (see shaped_qwen3 / shaped_qwen35); llama3 is
-not special.
+One module per family, one contract for every family (docs/extending.md
+§4/§6): the Shaped*Config (shapes + the param-count surface the roofline
+seeds read), the kind spec(s) for ``shaped_program.build_shaped_program``,
+the config->dims mapping, and the ``FamilyLayouts`` declaration consumed by
+the generic lowering (``training.lowering``). Llama3 is one dense-
+transformer kind; nothing here is special.
 
 Naming conventions of the emitted chain (family-invariant, owned by the
 generic builder):
@@ -26,14 +26,16 @@ from dataclasses import dataclass
 from typing import Mapping
 
 from dataflow.core import Program
-from dataflow.tasks.layouts import DTypePolicy
-
-from .shaped_program import (
-    LayerKindSpec,
-    ShapedHardware,
-    build_shaped_program,
-    roofline_block_kind_spec,
+from dataflow.tasks.layouts import (
+    DTypePolicy,
+    LlamaDims,
+    context_layout,
+    embed_weight_layout,
+    head_weight_layout,
+    weight_layout,
 )
+from .lowering import FamilyLayouts, apply_exact_sizes, initial_values_from_layouts, size_of_factory
+from .shaped_program import ShapedHardware, build_shaped_program, roofline_block_kind_spec
 
 
 @dataclass(frozen=True)
@@ -132,21 +134,57 @@ def build_shaped_llama3(
     fast_memory_capacity: int | None = None,
     recompute_levels: Mapping[str, int] | None = None,
     name: str | None = None,
-    kinds: Mapping[str, LayerKindSpec] | None = None,
-    kind_of=None,
 ) -> Program:
-    """Llama3 through the generic builder: one dense-transformer kind.
-
-    ``kinds``/``kind_of`` remain overridable because this function doubles
-    as the heterogeneous-family test harness entry (the LayerKindSpec
-    machinery is exercised against llama3 shapes in
-    tests/training/test_shaped_llama3.py)."""
+    """Llama3 through the generic builder: one dense-transformer kind."""
     hw = hw or ShapedHardware()
-    if kinds is None:
-        kinds = {"block": roofline_block_kind_spec(cfg, hw)}
-        kind_of = None
     return build_shaped_program(
-        cfg, hw=hw, kinds=kinds, kind_of=kind_of, family="llama3-shaped",
+        cfg, hw=hw, family="llama3-shaped",
+        kinds={"block": roofline_block_kind_spec(cfg, hw)},
         fast_memory_capacity=fast_memory_capacity,
         recompute_levels=recompute_levels, name=name,
     )
+
+
+def dims_of(cfg: ShapedLlamaConfig) -> LlamaDims:
+    return LlamaDims(
+        d_model=cfg.d_model,
+        n_heads=cfg.n_heads,
+        n_kv_heads=cfg.n_kv_heads,
+        d_ff=cfg.d_ff,
+        vocab_size=cfg.vocab_size,
+        tokens=cfg.tokens,
+        seq_len=cfg.seq_len,
+        dtypes=getattr(cfg, "dtypes", None) or DTypePolicy(),
+        seq_lens=getattr(cfg, "seq_lens", None),
+    )
+
+
+def family_layouts(cfg: ShapedLlamaConfig) -> tuple[LlamaDims, FamilyLayouts]:
+    dims = dims_of(cfg)
+    cl = context_layout(dims)
+    return dims, FamilyLayouts(
+        n_layers=cfg.n_layers,
+        block_weight_at=lambda i: weight_layout(dims, layer=i),
+        block_context_at=lambda i: cl,
+        embed=embed_weight_layout(dims),
+        head=head_weight_layout(dims),
+    )
+
+
+def lower_llama3(
+    cfg: ShapedLlamaConfig,
+    *,
+    hw: ShapedHardware | None = None,
+    recompute_levels: Mapping[str, int] | None = None,
+    fast_memory_capacity: int | None = None,
+) -> Program:
+    shaped = build_shaped_llama3(
+        cfg, hw=hw, recompute_levels=recompute_levels, fast_memory_capacity=fast_memory_capacity,
+    )
+    dims, fl = family_layouts(cfg)
+    return apply_exact_sizes(shaped, "llama3-exact-v1", size_of=size_of_factory(dims, fl))
+
+
+def initial_values(program: Program, cfg: ShapedLlamaConfig, backend, *, seed: int = 0):
+    dims, fl = family_layouts(cfg)
+    return initial_values_from_layouts(program, dims, fl, backend, seed=seed)

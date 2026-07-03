@@ -31,9 +31,9 @@ from dataflow.training.families import resolve_family
 from dataflow.training.planning import plan_program
 from dataflow.training.profiling import apply_measured_costs, cached_pcie, load_or_profile
 from dataflow.training.replay import replay_gap_pct
-from dataflow.training.shaped_llama3 import ShapedLlamaConfig
-from dataflow.training.shaped_qwen3 import ShapedQwen3Config
-from dataflow.training.shaped_qwen35 import ShapedQwen35Config
+from dataflow.training.llama3 import ShapedLlamaConfig
+from dataflow.training.qwen3 import ShapedQwen3Config
+from dataflow.training.qwen35 import ShapedQwen35Config
 from dataflow.training.train_loop import train
 
 GIB = 1024**3

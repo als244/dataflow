@@ -9,8 +9,8 @@
 """
 from dataflow.tasks.llama3_blocks import BlockFwd
 from dataflow.tasks.layouts import context_layout
-from dataflow.training.llama3_lowering import dims_of
-from dataflow.training.shaped_llama3 import ShapedLlamaConfig
+from dataflow.training.llama3 import dims_of
+from dataflow.training.llama3 import ShapedLlamaConfig
 
 
 def test_stage_context_completeness():

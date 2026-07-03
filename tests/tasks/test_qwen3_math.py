@@ -12,8 +12,8 @@ torch = pytest.importorskip("torch")
 
 from dataflow.tasks.layouts import Qwen3Dims, qwen3_context_layout  # noqa: E402
 from dataflow.tasks.qwen3_blocks import Qwen3BlockFwd  # noqa: E402
-from dataflow.training.qwen3_lowering import dims_of_qwen3, lower_qwen3  # noqa: E402
-from dataflow.training.shaped_qwen3 import ShapedQwen3Config  # noqa: E402
+from dataflow.training.qwen3 import dims_of_qwen3, lower_qwen3  # noqa: E402
+from dataflow.training.qwen3 import ShapedQwen3Config  # noqa: E402
 
 CFG = ShapedQwen3Config(
     n_layers=2, d_model=256, n_heads=4, n_kv_heads=2, head_dim=64,
@@ -133,7 +133,7 @@ def test_qwen3_multistep_matches_golden_and_loss_decreases():
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.tasks.interop import torch_view
     from dataflow.training.planning import plan_program
-    from dataflow.training.qwen3_lowering import initial_values_qwen3
+    from dataflow.training.qwen3 import initial_values_qwen3
     from dataflow.training.train_loop import train
 
     STEPS = 3

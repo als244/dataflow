@@ -15,7 +15,7 @@ import argparse
 import json
 from pathlib import Path
 
-from dataflow.training.shaped_llama3 import ShapedLlamaConfig
+from dataflow.training.llama3 import ShapedLlamaConfig
 from dataflow.training.testing.gradcheck import check_model_step
 
 GIB = 1024**3
@@ -41,7 +41,7 @@ def main() -> None:
     parser.add_argument("--out", type=Path, default=Path("artifacts/m4/correctness.json"))
     args = parser.parse_args()
 
-    from dataflow.training.llama3_lowering import lower_llama3
+    from dataflow.training.llama3 import lower_llama3
 
     levels_all = {
         rw.object_id: 1 for rw in lower_llama3(CFG).recompute_rewrites

@@ -11,7 +11,7 @@ from dataflow.runtime import Engine  # noqa: E402
 from dataflow.runtime.device.cuda import CudaBackend  # noqa: E402
 from dataflow.runtime.device.cuda_spin import SpinKernel, make_spin_resolver  # noqa: E402
 from dataflow.training.planning import plan_program, simulate_program  # noqa: E402
-from dataflow.training.shaped_llama3 import ShapedLlamaConfig, build_shaped_llama3  # noqa: E402
+from dataflow.training.llama3 import ShapedLlamaConfig, build_shaped_llama3  # noqa: E402
 
 pytestmark = pytest.mark.gpu
 

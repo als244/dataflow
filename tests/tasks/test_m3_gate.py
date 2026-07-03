@@ -11,10 +11,10 @@ from dataflow.runtime.device.cuda import CudaBackend  # noqa: E402
 from dataflow.runtime.device.fake import FakeBackend  # noqa: E402
 from dataflow.tasks.interop import torch_view  # noqa: E402
 from dataflow.tasks.llama3_blocks import build_resolver  # noqa: E402
-from dataflow.training.llama3_lowering import dims_of, initial_values, lower_llama3  # noqa: E402
+from dataflow.training.llama3 import dims_of, initial_values, lower_llama3  # noqa: E402
 from dataflow.training.planning import plan_program  # noqa: E402
 from dataflow.training.profiling import apply_measured_costs, profile_program  # noqa: E402
-from dataflow.training.shaped_llama3 import ShapedLlamaConfig  # noqa: E402
+from dataflow.training.llama3 import ShapedLlamaConfig  # noqa: E402
 from dataflow.training.testing.gradcheck import rel_l2  # noqa: E402
 
 pytestmark = pytest.mark.gpu

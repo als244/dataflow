@@ -160,7 +160,7 @@ def test_golden_qwen35_trains():
         qwen35_attn_weight_layout,
         qwen35_lin_weight_layout,
     )
-    from dataflow.training.shaped_qwen35 import ShapedQwen35Config, dims_of_qwen35
+    from dataflow.training.qwen35 import ShapedQwen35Config, dims_of_qwen35
 
     cfg = ShapedQwen35Config.tiny()
     dims = dims_of_qwen35(cfg)
@@ -213,7 +213,7 @@ def test_golden_qwen35_trains():
 
 
 def _tiny_dims():
-    from dataflow.training.shaped_qwen35 import ShapedQwen35Config, dims_of_qwen35
+    from dataflow.training.qwen35 import ShapedQwen35Config, dims_of_qwen35
 
     return dims_of_qwen35(ShapedQwen35Config.tiny())
 
@@ -338,7 +338,7 @@ def test_qwen35_attn_block_ladder2():
 def _tiny_cfg(**over):
     from dataclasses import replace
 
-    from dataflow.training.shaped_qwen35 import ShapedQwen35Config
+    from dataflow.training.qwen35 import ShapedQwen35Config
 
     return replace(ShapedQwen35Config.tiny(), **over)
 
@@ -365,7 +365,7 @@ def test_qwen35_lowering_validates_and_plans():
     from dataflow.core import validate_program
     from dataflow.training.families import resolve_family
     from dataflow.training.planning import plan_program, simulate_program
-    from dataflow.training.shaped_qwen35 import ShapedQwen35Config
+    from dataflow.training.qwen35 import ShapedQwen35Config
 
     # untied (the 9B default): separate W_head/O_head, bare-table W_embed
     cfg = _tiny_cfg()
@@ -396,7 +396,7 @@ def test_qwen35_model_step_vs_golden():
 def test_qwen35_tied_model_step_vs_golden():
     """The 2B-style tied variant stays golden-verified E2E (one W_embed
     leaf, head_bwd round-0 creates the shared dW_embed)."""
-    from dataflow.training.shaped_qwen35 import ShapedQwen35Config
+    from dataflow.training.qwen35 import ShapedQwen35Config
     from dataflow.training.testing.gradcheck import check_model_step
 
     check_model_step(

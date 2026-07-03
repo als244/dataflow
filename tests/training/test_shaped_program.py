@@ -1,5 +1,5 @@
 from dataflow.core import validate_program
-from dataflow.training.shaped_llama3 import ShapedLlamaConfig, build_shaped_llama3
+from dataflow.training.llama3 import ShapedLlamaConfig, build_shaped_llama3
 
 GIB = 1024**3
 
@@ -156,7 +156,7 @@ def test_tied_embeddings_chain_structure():
 def test_heterogeneous_kinds_emit_per_kind_keys_and_sizes():
     """LayerKindSpec table: task IDS stay uniform (tooling contract) while
     compute_block_keys, W/A sizes, and rewrite keys follow the layer kind."""
-    from dataflow.training.shaped_program import LayerKindSpec
+    from dataflow.training.shaped_program import LayerKindSpec, build_shaped_program
 
     cfg = ShapedLlamaConfig.tiny()  # 2 layers
     sub = [{"kind": "roofline", "name": "x", "flops": 1, "memory_bytes": 1, "efficiency": "matmul"}]
@@ -172,8 +172,9 @@ def test_heterogeneous_kinds_emit_per_kind_keys_and_sizes():
             fwd_subops=sub, bwd_subops=sub, recompute_subops=sub, optimizer_subops=sub,
         ),
     }
-    program = build_shaped_llama3(
-        cfg, kinds=kinds, kind_of=lambda i: "lin" if i == 0 else "full",
+    program = build_shaped_program(
+        cfg, family="llama3-shaped",
+        kinds=kinds, kind_of=lambda i: "lin" if i == 0 else "full",
     )
     validate_program(program)
     by_id = {t.id: t for t in program.tasks}

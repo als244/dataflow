@@ -8,7 +8,7 @@ from dataclasses import asdict
 import pytest
 
 from dataflow.core.convert import to_webapp_program
-from dataflow.training.shaped_llama3 import ShapedLlamaConfig, build_shaped_llama3
+from dataflow.training.llama3 import ShapedLlamaConfig, build_shaped_llama3
 
 
 @pytest.fixture(scope="module")
