@@ -49,6 +49,11 @@ class BufferPool:
     # (location, size) -> total buffers ever created: a completed run's map is
     # the exact prewarm demand for a repeat run (direct regime only).
     allocated_by_key: dict[tuple[str, int], int] = field(default_factory=dict)
+    # placed mode drops Buffer objects at put() (offsets are identity-managed),
+    # which would also drop a pending guard (poison memset still queued): the
+    # guard outlives the object here, keyed by address range, and re-attaches
+    # to the next incarnation carved over the range.
+    _placed_pending_guards: list = field(default_factory=list)  # (start, end, event)
 
     def add_slab(
         self, location: Location, capacity_bytes: int, *, overflow_bytes: int = 0
@@ -139,7 +144,7 @@ class BufferPool:
                 self._incarnations[tag] = key[1] + 1
                 self._live_ranges[key] = (offset, offset + size_bytes)
                 self._seq += 1
-                return Buffer(
+                buf = Buffer(
                     id=f"placed:{key[0]}:{key[1]}",
                     location="fast",
                     size_bytes=size_bytes,
@@ -147,6 +152,19 @@ class BufferPool:
                     raw=("placed",),
                     tag=key,
                 )
+                if self._placed_pending_guards:
+                    start, end = buf.ptr, buf.ptr + size_bytes
+                    live, mine = [], []
+                    for s0, e0, ev in self._placed_pending_guards:
+                        if self.backend.event_complete(ev):
+                            continue
+                        live.append((s0, e0, ev))
+                        if s0 < end and start < e0:
+                            mine.append(ev)
+                    self._placed_pending_guards = live
+                    if mine:
+                        buf.guard_event = mine[0] if len(mine) == 1 else tuple(mine)
+                return buf
         return self._get_dynamic(location, size_bytes)
 
     def _get_dynamic(self, location: Location, size_bytes: int) -> Buffer:
@@ -169,12 +187,27 @@ class BufferPool:
             # the slab (coalesces holes) and retry once. Overflow buffers stay
             # pooled — freeing them mid-run would call the vendor allocator
             # (sync risk) and forfeit their reuse.
+            #
+            # A buffer whose guard event is still PENDING must stay pooled
+            # too: the guard (e.g. a poison-on-free 0xFF memset queued behind
+            # a busy compute stream) is attached to the Buffer OBJECT, so
+            # recycling the range through the slab hands it to a new Buffer
+            # with guard_event=None — the next owner's writes then race the
+            # straggling memset (measured: the poison-gate NaN flake). Free-
+            # list reuse keeps the object, and with it the guard.
             for (loc, _size), stack in self.free_lists.items():
                 if loc != location:
                     continue
-                keep = [b for b in stack if not (isinstance(b.raw, tuple) and b.raw[0] == "slab")]
+                keep = []
                 for buf in stack:
-                    if isinstance(buf.raw, tuple) and buf.raw[0] == "slab":
+                    slab_backed = isinstance(buf.raw, tuple) and buf.raw[0] == "slab"
+                    if not slab_backed:
+                        keep.append(buf)
+                    elif buf.guard_event is not None and not self.backend.event_complete(
+                        buf.guard_event
+                    ):
+                        keep.append(buf)
+                    else:
                         buf.raw[2].free(buf.raw[1], buf.size_bytes)
                 stack[:] = keep
             offset = slab.allocate(size_bytes)
@@ -202,6 +235,12 @@ class BufferPool:
             self.recorder.on_put(buffer.tag)
         if isinstance(buffer.raw, tuple) and buffer.raw and buffer.raw[0] == "placed":
             self._live_ranges.pop(buffer.tag, None)
+            if buffer.guard_event is not None and not self.backend.event_complete(
+                buffer.guard_event
+            ):
+                self._placed_pending_guards.append(
+                    (buffer.ptr, buffer.ptr + buffer.size_bytes, buffer.guard_event)
+                )
             return  # placed offsets are identity-managed, never free-listed
         self.free_lists.setdefault((buffer.location, buffer.size_bytes), []).append(buffer)
 

@@ -108,3 +108,60 @@ def test_mini_program_end_to_end():
     # transfers really happened
     assert any(iv.track != "compute" for iv in result.trace.intervals)
     result.close()
+
+
+@pytest.mark.gpu
+def test_slab_flush_preserves_pending_poison_guard():
+    """Deterministic repro of the poison-test flake's mechanism: a freed
+    buffer with a PENDING guard (its 0xFF poison memset still queued behind
+    a busy compute stream) must not have its address range recycled through
+    the fragmentation flush — the flush discards the Buffer object, and with
+    it the guard, so the range's next owner takes an unguarded write race
+    against the straggling memset. Broken code: the poison lands on the new
+    owner's freshly-written bytes."""
+    import torch
+
+    from dataflow.runtime.device.cuda_spin import SpinKernel
+    from dataflow.runtime.pool import BufferPool
+    from dataflow.tasks.interop import torch_view
+
+    backend = CudaBackend()
+    compute = backend.create_stream("compute")
+    h2d = backend.create_stream("h2d")
+    spin = SpinKernel()
+
+    MB = 1 << 20
+    pool = BufferPool(backend=backend)
+    pool.add_slab("fast", 4 * MB)
+
+    # B carves 1 MiB; its poison memset is queued behind a 100 ms spin, so
+    # the guard event stays pending long past the host-side flush below
+    b = pool.get("fast", MB, tag="victim")
+    spin.launch_us(compute, 100_000)
+    backend.memset_async(b, 0xFF, compute)
+    b.guard_event = backend.record_event(compute)
+    pool.put(b)
+
+    # full-slab request: class miss -> fragmentation flush -> B's range goes
+    # back to the slab -> the carve returns it inside a new Buffer object
+    c = pool.get("fast", 4 * MB, tag="reuser")
+    overlaps = c.ptr <= b.ptr < c.ptr + c.size_bytes
+
+    # the new owner writes with exactly the transfers' discipline: wait the
+    # guard if one exists, else write immediately
+    if c.guard_event is not None:
+        backend.stream_wait_event(h2d, c.guard_event)
+    backend.memset_async(c, 0x00, h2d)
+    backend.sync_all()
+
+    data = torch_view(c, (c.size_bytes,), torch.uint8)
+    corrupted = int((data != 0).sum())
+    assert corrupted == 0, (
+        f"{corrupted} bytes of a live buffer were overwritten by a stale "
+        f"poison memset (range reuse dropped the pending guard; "
+        f"overlap={overlaps}); "
+    )
+    del data
+    pool.drain()
+    if not (isinstance(c.raw, tuple) and c.raw and c.raw[0] in ("slab", "placed")):
+        backend.free(c)  # vendor-alloc escape buffer (the fixed path takes it)

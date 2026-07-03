@@ -97,6 +97,13 @@ class DeviceBackend(Protocol):
         token handler at or after its completion)."""
         ...
 
+    def event_complete(self, event: Event) -> bool:
+        """Non-blocking: has the event's stream position been reached?
+        Unlike event_time_us this is legal on PENDING events — it exists for
+        guard checks (e.g. the pool must not recycle an address range whose
+        poison memset is still queued)."""
+        ...
+
     # --- memory ---------------------------------------------------------------
     def alloc(self, location: Location, size_bytes: int) -> Buffer:
         """Device alloc for 'fast', pinned-host alloc for 'backing'.

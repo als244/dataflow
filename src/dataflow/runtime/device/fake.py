@@ -42,6 +42,9 @@ class FakeBackend:
     def stream_wait_event(self, stream: Stream, event: Event) -> None:
         stream.clock_us = max(stream.clock_us, event.time_us)
 
+    def event_complete(self, event: Event) -> bool:
+        return event.time_us <= self._host_us
+
     def align_stream_to_host(self, stream: Stream) -> None:
         stream.clock_us = max(stream.clock_us, self._host_us)
 

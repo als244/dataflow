@@ -182,8 +182,11 @@ class TransferEngine:
             self.backend.stream_wait_event(self.stream, src_ready)
         if dst_buffer.guard_event is not None:
             # a debug poison touched these bytes on another stream; the copy
-            # must not race it
-            self.backend.stream_wait_event(self.stream, dst_buffer.guard_event)
+            # must not race it (a tuple = guards inherited from multiple
+            # overlapping placed ranges)
+            guards = dst_buffer.guard_event
+            for ev in guards if isinstance(guards, tuple) else (guards,):
+                self.backend.stream_wait_event(self.stream, ev)
             dst_buffer.guard_event = None
         self.backend.align_stream_to_host(self.stream)
         job.start_event = self.backend.record_event(self.stream)

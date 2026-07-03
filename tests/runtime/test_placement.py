@@ -174,3 +174,42 @@ def test_annotator_ranges_balanced_over_full_run():
     task_ids = {t.id for t in annotated.tasks}
     assert task_ids.issubset(set(pushes))  # every task got a range
 
+
+
+def test_placed_reuse_inherits_pending_guard():
+    """Placed offsets are identity-managed: put() drops the Buffer object, so
+    a pending guard (poison memset still queued) must survive by RANGE and
+    re-attach to the next incarnation carved over it — otherwise the next
+    owner's h2d fill races the straggling memset (the poison-gate NaN class,
+    placement-mode variant)."""
+    from dataflow.runtime.placement import Placement
+    from dataflow.runtime.pool import BufferPool
+
+    KB = 1024
+    backend = FakeBackend()
+    stream = backend.create_stream("compute")
+    pool = BufferPool(backend=backend)
+    pool.enable_placement(Placement(
+        offsets={("X", 0): 0, ("Y", 0): 0},
+        sizes={("X", 0): 4 * KB, ("Y", 0): 4 * KB},
+        extent_bytes=4 * KB,
+        load_bytes=4 * KB,
+        physical_limit_bytes=64 * KB,
+    ))
+
+    x = pool.get("fast", 4 * KB, tag="X")
+    # guard that is still PENDING at put(): recorded on a stream whose clock
+    # is ahead of the host clock (the fake backend's "in flight")
+    backend.advance_stream(stream, 500.0)
+    x.guard_event = backend.record_event(stream)
+    pool.put(x)
+
+    y = pool.get("fast", 4 * KB, tag="Y")  # same offset range, new object
+    assert y.ptr == x.ptr
+    assert y.guard_event is not None, "pending guard dropped across placed reuse"
+
+    # once the guard completes, later incarnations carry nothing
+    pool.put(y)
+    backend._host_us = 1_000.0
+    x2 = pool.get("fast", 4 * KB, tag="X")
+    assert x2.guard_event is None
