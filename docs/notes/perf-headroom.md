@@ -22,8 +22,11 @@ Cross-check: 662 boundaries × 815 µs ≈ 0.54 s/step ≈ the entire
 real-vs-sim deficit (−3…−4%) — the sim's unmodeled term is exactly this.
 
 **Remedies, in order:**
-- **Dispatch-ahead (BUILT — measured +1.4% at bs8/ga8@24, real-vs-sim
-  −0.87%)**: plan-derived sync points; free boundaries enqueue immediately,
+- **Dispatch-ahead (built, measured, REVERTED — recover at 21243be)**:
+  verdict: +1.4% at the compute-bound top, a wash at 16/20 GiB, −1.8%
+  at the transfer-bound bottom — not worth the engine complexity.
+  The gaps' true fix is CUDA-graph capture per dataflow-task (below).
+  Design record: plan-derived sync points; free boundaries enqueue immediately,
   hiding the tax under GPU execution. Two instructive failed versions:
   v1 pre-charged the ledger at enqueue and STARVED transfer admission
   (−20%: prefetches compete for the same ledger); v2 "drained

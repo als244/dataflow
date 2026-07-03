@@ -80,10 +80,6 @@ class FakeBackend:
         self._seq += 1
         heapq.heappush(self._pending, (event.time_us, priority, self._seq, token))
 
-    def poll_completion(self):
-        # virtual clocks: every queued token is "ready now"
-        return self.next_completion()
-
     def next_completion(self) -> Any | None:
         if not self._pending:
             return None

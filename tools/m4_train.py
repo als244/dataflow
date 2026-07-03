@@ -77,11 +77,6 @@ def main() -> None:
     parser.add_argument("--steps", type=int, default=4)
     parser.add_argument("--recompute", action="store_true")
     parser.add_argument(
-        "--dispatch", choices=["strict", "ahead"], default="strict",
-        help="strict: exact sim pacing (parity reference); ahead: enqueue "
-             "past boundaries the plan proves safe (hides per-task host tax)",
-    )
-    parser.add_argument(
         "--placement", choices=["static", "dynamic"], default="static",
         help="static (default): offsets packed offline from dry-run lifetimes, "
              "fragmentation impossible; dynamic: online slab+arena — required "
@@ -135,8 +130,7 @@ def main() -> None:
         print(f"replaying saved plan {args.annotated.name}: "
               f"sim {sim_us / 1e3:.1f} ms/step ({sim_tok_s:.0f} tok/s)")
         backend = CudaBackend()
-        report = train(program, cfg, backend, steps=args.steps, seed=11,
-                       dispatch=args.dispatch)
+        report = train(program, cfg, backend, steps=args.steps, seed=11)
         real_tok_s = tokens_per_step / (report.steady_state_makespan_us / 1e6)
         print(json.dumps({
             "annotated": str(args.annotated),
@@ -316,7 +310,6 @@ def main() -> None:
             report = train(
                 planned.program, cfg, backend, steps=args.steps, seed=11,
                 placement_mode=args.placement, placement=placement,
-                dispatch=args.dispatch,
             )
         except PlacementError as exc:
             # not packable on this device: keep the SIM side of the row so the
@@ -326,7 +319,6 @@ def main() -> None:
                 "budget_gib": gib,
                 "planned_budget_gib": eff / GIB,
                 "placement_mode": args.placement,
-            "dispatch": args.dispatch,
                 "extent_budget": args.extent_budget,
                 "sim_ms_per_step": planned.makespan_us / 1e3,
                 "sim_tokens_per_s": sim_tok_s,
@@ -356,7 +348,6 @@ def main() -> None:
                     + report.placement_extent_bytes
                     + torch.cuda.max_memory_reserved()) / GIB} if gib in device_meta else {}),
             "placement_mode": args.placement,
-            "dispatch": args.dispatch,
             "extent_budget": args.extent_budget,
             "sim_ms_per_step": planned.makespan_us / 1e3,
             "real_ms_per_step_steady": steady_us / 1e3,

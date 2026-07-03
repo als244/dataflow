@@ -226,36 +226,6 @@ class CudaBackend:
         # Runs on CUDA's callback thread: queue push only, no CUDA calls.
         self._hostfn_queue.put(int(user_data) if user_data is not None else 0)
 
-    def poll_completion(self) -> Any | None:
-        """Non-blocking: return a completed token if one is ready NOW, else
-        None immediately (next_completion blocks while work is in flight —
-        correct for waits/deadlock detection, fatal for opportunistic
-        drains)."""
-        if self.completion_mode == "hostfn":
-            try:
-                key = self._hostfn_queue.get_nowait()
-            except Exception:
-                return None
-            with self._hostfn_lock:
-                pending = self._hostfn_tokens.pop(key)
-                self._hostfn_outstanding -= 1
-            return pending.token
-        best: tuple[float, int, str] | None = None
-        for stream_id, dq in self._pending.items():
-            if not dq:
-                continue
-            head = dq[0]
-            err = cudart.cudaEventQuery(head.event.raw)[0]
-            if err == cudart.cudaError_t.cudaSuccess:
-                t = self.event_time_us(head.event)
-                cand = (t, head.priority, stream_id)
-                if best is None or cand < best:
-                    best = cand
-        if best is None:
-            return None
-        _, _, stream_id = best
-        return self._pending[stream_id].popleft().token
-
     def next_completion(self) -> Any | None:
         if self.completion_mode == "hostfn":
             with self._hostfn_lock:

@@ -63,7 +63,6 @@ def train(
     physical_limit_bytes: int = 27 * 1024**3,
     placement_mode: str = "static",
     placement=None,
-    dispatch: str = "strict",
 ) -> TrainReport:
     """Run `steps` optimizer steps of the (single-step) annotated program.
 
@@ -135,7 +134,6 @@ def train(
                 result = Engine(backend, session=session).execute(
                     stepped, resolver=resolver, initial_buffers=values,
                     pool_prewarm=dry.pool_demand, placement=placement,
-                    dispatch=dispatch,
                 )
             finally:
                 if annotator is not None and annotator.enabled:
