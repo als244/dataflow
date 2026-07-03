@@ -77,3 +77,65 @@ def test_capacity_sweep_monotone_tiny():
     caps = [500_000, 800_000, 2_000_000]
     makespans = [plan_program(program, fast_memory_capacity=c).makespan_us for c in caps]
     assert makespans[0] >= makespans[1] >= makespans[2]
+
+
+def test_backing_capacity_drives_recompute():
+    """First-class backing capacity steering the recompute planner.
+
+    The lever exists in the GRAD-ACCUM regime, where saved contexts dominate
+    backing demand: recompute variants genuinely shrink the footprint, so a
+    cap between the save-all and recompute-all peaks forces recomputation to
+    replace offloading. (At ga=1 the footprint is dominated by the W/dW
+    round-trip, which no recompute level removes — there the cap is a sharp
+    feasibility cliff, not a dial; measured and documented.)"""
+    from dataclasses import replace
+
+    from dataflow.runtime import Engine
+    from dataflow.runtime.device.fake import FakeBackend
+
+    cfg = ShapedLlamaConfig.llama3_8b(batch=1, grad_accum_rounds=2)
+    cap = 12 * 1024**3
+    program = build_shaped_llama3(cfg)
+    all_levels = {
+        rw.object_id: rw.options[-1].level for rw in program.recompute_rewrites
+    }
+
+    def plan_at(backing: int | None):
+        def variant(levels):
+            return replace(
+                build_shaped_llama3(cfg, recompute_levels=levels),
+                backing_memory_capacity=backing,
+            )
+
+        return plan_program(
+            replace(program, backing_memory_capacity=backing),
+            fast_memory_capacity=cap,
+            recompute=True,
+            build_variant=variant,
+        )
+
+    def peak_backing(planned) -> int:
+        dry = Engine(FakeBackend()).execute(planned.program)
+        peak = dry.peak_backing_bytes
+        dry.close()
+        return peak
+
+    unlimited = plan_at(None)
+    n_unlimited = sum(1 for v in unlimited.recompute_levels.values() if v > 0)
+
+    # measure both ends of the dial, cap in between
+    save_peak = peak_backing(unlimited) if n_unlimited == 0 else None
+    rc_all_planned = plan_program(
+        replace(build_shaped_llama3(cfg, recompute_levels=all_levels),
+                backing_memory_capacity=None),
+        fast_memory_capacity=cap,
+    )
+    rc_peak = peak_backing(rc_all_planned)
+    assert save_peak is not None and save_peak > rc_peak, (save_peak, rc_peak)
+    tight = plan_at((save_peak + rc_peak) // 2)
+
+    n_tight = sum(1 for v in tight.recompute_levels.values() if v > 0)
+    assert n_tight > n_unlimited, (n_unlimited, n_tight)
+    # the tight plan must actually simulate green under the cap
+    log = simulate_program(tight.program)
+    assert max(iv.end for iv in log.task_intervals) == tight.makespan_us
