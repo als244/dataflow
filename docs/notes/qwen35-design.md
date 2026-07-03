@@ -39,8 +39,11 @@ was read from those sources, not recalled.
      head_v_dim=128); `xo = o_normed @ W_out + x` (out: value_dim→d).
 - Per-layer linear-attn params besides projections: conv (8192,4),
   A_log (32,), dt_bias (32,), norm (128,).
-- **Tied embeddings**: vocab 248,320; NO separate lm_head — the head
-  IS the embedding table.
+- **Tied embeddings** (a per-model CONFIG choice, not a family
+  property): vocab 248,320; NO separate lm_head — the head IS the
+  embedding table. Final RMSNorm before the head carries a REAL learned
+  weight (model.norm.weight) — unlike our llama/qwen3 shaped families'
+  weightless approximation, this one is first-class.
 - MTP head (`mtp_num_hidden_layers: 1`): ignored for LM training (as
   flextrain's training path does) — recorded decision, revisit never
   unless the objective changes.
@@ -94,15 +97,20 @@ llama/qwen3 chains must stay BIT-IDENTICAL — same ids, same order):
   conv + delta rule ≈ treat as matmul roofline on proj+out + memory
   term; accuracy irrelevant — profiling replaces).
 
-### 3b. Tied embeddings (second structural change)
-- Lowering flag `tied_embeddings`: drop `W_head`/`O_head`/`dW_head_*`;
-  `head_fwd`/`head_bwd` take `W_embed`; `dW_embed_{s}` accumulates from
-  BOTH `head_bwd` (first writer, rounds create/mutate) AND `embed_bwd`
-  (always mutate-accumulate); single `optimizer_embed`. Golden mirrors
-  (one leaf, grads summed by autograd automatically).
-- Chain-order note: head_bwd of round 0 CREATES dW_embed, embed_bwd of
-  round 0 mutates it, etc. — mutation-pattern change in the builder,
-  gated by the flag; llama/qwen3 (untied) untouched.
+### 3b. Tied embeddings (second structural change — config-gated)
+- One object family `W_e / dW_e / O_e` replaces the separate
+  embed/head trio: lowering flag `tied_embeddings` drops
+  `W_head`/`O_head`/`dW_head_*`; `embed_fwd`/`head_fwd`/`head_bwd`/
+  `embed_bwd` all reference `W_e`; `dW_e_{s}` accumulates from BOTH
+  `head_bwd` (round 0 creates it) AND `embed_bwd` (mutate-accumulates),
+  then every later round mutates; single `optimizer_e`. Golden mirrors
+  with one leaf (autograd sums the two contributions automatically).
+- **Final-norm weight rides in `W_e`**: the packed embed layout gains a
+  second field `[embed_table | final_norm_w(d)]` so the one-object
+  contract holds — head_fwd computes `rmsnorm(x, final_norm_w) @ tableᵀ`
+  and head_bwd produces the final-norm weight grad into `dW_e`'s
+  matching field. (llama/qwen3 keep their weightless final norm and
+  untied objects — builder changes are flag-gated, chains bit-identical.)
 
 ### 3c. Blocks (tasks/qwen35_blocks.py)
 Two staged executables + shared MLP-tail stages factored from the
@@ -184,13 +192,26 @@ leaf.
 - Hopper GVA bwd workaround (fla #640): sm90-only; we're sm120 —
   verify `chunk_gated_delta_rule_bwd` works directly in ladder 1;
   fallback = flextrain's expand/reduce trick if Blackwell hits it too.
-- deps: `flash-linear-attention==0.5.0` (matches flextrain) installed
-  in the dataflow env; fwd kernel smoke-tested on sm_120.
+- deps — OUR OWN pins, chosen for our stack (flextrain is reference
+  only): `flash-linear-attention==0.5.1` (latest; API verified — fwd
+  takes `use_gate_in_kernel`/`A_log`, bwd takes `g_input`; naive
+  references present; fwd smoke green on sm_120) and
+  `causal-conv1d==1.6.2.post1` (built from source for sm_120 with CUDA
+  13.1). Conv A/B at 9B shapes (T=8192, D=8192, W=4, silu) on the 5090:
+  CUDA 0.193 ms vs fla-Triton 0.192 ms — BOTH at ~1,400 GB/s (memory-
+  bound, at bandwidth; no gap on this card), both 1.7e-3 rel err vs an
+  fp32 reference. Integration note: fla's kernel consumes token-major
+  (T, D) natively; causal_conv1d_fn wants channel-major (B, D, T).
+  DECISION: conv is a kernel-REGISTRY op with both impls registered —
+  fla-triton default (layout-native), causal-conv1d as the measured
+  alternate; the registry's kernel-set stamping keeps profiles honest
+  either way.
 
 ## 7. Status
 - [x] Recon: flextrain qwen3_5 layers/blocks read; HF config extracted;
       fwd/bwd contracts documented above.
-- [x] Deps: fla 0.5.0 installed; sm_120 fwd smoke green.
+- [x] Deps: fla 0.5.1 + causal-conv1d 1.6.2.post1 (our pins), sm_120
+      smokes green, conv A/B measured (tie at bandwidth).
 - [ ] Heterogeneous builder + tied-embeddings lowering generalization.
 - [ ] Layouts + blocks + golden + lowering + families entry.
 - [ ] Ladder + gates.
