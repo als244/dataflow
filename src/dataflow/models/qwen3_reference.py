@@ -32,10 +32,11 @@ class GoldenQwen3(GoldenLlama3):
         km = (h1 @ w["wk"]).view(t, kvh, hd)
         qn = ops.rmsnorm_reference(qm, w["q_norm_w"]).view(t, d.q_dim)
         kn = ops.rmsnorm_reference(km, w["k_norm_w"]).view(t, d.kv_dim)
-        q = ops.rope_fwd(qn, d.seq_len, h, hd, d.rope_base)
-        k = ops.rope_fwd(kn, d.seq_len, kvh, hd, d.rope_base)
+        pos = ops.positions_for(d.seq_spec, x.shape[0], x.device)
+        q = ops.rope_fwd(qn, pos, h, hd, d.rope_base)
+        k = ops.rope_fwd(kn, pos, kvh, hd, d.rope_base)
         v = h1 @ w["wv"]
-        attn = ops.attention_reference(q, k, v, h, kvh, hd, d.seq_len)
+        attn = ops.attention_reference(q, k, v, h, kvh, hd, d.seq_spec)
         h_mid = x + attn @ w["wo"]
         h2 = ops.rmsnorm_reference(h_mid, w["ffn_norm_w"])
         x1 = h2 @ w["w1"]

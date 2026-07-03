@@ -79,9 +79,10 @@ class Qwen3BlockFwd(BlockFwd):
     @staticmethod
     def _stage_rope(kctx, K, d, st):
         q = torch.empty_like(st["qn"])
-        K.rope_fwd(kctx, st["qn"], q, d.seq_len, d.n_heads, d.head_dim, d.rope_base)
+        pos = ops.positions_for(d.seq_spec, q.shape[0], q.device)
+        K.rope_fwd(kctx, st["qn"], q, pos, d.n_heads, d.head_dim, d.rope_base)
         k = torch.empty_like(st["kn"])
-        K.rope_fwd(kctx, st["kn"], k, d.seq_len, d.n_kv_heads, d.head_dim, d.rope_base)
+        K.rope_fwd(kctx, st["kn"], k, pos, d.n_kv_heads, d.head_dim, d.rope_base)
         st.update(q=q, k=k)
 
     @staticmethod
@@ -179,17 +180,18 @@ class Qwen3BlockBwd(BlockBwd):
         kn = torch.empty_like(a["km"])
         K.rmsnorm_apply(kctx, km2, a["rstd_k"], w["k_norm_w"], kn.view(t * kvh, hd))
         q = torch.empty_like(qn)
-        K.rope_fwd(kctx, qn, q, d.seq_len, h, hd, d.rope_base)
+        pos = ops.positions_for(d.seq_spec, qn.shape[0], qn.device)
+        K.rope_fwd(kctx, qn, q, pos, h, hd, d.rope_base)
         k = torch.empty_like(kn)
-        K.rope_fwd(kctx, kn, k, d.seq_len, kvh, hd, d.rope_base)
+        K.rope_fwd(kctx, kn, k, pos, kvh, hd, d.rope_base)
 
         dq, dk, dv = ops.flash_bwd(
-            d_attn, q, k, a["v"], a["attn_out"], a["lse"], h, kvh, hd, d.seq_len,
+            d_attn, q, k, a["v"], a["attn_out"], a["lse"], h, kvh, hd, d.seq_spec,
         )
         dqn = torch.empty_like(dq)
-        K.rope_bwd(kctx, dq, dqn, d.seq_len, h, hd, d.rope_base)
+        K.rope_bwd(kctx, dq, dqn, pos, h, hd, d.rope_base)
         dkn = torch.empty_like(dk)
-        K.rope_bwd(kctx, dk, dkn, d.seq_len, kvh, hd, d.rope_base)
+        K.rope_bwd(kctx, dk, dkn, pos, kvh, hd, d.rope_base)
 
         dqm, dq_norm = norm_bwd(dqn.view(t * h, hd), qm2, a["rstd_q"], w["q_norm_w"])
         acc("q_norm_w", dq_norm)

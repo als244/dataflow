@@ -136,6 +136,14 @@ class LlamaDims:
     seq_len: int
     rope_base: float = 500_000.0
     dtypes: DTypePolicy = DTypePolicy()
+    # explicit per-sequence lengths for ragged packing (sum == tokens);
+    # None = uniform sequences of seq_len (varlen-first design note)
+    seq_lens: tuple[int, ...] | None = None
+
+    @property
+    def seq_spec(self):
+        """int (uniform) or tuple (ragged) — the ops-layer seq argument."""
+        return self.seq_lens if self.seq_lens is not None else self.seq_len
 
     @property
     def head_dim(self) -> int:
@@ -164,6 +172,14 @@ class Qwen3Dims:
     seq_len: int
     rope_base: float = 1_000_000.0
     dtypes: DTypePolicy = DTypePolicy()
+    # explicit per-sequence lengths for ragged packing (sum == tokens);
+    # None = uniform sequences of seq_len (varlen-first design note)
+    seq_lens: tuple[int, ...] | None = None
+
+    @property
+    def seq_spec(self):
+        """int (uniform) or tuple (ragged) — the ops-layer seq argument."""
+        return self.seq_lens if self.seq_lens is not None else self.seq_len
 
     @property
     def q_dim(self) -> int:
@@ -190,6 +206,16 @@ def _param_specs(dims, names_shapes, ns: str | None = None,
 
 def _policy_of(dims) -> DTypePolicy:
     return getattr(dims, "dtypes", None) or DTypePolicy()
+
+
+def _lse_spec(dims, n_heads: int) -> tuple[str, tuple[int, ...], str]:
+    """Flash lse context field. Uniform batches keep the historical
+    (batch*heads, seq_len) shape; ragged packing stores (heads, tokens)
+    (same element count — ops.flash_fwd emits the matching layout)."""
+    t = dims.tokens
+    if getattr(dims, "seq_lens", None) is not None and len(set(dims.seq_lens)) > 1:
+        return ("lse", (n_heads, t), "fp32")
+    return ("lse", ((t // dims.seq_len) * n_heads, dims.seq_len), "fp32")
 
 
 def grad_layout(weight: PackedLayout, policy: DTypePolicy,
@@ -245,7 +271,7 @@ def context_layout(dims: LlamaDims) -> PackedLayout:
         ("q", (t, d), "bf16"),
         ("k", (t, kv), "bf16"),
         ("v", (t, kv), "bf16"),
-        ("lse", ((t // dims.seq_len) * h, dims.seq_len), "fp32"),
+        _lse_spec(dims, h),
         ("attn_out", (t, d), "bf16"),
         ("h_mid", (t, d), "bf16"),
         ("rstd_ffn", (t,), "fp32"),
@@ -289,7 +315,7 @@ def qwen3_context_layout(dims: Qwen3Dims) -> PackedLayout:
         ("rstd_q", (t * h,), "fp32"),
         ("rstd_k", (t * kvh,), "fp32"),
         ("v", (t, kv), "bf16"),
-        ("lse", ((t // dims.seq_len) * h, dims.seq_len), "fp32"),
+        _lse_spec(dims, h),
         ("attn_out", (t, q), "bf16"),
         ("h_mid", (t, d), "bf16"),
         ("rstd_ffn", (t,), "fp32"),
@@ -332,6 +358,14 @@ class Qwen35Dims:
     seq_len: int
     rope_base: float = 10_000_000.0
     dtypes: DTypePolicy = DTypePolicy()
+    # explicit per-sequence lengths for ragged packing (sum == tokens);
+    # None = uniform sequences of seq_len (varlen-first design note)
+    seq_lens: tuple[int, ...] | None = None
+
+    @property
+    def seq_spec(self):
+        """int (uniform) or tuple (ragged) — the ops-layer seq argument."""
+        return self.seq_lens if self.seq_lens is not None else self.seq_len
 
     @property
     def attn_dim(self) -> int:
@@ -443,7 +477,7 @@ def qwen35_attn_context_layout(dims: Qwen35Dims) -> PackedLayout:
         ("rstd_k", (t * kvh,), "fp32"),
         ("gate", (t, dims.attn_dim), "bf16"),
         ("v", (t, dims.kv_dim), "bf16"),
-        ("lse", ((t // dims.seq_len) * h, dims.seq_len), "fp32"),
+        _lse_spec(dims, h),
         ("attn_out", (t, dims.attn_dim), "bf16"),
         ("xo", (t, d), "bf16"),
         ("rstd_ffn", (t,), "fp32"),

@@ -63,14 +63,15 @@ from .llama3_blocks import (
 
 
 def _cu_seqlens(dims: Qwen35Dims, device) -> tuple:
-    """(cu_seqlens, chunk_indices) for packed rounds; (None, None) when the
-    round is a single sequence."""
-    if dims.tokens == dims.seq_len:
+    """(cu_seqlens, chunk_indices) for packed rounds — ragged-aware via the
+    dims' seq spec; (None, None) when the round is a single sequence."""
+    lens = ops.seq_lens_of(dims.seq_spec, dims.tokens)
+    if len(lens) == 1:
         return None, None
     from fla.modules.conv.triton.ops import prepare_chunk_indices
 
-    n = dims.tokens // dims.seq_len
-    cu = torch.arange(n + 1, device=device, dtype=torch.int64) * dims.seq_len
+    cu = torch.zeros(len(lens) + 1, device=device, dtype=torch.int64)
+    torch.cumsum(torch.tensor(lens, device=device, dtype=torch.int64), 0, out=cu[1:])
     return cu, prepare_chunk_indices(cu, 64)
 
 
@@ -396,7 +397,8 @@ class Qwen35AttnBlockFwd(BlockFwd):
         rs = xh[:, :, :rot].contiguous().view(t, heads * rot)
         out = torch.empty_like(rs)
         fn = K.rope_bwd if bwd else K.rope_fwd
-        fn(kctx, rs, out, d.seq_len, heads, rot, d.rope_base)
+        pos = ops.positions_for(d.seq_spec, t, rs.device)
+        fn(kctx, rs, out, pos, heads, rot, d.rope_base)
         y = torch.empty_like(xh)
         y[:, :, :rot] = out.view(t, heads, rot)
         y[:, :, rot:] = xh[:, :, rot:]
@@ -439,7 +441,7 @@ class Qwen35AttnBlockFwd(BlockFwd):
     @staticmethod
     def _stage_attn(kctx, K, d, st):
         attn_out, lse = ops.flash_fwd(
-            st["q"], st["k"], st["v"], d.n_heads, d.n_kv_heads, d.head_dim, d.seq_len,
+            st["q"], st["k"], st["v"], d.n_heads, d.n_kv_heads, d.head_dim, d.seq_spec,
         )
         st["attn_out"] = attn_out
         if st["a"] is not None:
@@ -569,7 +571,7 @@ class Qwen35AttnBlockBwd(_Base):
         q = Qwen35AttnBlockFwd._partial_rope(kctx, K, d, qn, h)
         k = Qwen35AttnBlockFwd._partial_rope(kctx, K, d, kn, kvh)
         dq, dk, dv = ops.flash_bwd(
-            d_attn, q, k, a["v"], a["attn_out"], a["lse"], h, kvh, hd, d.seq_len,
+            d_attn, q, k, a["v"], a["attn_out"], a["lse"], h, kvh, hd, d.seq_spec,
         )
         dqn = Qwen35AttnBlockFwd._partial_rope(kctx, K, d, dq, h, bwd=True)
         dkn = Qwen35AttnBlockFwd._partial_rope(kctx, K, d, dk, kvh, bwd=True)

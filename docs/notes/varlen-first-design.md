@@ -3,7 +3,28 @@
 Requested by Shein 2026-07-03: activations represented as
 `[total_tokens, hidden]` (no batch dim) in ALL models, with the batch's
 sequence lengths tracked and passed to the sequence-dependent ops (rope,
-attention, and the qwen35 conv/linear-attn resets). Status: DESIGN.
+attention, and the qwen35 conv/linear-attn resets).
+
+**Status: IMPLEMENTED (2026-07-03).** `cfg.seq_lens` (tuple, sum = round
+tokens; None = uniform batch x seq_len) rides dims into every block;
+rope takes an explicit `positions` tensor (`ops.positions_for`, triton
+kernel loads per-row positions); flash/attention/conv/delta references
+take a polymorphic seq spec — int uniform keeps the historical dense
+fast paths BIT-COMPATIBLE, tuples run ragged (per-sequence flash calls
+with an (heads, tokens) lse context layout; the qwen35 fla/conv kernels
+take the ragged cu_seqlens natively). Gates:
+tests/training/test_varlen_e2e.py (ragged flash parity vs block-diag
+autograd + llama AND qwen35 tiny ragged model-steps through the real
+engine vs golden) and the ragged rope kernel-parity case in
+test_kernels. Hard-won detail: the aten flash-bwd kernel reads lse
+assuming CONTIGUOUS rows — a same-shape reshape of the lse column slice
+is a strided-view no-op and silently corrupts every grad (the fla
+contiguity lesson, aten edition; .contiguous() is load-bearing).
+Not built (recorded): aten VARLEN flash (per-seq loop is v1 — fine at
+tiny/test scale, measurable for many-sequence rounds), per-step VARYING
+patterns (needs --placement dynamic + per-pattern profiles), seq-pattern
+hash in profile signatures (ragged sweeps must not reuse uniform-pattern
+cost caches; use --refresh-profiles until keyed).
 
 ## What is already true (audit, 2026-07-03)
 

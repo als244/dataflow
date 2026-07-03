@@ -1,8 +1,10 @@
 """rope (llama rotate-half): fused Triton (default) + eager fallback.
 
 Op signatures:
-- ``rope_fwd(kctx, x, out, seq_len, n_heads, head_dim, base)``
-- ``rope_bwd(kctx, dx, out, seq_len, n_heads, head_dim, base)``
+- ``rope_fwd(kctx, x, out, positions, n_heads, head_dim, base)``
+- ``rope_bwd(kctx, dx, out, positions, n_heads, head_dim, base)``
+  (``positions``: (tokens,) int32 per-sequence indices — sequence structure
+  is explicit; build with ``ops.positions_for``)
 
 x/out: (tokens, n_heads*head_dim) contiguous, tokens = batch x seq_len
 (positions restart every seq_len rows). The eager form is the single worst
@@ -29,12 +31,12 @@ def _eager_hint(x: torch.Tensor, *a) -> int:
 register(
     "rope_fwd", "eager", deterministic=True, allocates="torch",
     workspace=internal(_eager_hint), priority=0,
-    fn=lambda kctx, x, out, s, h, hd, base: out.copy_(ops.rope_fwd(x, s, h, hd, base)),
+    fn=lambda kctx, x, out, pos, h, hd, base: out.copy_(ops.rope_fwd(x, pos, h, hd, base)),
 )
 register(
     "rope_bwd", "eager", deterministic=True, allocates="torch",
     workspace=internal(_eager_hint), priority=0,
-    fn=lambda kctx, dx, out, s, h, hd, base: out.copy_(ops.rope_bwd(dx, s, h, hd, base)),
+    fn=lambda kctx, dx, out, pos, h, hd, base: out.copy_(ops.rope_bwd(dx, pos, h, hd, base)),
 )
 
 try:
@@ -47,7 +49,7 @@ if triton is not None:
 
     @triton.jit
     def _rope_kernel(
-        x_ptr, out_ptr, n_pairs, seq_len, width, head_dim,
+        x_ptr, out_ptr, positions_ptr, n_pairs, width, head_dim,
         base, SIN_SIGN: tl.constexpr, BLOCK: tl.constexpr,
     ):
         # one lane per rotate-half PAIR: pair p -> row, head, i (i < hd/2)
@@ -60,7 +62,7 @@ if triton is not None:
         head = rem // half
         i = rem % half
 
-        pos = (row % seq_len).to(tl.float32)
+        pos = tl.load(positions_ptr + row, mask=mask, other=0).to(tl.float32)
         # angle = pos * base^(-2i/hd); exp2/log2 form of pow for libdevice
         expo = -2.0 * i.to(tl.float32) / head_dim
         freq = tl.exp2(expo * tl.log2(base))
@@ -80,21 +82,22 @@ if triton is not None:
 
     _BLOCK = 512
 
-    def _launch(x, out, seq_len, n_heads, head_dim, base, sign):
+    def _launch(x, out, positions, n_heads, head_dim, base, sign):
         assert x.is_contiguous() and out.is_contiguous() and x.shape == out.shape
+        assert positions.is_contiguous() and positions.shape[0] == x.shape[0]
         width = n_heads * head_dim
         n_pairs = x.shape[0] * (width // 2)
         _rope_kernel[(triton.cdiv(n_pairs, _BLOCK),)](
-            x, out, n_pairs, seq_len, width, head_dim,
+            x, out, positions, n_pairs, width, head_dim,
             float(base), SIN_SIGN=sign, BLOCK=_BLOCK,
         )
 
     @register("rope_fwd", "triton", deterministic=True,
               workspace=none(), requires=lambda c: c.get("triton"), priority=10)
-    def _fwd(kctx, x, out, seq_len, n_heads, head_dim, base):
-        _launch(x, out, seq_len, n_heads, head_dim, base, 1.0)
+    def _fwd(kctx, x, out, positions, n_heads, head_dim, base):
+        _launch(x, out, positions, n_heads, head_dim, base, 1.0)
 
     @register("rope_bwd", "triton", deterministic=True,
               workspace=none(), requires=lambda c: c.get("triton"), priority=10)
-    def _bwd(kctx, dx, out, seq_len, n_heads, head_dim, base):
-        _launch(dx, out, seq_len, n_heads, head_dim, base, -1.0)
+    def _bwd(kctx, dx, out, positions, n_heads, head_dim, base):
+        _launch(dx, out, positions, n_heads, head_dim, base, -1.0)

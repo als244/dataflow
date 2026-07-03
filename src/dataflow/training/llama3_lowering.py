@@ -43,6 +43,7 @@ def dims_of(cfg: ShapedLlamaConfig) -> LlamaDims:
         tokens=cfg.tokens,
         seq_len=cfg.seq_len,
         dtypes=getattr(cfg, "dtypes", None) or DTypePolicy(),
+        seq_lens=getattr(cfg, "seq_lens", None),
     )
 
 

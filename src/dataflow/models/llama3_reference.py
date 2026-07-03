@@ -94,10 +94,11 @@ class GoldenLlama3:
     def block_forward(self, x: torch.Tensor, w: Leaves) -> torch.Tensor:
         d = self.dims
         h1 = ops.rmsnorm_reference(x, w["attn_norm_w"])
-        q = ops.rope_fwd(h1 @ w["wq"], d.seq_len, d.n_heads, d.head_dim, d.rope_base)
-        k = ops.rope_fwd(h1 @ w["wk"], d.seq_len, d.n_kv_heads, d.head_dim, d.rope_base)
+        pos = ops.positions_for(d.seq_spec, x.shape[0], x.device)
+        q = ops.rope_fwd(h1 @ w["wq"], pos, d.n_heads, d.head_dim, d.rope_base)
+        k = ops.rope_fwd(h1 @ w["wk"], pos, d.n_kv_heads, d.head_dim, d.rope_base)
         v = h1 @ w["wv"]
-        attn = ops.attention_reference(q, k, v, d.n_heads, d.n_kv_heads, d.head_dim, d.seq_len)
+        attn = ops.attention_reference(q, k, v, d.n_heads, d.n_kv_heads, d.head_dim, d.seq_spec)
         h_mid = x + attn @ w["wo"]
         h2 = ops.rmsnorm_reference(h_mid, w["ffn_norm_w"])
         x1 = h2 @ w["w1"]

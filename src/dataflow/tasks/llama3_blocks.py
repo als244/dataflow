@@ -145,10 +145,11 @@ class BlockFwd(_Base):
         h1, w = st["h1"], st["w"]
         qm = h1 @ w["wq"]
         q = torch.empty_like(qm)
-        K.rope_fwd(kctx, qm, q, d.seq_len, d.n_heads, d.head_dim, d.rope_base)
+        pos = ops.positions_for(d.seq_spec, qm.shape[0], qm.device)
+        K.rope_fwd(kctx, qm, q, pos, d.n_heads, d.head_dim, d.rope_base)
         km = h1 @ w["wk"]
         k = torch.empty_like(km)
-        K.rope_fwd(kctx, km, k, d.seq_len, d.n_kv_heads, d.head_dim, d.rope_base)
+        K.rope_fwd(kctx, km, k, pos, d.n_kv_heads, d.head_dim, d.rope_base)
         v = h1 @ w["wv"]
         st.update(q=q, k=k, v=v)
         if st["a"] is not None:
@@ -159,7 +160,7 @@ class BlockFwd(_Base):
     @staticmethod
     def _stage_attn(kctx, K, d, st):
         attn_out, lse = ops.flash_fwd(
-            st["q"], st["k"], st["v"], d.n_heads, d.n_kv_heads, d.head_dim, d.seq_len
+            st["q"], st["k"], st["v"], d.n_heads, d.n_kv_heads, d.head_dim, d.seq_spec
         )
         st["attn_out"] = attn_out
         if st["a"] is not None:
@@ -309,12 +310,13 @@ class BlockBwd(_Base):
         acc("wo", a["attn_out"].T @ dh_mid)
         dq, dk, dv = ops.flash_bwd(
             d_attn, a["q"], a["k"], a["v"], a["attn_out"], a["lse"],
-            d.n_heads, d.n_kv_heads, d.head_dim, d.seq_len,
+            d.n_heads, d.n_kv_heads, d.head_dim, d.seq_spec,
         )
         dq_r = torch.empty_like(dq)
-        K.rope_bwd(kctx, dq, dq_r, d.seq_len, d.n_heads, d.head_dim, d.rope_base)
+        pos = ops.positions_for(d.seq_spec, dq.shape[0], dq.device)
+        K.rope_bwd(kctx, dq, dq_r, pos, d.n_heads, d.head_dim, d.rope_base)
         dk_r = torch.empty_like(dk)
-        K.rope_bwd(kctx, dk, dk_r, d.seq_len, d.n_kv_heads, d.head_dim, d.rope_base)
+        K.rope_bwd(kctx, dk, dk_r, pos, d.n_kv_heads, d.head_dim, d.rope_base)
         h1 = torch.empty_like(x)
         K.rmsnorm_apply(kctx, x, a["rstd_attn"], w["attn_norm_w"], h1)
         acc("wq", h1.T @ dq_r)

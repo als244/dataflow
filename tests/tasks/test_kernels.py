@@ -110,24 +110,31 @@ def test_swiglu_fused(rows, dff):
     assert rel_l2(f_dx3.float(), a3.grad.float()) < 3e-2
 
 
-@pytest.mark.parametrize("batch,seq,heads,hd", [(1, 128, 8, 64), (2, 64, 8, 64), (2, 96, 6, 128)])
-def test_rope_fused(batch, seq, heads, hd):
-    x = _rand(batch * seq, heads * hd, seed=4)
-    dy = _rand(batch * seq, heads * hd, seed=5)
+@pytest.mark.parametrize("seq,heads,hd", [
+    (128, 8, 64),                # single sequence
+    ((64, 64), 8, 64),           # uniform pair (tuple spec)
+    ((96, 96), 6, 128),
+    ((80, 29, 19), 8, 64),       # RAGGED packing: positions reset per seq
+])
+def test_rope_fused(seq, heads, hd):
+    t = seq if isinstance(seq, int) else sum(seq)
+    x = _rand(t, heads * hd, seed=4)
+    dy = _rand(t, heads * hd, seed=5)
     base = 500000.0
+    pos = ops.positions_for(seq, t, x.device)
 
-    e_fwd = ops.rope_fwd(x, seq, heads, hd, base)
+    e_fwd = ops.rope_fwd(x, pos, heads, hd, base)
     f_fwd = torch.empty_like(x)
-    FUSED.rope_fwd(KCTX, x, f_fwd, seq, heads, hd, base)
+    FUSED.rope_fwd(KCTX, x, f_fwd, pos, heads, hd, base)
     assert rel_l2(f_fwd.float(), e_fwd.float()) < 2e-3
 
-    e_bwd = ops.rope_bwd(dy, seq, heads, hd, base)
+    e_bwd = ops.rope_bwd(dy, pos, heads, hd, base)
     f_bwd = torch.empty_like(dy)
-    FUSED.rope_bwd(KCTX, dy, f_bwd, seq, heads, hd, base)
+    FUSED.rope_bwd(KCTX, dy, f_bwd, pos, heads, hd, base)
     assert rel_l2(f_bwd.float(), e_bwd.float()) < 2e-3
 
     ax = x.detach().clone().requires_grad_(True)
-    ops.rope_fwd(ax, seq, heads, hd, base).backward(dy)
+    ops.rope_fwd(ax, pos, heads, hd, base).backward(dy)
     assert rel_l2(f_bwd.float(), ax.grad.float()) < 3e-2
 
 
@@ -247,7 +254,7 @@ def test_fused_steady_state_no_torch_allocation():
 
     def run():
         FUSED.swiglu_fwd_out(KCTX, x1, x3, out)
-        FUSED.rope_fwd(KCTX, x1, out, 128, 8, 128, 500000.0)
+        FUSED.rope_fwd(KCTX, x1, out, ops.positions_for(128, x1.shape[0], x1.device), 8, 128, 500000.0)
         FUSED.rmsnorm_fwd(KCTX, x1, x3[0], out, rstd)
         FUSED.adamw_step(KCTX, x1, x3, m, v,
                          lr=1e-4, beta1=0.9, beta2=0.95, eps=1e-8,

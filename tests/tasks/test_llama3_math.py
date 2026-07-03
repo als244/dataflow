@@ -49,8 +49,9 @@ def test_rope_backward_is_transpose():
     """<rope(x), y> == <x, rope_bwd(y)> (rotation orthogonality)."""
     x = torch.randn(128, 256, device="cuda", dtype=torch.bfloat16)
     y = torch.randn(128, 256, device="cuda", dtype=torch.bfloat16)
-    rx = ops.rope_fwd(x, 128, 8, 32, 500_000.0)
-    ry = ops.rope_bwd(y, 128, 8, 32, 500_000.0)
+    pos = ops.positions_for(128, 128, x.device)
+    rx = ops.rope_fwd(x, pos, 8, 32, 500_000.0)
+    ry = ops.rope_bwd(y, pos, 8, 32, 500_000.0)
     lhs = (rx.float() * y.float()).sum()
     rhs = (x.float() * ry.float()).sum()
     # normalize by the inner-product scale (the raw value can be near zero)

@@ -82,10 +82,59 @@ def rmsnorm_noweight_reference(x: torch.Tensor) -> torch.Tensor:
 
 # --- rope (llama rotate-half) ----------------------------------------------------
 
+# --- sequence structure -----------------------------------------------------
+#
+# ``seq`` arguments across the ops are polymorphic (varlen-first design,
+# docs/notes/varlen-first-design.md): an int means uniform sequences of that
+# length (tokens // seq of them — the historical fast paths), a tuple is the
+# explicit per-sequence length list (ragged packing), None means one
+# sequence spanning all tokens.
+
+
+def seq_lens_of(seq, tokens: int) -> tuple[int, ...]:
+    """Normalize a seq spec to the explicit per-sequence length tuple."""
+    if seq is None:
+        return (tokens,)
+    if isinstance(seq, int):
+        return (seq,) * (tokens // seq)
+    lens = tuple(int(n) for n in seq)
+    assert sum(lens) == tokens, (lens, tokens)
+    return lens
+
+
+def seq_bounds_of(seq, tokens: int) -> list[tuple[int, int]]:
+    out, lo = [], 0
+    for n in seq_lens_of(seq, tokens):
+        out.append((lo, lo + n))
+        lo += n
+    return out
+
+
+import functools as _functools
+
+
+@_functools.lru_cache(maxsize=128)
+def _positions_cached(seq_lens: tuple, device_str: str) -> torch.Tensor:
+    pos = torch.cat([torch.arange(n, dtype=torch.int32) for n in seq_lens])
+    return pos.to(device_str)
+
+
+def positions_for(seq, tokens: int, device) -> torch.Tensor:
+    """(tokens,) int32 per-sequence position indices for a seq spec."""
+    return _positions_cached(seq_lens_of(seq, tokens), str(device))
+
+
 def _rope_cos_sin(seq_len: int, head_dim: int, base: float, device, dtype=torch.float32):
     inv = 1.0 / (base ** (torch.arange(0, head_dim, 2, device=device, dtype=torch.float32) / head_dim))
     t = torch.arange(seq_len, device=device, dtype=torch.float32)
     freqs = torch.outer(t, inv)
+    emb = torch.cat((freqs, freqs), dim=-1)
+    return emb.cos().to(dtype), emb.sin().to(dtype)
+
+
+def _rope_cos_sin_pos(positions: torch.Tensor, head_dim: int, base: float, dtype=torch.float32):
+    inv = 1.0 / (base ** (torch.arange(0, head_dim, 2, device=positions.device, dtype=torch.float32) / head_dim))
+    freqs = torch.outer(positions.float(), inv)
     emb = torch.cat((freqs, freqs), dim=-1)
     return emb.cos().to(dtype), emb.sin().to(dtype)
 
@@ -95,23 +144,23 @@ def _rotate_half(x: torch.Tensor) -> torch.Tensor:
     return torch.cat((-x[..., h:], x[..., :h]), dim=-1)
 
 
-def rope_fwd(x: torch.Tensor, seq_len: int, n_heads: int, head_dim: int, base: float) -> torch.Tensor:
-    """x: (tokens, n_heads*head_dim); tokens = batch x seq_len (positions
-    restart every seq_len rows)."""
-    b = x.shape[0] // seq_len
-    cos, sin = _rope_cos_sin(seq_len, head_dim, base, x.device)
-    xh = x.view(b, seq_len, n_heads, head_dim).float()
-    out = xh * cos[None, :, None, :] + _rotate_half(xh) * sin[None, :, None, :]
-    return out.to(x.dtype).view(b * seq_len, n_heads * head_dim)
+def rope_fwd(x: torch.Tensor, positions: torch.Tensor, n_heads: int, head_dim: int, base: float) -> torch.Tensor:
+    """x: (tokens, n_heads*head_dim); positions: (tokens,) int PER-SEQUENCE
+    indices (``positions_for``) — sequence structure is fully explicit."""
+    t = x.shape[0]
+    cos, sin = _rope_cos_sin_pos(positions, head_dim, base)
+    xh = x.view(t, n_heads, head_dim).float()
+    out = xh * cos[:, None, :] + _rotate_half(xh) * sin[:, None, :]
+    return out.to(x.dtype).view(t, n_heads * head_dim)
 
 
-def rope_bwd(dx: torch.Tensor, seq_len: int, n_heads: int, head_dim: int, base: float) -> torch.Tensor:
+def rope_bwd(dx: torch.Tensor, positions: torch.Tensor, n_heads: int, head_dim: int, base: float) -> torch.Tensor:
     """Gradient through the rotation = rotation by -theta (its transpose)."""
-    b = dx.shape[0] // seq_len
-    cos, sin = _rope_cos_sin(seq_len, head_dim, base, dx.device)
-    dh = dx.view(b, seq_len, n_heads, head_dim).float()
-    out = dh * cos[None, :, None, :] - _rotate_half(dh) * sin[None, :, None, :]
-    return out.to(dx.dtype).view(b * seq_len, n_heads * head_dim)
+    t = dx.shape[0]
+    cos, sin = _rope_cos_sin_pos(positions, head_dim, base)
+    dh = dx.view(t, n_heads, head_dim).float()
+    out = dh * cos[:, None, :] - _rotate_half(dh) * sin[:, None, :]
+    return out.to(dx.dtype).view(t, n_heads * head_dim)
 
 
 # --- flash attention (aten low-level fwd/bwd split) ------------------------------
@@ -123,7 +172,17 @@ def flash_fwd(
     """q: (t, d); k, v: (t, kv); t = batch x seq_len (causal PER SEQUENCE).
     Returns (attn_out (t, d), lse (batch*n_heads, seq_len))."""
     t = q.shape[0]
-    s = seq_len or t
+    lens = seq_lens_of(seq_len, t)
+    if len(set(lens)) > 1:
+        # ragged packing: one dense call per sequence; lse layout (h, t)
+        outs, lses = [], []
+        for lo, hi in seq_bounds_of(lens, t):
+            o, l = flash_fwd(q[lo:hi], k[lo:hi], v[lo:hi],
+                             n_heads, n_kv_heads, head_dim, hi - lo)
+            outs.append(o)
+            lses.append(l.view(n_heads, hi - lo))
+        return torch.cat(outs), torch.cat(lses, dim=1)
+    s = lens[0]
     b = t // s
     rep = n_heads // n_kv_heads
     q4 = q.view(b, s, n_heads, head_dim).transpose(1, 2)
@@ -145,7 +204,26 @@ def flash_bwd(
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Returns (dq (t,d), dk (t,kv), dv (t,kv)); GQA head grads reduced."""
     t = q.shape[0]
-    s = seq_len or t
+    lens = seq_lens_of(seq_len, t)
+    if len(set(lens)) > 1:
+        # ragged: lse arrives (n_heads, t); slice everything per sequence.
+        # .contiguous() on the lse column slice is LOAD-BEARING: reshape of
+        # a same-shaped strided view is a no-op, and the aten flash-bwd
+        # kernel reads lse assuming contiguous rows (the fla contiguity
+        # lesson, aten edition — silent garbage grads otherwise).
+        lse2 = lse.view(n_heads, t)
+        dqs, dks, dvs = [], [], []
+        for lo, hi in seq_bounds_of(lens, t):
+            dq_i, dk_i, dv_i = flash_bwd(
+                d_attn[lo:hi], q[lo:hi], k[lo:hi], v[lo:hi], attn_out[lo:hi],
+                lse2[:, lo:hi].contiguous(),
+                n_heads, n_kv_heads, head_dim, hi - lo,
+            )
+            dqs.append(dq_i)
+            dks.append(dk_i)
+            dvs.append(dv_i)
+        return torch.cat(dqs), torch.cat(dks), torch.cat(dvs)
+    s = lens[0]
     b = t // s
     rep = n_heads // n_kv_heads
     q4 = q.view(b, s, n_heads, head_dim).transpose(1, 2)
@@ -171,7 +249,14 @@ def attention_reference(
     n_heads: int, n_kv_heads: int, head_dim: int, seq_len: int | None = None,
 ) -> torch.Tensor:
     t = q.shape[0]
-    s = seq_len or t
+    lens = seq_lens_of(seq_len, t)
+    if len(set(lens)) > 1:
+        return torch.cat([
+            attention_reference(q[lo:hi], k[lo:hi], v[lo:hi],
+                                n_heads, n_kv_heads, head_dim, hi - lo)
+            for lo, hi in seq_bounds_of(lens, t)
+        ])
+    s = lens[0]
     b = t // s
     rep = n_heads // n_kv_heads
     q4 = q.view(b, s, n_heads, head_dim).transpose(1, 2)
@@ -334,7 +419,13 @@ def causal_conv1d_silu_reference(
     sequence's tail)."""
     T, D = x.shape
     W = w.shape[-1]
-    B = 1 if seq_len is None else T // seq_len
+    lens = seq_lens_of(seq_len, T)
+    if len(set(lens)) > 1:
+        return torch.cat([
+            causal_conv1d_silu_reference(x[lo:hi], w, seq_len=hi - lo)
+            for lo, hi in seq_bounds_of(lens, T)
+        ])
+    B = T // lens[0]
     xf = x.float().T.reshape(D, B, -1).transpose(0, 1)  # (B, D, seq)
     wf = w.float().unsqueeze(1)                         # (D, 1, W)
     y = torch.nn.functional.conv1d(
@@ -380,11 +471,11 @@ def gated_delta_rule_reference(
     gf = g.float()
     if scale is None:
         scale = K ** -0.5
-    reset = seq_len or T
+    starts = {lo for lo, _hi in seq_bounds_of(seq_len, T)}
     state = torch.zeros(HV, K, V, dtype=torch.float32, device=q.device)
     outs = []
     for t in range(T):
-        if t % reset == 0:
+        if t in starts:
             state = torch.zeros(HV, K, V, dtype=torch.float32, device=q.device)
         state = state * gf[t].exp()[:, None, None]
         err = vf[t] - torch.einsum("hk,hkv->hv", kf[t], state)
@@ -395,12 +486,14 @@ def gated_delta_rule_reference(
 
 
 def partial_rope_reference(
-    x: torch.Tensor, seq_len: int, n_heads: int, head_dim: int, rot_dim: int, base: float,
+    x: torch.Tensor, seq, n_heads: int, head_dim: int, rot_dim: int, base: float,
 ) -> torch.Tensor:
     """Partial RoPE: rotate only the first rot_dim channels of each head
-    (pair-interleaved, via the family rope reference); the rest pass through."""
+    (pair-interleaved, via the family rope reference); the rest pass through.
+    ``seq`` is a seq spec (int uniform / tuple ragged)."""
     t = x.shape[0]
     xh = x.view(t, n_heads, head_dim)
-    rot = rope_fwd(xh[:, :, :rot_dim].reshape(t, n_heads * rot_dim), seq_len, n_heads, rot_dim, base)
+    pos = positions_for(seq, t, x.device)
+    rot = rope_fwd(xh[:, :, :rot_dim].reshape(t, n_heads * rot_dim), pos, n_heads, rot_dim, base)
     return torch.cat([rot.view(t, n_heads, rot_dim), xh[:, :, rot_dim:]], dim=-1).view(t, n_heads * head_dim)
 

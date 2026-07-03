@@ -55,10 +55,15 @@ class ShapedQwen35Config:
     # supported config choice, exercised by the tiny_tied ladder tests.
     tied_embeddings: bool = False
     dtypes: DTypePolicy = DTypePolicy()
+    # ragged packing: explicit per-round sequence lengths (sum = tokens
+    # per round); None = uniform batch x seq_len
+    seq_lens: tuple[int, ...] | None = None
     rope_base: float = 10_000_000.0
 
     @property
     def tokens(self) -> int:
+        if self.seq_lens is not None:
+            return sum(self.seq_lens)
         return self.seq_len * self.batch
 
     # the generic builder's embed/head/loss costs read these:
@@ -117,6 +122,7 @@ def dims_of_qwen35(cfg: ShapedQwen35Config) -> Qwen35Dims:
         conv_kernel=cfg.conv_kernel, d_ff=cfg.d_ff, vocab_size=cfg.vocab_size,
         tokens=cfg.tokens, seq_len=cfg.seq_len, rope_base=cfg.rope_base,
         dtypes=getattr(cfg, "dtypes", None) or DTypePolicy(),
+        seq_lens=getattr(cfg, "seq_lens", None),
     )
 
 

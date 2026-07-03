@@ -67,9 +67,14 @@ class ShapedLlamaConfig:
     # per-field dtype policy for params/grads/opt state (default: all bf16,
     # the historical convention; docs/notes/dtype-policy-design.md)
     dtypes: DTypePolicy = DTypePolicy()
+    # ragged packing: explicit per-round sequence lengths (sum = tokens
+    # per round); None = uniform batch x seq_len
+    seq_lens: tuple[int, ...] | None = None
 
     @property
     def tokens(self) -> int:
+        if self.seq_lens is not None:
+            return sum(self.seq_lens)
         return self.seq_len * self.batch
 
     @property

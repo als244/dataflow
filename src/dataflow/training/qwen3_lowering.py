@@ -35,6 +35,7 @@ def dims_of_qwen3(cfg: ShapedQwen3Config) -> Qwen3Dims:
         tokens=cfg.tokens,
         seq_len=cfg.seq_len,
         dtypes=getattr(cfg, "dtypes", None) or DTypePolicy(),
+        seq_lens=getattr(cfg, "seq_lens", None),
     )
 
 
