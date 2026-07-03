@@ -46,14 +46,18 @@ Import rules (enforced by `tests/test_import_boundaries.py`):
 ## End-to-end flow
 
 ```
-ModelDef + TrainingSpec
-  → training.lower()             objects (exact sizes) + tasks (block keys,
-                                 declared costs, workspace temps) + rewrites
-  → dataflow.training.planning   PressureFit + plan_with_recompute (dataflow_sim)
-  → annotated core Program       (directives joined back, capacities authoritative)
-  → profile pass                 measured runtimes + workspace → re-plan
-  → dataflow.runtime.execute     cuda DeviceBackend, real streams/events
-  → trace                        compare vs sim EventLog; export webapp JSONs
+ShapedConfig (family + shapes)
+  → training.lower_<family>()    objects (layout-exact sizes) + tasks (block
+                                 keys, declared costs) + recompute rewrites
+  → profile pass                 measured runtimes + workspace (disk-cached),
+                                 measured PCIe (disk-cached) → measured costs
+  → dataflow.training.planning   PressureFit + plan_with_recompute
+                                 (dataflow_sim; preplace="task0")
+  → annotated core Program       directives joined back; static placement
+                                 packed + proven against physical VRAM
+  → train()                      one chain replayed per optimizer step
+                                 (Session-persistent slab/pools/streams)
+  → trace / report               real + wall tok/s vs sim; webapp exports
 ```
 
 ## Simulator semantics the runtime reproduces
@@ -72,13 +76,24 @@ From `dataflow_sim.engine.simulator` (the contract for M1/M2 parity gates):
   (not released) or their update is lost — planners guarantee this, the
   runtime validates it.
 
-## Status
+## Status (2026-07-03)
 
-- **M0 (this milestone): done.** IR, validation, JSON, converters, shaped
-  llama3 generator (tiny + 8B), PressureFit + recompute planning integration,
-  simulator round-trips, webapp acceptance (in-process FastAPI tests), golden
-  path artifacts under `examples/`.
-- M1: runtime engine on the fake (virtual-clock) backend; parity gate vs sim.
-- M2: cuda backend + synthetic calibrated tasks; real-overlap gate.
-- M3: torch/Triton executables + correctness ladder + gradcheck tooling.
-- M4: end-to-end memory-constrained multi-step training vs sim prediction.
+M0–M4 are done, each behind its gate:
+
+- **M0** IR + validation + sim round-trips + webapp export.
+- **M1** engine parity vs the simulator on the fake backend (exact).
+- **M2** cuda backend; replay fidelity +0.5% at 8B scale; zero implicit
+  syncs on the steady-state path.
+- **M3** torch/Triton executables, gradcheck ladder, golden llama3 model,
+  plan-invariance / poison-on-free / interleaving-stress.
+- **M4** memory-constrained multi-step llama3-8B training: fused kernel
+  registry, static placement (packing proven at planning time), measured
+  seq-1K sweeps, step-boundary fix (optimizer interleave + honest head).
+  Headline: **3,501 wall tok/s at a 23.75 GiB budget** — above the measured
+  flextrain ceiling on the same machine (3,410–3,435) — and 97% of that
+  ceiling at 12 GiB. See `docs/m4-report.md`, `results/m4/`, and
+  `docs/notes/` (perf-headroom, step-boundary, placement-deadlock,
+  poison-guard-loss) for the measured story.
+- **M5 (next)**: CUDA-graph-per-task (the remaining ~4–5% host-dispatch
+  tax), VMM chunk-backing (the placement geometry tax), new model
+  families via `docs/extending.md`.

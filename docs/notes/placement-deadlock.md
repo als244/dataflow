@@ -96,3 +96,11 @@ valve the engine deadlocks; with it the run completes with
 - **VMM chunk-backing** (M5): removes fixed offsets entirely, and with
   them both the geometry tax and this whole class of inversion — the real
   long-term fix; the escape valve is the guarantee until then.
+
+---
+
+*Sibling bug, one level down:* the same lifetime-inversion class later
+appeared in the LEDGER (bytes instead of offsets) once optimizer
+interleaving moved prefetch triggers into the backward's pressure window —
+resolved by a Belady eviction valve at the quiescent-deadlock site. See
+docs/notes/step-boundary.md §5 and `pressure_evictions` in run results.

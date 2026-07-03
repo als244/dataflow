@@ -10,24 +10,27 @@ from dataflow.runtime.device.cuda import CudaBackend
 from dataflow.tasks.llama3_blocks import build_resolver
 from dataflow.training.llama3_lowering import dims_of, lower_llama3
 from dataflow.training.planning import plan_program
-from dataflow.training.profiling import apply_measured_costs, profile_program
+from dataflow.training.profiling import apply_measured_costs, cached_pcie, load_or_profile
 from dataflow.training.shaped_llama3 import ShapedLlamaConfig
 from dataflow.training.train_loop import train
 
-cfg = ShapedLlamaConfig.llama3_8b()          # or any ShapedLlamaConfig
+cfg = ShapedLlamaConfig.llama3_8b(seq_len=1024, batch=8, grad_accum_rounds=8)
 backend = CudaBackend()
 
-# 1. measure the machine (PCIe directions contend on desktop platforms —
-#    plan with the bidirectional numbers)
-pcie = backend.measure_pcie()
+# 1. the machine, measured ONCE and disk-cached (PCIe directions contend on
+#    desktop platforms — plan with the bidirectional numbers; re-measuring
+#    per run makes plans non-reproducible: bandwidth noise flips recompute
+#    choices)
+pcie = cached_pcie(backend)
 
 # 2. lower with layout-exact sizes; install measured bandwidths
 program = replace(lower_llama3(cfg),
                   bandwidth_from_slow=pcie.bidi_h2d,
                   bandwidth_to_slow=pcie.bidi_d2h)
 
-# 3. measure the tasks (runtimes + torch-scratch workspace), plan on truth
-profiles = profile_program(program, build_resolver(dims_of(cfg)), backend)
+# 3. task costs, measured and disk-cached (keyed by task signatures +
+#    kernel set + device, so a kernel swap re-measures instead of lying)
+profiles = load_or_profile(program, build_resolver(dims_of(cfg)), backend)
 planned = plan_program(apply_measured_costs(program, profiles),
                        fast_memory_capacity=16 * 1024**3,
                        recompute=True,
@@ -35,9 +38,13 @@ planned = plan_program(apply_measured_costs(program, profiles),
                            lower_llama3(cfg, recompute_levels=lv), profiles))
 
 # 4. train: one annotated chain replayed per optimizer step; persistent
-#    state lives in pinned buffers the plan's offloads update in place
+#    state lives in pinned buffers the plan's offloads update in place.
+#    Static placement (default) packs every fast allocation offline and
+#    raises PlacementError at PLANNING time if it cannot fit physical VRAM.
 report = train(planned.program, cfg, backend, steps=100)
-print(report.losses, report.steady_state_makespan_us)
+print(report.losses)
+# quote wall_tokens_per_s in results: it covers the FULL step
+# (fill + execute + readback), makespan-only numbers flatter the seam
 ```
 
 What the pieces guarantee:
@@ -57,7 +64,26 @@ What the pieces guarantee:
 
 Visualize any program in the webapp (https://dataflowsim.sunshein.net/):
 `dataflow.core.convert.to_webapp_program(program)` produces the upload JSON
-(cost subops included, so hardware sliders re-resolve runtimes).
+(cost subops included, so hardware sliders re-resolve runtimes). A REAL run
+uploads too: `tools/gap_analysis.py` (or a replay that persists its trace)
+plus `tools/export_measured_run.py` produce a `*.measured.json` the webapp
+renders in the main window next to the sim's prediction of the same plan.
+
+## The CLI instead (what the results tables were built with)
+
+```
+python tools/m4_train.py --config 8b-s1k-bs8ga8 --budgets 12,16,20 --steps 3 --recompute
+python tools/m4_train.py --config 8b-s1k-bs8ga8 --budgets 24 --probe-max ...   # largest feasible budget
+python tools/m4_train.py --config ... --device-gib 29 ...   # HARD device envelope (actual usage <= 29)
+python tools/m4_train.py --config ... --annotated <saved>.annotated.json  # exact replay of a saved plan
+python tools/gap_analysis.py --config ... --budget ...      # real-vs-sim gap decomposition
+python tools/window_plans.py --config ... --budgets ...     # k-step window oracle (step-seam analysis)
+```
+
+Every summary row reports `real_tokens_per_s` (makespan) AND
+`wall_tokens_per_s` (full step) plus `placement_escapes` /
+`pressure_evictions` (both 0 in healthy runs). A/B flags for the planning
+defaults: `--optimizer interleaved|tail`, `--preplace task0|greedy`.
 
 ## Profiling a run with Nsight Systems (device metrics + NVTX)
 
@@ -71,8 +97,9 @@ Produces `artifacts/nsys/<config>-<budget>gib-<steps>steps.nsys-rep` with:
 GPU metrics sampled on the timeline (`--gpu-metrics-devices=all`; needs
 perf-counter permission — the script prints the fix if denied), CUDA +
 NVTX + OS-runtime traces, and the runtime's own NVTX ranges: one per task
-(`block_bwd_0_3_16`), one per transfer (`from_slow:A_0_3_16`), one per
-optimizer step (`step:N`). Open in the nsys GUI and use the NVTX
+(`block_bwd_{step}_{round}_{layer}` — the display name substitutes the
+GLOBAL step into the replayed plan's ids), one per transfer
+(`from_slow:A_{step}_3_16`), one per optimizer step (`step:N`). Open in the nsys GUI and use the NVTX
 projection rows to read ranges on the stream timelines. By default capture
 is limited to the `train_steps` range, so planning/setup stay out of the
 report; profiles and PCIe numbers come from the disk caches.

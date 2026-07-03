@@ -14,7 +14,15 @@ CUDA∩HIP common subset so an AMD backend is a mechanical addition.
   (deadlock detection).
 - **Timebase**: `event_time_us(event)` on a shared origin; valid only after
   the event completed. `mark_origin()` re-zeros after setup so traces
-  measure execution, not allocation.
+  measure execution, not allocation. `event_complete(event)` is the
+  non-blocking pending-check (guard hygiene in the pool; legal on pending
+  events, unlike `event_time_us`).
+- **Annotation** (`annotate.py`): a 3-method vendor-portable protocol
+  (`range_push` / `range_pop` / `mark`), `DATAFLOW_NVTX=1` selects the NVTX
+  implementation (an AMD backend plugs roctx into the same calls);
+  `RecordingAnnotator` is the test double. Display names may be rewritten
+  per run via `Engine.execute(annotate_rename=)` — trace/plan ids never
+  change.
 - **Virtual-time hooks**: `advance_stream` / `align_stream_to_host` exist for
   the fake backend's clocks; real backends no-op align and reject advance
   (real executables enqueue real work).

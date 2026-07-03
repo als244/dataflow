@@ -4,7 +4,7 @@
 `DeviceBackend`: object tracking, memory accounting, buffer pooling, task
 dispatch, directive execution (release / offload / prefetch), and tracing.
 Workload-agnostic: no DNN knowledge, no torch, no simulator imports (vendor
-bindings only inside `device/cuda.py`, when it lands in M2).
+bindings only inside `device/cuda.py`).
 
 ## Execution model
 
@@ -64,6 +64,17 @@ served dynamically instead (counted as `placement_escapes`, reported per
 run, zero in healthy runs). Full post-mortem:
 [docs/notes/placement-deadlock.md](../../../docs/notes/placement-deadlock.md).
 
+The same inversion class exists one level down, in BYTES: real transfer
+timing can admit individually-legal h2d prefetches whose bytes collectively
+strand a later reservation behind a not-yet-reachable release (the sim
+proves feasibility under ITS timing only). At quiescent deadlock the engine
+evicts the farthest-next-use CLEAN resident (live backing copy, current
+version, untouched by plan directives before its next use) and reloads it
+before use — semantically a sim "deferred prefetch" decided late; the
+budget cap only ever decreases. Counted as `pressure_evictions` (zero in
+healthy runs); deterministic regression via `FakeBackend(time_scale=)`
+timing distortion. See docs/notes/step-boundary.md §5.
+
 Placement is an **independent, optional optimization** — the engine takes
 `placement=None` (dynamic slab+arena) or a `Placement` (assigned offsets)
 with identical execution semantics; the training loop's knob is
@@ -83,6 +94,16 @@ across `execute()` calls; incarnation counters reset per run
 optimizer step. `RunResult.close()` releases engine-local resources when no
 session is used.
 
+Debug mode `Engine(poison_on_free=True)` memsets every freed fast buffer to
+0xFF (NaN in bf16/fp32) so any use-after-release explodes instead of
+silently reading stale bytes. Its safety contract: the memset rides the
+compute stream (ordered vs kernel reuse) and sets `buffer.guard_event`,
+which transfers wait before filling a reused buffer — and the guard follows
+the BYTES, not the Buffer object: the pool refuses to recycle an address
+range whose guard is still pending (fragmentation flush) and re-attaches
+pending guards across placed-offset incarnations
+(docs/notes/poison-guard-loss.md).
+
 Deadlock (dispatcher blocked or queues stuck with nothing in flight) raises
 `DeadlockError` with the waiting reason and queue contents. Directive-state
 violations raise `ExecutionError`. `final_locations` are verified at the end
@@ -97,19 +118,23 @@ details: transfer duration `max((size + bw - 1) // bw, 1)` with per-trigger
 override; tie order at equal times = from_slow done, to_slow done, task done
 (`PRIORITY_*` in `device/base.py`); reservations charged at task start.
 
-Strict pacing costs one host wake-up per task on real hardware; an
-aggressive dispatch-ahead mode (device-side input waits + committed-ahead
-accounting) is an M2 experiment — its parity divergence must be quantified
-before it becomes default.
+Strict pacing costs one host wake-up per task on real hardware (~815 µs of
+host work per boundary at 8B scale — measured anatomy in
+docs/notes/perf-headroom.md). A plan-derived dispatch-ahead mode was built,
+measured (+1.4% best case, negative at tight budgets), and REVERTED — the
+chosen endgame for the boundary tax is CUDA-graph capture per task, for
+which static placement's fixed addresses already satisfy the
+stable-pointer precondition.
 
 ## API surface
 
 - `Engine(backend, validate=True, strict_final_locations=True, session=None)`
   → `.execute(program, resolver=None, initial_buffers=None,
   pool_prewarm=None, record_placement=None, placement=None) -> RunResult`
-- `RunResult{trace, makespan_us, peak_fast_bytes, final_location_violations,
-  buffers_allocated, buffers_reused, slab_overflows, pool_demand, objects,
-  close()}`
+- `RunResult{trace, makespan_us, peak_fast_bytes, peak_backing_bytes,
+  final_location_violations, buffers_allocated, buffers_reused,
+  slab_overflows, placement_escapes, pressure_evictions, pool_demand,
+  objects, close()}`
 - `PlacementRecorder` / `compute_placement(recorder, physical_limit_bytes)`
   / `Placement{offsets, extent_bytes, load_bytes, overhead}` / `PlacementError`
 - Executable contract: `Executable.launch(TaskContext)` — enqueue on

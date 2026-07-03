@@ -2,6 +2,13 @@
 
 Date: 2026-07-02 · commit: (M4) · harness: `tools/m4_train.py` · artifacts: `artifacts/m4/`
 
+> Snapshot of the original M4 gate (seq 4096, bs=1). Later measured
+> developments supersede the absolute numbers: fused kernel registry
+> (+9–29%), static placement, seq-1K batching sweeps, and the step-boundary
+> fix — current tables live in `results/m4/` (latest:
+> `results/m4/seq1k-boundary-v1/`, record 3,501 wall tok/s @ 23.75 GiB)
+> with the measured analysis in `docs/notes/`.
+
 ## Setup
 
 - Model: llama3-8B-shaped (32L, d=4096, GQA 32/8, ff=14336, vocab=128256),

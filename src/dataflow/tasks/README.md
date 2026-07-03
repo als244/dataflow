@@ -35,8 +35,10 @@ introspection; cudagraph pools break external-buffer ownership).
 
 ## Adding an op / block
 
-See `docs/extending.md`: implement launch + reference + costs, register in
-the block composition, and run the gradcheck ladder
+See `docs/extending.md` (the canonical walkthrough): implement launch +
+reference + costs, author the block forward as a `STAGES` tuple (the
+recompute variant is DERIVED from it — run stages through the last
+context-emitting one — never hand-written), and run the gradcheck ladder
 (`dataflow.training.testing`): op backward → block backward (incl.
 recompute-equivalence + accumulation semantics) → model step.
 
