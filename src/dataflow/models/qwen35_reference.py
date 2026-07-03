@@ -1,12 +1,13 @@
 """Golden Qwen3.5-dense reference: plain eager torch + autograd.
 
-Standalone (the hybrid + tied-embedding structure doesn't fit the llama
-golden's three-leaf shape): ONE packed embed/head leaf ``[table |
-final_norm_w]`` plus one packed leaf per layer, per-kind block forwards
-composed EXCLUSIVELY from the pinned reference ops (tasks/ops.py — the same
-functions the kernel-contract tests validate against fla), and the exact
-AdamW replica. The sequential delta-rule recurrence makes this golden slow
-and obviously correct; use tiny configs.
+Standalone (the hybrid structure doesn't fit the llama golden): per-kind
+block forwards composed EXCLUSIVELY from the pinned reference ops
+(tasks/ops.py — the same functions the kernel-contract tests validate
+against fla) and the exact AdamW replica. Embeddings follow the config:
+UNTIED (the 9B) = bare-table w_embed + packed ``[table | final_norm_w]``
+w_head leaf; TIED (2B-style, ``w_head=None``) = the head layout rides the
+single w_embed leaf. The sequential delta-rule recurrence makes this
+golden slow and obviously correct; use tiny configs.
 """
 from __future__ import annotations
 
@@ -38,7 +39,8 @@ def _views(layout, flat_bf16: torch.Tensor) -> dict[str, torch.Tensor]:
 class GoldenQwen35:
     dims: Qwen35Dims
     hyper: AdamWHyper = field(default_factory=AdamWHyper)
-    w_embed: torch.Tensor = None  # packed flat bf16 [table | final_norm_w]
+    w_embed: torch.Tensor = None  # tied: packed [table | final_norm_w]; untied: bare table
+    w_head: torch.Tensor = None   # untied only: packed [table | final_norm_w]
     w_blocks: list[torch.Tensor] = field(default_factory=list)
     step_count: int = 0
     _adam_m: dict[str, torch.Tensor] = field(default_factory=dict)
@@ -48,11 +50,14 @@ class GoldenQwen35:
     def from_packed_bytes(
         cls, dims: Qwen35Dims, n_layers: int,
         w_embed_bytes: torch.Tensor, w_block_bytes: list[torch.Tensor],
+        w_head_bytes: torch.Tensor | None = None,
         hyper: AdamWHyper = AdamWHyper(),
     ) -> "GoldenQwen35":
         assert n_layers == dims.n_layers == len(w_block_bytes)
         model = cls(dims=dims, hyper=hyper)
         model.w_embed = w_embed_bytes.clone().view(torch.bfloat16).cuda().requires_grad_()
+        if w_head_bytes is not None:
+            model.w_head = w_head_bytes.clone().view(torch.bfloat16).cuda().requires_grad_()
         model.w_blocks = [
             b.clone().view(torch.bfloat16).cuda().requires_grad_() for b in w_block_bytes
         ]
@@ -118,8 +123,13 @@ class GoldenQwen35:
 
     def loss(self, tokens: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         d = self.dims
-        hv = _views(head_weight_layout(d), self.w_embed)
-        x = hv["w"][tokens.long()]
+        if self.w_head is None:  # tied: one leaf serves embed AND head
+            hv = _views(head_weight_layout(d), self.w_embed)
+            table = hv["w"]
+        else:
+            hv = _views(head_weight_layout(d), self.w_head)
+            table = self.w_embed.view(d.vocab_size, d.d_model)
+        x = table[tokens.long()]
         for i in range(d.n_layers):
             w = self._layer_views(i)
             x = (
@@ -149,15 +159,20 @@ class GoldenQwen35:
         loss.backward()
         self.step_count += 1
         self._adamw("embed", self.w_embed, self.w_embed.grad)
+        if self.w_head is not None:
+            self._adamw("head", self.w_head, self.w_head.grad)
         for i, flat in enumerate(self.w_blocks):
             self._adamw(f"block_{i}", flat, flat.grad)
         return float(loss.detach())
 
     def parameters(self) -> list[torch.Tensor]:
-        return [self.w_embed, *self.w_blocks]
+        head = [] if self.w_head is None else [self.w_head]
+        return [self.w_embed, *head, *self.w_blocks]
 
     def grads_packed(self) -> dict[str, torch.Tensor]:
         out = {"dW_embed": self.w_embed.grad.reshape(-1)}
+        if self.w_head is not None:
+            out["dW_head"] = self.w_head.grad.reshape(-1)
         for i, flat in enumerate(self.w_blocks):
             out[f"dW_{i}"] = flat.grad.reshape(-1)
         return out

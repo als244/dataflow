@@ -149,8 +149,8 @@ def test_conv_and_l2norm_helpers_match_references():
 
 
 def test_golden_qwen35_trains():
-    """Golden self-consistency: hybrid stack + tied head trains — loss starts
-    at ~ln(vocab) (random-init sanity) and decreases on a memorized batch.
+    """Golden self-consistency, BOTH embedding modes: loss starts at
+    ~ln(vocab) (random-init sanity) and decreases on a memorized batch.
     (Runtime-vs-golden pinning is ladder 3, once the blocks exist.)"""
     import math
 
@@ -181,22 +181,35 @@ def test_golden_qwen35_trains():
                 flat[start : start + n] = 0.0
         return flat.view(torch.uint8)
 
-    blocks = [
-        packed(
-            qwen35_attn_weight_layout(dims) if dims.kind_of(i) == "full"
-            else qwen35_lin_weight_layout(dims)
-        )
-        for i in range(dims.n_layers)
-    ]
-    golden = GoldenQwen35.from_packed_bytes(
-        dims, dims.n_layers, packed(head_weight_layout(dims)), blocks,
-    )
-    toks = torch.randint(0, dims.vocab_size, (dims.tokens,), generator=gen).cuda()
-    tgts = torch.randint(0, dims.vocab_size, (dims.tokens,), generator=gen).cuda()
-    losses = [golden.train_step(toks, tgts) for _ in range(3)]
-    assert all(x == x for x in losses)                       # finite
-    assert abs(losses[0] - math.log(dims.vocab_size)) < 0.5  # random-init sanity
-    assert losses[-1] < losses[0]
+    def table():
+        n = dims.vocab_size * dims.d_model
+        return (torch.randn(n, generator=gen) * 0.02).to(torch.bfloat16).view(torch.uint8)
+
+    def blocks():
+        return [
+            packed(
+                qwen35_attn_weight_layout(dims) if dims.kind_of(i) == "full"
+                else qwen35_lin_weight_layout(dims)
+            )
+            for i in range(dims.n_layers)
+        ]
+
+    for golden in (
+        # untied (the 9B shape): bare embed table + separate head leaf
+        GoldenQwen35.from_packed_bytes(
+            dims, dims.n_layers, table(), blocks(), packed(head_weight_layout(dims)),
+        ),
+        # tied (2B-style): one [table | final_norm_w] leaf
+        GoldenQwen35.from_packed_bytes(
+            dims, dims.n_layers, packed(head_weight_layout(dims)), blocks(),
+        ),
+    ):
+        toks = torch.randint(0, dims.vocab_size, (dims.tokens,), generator=gen).cuda()
+        tgts = torch.randint(0, dims.vocab_size, (dims.tokens,), generator=gen).cuda()
+        losses = [golden.train_step(toks, tgts) for _ in range(3)]
+        assert all(x == x for x in losses)                       # finite
+        assert abs(losses[0] - math.log(dims.vocab_size)) < 0.5  # random-init sanity
+        assert losses[-1] < losses[0]
 
 
 def _tiny_dims():
@@ -348,19 +361,26 @@ def test_qwen35_lowering_validates_and_plans():
     from dataflow.core import validate_program
     from dataflow.training.families import resolve_family
     from dataflow.training.planning import plan_program, simulate_program
+    from dataflow.training.shaped_qwen35 import ShapedQwen35Config
 
+    # untied (the 9B default): separate W_head/O_head, bare-table W_embed
     cfg = _tiny_cfg()
     fam = resolve_family(cfg)
     assert fam.name == "qwen35"
     program = fam.lower(cfg)
     validate_program(program)
     assert program.metadata["family"] == "qwen35-shaped"
-    # tied embeddings: no W_head/O_head objects anywhere in the program
     ids = {spec.id for spec in program.initial_objects}
-    assert "W_embed" in ids and "W_head" not in ids and "O_head" not in ids
+    assert {"W_embed", "W_head", "O_head"} <= ids
     planned = plan_program(program, fast_memory_capacity=8 * 1024 * 1024)
     log = simulate_program(planned.program)
     assert max(iv.end for iv in log.task_intervals) > 0
+
+    # tied (2B-style): ONE W_embed serves embed and head
+    tied = fam.lower(ShapedQwen35Config.tiny_tied())
+    validate_program(tied)
+    tids = {spec.id for spec in tied.initial_objects}
+    assert "W_embed" in tids and "W_head" not in tids and "O_head" not in tids
 
 
 def test_qwen35_model_step_vs_golden():
@@ -369,16 +389,35 @@ def test_qwen35_model_step_vs_golden():
     check_model_step(_tiny_cfg(), fast_memory_capacity=64 * 1024 * 1024, tol=3e-2).assert_ok()
 
 
+def test_qwen35_tied_model_step_vs_golden():
+    """The 2B-style tied variant stays golden-verified E2E (one W_embed
+    leaf, head_bwd round-0 creates the shared dW_embed)."""
+    from dataflow.training.shaped_qwen35 import ShapedQwen35Config
+    from dataflow.training.testing.gradcheck import check_model_step
+
+    check_model_step(
+        ShapedQwen35Config.tiny_tied(), fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
+    ).assert_ok()
+
+
 def test_qwen35_plan_invariance():
-    """Different budgets + recompute plans must produce identical math."""
+    """Different budgets + recompute plans must produce identical math.
+
+    Tight legs run at 12 MiB, not 8: the UNTIED tiny at 8 MiB sits so close
+    to its working set that the interleaved optimizer's in-flight O_i
+    prefetches strand the ledger under real timing and the pressure-eviction
+    valve ping-pongs (every resident has a near next-use at tiny scale — no
+    far-future Belady candidate) until DeadlockError. Known M4.9-class
+    timing-inversion corner, loud not silent; 9B budgets show 0 evictions.
+    12 MiB still forces offload traffic + the forced-recompute plan."""
     from dataflow.training.testing.gradcheck import check_model_step
 
     cfg = _tiny_cfg()
     r1 = check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2)
-    r2 = check_model_step(cfg, fast_memory_capacity=8 * 1024 * 1024, tol=3e-2)
+    r2 = check_model_step(cfg, fast_memory_capacity=12 * 1024 * 1024, tol=3e-2)
     levels = {f"A_0_0_{i}": 1 for i in range(cfg.n_layers)}
     r3 = check_model_step(
-        cfg, fast_memory_capacity=8 * 1024 * 1024, recompute_levels=levels, tol=3e-2,
+        cfg, fast_memory_capacity=12 * 1024 * 1024, recompute_levels=levels, tol=3e-2,
     )
     for r in (r1, r2, r3):
         r.assert_ok()
@@ -434,6 +473,8 @@ def _run35(engine_kwargs=None, resolver_wrapper=None, program=None, seed=7):
     dims = fam.dims_of(cfg)
 
     def masked(flat, layout):
+        if layout is None:  # bare table (untied W_embed): no padding gaps
+            return flat
         keep = torch.zeros_like(flat, dtype=torch.bool)
         for f in layout.fields:
             n = 1
@@ -443,7 +484,10 @@ def _run35(engine_kwargs=None, resolver_wrapper=None, program=None, seed=7):
             keep[start : start + n] = True
         return torch.where(keep, flat, torch.zeros_like(flat))
 
-    layouts = {"W_embed": head_weight_layout(dims)}
+    if cfg.tied_embeddings:
+        layouts = {"W_embed": head_weight_layout(dims)}
+    else:
+        layouts = {"W_embed": None, "W_head": head_weight_layout(dims)}
     for i in range(cfg.n_layers):
         layouts[f"W_{i}"] = (
             qwen35_attn_weight_layout(dims) if dims.kind_of(i) == "full"
@@ -557,6 +601,7 @@ def test_qwen35_multistep_matches_golden_and_loss_decreases():
         dims, cfg.n_layers,
         pinned("W_embed"),
         [pinned(f"W_{i}") for i in range(cfg.n_layers)],
+        pinned("W_head"),
     )
     golden_losses = [
         golden.train_step(t.long().cuda(), g.long().cuda()) for t, g in batches

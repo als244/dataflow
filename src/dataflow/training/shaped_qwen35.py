@@ -49,7 +49,10 @@ class ShapedQwen35Config:
     grad_accum_rounds: int = 1
     num_steps: int = 1
     optimizer_placement: str = "interleaved"
-    tied_embeddings: bool = True
+    # Qwen3.5-9B does NOT tie (config.json tie_word_embeddings: false;
+    # untied ~8.96B params = the "9B"). The 2B DOES tie — tied stays a
+    # supported config choice, exercised by the tiny_tied ladder tests.
+    tied_embeddings: bool = False
     rope_base: float = 10_000_000.0
 
     @property
@@ -88,6 +91,11 @@ class ShapedQwen35Config:
             num_k_heads=2, num_v_heads=4, head_k_dim=32, head_v_dim=32,
             conv_kernel=4, d_ff=512, vocab_size=512, seq_len=128, batch=1,
         )
+
+    @classmethod
+    def tiny_tied(cls) -> "ShapedQwen35Config":
+        """The 2B-style tied variant (one W_embed serves embed AND head)."""
+        return replace(cls.tiny(), tied_embeddings=True)
 
     @classmethod
     def qwen35_9b(cls, *, seq_len: int = 4096, batch: int = 1,

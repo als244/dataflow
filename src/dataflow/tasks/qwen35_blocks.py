@@ -612,6 +612,7 @@ def build_qwen35_resolver(
         "embed_bwd": EmbedBwd(dims, kernels),
         "optimizer_block": AdamWStep(dims, kernels, hyper),
         "optimizer_embed": AdamWStep(dims, kernels, hyper),
+        "optimizer_head": AdamWStep(dims, kernels, hyper),  # untied only
     }
 
     def resolver(task: TaskSpec):
