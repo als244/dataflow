@@ -270,6 +270,18 @@ class Engine:
             provided_buffer_ids={id(b) for b in initial_buffers.values()},
         )
         annotator = getattr(self.backend, "annotator", None) or _NOOP_ANNOTATOR
+        import os as _os
+        import time as _time
+        stats = None
+        if _os.environ.get("DATAFLOW_DISPATCH_STATS") == "1":
+            stats = {k: 0.0 for k in (
+                "prev_token_wait", "input_wait", "reserve_wait",
+                "reserve_bookkeeping", "launch_enqueue",
+            )}
+            stats["tasks"] = 0
+            stats["token_detect_lat"] = 0.0
+            stats["token_detect_n"] = 0
+            state.stats = stats
         for task in program.tasks:
             fast_out = sum(o.size_bytes for o in task.outputs if o.location == "fast")
             backing_out = sum(o.size_bytes for o in task.outputs if o.location == "backing")
@@ -280,10 +292,15 @@ class Engine:
             # task whose input is live *now* could consume a copy the plan is
             # about to release/re-prefetch (stale-read), and no-input tasks
             # would reserve outputs earlier than the simulator charges them.
+            _t = _time.perf_counter() if stats is not None else 0.0
             while state.outstanding_task is not None:
                 state.step(f"waiting for task {state.outstanding_task!r} to retire")
+            if stats is not None:
+                stats["prev_token_wait"] += _time.perf_counter() - _t
+                stats["tasks"] += 1
 
             # 1. inputs host-observed live in fast memory
+            _t = _time.perf_counter() if stats is not None else 0.0
             while True:
                 waiting = [
                     obj for obj in task.inputs
@@ -292,10 +309,13 @@ class Engine:
                 if not waiting:
                     break
                 state.step(f"task {task.id!r} waiting for inputs {waiting} to be live in fast memory")
+            if stats is not None:
+                stats["input_wait"] += _time.perf_counter() - _t
 
             # 2. fast capacity for outputs (the simulator's task stall) —
             # assigned mode adds per-offset availability to the same condition
             escaped_outputs: set[str] = set()
+            _t = _time.perf_counter() if stats is not None else 0.0
             while True:
                 can_res = ledger.can_reserve("fast", fast_out)
                 busy = [
@@ -304,6 +324,8 @@ class Engine:
                     and not pool.can_get(o.location, o.size_bytes, tag=o.id)
                 ]
                 if can_res and not busy:
+                    if stats is not None:
+                        stats["reserve_wait"] += _time.perf_counter() - _t
                     break
                 token = self.backend.next_completion()
                 if token is not None:
@@ -336,6 +358,7 @@ class Engine:
                 )
 
             # 4. reserve outputs
+            _t = _time.perf_counter() if stats is not None else 0.0
             out_buffers: dict[str, Buffer] = {}
             for out in task.outputs:
                 ledger.charge(out.location, out.size_bytes)
@@ -357,9 +380,12 @@ class Engine:
                     t=self.backend.host_now_us(), kind="reserve", object_id=out.id, task_id=task.id,
                 ))
 
+            if stats is not None:
+                stats["reserve_bookkeeping"] += _time.perf_counter() - _t
             # 5. launch (start/done timestamps come from the events themselves,
             # resolved in the token handler — identical mechanism on fake and
             # real backends)
+            _t = _time.perf_counter() if stats is not None else 0.0
             in_buffers = {obj: table.get(obj).fast.buffer for obj in task.inputs}  # type: ignore[union-attr]
             mut_buffers = {obj: in_buffers[obj] for obj in task.mutates}
             self.backend.align_stream_to_host(compute)
@@ -377,6 +403,8 @@ class Engine:
                 compute, done, _TaskDone(task=task, start_event=start_ev, done_event=done),
                 priority=PRIORITY_TASK_DONE,
             )
+            if stats is not None:
+                stats["launch_enqueue"] += _time.perf_counter() - _t
             state.outstanding_task = task.id
 
         # --- drain -------------------------------------------------------------
@@ -399,6 +427,16 @@ class Engine:
                 "can never admit them. " + "; ".join(stuck)
             )
 
+        if stats is not None:
+            n = max(stats["tasks"], 1)
+            print("dispatch stats (per task, us):")
+            for k in ("prev_token_wait", "input_wait", "reserve_wait",
+                      "reserve_bookkeeping", "launch_enqueue"):
+                print(f"  {k:22} {stats[k] / n * 1e6:9.1f}")
+            if stats["token_detect_n"]:
+                print(f"  {'token_detect_latency':22} "
+                      f"{stats['token_detect_lat'] / stats['token_detect_n'] * 1e6:9.1f}"
+                      f"   (n={stats['token_detect_n']})")
         violations = self._final_location_violations(program, table)
         if violations and self.strict_final_locations:
             raise ExecutionError(
@@ -500,6 +538,7 @@ class _RunState:
     final_locations: dict[str, str] = None  # type: ignore[assignment]
     provided_buffer_ids: set[int] = None  # type: ignore[assignment]
     outstanding_task: str | None = None
+    stats: dict | None = None
 
     def step(self, waiting_reason: str) -> None:
         token = self.engine.backend.next_completion()
@@ -522,6 +561,11 @@ class _RunState:
         self.handle(token)
 
     def handle(self, token: object) -> None:
+        if self.stats is not None and isinstance(token, _TaskDone):
+            lat = (self.engine.backend.host_now_us()
+                   - self.engine.backend.event_time_us(token.done_event))
+            self.stats["token_detect_lat"] += lat / 1e6
+            self.stats["token_detect_n"] += 1
         if isinstance(token, _TaskDone):
             self._on_task_done(token)
         elif isinstance(token, TransferDone):
