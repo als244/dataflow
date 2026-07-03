@@ -109,11 +109,20 @@ def main() -> None:
         "8b": "bs=1, ga=1 (4,096 tokens/step)",
         "8b-bs4ga4": "bs=4, ga=4 (65,536 tokens/step)",
         "8b-ga16": "bs=1, ga=16 (65,536 tokens/step)",
+        "8b-s1k-bs2ga32": "seq 1K: bs=2, ga=32 (65,536 tokens/step)",
+        "8b-s1k-bs4ga16": "seq 1K: bs=4, ga=16 (65,536 tokens/step)",
+        "8b-s1k-bs8ga8": "seq 1K: bs=8, ga=8 (65,536 tokens/step)",
+        "8b-s1k-bs16ga4": "seq 1K: bs=16, ga=4 (65,536 tokens/step)",
         "baseline1b": "1B-class baseline config",
         "mini": "mini smoke config",
     }
+    known_order = (
+        "8b", "8b-bs4ga4", "8b-ga16",
+        "8b-s1k-bs2ga32", "8b-s1k-bs4ga16", "8b-s1k-bs8ga8", "8b-s1k-bs16ga4",
+        "baseline1b", "mini",
+    )
 
-    for config in ("8b", "8b-bs4ga4", "8b-ga16", "baseline1b", "mini"):
+    for config in known_order:
         rows = by_config.get(config)
         if not rows:
             continue
@@ -122,6 +131,14 @@ def main() -> None:
         print("| budget (GiB) | sim ms/step | real ms/step | sim tok/s | real tok/s | real vs sim | replay gap | recompute | placed extent | geom. tax | losses |")
         print("|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|:---|")
         for r in rows:
+            if "status" in r:  # sim-only row (e.g. placement infeasible)
+                print(
+                    f"| {r['budget_gib']:g} | {r['sim_ms_per_step']:.0f} | — | "
+                    f"{r['sim_tokens_per_s']:.0f} | — | — | — | "
+                    f"{r.get('recompute_chosen', 0)}/{_rewrite_count(r)} | — | — | "
+                    f"{r['status'].split(':')[0]} |"
+                )
+                continue
             losses = ", ".join(f"{x:.3f}" for x in r["losses"])
             extent = r.get("placement_extent_gib")
             extent_s = f"{extent:.2f} GiB" if extent else "—"
@@ -149,8 +166,8 @@ def main() -> None:
             )
 
     # cross-config comparison at shared budgets
-    shared = ("8b", "8b-bs4ga4", "8b-ga16")
-    if all(c in by_config for c in shared):
+    shared = tuple(c for c in known_order if c in by_config and c not in ("baseline1b", "mini"))
+    if len(shared) >= 2:
         print("\n## Batching comparison (real tok/s by budget)\n")
         budgets = sorted({r["budget_gib"] for c in shared for r in by_config[c]})
         print("| budget (GiB) | " + " | ".join(pretty[c] for c in shared) + " |")
@@ -159,7 +176,12 @@ def main() -> None:
             cells = []
             for c in shared:
                 match = [r for r in by_config[c] if r["budget_gib"] == b]
-                cells.append(f"{match[0]['real_tokens_per_s']:.0f}" if match else "—")
+                if not match:
+                    cells.append("—")
+                elif "status" in match[0]:
+                    cells.append(f"— (sim {match[0]['sim_tokens_per_s']:.0f})")
+                else:
+                    cells.append(f"{match[0]['real_tokens_per_s']:.0f}")
             print(f"| {b:g} | " + " | ".join(cells) + " |")
 
     # correctness at very tight budgets (tools/m4_correctness.py output)
@@ -188,6 +210,8 @@ def _rewrite_count(row: dict) -> int:
     """Recompute-decision denominator = n_layers x grad-accum rounds."""
     layers, rounds = {
         "8b": (32, 1), "8b-bs4ga4": (32, 4), "8b-ga16": (32, 16),
+        "8b-s1k-bs2ga32": (32, 32), "8b-s1k-bs4ga16": (32, 16),
+        "8b-s1k-bs8ga8": (32, 8), "8b-s1k-bs16ga4": (32, 4),
         "baseline1b": (16, 1), "mini": (4, 1),
     }.get(row.get("_config", ""), (1, 1))
     return layers * rounds

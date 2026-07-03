@@ -43,6 +43,11 @@ CONFIGS = {
     # per-step optimizer/transfer overhead over more math
     "8b-bs4ga4": ShapedLlamaConfig.llama3_8b(batch=4, grad_accum_rounds=4),
     "8b-ga16": ShapedLlamaConfig.llama3_8b(batch=1, grad_accum_rounds=16),
+    # seq-1024 family: 64 sequences/step (65,536 tokens/step) chunked four ways
+    "8b-s1k-bs2ga32": ShapedLlamaConfig.llama3_8b(seq_len=1024, batch=2, grad_accum_rounds=32),
+    "8b-s1k-bs4ga16": ShapedLlamaConfig.llama3_8b(seq_len=1024, batch=4, grad_accum_rounds=16),
+    "8b-s1k-bs8ga8": ShapedLlamaConfig.llama3_8b(seq_len=1024, batch=8, grad_accum_rounds=8),
+    "8b-s1k-bs16ga4": ShapedLlamaConfig.llama3_8b(seq_len=1024, batch=16, grad_accum_rounds=4),
     "baseline1b": ShapedLlamaConfig(
         n_layers=16, d_model=2048, n_heads=16, n_kv_heads=4, d_ff=8192,
         vocab_size=32768, seq_len=4096, batch=1,
@@ -169,10 +174,28 @@ def main() -> None:
               f"{len(planned.recompute_levels)} ===")
 
         torch.cuda.empty_cache()  # release prior budget's torch scratch
-        report = train(
-            planned.program, cfg, backend, steps=args.steps, seed=11,
-            placement_mode=args.placement, placement=placement,
-        )
+        from dataflow.runtime.placement import PlacementError
+
+        try:
+            report = train(
+                planned.program, cfg, backend, steps=args.steps, seed=11,
+                placement_mode=args.placement, placement=placement,
+            )
+        except PlacementError as exc:
+            # not packable on this device: keep the SIM side of the row so the
+            # table stays comprehensive, and say why the real side is absent
+            print(f"placement infeasible at {gib:g} GiB: {exc}")
+            rows.append({
+                "budget_gib": gib,
+                "planned_budget_gib": eff / GIB,
+                "placement_mode": args.placement,
+                "extent_budget": args.extent_budget,
+                "sim_ms_per_step": planned.makespan_us / 1e3,
+                "sim_tokens_per_s": sim_tok_s,
+                "recompute_chosen": sum(1 for v in planned.recompute_levels.values() if v),
+                "status": f"placement_infeasible: {exc}",
+            })
+            continue
         steady_us = report.steady_state_makespan_us
         real_tok_s = tokens_per_step / (steady_us / 1e6)
         gap = replay_gap_pct(planned.program, report.last_trace, report.step_makespan_us[-1])
