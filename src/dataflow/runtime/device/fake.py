@@ -18,6 +18,12 @@ from .base import Buffer, Event, Location, Stream, StreamKind
 class FakeBackend:
     name: str = "fake"
     physical: bool = False
+    # test-only timing distortion: (stream_kind, duration_us) -> duration_us.
+    # None (default) = exact declared durations — the M1/M2 parity contract.
+    # A non-None scale deliberately reorders completion tokens the way real
+    # hardware jitter does (e.g. transfers finishing early relative to
+    # compute), for timing-robustness tests. Never set outside tests.
+    time_scale: Any = None
     _host_us: float = 0.0
     _seq: int = 0
     _pending: list[tuple[float, int, int, Any]] = field(default_factory=list)
@@ -71,6 +77,8 @@ class FakeBackend:
         return  # bytes are notional
 
     def advance_stream(self, stream: Stream, duration_us: float) -> tuple[float, float]:
+        if self.time_scale is not None:
+            duration_us = self.time_scale(stream.kind, duration_us)
         start = max(stream.clock_us, self._host_us)
         stream.clock_us = start + duration_us
         return start, stream.clock_us

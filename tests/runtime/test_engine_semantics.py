@@ -198,3 +198,77 @@ def test_stale_final_location_detected():
     )
     with pytest.raises(ExecutionError, match="stale"):
         run_engine(program)
+
+
+def _inversion_program() -> Program:
+    """Sim-valid chain whose ONE-IN-FLIGHT h2d serialization protects t2's
+    reservation under sim timing: when `a`'s offload frees 30 bytes at t=33,
+    the h2d engine is still busy with `x` (until t=43), so blocked-head `far`
+    cannot take the bytes and stalled t2 reserves first. Under distorted
+    timing (h2d much faster than d2h), `x` finishes long before `a`'s
+    offload, the idle h2d engine grabs the freed bytes for `far` ahead of
+    t2's re-check, and `far`'s release depends on t3 > t2: a ledger
+    lifetime inversion no waiting can resolve."""
+    return Program(
+        name="ledger-inversion",
+        initial_objects=(
+            ObjectSpec(id="a", size_bytes=30, location="fast"),
+            ObjectSpec(id="x", size_bytes=40, location="backing"),
+            ObjectSpec(id="far", size_bytes=60, location="backing"),
+        ),
+        tasks=(
+            TaskSpec(id="t0", runtime_us=1.0),
+            TaskSpec(
+                id="t1", inputs=("a",), runtime_us=2.0,
+                offload_after=(TransferDirective(object_id="a", runtime_us=30.0),),
+                prefetch_after=(
+                    TransferDirective(object_id="x", runtime_us=40.0),
+                    TransferDirective(object_id="far", runtime_us=60.0),
+                ),
+            ),
+            TaskSpec(
+                id="t2", runtime_us=1000.0,
+                outputs=(OutputSpec(id="w2", size_bytes=50),),
+                releases_after=("w2",),
+            ),
+            TaskSpec(id="t3", inputs=("x", "far"), runtime_us=1.0),
+        ),
+        fast_memory_capacity=100,
+        final_locations={"a": "backing"},
+    )
+
+
+def test_ledger_inversion_parity_baseline():
+    """Under exact (sim) timing the chain completes with no evictions —
+    the valve must never fire where parity holds."""
+    result, _ = run_both(_inversion_program())
+    assert result.pressure_evictions == 0
+
+
+def test_ledger_inversion_eviction_valve():
+    """Distorted timing (h2d 1000x faster) reorders admissions into a
+    quiescent ledger deadlock; the valve evicts the farthest-next-use clean
+    resident, reloads it before use, and the run completes within budget."""
+    backend = FakeBackend(
+        time_scale=lambda kind, us: us / 1000.0 if kind == "h2d" else us
+    )
+    result = Engine(backend).execute(_inversion_program())
+    assert result.pressure_evictions >= 1
+    assert result.peak_fast_bytes <= 100  # budget contract held throughout
+    kinds = [e.kind for e in result.trace.events]
+    assert "pressure_evict" in kinds
+    evicted = [e.object_id for e in result.trace.events if e.kind == "pressure_evict"]
+    assert evicted == ["far"]  # Belady: farthest next use, largest
+
+
+def test_ledger_inversion_without_valve_deadlocks(monkeypatch):
+    """Negative control: same distorted timing minus the valve must be the
+    quiescent deadlock the valve exists to break."""
+    from dataflow.runtime.engine import _RunState
+
+    monkeypatch.setattr(_RunState, "_evict_for_pressure", lambda self, exclude: False)
+    backend = FakeBackend(
+        time_scale=lambda kind, us: us / 1000.0 if kind == "h2d" else us
+    )
+    with pytest.raises(DeadlockError, match="t2"):
+        Engine(backend).execute(_inversion_program())

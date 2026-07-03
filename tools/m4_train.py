@@ -111,11 +111,26 @@ def main() -> None:
     )
     parser.add_argument("--refresh-profiles", action="store_true",
                         help="ignore the profile cache and re-measure")
+    parser.add_argument(
+        "--optimizer", choices=["interleaved", "tail"], default="interleaved",
+        help="optimizer task placement in the lowered chain: interleaved "
+             "(default; each optimizer fires at its gradient's final mutation, "
+             "state streaming overlaps the last backward round) or tail "
+             "(legacy; all optimizers after all rounds — drains transfers "
+             "into a GPU-idle PCIe phase)",
+    )
+    parser.add_argument(
+        "--preplace", choices=["task0", "greedy"], default="task0",
+        help="PressureFit t=0 placement: task0 (default; only task 0's "
+             "inputs pre-placed, the rest arrive as planned prefetches) or "
+             "greedy (legacy; fills spare capacity — the runtime then pays "
+             "the whole set as a synchronous upload before each step)",
+    )
     args = parser.parse_args()
 
     from dataflow.tasks.kernels import resolve_kernels
 
-    cfg = CONFIGS[args.config]
+    cfg = replace(CONFIGS[args.config], optimizer_placement=args.optimizer)
     dims = dims_of(cfg)
     tokens_per_step = float(cfg.tokens * cfg.grad_accum_rounds)
 
@@ -132,6 +147,8 @@ def main() -> None:
         backend = CudaBackend()
         report = train(program, cfg, backend, steps=args.steps, seed=11)
         real_tok_s = tokens_per_step / (report.steady_state_makespan_us / 1e6)
+        steady_wall = sum(report.step_wall_s[1:]) / max(len(report.step_wall_s) - 1, 1)
+        wall_tok_s = tokens_per_step / steady_wall
         print(json.dumps({
             "annotated": str(args.annotated),
             "sim_tokens_per_s": sim_tok_s,
@@ -139,6 +156,7 @@ def main() -> None:
             "wall_tokens_per_s": wall_tok_s,
             "real_vs_sim_pct": (real_tok_s / sim_tok_s - 1) * 100,
             "placement_escapes": report.placement_escapes,
+            "pressure_evictions": report.pressure_evictions,
             "losses": [round(x, 4) for x in report.losses],
         }, indent=2))
         return
@@ -183,6 +201,7 @@ def main() -> None:
             build_variant=(
                 lambda levels: apply_measured_costs(build_raw(levels), profiles)
             ) if args.recompute else None,
+            preplace=args.preplace,
         )
 
     if (args.budgets is None) == (args.device_gib is None):
@@ -368,6 +387,7 @@ def main() -> None:
             "step_slab_overflows": report.step_slab_overflows,
             "placement_extent_gib": report.placement_extent_bytes / GIB,
             "placement_escapes": report.placement_escapes,
+            "pressure_evictions": report.pressure_evictions,
             "placement_overhead": report.placement_overhead,
             "recompute_chosen": sum(1 for v in planned.recompute_levels.values() if v),
         }
@@ -382,6 +402,7 @@ def main() -> None:
         )
 
     result = {"config": args.config, "steps": args.steps, "pcie": pcie.__dict__,
+              "optimizer_placement": args.optimizer, "preplace": args.preplace,
               "kernel_set": kernel_set, "sweep": rows}
 
     if args.baseline:

@@ -67,6 +67,7 @@ class RunResult:
     slab_overflows: int
     peak_backing_bytes: int = 0
     placement_escapes: int = 0  # cumulative pool counter (see slab_overflows)
+    pressure_evictions: int = 0  # quiescent-deadlock ledger evictions (this run)
     # exact (location, size) -> count buffer demand of this run; feed it to a
     # subsequent run's `pool_prewarm` (e.g. fake dry run -> real run)
     pool_demand: dict[tuple[str, int], int] = None  # type: ignore[assignment]
@@ -253,19 +254,27 @@ class Engine:
         # per-round context would otherwise pile up dead pinned copies).
         last_ref: dict[str, int] = {}
         task_index: dict[str, int] = {}
+        uses_by_obj: dict[str, list[int]] = {}  # input positions (eviction valve)
+        directives_by_obj: dict[str, list[int]] = {}  # any release/offload/prefetch
         for idx, t in enumerate(program.tasks):
             task_index[t.id] = idx
             for obj_id in t.inputs:
                 last_ref[obj_id] = idx
+                uses_by_obj.setdefault(obj_id, []).append(idx)
+            for obj_id in t.releases_after:
+                directives_by_obj.setdefault(obj_id, []).append(idx)
             for trig in t.offload_after:
                 last_ref[trig.object_id] = idx
+                directives_by_obj.setdefault(trig.object_id, []).append(idx)
             for trig in t.prefetch_after:
                 last_ref[trig.object_id] = idx
+                directives_by_obj.setdefault(trig.object_id, []).append(idx)
 
         state = _RunState(
             engine=self, table=table, ledger=ledger, pool=pool, trace=trace,
             h2d=h2d, d2h=d2h, deferred=deferred_prefetches, poison=poison,
-            last_ref=last_ref, task_index=task_index,
+            last_ref=last_ref, task_index=task_index, uses_by_obj=uses_by_obj,
+            directives_by_obj=directives_by_obj,
             final_locations=dict(program.final_locations),
             provided_buffer_ids={id(b) for b in initial_buffers.values()},
         )
@@ -282,9 +291,12 @@ class Engine:
             stats["token_detect_lat"] = 0.0
             stats["token_detect_n"] = 0
             state.stats = stats
-        for task in program.tasks:
+        for task_pos, task in enumerate(program.tasks):
             fast_out = sum(o.size_bytes for o in task.outputs if o.location == "fast")
             backing_out = sum(o.size_bytes for o in task.outputs if o.location == "backing")
+            state.cursor = task_pos
+            state.current_task_id = task.id
+            protected = frozenset(task.inputs)  # never evict what this task needs
 
             # 0. strict pacing: retire the previous task before dispatching the
             # next. Directives of ALL earlier tasks are then applied, so slot
@@ -294,7 +306,8 @@ class Engine:
             # would reserve outputs earlier than the simulator charges them.
             _t = _time.perf_counter() if stats is not None else 0.0
             while state.outstanding_task is not None:
-                state.step(f"waiting for task {state.outstanding_task!r} to retire")
+                state.step(f"waiting for task {state.outstanding_task!r} to retire",
+                           exclude=protected)
             if stats is not None:
                 stats["prev_token_wait"] += _time.perf_counter() - _t
                 stats["tasks"] += 1
@@ -308,7 +321,8 @@ class Engine:
                 ]
                 if not waiting:
                     break
-                state.step(f"task {task.id!r} waiting for inputs {waiting} to be live in fast memory")
+                state.step(f"task {task.id!r} waiting for inputs {waiting} to be live in fast memory",
+                           exclude=protected)
             if stats is not None:
                 stats["input_wait"] += _time.perf_counter() - _t
 
@@ -347,7 +361,8 @@ class Engine:
                     continue
                 state.step(
                     f"task {task.id!r} waiting to reserve {fast_out} fast bytes "
-                    f"(used={ledger.used['fast']}, cap={ledger.fast_capacity})"
+                    f"(used={ledger.used['fast']}, cap={ledger.fast_capacity})",
+                    exclude=protected,
                 )
 
             # 3. backing outputs never stall (mirror sim: immediate error)
@@ -466,6 +481,7 @@ class Engine:
             buffers_reused=pool.reused_count,
             slab_overflows=pool.slab_overflows,
             placement_escapes=pool.placement_escapes,
+            pressure_evictions=state.pressure_evictions,
             pool_demand=dict(pool.allocated_by_key),
             objects=table,
             _owned_pool=None if self.session is not None else pool,
@@ -537,10 +553,16 @@ class _RunState:
     task_index: dict[str, int] = None  # type: ignore[assignment]
     final_locations: dict[str, str] = None  # type: ignore[assignment]
     provided_buffer_ids: set[int] = None  # type: ignore[assignment]
+    uses_by_obj: dict[str, list[int]] = None  # type: ignore[assignment]
+    directives_by_obj: dict[str, list[int]] = None  # type: ignore[assignment]
     outstanding_task: str | None = None
     stats: dict | None = None
+    cursor: int = 0                      # dispatch position (eviction valve)
+    current_task_id: str | None = None
+    pressure_evictions: int = 0
+    prefetch_override: dict[str, float | None] = None  # type: ignore[assignment]
 
-    def step(self, waiting_reason: str) -> None:
+    def step(self, waiting_reason: str, *, exclude: frozenset = frozenset()) -> None:
         token = self.engine.backend.next_completion()
         if token is None:
             # quiescent: a prefetch head blocked only by a placed-offset
@@ -552,13 +574,88 @@ class _RunState:
                     detail="from_slow head",
                 ))
                 return
+            # ledger inversion: real transfer/compute timing let admitted
+            # prefetches race ahead of the release frontier and strand the
+            # ledger in a state the (sim-verified) plan never visits. Evict
+            # the farthest-next-use CLEAN resident back to its backing copy
+            # and reload it before its use — semantically the sim's own
+            # "deferred prefetch", decided late. Budget cap is never exceeded
+            # (eviction only frees); genuine capacity deadlocks still raise.
+            evicted = self._evict_for_pressure(exclude)
+            if evicted == "evicted-poke":
+                # a plan transfer was already waiting at the h2d head: freed
+                # bytes go to it first (the simulator's own tie priority)
+                self.h2d.try_start()
+                return
+            if evicted == "evicted":
+                # queue held only our reload: the stalled caller re-checks and
+                # takes the bytes; the reload admits on a later token
+                return
             raise DeadlockError(
                 f"deadlock: {waiting_reason}; no in-flight work can unblock it "
                 f"(from_slow queue={[j.object_id for j in self.h2d.queue]}, "
                 f"to_slow queue={[j.object_id for j in self.d2h.queue]}, "
-                f"deferred={sorted(self.deferred)})"
+                f"deferred={sorted(self.deferred)}, "
+                f"pressure_evictions={self.pressure_evictions})"
             )
         self.handle(token)
+
+    def _evict_for_pressure(self, exclude: frozenset) -> str | None:
+        """Evict ONE clean fast-resident object (valid backing copy, current
+        version, not needed by the stalled task) with the farthest next use,
+        and queue its reload. Returns None when no safe victim exists, else
+        whether a pre-existing queue head should be poked with the bytes."""
+        if self.pressure_evictions >= 10 * len(self.task_index):
+            return None  # thrash guard: let the deadlock surface loudly
+        best = None  # (next_use, size, oid, rec)
+        for oid, rec in self.table.records.items():
+            fast, backing = rec.fast, rec.backing
+            if (
+                oid in exclude
+                or fast is None or fast.state != "live"
+                or backing is None or backing.state != "live"
+                or fast.version != rec.version
+                or backing.version != rec.version
+            ):
+                continue
+            uses = self.uses_by_obj.get(oid)
+            if not uses or uses[-1] < self.cursor:
+                continue  # no future use -> a later plan-release would misfire
+            from bisect import bisect_left
+            nxt = uses[bisect_left(uses, self.cursor)]
+            dirs = self.directives_by_obj.get(oid, ())
+            # window [cursor, nxt): the current task is un-launched, so its
+            # directives are still pending and would misfire on an evicted slot
+            if dirs and bisect_left(dirs, self.cursor) < bisect_left(dirs, nxt):
+                continue  # plan touches this slot before the next use
+            key = (nxt, rec.size_bytes)
+            if best is None or key > (best[0], best[1]):
+                best = (nxt, rec.size_bytes, oid, rec)
+        if best is None:
+            return None
+        nxt, size, oid, rec = best
+        had_head_before = bool(self.h2d.queue) or self.h2d.inflight is not None
+        slot = rec.fast
+        self.ledger.release("fast", size)
+        if self.poison is not None:
+            self.poison(slot.buffer)  # type: ignore[operator]
+        self.pool.put(slot.buffer)
+        rec.fast = None
+        self.pressure_evictions += 1
+        now = self.engine.backend.host_now_us()
+        self.trace.events.append(TraceEvent(
+            t=now, kind="pressure_evict", object_id=oid,
+            task_id=self.current_task_id, detail=f"next_use_task={nxt}",
+        ))
+        # reload before its next use; anchor is already-complete by construction;
+        # duration mirrors the object's own prefetch trigger (bandwidth fallback)
+        override = (self.prefetch_override or {}).get(oid)
+        self.h2d.enqueue(TransferJob(
+            object_id=oid, size_bytes=size, runtime_override=override,
+            anchor_event=self.engine.backend.record_event(self.h2d.stream),
+            fired_by_task=self.current_task_id or "pressure_evict",
+        ))
+        return "evicted-poke" if had_head_before else "evicted"
 
     def handle(self, token: object) -> None:
         if self.stats is not None and isinstance(token, _TaskDone):
@@ -684,6 +781,9 @@ class _RunState:
                 runtime_override=trig.runtime_us, anchor_event=tok.done_event,
                 fired_by_task=task.id,
             )
+            if self.prefetch_override is None:
+                self.prefetch_override = {}
+            self.prefetch_override[trig.object_id] = trig.runtime_us
             if offload_in_flight:
                 self.deferred.setdefault(trig.object_id, []).append(job)
                 self.trace.events.append(TraceEvent(

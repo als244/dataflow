@@ -55,6 +55,14 @@ class ShapedLlamaConfig:
     batch: int = 1
     grad_accum_rounds: int = 1
     num_steps: int = 1
+    # "interleaved" (default): each optimizer task is emitted immediately
+    # after the LAST mutation of its gradient (inside the final grad-accum
+    # round's backward), so its state streaming (O in, W+O writebacks out)
+    # overlaps the remaining backward compute. "tail" restores the legacy
+    # all-optimizers-after-all-rounds order, whose transfers drain into a
+    # GPU-idle PCIe phase at the end of every step (measured 1.5-2.0 s at
+    # 8B/seq-1K). Task ids are identical in both modes; only order changes.
+    optimizer_placement: str = "interleaved"
 
     @property
     def tokens(self) -> int:
@@ -305,9 +313,40 @@ def build_shaped_llama3(
             metadata={"cost_subops": costs.subops[block]},
         ))
 
+    if cfg.optimizer_placement not in ("interleaved", "tail"):
+        raise ValueError(
+            f"optimizer_placement must be 'interleaved' or 'tail', "
+            f"got {cfg.optimizer_placement!r}"
+        )
+    interleaved = cfg.optimizer_placement == "interleaved"
+
     for s in range(cfg.num_steps):
+        # Optimizer emitters: one per parameter family; ids/inputs identical
+        # in both placements. In interleaved mode each fires right after the
+        # final mutation of its gradient (last round's backward task), so O
+        # prefetches and W/O writebacks overlap the rest of the backward
+        # instead of draining serially after all compute is done.
+        def opt_embed(s: int = s) -> None:
+            task(f"optimizer_embed_{s}", "optimizer_embed",
+                 ["W_embed", f"dW_embed_{s}", "O_embed"], [],
+                 costs.optimizer_us["embed"], mutates=("W_embed", "O_embed"),
+                 group="optimizer")
+
+        def opt_block(i: int, s: int = s) -> None:
+            task(f"optimizer_{s}_{i}", "optimizer_block",
+                 [f"W_{i}", f"dW_{s}_{i}", f"O_{i}"], [],
+                 costs.optimizer_us["block"], mutates=(f"W_{i}", f"O_{i}"),
+                 group="optimizer", params={"layer": i})
+
+        def opt_head(s: int = s) -> None:
+            task(f"optimizer_head_{s}", "optimizer_head",
+                 ["W_head", f"dW_head_{s}", "O_head"], [],
+                 costs.optimizer_us["head"], mutates=("W_head", "O_head"),
+                 group="optimizer")
+
         for r in range(cfg.grad_accum_rounds):
             first_round = r == 0
+            last_round = r == cfg.grad_accum_rounds - 1
             # ---- forward ----
             task(
                 f"embed_fwd_{s}_{r}", "embed_fwd",
@@ -364,6 +403,8 @@ def build_shaped_llama3(
                 head_mutates = (f"dW_head_{s}",)
             task(f"head_bwd_{s}_{r}", "head_bwd", head_grad_inputs, head_outs,
                  costs.head_bwd_us, mutates=head_mutates, group="backward")
+            if interleaved and last_round:
+                opt_head()  # dW_head_{s} saw its final mutation just now
 
             for i in reversed(range(cfg.n_layers)):
                 a_id = f"A_{s}_{r}_{i}"
@@ -384,6 +425,8 @@ def build_shaped_llama3(
                     mutates = (f"dW_{s}_{i}",)
                 task(f"block_bwd_{s}_{r}_{i}", "block_bwd", bwd_inputs, outs,
                      costs.block_bwd_us, mutates=mutates, group="backward", params={"layer": i})
+                if interleaved and last_round:
+                    opt_block(i)  # dW_{s}_{i} is final; W_i still resident from bwd
 
             embed_bwd_inputs = [f"dy_embed_{s}_{r}", f"tokens_{s}_{r}"]
             embed_outs: list[OutputSpec] = []
@@ -395,19 +438,15 @@ def build_shaped_llama3(
                 embed_mutates = (f"dW_embed_{s}",)
             task(f"embed_bwd_{s}_{r}", "embed_bwd", embed_bwd_inputs, embed_outs,
                  costs.embed_bwd_us, mutates=embed_mutates, group="backward")
+            if interleaved and last_round:
+                opt_embed()  # embed_bwd is the round's last task; embed opt closes the step
 
-        # ---- optimizer (after all rounds of step s) ----
-        task(f"optimizer_embed_{s}", "optimizer_embed",
-             ["W_embed", f"dW_embed_{s}", "O_embed"], [],
-             costs.optimizer_us["embed"], mutates=("W_embed", "O_embed"), group="optimizer")
-        for i in range(cfg.n_layers):
-            task(f"optimizer_{s}_{i}", "optimizer_block",
-                 [f"W_{i}", f"dW_{s}_{i}", f"O_{i}"], [],
-                 costs.optimizer_us["block"], mutates=(f"W_{i}", f"O_{i}"), group="optimizer",
-                 params={"layer": i})
-        task(f"optimizer_head_{s}", "optimizer_head",
-             ["W_head", f"dW_head_{s}", "O_head"], [],
-             costs.optimizer_us["head"], mutates=("W_head", "O_head"), group="optimizer")
+        if not interleaved:
+            # ---- legacy tail placement: all optimizers after all rounds ----
+            opt_embed()
+            for i in range(cfg.n_layers):
+                opt_block(i)
+            opt_head()
 
     label = name or (
         f"llama3-shaped-{cfg.n_layers}L-d{cfg.d_model}-s{cfg.seq_len}-b{cfg.batch}"

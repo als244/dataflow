@@ -67,3 +67,50 @@ def test_rewrites_cover_all_saved_contexts():
     program = build_shaped_llama3(cfg)
     ids = {rw.object_id for rw in program.recompute_rewrites}
     assert ids == {f"A_0_0_{i}" for i in range(cfg.n_layers)}
+
+
+def test_interleaved_optimizer_fires_at_final_grad_mutation():
+    """Default placement: optimizer_i sits right after the LAST round's
+    block_bwd_i (its dW's final mutation), not in a tail phase; ids and the
+    task SET are identical to tail mode so plans/profiles stay comparable."""
+    from dataclasses import replace as dc_replace
+
+    cfg = dc_replace(ShapedLlamaConfig.tiny(), grad_accum_rounds=3)
+    inter = build_shaped_llama3(cfg)
+    tail = build_shaped_llama3(dc_replace(cfg, optimizer_placement="tail"))
+    validate_program(inter)
+    validate_program(tail)
+    assert {t.id for t in inter.tasks} == {t.id for t in tail.tasks}
+
+    order = [t.id for t in inter.tasks]
+    idx = {tid: k for k, tid in enumerate(order)}
+    last = cfg.grad_accum_rounds - 1
+    for i in range(cfg.n_layers):
+        assert idx[f"optimizer_0_{i}"] == idx[f"block_bwd_0_{last}_{i}"] + 1
+    assert idx[f"optimizer_head_0"] == idx[f"head_bwd_0_{last}"] + 1
+    assert idx[f"optimizer_embed_0"] == idx[f"embed_bwd_0_{last}"] + 1
+    # interleaved: no optimizer task may follow embed's (the chain's closer)
+    assert order[-1] == "optimizer_embed_0"
+
+    # tail mode keeps the legacy suffix: every optimizer after every backward
+    tail_order = [t.id for t in tail.tasks]
+    first_opt = min(k for k, tid in enumerate(tail_order) if tid.startswith("optimizer"))
+    assert all(tid.startswith("optimizer") for tid in tail_order[first_opt:])
+
+
+def test_interleaved_optimizer_respects_reader_ordering():
+    """No task after optimizer_i may READ W_i or O_i within the step (the
+    mutation must be the last touch), and dW_i must not be referenced after
+    its optimizer consumes it — the properties interleaving relies on."""
+    from dataclasses import replace as dc_replace
+
+    cfg = dc_replace(ShapedLlamaConfig.tiny(), grad_accum_rounds=2, num_steps=2)
+    program = build_shaped_llama3(cfg)
+    idx = {t.id: k for k, t in enumerate(program.tasks)}
+    for s in range(cfg.num_steps):
+        step_end = idx[f"optimizer_embed_{s}"]  # interleaved: the step's closer
+        for i in range(cfg.n_layers):
+            k_opt = idx[f"optimizer_{s}_{i}"]
+            for t in program.tasks[k_opt + 1 : step_end + 1]:
+                assert f"W_{i}" not in t.inputs, (t.id, f"reads W_{i} after optimizer_{s}_{i}")
+                assert f"dW_{s}_{i}" not in t.inputs, (t.id, "reads consumed grad")

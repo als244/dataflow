@@ -68,6 +68,7 @@ def plan_program(
     build_variant: BuildVariant | None = None,
     max_iters: int = 8,
     max_wall_s: float | None = None,
+    preplace: str = "task0",
 ) -> PlannedProgram:
     """Annotate a bare program with PressureFit (+ optional recompute planning).
 
@@ -76,6 +77,15 @@ def plan_program(
     the program for a recompute-level assignment (the program's
     ``recompute_rewrites`` supply the options); the returned PlannedProgram
     carries the chosen levels and the re-lowered annotated program.
+
+    ``preplace`` defaults to ``"task0"`` here — unlike the simulator's own
+    ``"greedy"`` default — because the runtime REALIZES initial fast
+    placement with synchronous uploads before the chain's clock starts:
+    every pre-placed byte beyond task 0's needs is exposed wall time the
+    simulator never charged (measured 0.32-0.42 s/step at 8B scale). With
+    ``"task0"`` those bytes travel as planned prefetches instead, charged
+    by the sim and overlapped with early compute. Pass ``"greedy"`` to
+    reproduce legacy plans.
     """
     from dataflow_sim.engine.simulator import run
     from dataflow_sim.policies.pressurefit import apply_pressurefit_policy
@@ -83,7 +93,7 @@ def plan_program(
     cap = fast_memory_capacity if fast_memory_capacity is not None else program.fast_memory_capacity
 
     def policy_fn(chain: Any) -> Any:
-        return apply_pressurefit_policy(chain, fast_memory_capacity=cap)
+        return apply_pressurefit_policy(chain, fast_memory_capacity=cap, preplace=preplace)
 
     if recompute:
         if build_variant is None:

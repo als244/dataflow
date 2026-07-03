@@ -1,0 +1,82 @@
+[
+ {
+  "mode": "legacy",
+  "budget_gib": 12,
+  "sim_ms": 19919.314410247804,
+  "sim_tok_s": 3290.073074316452,
+  "recompute": 128,
+  "setup_copy_gib": 11.541473388671875,
+  "opt_window_s": 2.04052998828125,
+  "opt_window_gpu_idle_s": 1.967107625
+ },
+ {
+  "mode": "legacy",
+  "budget_gib": 16,
+  "sim_ms": 19877.20191415405,
+  "sim_tok_s": 3297.043531732375,
+  "recompute": 128,
+  "setup_copy_gib": 14.95758056640625,
+  "opt_window_s": 1.90827430078125,
+  "opt_window_gpu_idle_s": 1.8348519375
+ },
+ {
+  "mode": "legacy",
+  "budget_gib": 20,
+  "sim_ms": 19763.550914154053,
+  "sim_tok_s": 3316.0032974168175,
+  "recompute": 128,
+  "setup_copy_gib": 14.95758056640625,
+  "opt_window_s": 1.74134061328125,
+  "opt_window_gpu_idle_s": 1.66791825
+ },
+ {
+  "mode": "legacy",
+  "budget_gib": 24,
+  "sim_ms": 19603.80828451538,
+  "sim_tok_s": 3343.0239190701254,
+  "recompute": 113,
+  "setup_copy_gib": 14.95758056640625,
+  "opt_window_s": 1.59346558203125,
+  "opt_window_gpu_idle_s": 1.52004321875
+ },
+ {
+  "mode": "new",
+  "budget_gib": 12,
+  "sim_ms": 18881.388994232177,
+  "sim_tok_s": 3470.9310856325087,
+  "recompute": 128,
+  "setup_copy_gib": 0.978546142578125,
+  "opt_window_s": 2.663620515625,
+  "opt_window_gpu_idle_s": 1.152890046875
+ },
+ {
+  "mode": "new",
+  "budget_gib": 16,
+  "sim_ms": 18693.43373251343,
+  "sim_tok_s": 3505.8299581426527,
+  "recompute": 128,
+  "setup_copy_gib": 0.978546142578125,
+  "opt_window_s": 2.492027517578125,
+  "opt_window_gpu_idle_s": 0.981297048828125
+ },
+ {
+  "mode": "new",
+  "budget_gib": 20,
+  "sim_ms": 18391.89733895874,
+  "sim_tok_s": 3563.3082760405587,
+  "recompute": 179,
+  "setup_copy_gib": 0.978546142578125,
+  "opt_window_s": 1.85317176171875,
+  "opt_window_gpu_idle_s": 0.13245301171875
+ },
+ {
+  "mode": "new",
+  "budget_gib": 24,
+  "sim_ms": 17852.850713958742,
+  "sim_tok_s": 3670.8983371915433,
+  "recompute": 131,
+  "setup_copy_gib": 0.978546142578125,
+  "opt_window_s": 1.82433576171875,
+  "opt_window_gpu_idle_s": 0.169238349609375
+ }
+]

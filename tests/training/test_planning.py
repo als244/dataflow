@@ -122,16 +122,23 @@ def test_backing_capacity_drives_recompute():
 
     unlimited = plan_at(None)
     n_unlimited = sum(1 for v in unlimited.recompute_levels.values() if v > 0)
+    # the free planner must stay far from recompute-all (else there is no dial)
+    assert n_unlimited < len(all_levels) // 4, n_unlimited
 
-    # measure both ends of the dial, cap in between
-    save_peak = peak_backing(unlimited) if n_unlimited == 0 else None
+    # measure both ends of the dial EXPLICITLY (the free plan need not be
+    # exactly save-all — e.g. optimizer interleaving shifts one layer), cap
+    # in between
+    save_planned = plan_program(
+        replace(program, backing_memory_capacity=None), fast_memory_capacity=cap,
+    )
+    save_peak = peak_backing(save_planned)
     rc_all_planned = plan_program(
         replace(build_shaped_llama3(cfg, recompute_levels=all_levels),
                 backing_memory_capacity=None),
         fast_memory_capacity=cap,
     )
     rc_peak = peak_backing(rc_all_planned)
-    assert save_peak is not None and save_peak > rc_peak, (save_peak, rc_peak)
+    assert save_peak > rc_peak, (save_peak, rc_peak)
     tight = plan_at((save_peak + rc_peak) // 2)
 
     n_tight = sum(1 for v in tight.recompute_levels.values() if v > 0)

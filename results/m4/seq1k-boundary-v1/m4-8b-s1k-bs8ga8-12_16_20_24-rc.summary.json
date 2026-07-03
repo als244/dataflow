@@ -1,0 +1,159 @@
+{
+  "config": "8b-s1k-bs8ga8",
+  "steps": 3,
+  "pcie": {
+    "uni_h2d": 35338,
+    "uni_d2h": 56756,
+    "bidi_h2d": 25529,
+    "bidi_d2h": 25783
+  },
+  "optimizer_placement": "interleaved",
+  "preplace": "task0",
+  "kernel_set": {
+    "adamw_step": "triton",
+    "ce_loss_fwd_bwd": "triton",
+    "rmsnorm_apply": "triton",
+    "rmsnorm_bwd": "triton",
+    "rmsnorm_fwd": "triton",
+    "rmsnorm_noweight": "triton",
+    "rope_bwd": "triton",
+    "rope_fwd": "triton",
+    "swiglu_bwd": "triton",
+    "swiglu_fwd_out": "triton"
+  },
+  "sweep": [
+    {
+      "budget_gib": 12.0,
+      "planned_budget_gib": 12.0,
+      "placement_mode": "static",
+      "extent_budget": false,
+      "sim_ms_per_step": 18881.388994232177,
+      "real_ms_per_step_steady": 19639.51953125,
+      "sim_tokens_per_s": 3470.9310856325087,
+      "real_tokens_per_s": 3336.9451780997224,
+      "wall_tokens_per_s": 3331.350841133273,
+      "real_vs_sim_pct": -3.8602295530269837,
+      "replay_fidelity_gap_pct": 1.3116283366809798,
+      "losses": [
+        12.585172653198242,
+        12.568313598632812,
+        12.57936954498291
+      ],
+      "peak_fast_gib": 11.941986083984375,
+      "peak_backing_gib": 69.33720398694277,
+      "pinned_host_gib": 146.873046875,
+      "step_makespans_ms": [
+        20372.166015625,
+        19653.36328125,
+        19625.67578125
+      ],
+      "step_wall_s": [
+        39.8161790400045,
+        19.686017810949124,
+        19.658982535940595
+      ],
+      "step_slab_overflows": [
+        0,
+        0,
+        0
+      ],
+      "placement_extent_gib": 13.018905639648438,
+      "placement_escapes": 0,
+      "pressure_evictions": 0,
+      "placement_overhead": 1.0901792673421669,
+      "recompute_chosen": 128
+    },
+    {
+      "budget_gib": 16.0,
+      "planned_budget_gib": 16.0,
+      "placement_mode": "static",
+      "extent_budget": false,
+      "sim_ms_per_step": 18693.815336029053,
+      "real_ms_per_step_steady": 19585.33984375,
+      "sim_tokens_per_s": 3505.7583923861084,
+      "real_tokens_per_s": 3346.176299356562,
+      "wall_tokens_per_s": 3340.6252124522084,
+      "real_vs_sim_pct": -4.55199917302147,
+      "replay_fidelity_gap_pct": 1.2438903019226277,
+      "losses": [
+        12.585172653198242,
+        12.568456649780273,
+        12.579544067382812
+      ],
+      "peak_fast_gib": 15.816116333007812,
+      "peak_backing_gib": 66.8996124342084,
+      "pinned_host_gib": 146.873046875,
+      "step_makespans_ms": [
+        19471.654296875,
+        19610.435546875,
+        19560.244140625
+      ],
+      "step_wall_s": [
+        38.614573005004786,
+        19.643059790018015,
+        19.592709464021027
+      ],
+      "step_slab_overflows": [
+        0,
+        0,
+        0
+      ],
+      "placement_extent_gib": 17.525161743164062,
+      "placement_escapes": 0,
+      "pressure_evictions": 0,
+      "placement_overhead": 1.1080572103904875,
+      "recompute_chosen": 128
+    },
+    {
+      "budget_gib": 20.0,
+      "planned_budget_gib": 20.0,
+      "placement_mode": "static",
+      "extent_budget": false,
+      "sim_ms_per_step": 18393.590730560303,
+      "real_ms_per_step_steady": 19445.7353515625,
+      "sim_tokens_per_s": 3562.980222840027,
+      "real_tokens_per_s": 3370.199111278868,
+      "wall_tokens_per_s": 3364.5459862473513,
+      "real_vs_sim_pct": -5.410670267697837,
+      "replay_fidelity_gap_pct": 0.8752668585378378,
+      "losses": [
+        12.585172653198242,
+        12.569070816040039,
+        12.579444885253906
+      ],
+      "peak_fast_gib": 19.975128177553415,
+      "peak_backing_gib": 63.550491351634264,
+      "pinned_host_gib": 146.873046875,
+      "step_makespans_ms": [
+        19308.51171875,
+        19376.98046875,
+        19514.490234375
+      ],
+      "step_wall_s": [
+        38.5768464980647,
+        19.40968956798315,
+        19.547126756049693
+      ],
+      "step_slab_overflows": [
+        0,
+        0,
+        0
+      ],
+      "placement_extent_gib": 22.00482177734375,
+      "placement_escapes": 0,
+      "pressure_evictions": 0,
+      "placement_overhead": 1.1016110425799999,
+      "recompute_chosen": 176
+    },
+    {
+      "budget_gib": 24.0,
+      "planned_budget_gib": 24.0,
+      "placement_mode": "static",
+      "extent_budget": false,
+      "sim_ms_per_step": 17852.850713958742,
+      "sim_tokens_per_s": 3670.8983371915433,
+      "recompute_chosen": 131,
+      "status": "placement_infeasible: static placement needs 29101408256 bytes (load lower bound 25712852996) but only 28991029248 physical bytes are available \u2014 not packable on this device; lower the budget or re-plan (this failure is at PLANNING time by design)"
+    }
+  ]
+}

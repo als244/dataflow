@@ -20,6 +20,9 @@ Strict pacing exposes host work between tasks that pipelined engines hide:
 
 Cross-check: 662 boundaries × 815 µs ≈ 0.54 s/step ≈ the entire
 real-vs-sim deficit (−3…−4%) — the sim's unmodeled term is exactly this.
+(2026-07-03: view/stream caches cut the DLPack fan-out to ~0.06 µs/view
+and enqueue to 224/456/182 µs for fwd/bwd/recompute — the eager-dispatch
+column remains the bulk, still waiting on CUDA-graph capture.)
 
 **Remedies, in order:**
 - **Dispatch-ahead (built, measured, REVERTED — recover at 21243be)**:
@@ -65,14 +68,29 @@ implementation needs ~8–12. Expansion sources, largest first:
 Per-family measured enqueue (idle GPU): block_bwd 565 µs, block_fwd 297,
 block_recompute 251 (2.2× cheaper after the w1/w3 truncation), optimizer 38.
 
-## 3. Step-boundary state round-trip (~6%/step)
+## 3. Step-boundary seam (FIXED 2026-07-03 — docs/notes/step-boundary.md)
 
-34 weight tensors (14.96 GiB) are initial-fast AND final-backing: every
-step offloads updated weights to pinned memory and re-uploads the same
-bytes at the next step's setup — serially, between `execute()` calls.
-Fix: fixed-point steady-state plans (final fast state ≡ initial fast
-state) with session-resident carryover buffers; also unlocks overlap of
-the remaining boundary traffic. Not yet built.
+Measured to be ~9-11%/step, twice the earlier ~6% estimate, in two parts:
+(a) the greedy pre-placement set (11.5-15 GiB) uploaded synchronously
+before each step's clock (0.32-0.42 s, wall-only — the sim never charged
+it), and (b) an optimizer-tail PCIe drain in which the GPU idles
+1.5-2.0 s while W+O writebacks and O prefetches stream after all compute
+has finished (sim-visible all along; real-vs-sim agreed within -3%,
+which is exactly why it hid). Fixed by (1) optimizer interleaving —
+each optimizer task emitted at its gradient's final mutation inside the
+last backward round, so its streaming overlaps remaining compute; task
+ids/sets unchanged — and (2) preplace="task0" — PressureFit pre-places
+only task 0's inputs; the rest arrive as planned, charged, overlappable
+prefetches. Sim-predicted +5.5/+6.3/+7.5/+9.8% at 12/16/20/24 GiB;
+measured rows in results/m4/seq1k-boundary-v1/. The stronger
+resident-carryover invariant (final-fast W, session-owned slots,
+deferred writeback + flush) was analyzed and deferred: the planner
+deliberately STREAMS W mid-step (161-206 GiB/step of W prefetch vs
+15 GiB resident), so pinning W would fight the recompute planner for
+the bytes it uses best — see the note's §3 for the recorded
+requirements. A k-step planning window is NOT needed for a repeatable
+plan (the boundary invariant, not the window, makes replay inductive);
+its residual value after the fix is ~0.1-0.2 s of cross-seam overlap.
 
 ## 4. Recompute truncation (DONE, 81c0043)
 
