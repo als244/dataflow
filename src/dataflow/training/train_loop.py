@@ -37,6 +37,7 @@ class TrainReport:
     # step 0 may overflow at tight budgets (headroom heuristic), steady
     # state must not — overflowed buffers join the free lists and get reused
     step_slab_overflows: list[int] = field(default_factory=list)
+    placement_escapes: int = 0  # quiescent-deadlock escapes (0 in healthy runs)
     last_trace: object = None  # RunTrace of the final step (replay-gap analysis)
     placement_extent_bytes: int = 0
     placement_overhead: float = 1.0  # extent / peak load (contiguity geometry tax)
@@ -137,6 +138,7 @@ def train(
             )
             prior = sum(report.step_slab_overflows)
             report.step_slab_overflows.append(result.slab_overflows - prior)
+            report.placement_escapes = result.placement_escapes
 
             loss_rec = result.objects.get("loss_0_0")
             slot = loss_rec.backing or loss_rec.fast

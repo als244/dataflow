@@ -62,6 +62,7 @@ class RunResult:
     buffers_reused: int
     slab_overflows: int
     peak_backing_bytes: int = 0
+    placement_escapes: int = 0  # cumulative pool counter (see slab_overflows)
     # exact (location, size) -> count buffer demand of this run; feed it to a
     # subsequent run's `pool_prewarm` (e.g. fake dry run -> real run)
     pool_demand: dict[tuple[str, int], int] = None  # type: ignore[assignment]
@@ -289,13 +290,34 @@ class Engine:
 
             # 2. fast capacity for outputs (the simulator's task stall) —
             # assigned mode adds per-offset availability to the same condition
-            while not (
-                ledger.can_reserve("fast", fast_out)
-                and all(
-                    pool.can_get(o.location, o.size_bytes, tag=o.id)
-                    for o in task.outputs if o.location == "fast"
-                )
-            ):
+            escaped_outputs: set[str] = set()
+            while True:
+                can_res = ledger.can_reserve("fast", fast_out)
+                busy = [
+                    o.id for o in task.outputs
+                    if o.location == "fast" and o.id not in escaped_outputs
+                    and not pool.can_get(o.location, o.size_bytes, tag=o.id)
+                ]
+                if can_res and not busy:
+                    break
+                token = self.backend.next_completion()
+                if token is not None:
+                    state.handle(token)
+                    continue
+                # quiescent. A pure placed-offset conflict (ledger admits,
+                # offsets busy) is a lifetime inversion vs the dry run — the
+                # holder's release depends on a LATER task, so waiting is a
+                # deadlock. Escape those instances to dynamic allocations
+                # (counted, reported) and proceed; genuine capacity blocks
+                # still deadlock loudly below.
+                if can_res and busy:
+                    for oid in busy:
+                        escaped_outputs.add(oid)
+                        trace.events.append(TraceEvent(
+                            t=self.backend.host_now_us(), kind="placement_escape",
+                            object_id=oid, task_id=task.id,
+                        ))
+                    continue
                 state.step(
                     f"task {task.id!r} waiting to reserve {fast_out} fast bytes "
                     f"(used={ledger.used['fast']}, cap={ledger.fast_capacity})"
@@ -312,7 +334,10 @@ class Engine:
             out_buffers: dict[str, Buffer] = {}
             for out in task.outputs:
                 ledger.charge(out.location, out.size_bytes)
-                buf = pool.get(out.location, out.size_bytes, tag=out.id)
+                if out.id in escaped_outputs:
+                    buf = pool.get_escaped(out.location, out.size_bytes, tag=out.id)
+                else:
+                    buf = pool.get(out.location, out.size_bytes, tag=out.id)
                 rec = table.add(
                     ObjectRecord(id=out.id, size_bytes=out.size_bytes, role=out.role, tensor=out.tensor)
                 )
@@ -393,6 +418,7 @@ class Engine:
             buffers_allocated=pool.allocated_count,
             buffers_reused=pool.reused_count,
             slab_overflows=pool.slab_overflows,
+            placement_escapes=pool.placement_escapes,
             pool_demand=dict(pool.allocated_by_key),
             objects=table,
             _owned_pool=None if self.session is not None else pool,
@@ -469,6 +495,15 @@ class _RunState:
     def step(self, waiting_reason: str) -> None:
         token = self.engine.backend.next_completion()
         if token is None:
+            # quiescent: a prefetch head blocked only by a placed-offset
+            # conflict is the same lifetime inversion — escape it and retry
+            if self.h2d.escape_blocked_head():
+                self.trace.events.append(TraceEvent(
+                    t=self.engine.backend.host_now_us(), kind="placement_escape",
+                    object_id=self.h2d.inflight.object_id if self.h2d.inflight else None,
+                    detail="from_slow head",
+                ))
+                return
             raise DeadlockError(
                 f"deadlock: {waiting_reason}; no in-flight work can unblock it "
                 f"(from_slow queue={[j.object_id for j in self.h2d.queue]}, "

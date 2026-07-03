@@ -54,9 +54,15 @@ exceeds the peak concurrent load (`Placement.overhead`, the *geometry tax*
 of contiguous placement — eliminating it needs VMM chunk-backed remapping,
 a planned follow-up); and real completion order can differ from dry-run
 order, so assigned-mode `can_get` refuses an offset while a prior
-overlapping instance is live — callers stall exactly like a capacity block
-(under strict pacing the blocker is always an in-flight transfer or an
-earlier task, so progress is guaranteed).
+overlapping instance is live — callers stall exactly like a capacity block.
+Progress is NOT unconditionally guaranteed: an early-started prefetch can
+hold an offset whose packer-assumed lifetime ended before the blocked
+instance began (a cross-tag lifetime inversion; observed once, at ga=32).
+The engine therefore carries a quiescent ESCAPE VALVE: when truly stuck on
+a pure offset conflict with ledger room available, the blocked instance is
+served dynamically instead (counted as `placement_escapes`, reported per
+run, zero in healthy runs). Full post-mortem:
+[docs/notes/placement-deadlock.md](../../../docs/notes/placement-deadlock.md).
 
 Placement is an **independent, optional optimization** — the engine takes
 `placement=None` (dynamic slab+arena) or a `Placement` (assigned offsets)

@@ -117,3 +117,39 @@ def test_assigned_mode_rejects_shape_instability():
     assigned.enable_placement(placement)
     with pytest.raises(RuntimeError, match="shape-stable"):
         assigned.get("fast", 48 * KB, tag="A")
+
+
+def test_quiescent_lifetime_inversion_escapes_instead_of_deadlocking():
+    """The bs2ga32@20 deadlock, distilled: the packer overlaps two instances
+    whose dry-run lifetimes were disjoint, but at run time the holder's
+    release depends on a task AFTER the blocked one (a lifetime inversion
+    the recording could not see). The engine must escape the blocked
+    instance to a dynamic allocation (counted) and complete, not deadlock."""
+    from dataflow.core.program import ObjectSpec, OutputSpec, Program, TaskSpec
+    from dataflow.runtime.placement import Placement
+
+    KB = 1024
+    # t1 makes A (released after t2 by t3's position in the chain via t2's
+    # directives); t2 makes B whose ASSIGNED offset overlaps A's range.
+    program = Program(
+        name="inversion",
+        initial_objects=(),
+        tasks=(
+            TaskSpec(id="t1", runtime_us=10, outputs=(OutputSpec(id="A", size_bytes=40 * KB, location="fast"),)),
+            TaskSpec(id="t2", runtime_us=10, inputs=("A",), outputs=(OutputSpec(id="B", size_bytes=40 * KB, location="fast"),)),
+            TaskSpec(id="t3", runtime_us=10, inputs=("A", "B"), releases_after=("A", "B")),
+        ),
+        fast_memory_capacity=200 * KB,
+    )
+    # adversarial placement: A and B share [0, 40k) although both are live
+    # across t2/t3 — models the recorded-vs-real divergence
+    placement = Placement(
+        offsets={("A", 0): 0, ("B", 0): 0},
+        sizes={("A", 0): 40 * KB, ("B", 0): 40 * KB},
+        extent_bytes=40 * KB,
+        load_bytes=40 * KB,
+        physical_limit_bytes=200 * KB,
+    )
+    result = Engine(FakeBackend()).execute(program, placement=placement)
+    assert result.placement_escapes == 1, result.placement_escapes
+    result.close()

@@ -108,7 +108,22 @@ class TransferEngine:
         base = f"{self.direction}:{object_id}"
         return base if seq == 0 else f"{base}#{seq}"
 
-    def try_start(self) -> None:
+    def escape_blocked_head(self) -> bool:
+        """Quiescent-deadlock escape (engine-invoked only): if the h2d head
+        is blocked purely by a placed-offset conflict while the ledger has
+        room, start it with a dynamically allocated destination. Returns
+        True if a transfer was started."""
+        if self.direction != "from_slow" or self.inflight is not None or not self.queue:
+            return False
+        job = self.queue[0]
+        if not self.ledger.can_reserve("fast", job.size_bytes):
+            return False  # genuine capacity block: not ours to escape
+        if self.pool.can_get("fast", job.size_bytes, tag=job.object_id):
+            return False  # not blocked at all; normal try_start will run it
+        self.try_start(escape=True)
+        return self.inflight is not None
+
+    def try_start(self, *, escape: bool = False) -> None:
         """Start the queue head if the destination has room (sim semantics:
         destination bytes are charged HERE, at start — never at enqueue)."""
         if self.inflight is not None or not self.queue:
@@ -124,11 +139,15 @@ class TransferEngine:
                 )
             if not self.ledger.can_reserve("fast", job.size_bytes):
                 return  # head blocks; re-attempted on frees
-            if not self.pool.can_get("fast", job.size_bytes, tag=job.object_id):
+            blocked = not self.pool.can_get("fast", job.size_bytes, tag=job.object_id)
+            if blocked and not escape:
                 return  # assigned offset still live; blocks like capacity
             self.queue.popleft()
             self.ledger.charge("fast", job.size_bytes)
-            dst_buffer = self.pool.get("fast", job.size_bytes, tag=job.object_id)
+            if blocked:
+                dst_buffer = self.pool.get_escaped("fast", job.size_bytes, tag=job.object_id)
+            else:
+                dst_buffer = self.pool.get("fast", job.size_bytes, tag=job.object_id)
             rec.fast = Slot(buffer=dst_buffer, state="inbound", version=src_slot.version)
             job.version = src_slot.version
             src_buffer = src_slot.buffer

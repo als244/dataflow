@@ -35,6 +35,7 @@ class BufferPool:
     reused_count: int = 0
     slab_overflows: int = 0  # requests that escaped to the vendor allocator
     arena_carves: int = 0    # requests served by the pre-reserved overflow arena
+    placement_escapes: int = 0  # quiescent-deadlock escapes out of assigned mode
     _seq: int = 0
     # --- static placement (fast location) ---
     # recording mode: dry runs log the instance stream for compute_placement
@@ -97,6 +98,18 @@ class BufferPool:
             if lo < end and offset < hi:
                 return False
         return True
+
+    def get_escaped(self, location: Location, size_bytes: int, tag: str) -> Buffer:
+        """Deadlock escape valve (called ONLY by the engine at quiescence):
+        the instance's assigned offset is held by a live buffer whose release
+        transitively depends on the blocked task — a lifetime inversion the
+        dry run could not see. Serve this instance dynamically instead; the
+        incarnation counter still advances so every LATER instance of the tag
+        keeps its recorded key."""
+        key = self._next_key(tag)
+        self._incarnations[tag] = key[1] + 1
+        self.placement_escapes += 1
+        return self._get_dynamic(location, size_bytes)
 
     def get(self, location: Location, size_bytes: int, tag: str | None = None) -> Buffer:
         if self.recorder is not None and location == "fast" and tag is not None:

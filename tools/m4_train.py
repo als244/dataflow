@@ -72,6 +72,13 @@ def main() -> None:
              "for shape-unstable programs (variable-length sequences)",
     )
     parser.add_argument(
+        "--probe-max", action="store_true",
+        help="replace the budget list with the LARGEST placement-feasible "
+             "budget for this config: probe one plan, scale by its measured "
+             "geometry tax, verify by packing (CPU-only), step down 0.25 GiB "
+             "on miss",
+    )
+    parser.add_argument(
         "--extent-budget", action="store_true",
         help="make the budget bound the PHYSICAL footprint: iteratively shave "
              "the planning budget until the packed extent (geometry tax "
@@ -127,17 +134,52 @@ def main() -> None:
     print(f"profiled {len(profiles)} unique task signatures in {time.perf_counter()-t0:.1f}s")
 
     args.out.mkdir(parents=True, exist_ok=True)
+
+    def _plan(budget: int):
+        return plan_program(
+            measured, fast_memory_capacity=budget, recompute=args.recompute,
+            build_variant=(
+                lambda levels: apply_measured_costs(build_raw(levels), profiles)
+            ) if args.recompute else None,
+        )
+
+    budget_list = [float(x) for x in args.budgets.split(",")]
+    if args.probe_max:
+        from dataflow.runtime import Engine
+        from dataflow.runtime.device.fake import FakeBackend
+        from dataflow.runtime.placement import PlacementRecorder, compute_placement
+
+        PHYS = 27 * GIB
+
+        def extent_at(gib_probe: float) -> int:
+            rec = PlacementRecorder()
+            Engine(FakeBackend()).execute(
+                _plan(int(gib_probe * GIB)).program, record_placement=rec
+            ).close()
+            return compute_placement(rec, physical_limit_bytes=2**62).extent_bytes
+
+        probe = 24.0
+        ext = extent_at(probe)
+        cand = min(27.0, probe * PHYS / ext)          # linear extent scaling
+        cand = int(cand * 4) / 4                       # quarter-GiB floor
+        print(f"probe: extent({probe:g}) = {ext / GIB:.2f} GiB "
+              f"(tax x{ext / (probe * GIB):.3f}) -> candidate {cand:g} GiB")
+        while cand > 20:
+            e = extent_at(cand)
+            print(f"probe: extent({cand:g}) = {e / GIB:.2f} GiB "
+                  f"{'<= ' if e <= PHYS else '> '}{PHYS / GIB:.0f} GiB limit")
+            if e <= PHYS:
+                break
+            cand -= 0.25
+        budget_list = [cand]
+        print(f"largest feasible budget: {cand:g} GiB")
+
     rows = []
-    for gib in [float(x) for x in args.budgets.split(",")]:
+    for gib in budget_list:
         cap = int(gib * GIB)
 
         def plan_at(budget: int):
-            return plan_program(
-                measured, fast_memory_capacity=budget, recompute=args.recompute,
-                build_variant=(
-                    lambda levels: apply_measured_costs(build_raw(levels), profiles)
-                ) if args.recompute else None,
-            )
+            return _plan(budget)
 
         planned = plan_at(cap)
         eff = cap
@@ -218,6 +260,7 @@ def main() -> None:
             "step_wall_s": report.step_wall_s,
             "step_slab_overflows": report.step_slab_overflows,
             "placement_extent_gib": report.placement_extent_bytes / GIB,
+            "placement_escapes": report.placement_escapes,
             "placement_overhead": report.placement_overhead,
             "recompute_chosen": sum(1 for v in planned.recompute_levels.values() if v),
         }
