@@ -76,3 +76,36 @@ def test_multistep_matches_golden_and_loss_decreases():
     assert all(n == 0 for n in report.step_slab_overflows[1:]), report.step_slab_overflows
     # multi-step invariance held (final state persisted through pinned buffers)
     assert report.peak_fast_bytes <= 8 * 1024 * 1024
+
+
+def test_dynamic_mode_matches_static():
+    """placement_mode is an independent optimization: the dynamic slab path
+    (required for variable-length programs) must produce the same training
+    trajectory as static placement.
+
+    Equivalence is TOLERANCE-based, not bitwise: buffer addresses differ
+    between allocators, and cuBLASLt selects GEMM algorithms by pointer
+    alignment — different bf16 reduction orders shift results ~1e-6 rel.
+    Within one allocator the run IS bitwise repeatable (determinism gate)."""
+    dims = dims_of(CFG)
+    planned = plan_program(lower_llama3(CFG), fast_memory_capacity=8 * 1024 * 1024)
+    backend = CudaBackend()
+
+    gen = torch.Generator().manual_seed(41)
+    batch = (
+        torch.randint(0, dims.vocab_size, (dims.tokens,), generator=gen, dtype=torch.int32),
+        torch.randint(0, dims.vocab_size, (dims.tokens,), generator=gen, dtype=torch.int32),
+    )
+    losses = {}
+    for mode in ("static", "dynamic"):
+        report = train(
+            planned.program, CFG, backend, steps=2, seed=13,
+            token_stream=lambda s: batch, placement_mode=mode,
+        )
+        losses[mode] = report.losses
+        if mode == "static":
+            assert report.placement_extent_bytes > 0
+        else:
+            assert report.placement_extent_bytes == 0  # knob honored
+    for a, b in zip(losses["static"], losses["dynamic"]):
+        assert abs(a - b) / max(abs(b), 1e-9) < 1e-4, losses

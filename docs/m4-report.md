@@ -73,19 +73,84 @@ a cheap follow-up; it does not affect the scheduling-fidelity claims.
 3. Sessions leaked slabs/pinned pools across sweep budgets → `train()` owns
    cleanup; sweep runs one process per budget.
 4. Slab headroom was proportional (starved VRAM at 20 GiB) → absolute 2 GiB
-   cap. Residual known limitation: best-fit + headroom + counted overflow is
-   a heuristic; the static buffer-assignment mode (offline placement proof
-   from the dry run) replaces it — tracked as a spawned task.
+   cap. The deeper issue — online contiguous allocation against a plan whose
+   lifetimes are fully known — was resolved in M4.1 by static placement
+   (below); the dynamic slab remains for direct `Engine` use.
 5. Missing final norm before the LM head (loss ~78) → folded weightless
    final rmsnorm into head fwd/bwd + golden model (loss ~12.5).
 6. Recompute variants have their own task signatures (`block_fwd` without
    context, `block_recompute`) → profiling covers both variants.
 
+## M4.1: batching sweeps + static placement
+
+Two more configs at the same 65,536 tokens/step (seq 4096): **bs=4, ga=4**
+and **bs=1, ga=16**, compared against the base config — tables and summary
+JSONs in `results/m4/`.
+
+The bs=4 config initially failed at *every* budget, and ga=16 at 20 GiB, all
+the same way: the dynamic slab had the bytes but no contiguous hole (peak
+occupancy >95% with 4×-larger activations mixes hole-splitting small objects
+between multi-GiB ones). Headroom, coalescing-reclaim, and a pre-reserved
+overflow arena moved the failure point without removing it — online
+contiguous allocation under adversarial fragmentation is a gamble, not a
+guarantee.
+
+The principled fix (`runtime/placement.py`): the annotated plan fully
+determines every fast allocation's lifetime, so a fake-backend dry run
+records the instance stream and offsets are packed **offline**
+(multi-order + seeded-restart interval packing), validated against physical
+VRAM **at planning time** (`PlacementError` instead of a mid-run crash), and
+executed verbatim from one base allocation. Runtime fragmentation is
+impossible by construction; the headroom/arena heuristics are bypassed.
+
+The honest residual is the **geometry tax**: the smallest contiguous extent
+that realizes a lifetime set genuinely exceeds its peak concurrent load
+(offline dynamic-storage-allocation is NP-hard; Robson's bound makes the
+worst case logarithmic in the size ratio). It is reported first-class in
+every result row (`placement_overhead`); measured ×1.08–×1.35 on these
+programs. Eliminating it entirely needs non-contiguous backing (CUDA VMM
+chunk mapping) — the placement interface is already shaped for that.
+
+Placement is an independent, default-on optimization
+(`train(placement_mode=...)`, `tools/m4_train.py --placement
+static|dynamic`): static mode requires a shape-stable program (the pool
+raises on any size mismatch vs the recording), so variable-length sequence
+training runs in dynamic mode until max-shape recording lands. Two ways to
+account for the tax: default sweeps validate the extent against physical
+VRAM (budget = ledger bytes, tax paid above it); `--extent-budget` instead
+shaves the planning budget until the packed extent fits inside the nominal
+budget — "N GiB" then bounds what the device physically holds.
+
+Named-cause gap attribution for placement: assigned offsets couple the
+schedule to the dry run's completion order — a transfer can wait for *its
+specific offset* to vacate, a stricter condition than the simulator's
+bytes-only stall. Measured: the replay-fidelity gap peaks exactly where
+offset churn peaks — ga16 (same objects reborn 16×/step) runs 1.25% → 3.48%
+→ 4.68% → 2.79% across 20/16/12/8 GiB, maximal at 12 GiB (recompute 256/512
+= maximum transfer pressure) and *relaxing* at 8 GiB (recompute 388/512
+displaces transfers with compute); bs4ga4 (4× fewer, larger instances)
+stays at 0.33–0.37%. This offset-coupling cost is the second quantified
+argument for VMM chunk-backing, alongside the geometry tax.
+
+One numerics observation from the placement work, regression-tested:
+cross-allocator *bitwise* equality is not achievable — cuBLASLt selects
+GEMM algorithms by pointer alignment, so different memory layouts shift
+bf16 results by ~1e-6 relative. All buffers are now uniformly 512-byte
+aligned to minimize divergence; the correctness contract is
+tolerance-equivalence to golden (which every mode passes), plus bitwise
+repeatability *within* a fixed layout (which holds).
+
+Correctness under pressure (`tools/m4_correctness.py`, table in
+`results/m4/README.md`): the full train step through the real engine matches
+the plain-torch golden model at bf16 noise at every budget down to 2 GiB
+with full recompute — worst per-tensor rel-L2 6.8e-4 at every point.
+Memory pressure changes *when* bytes move, never *what* they are.
+
 ## What M4 leaves open (→ M5)
 
 - Aggressive dispatch mode to close the small-task pacing gap.
 - Cost calibration under sustained clocks.
-- Static buffer assignment (placement proof; removes headroom/overflow).
+- VMM chunk-backed placement (eliminates the geometry tax).
 - Webapp: measured-trace overlay upload (programs already upload; traces
   are exported alongside in `artifacts/m4/`).
 - Second model family (Qwen3) via the extending guide.

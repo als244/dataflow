@@ -60,6 +60,18 @@ def main() -> None:
     parser.add_argument("--budgets", type=str, required=True, help="GiB list, e.g. 12,16,20")
     parser.add_argument("--steps", type=int, default=4)
     parser.add_argument("--recompute", action="store_true")
+    parser.add_argument(
+        "--placement", choices=["static", "dynamic"], default="static",
+        help="static (default): offsets packed offline from dry-run lifetimes, "
+             "fragmentation impossible; dynamic: online slab+arena — required "
+             "for shape-unstable programs (variable-length sequences)",
+    )
+    parser.add_argument(
+        "--extent-budget", action="store_true",
+        help="make the budget bound the PHYSICAL footprint: iteratively shave "
+             "the planning budget until the packed extent (geometry tax "
+             "included) fits within the nominal budget",
+    )
     parser.add_argument("--baseline", action="store_true", help="also time the plain-torch golden model")
     parser.add_argument(
         "--backing-gib", type=float, default=None,
@@ -101,12 +113,43 @@ def main() -> None:
     rows = []
     for gib in [float(x) for x in args.budgets.split(",")]:
         cap = int(gib * GIB)
-        planned = plan_program(
-            measured, fast_memory_capacity=cap, recompute=args.recompute,
-            build_variant=(
-                lambda levels: apply_measured_costs(build_raw(levels), profiles)
-            ) if args.recompute else None,
-        )
+
+        def plan_at(budget: int):
+            return plan_program(
+                measured, fast_memory_capacity=budget, recompute=args.recompute,
+                build_variant=(
+                    lambda levels: apply_measured_costs(build_raw(levels), profiles)
+                ) if args.recompute else None,
+            )
+
+        planned = plan_at(cap)
+        eff = cap
+        placement = None
+        if args.placement == "static" and args.extent_budget:
+            # shave the planning budget until the packed extent fits the
+            # nominal budget: "N GiB" then bounds what the device physically
+            # holds, not just the ledger. The geometry tax is paid out of the
+            # budget instead of out of headroom above it.
+            from dataflow.runtime import Engine
+            from dataflow.runtime.device.fake import FakeBackend
+            from dataflow.runtime.placement import PlacementRecorder, compute_placement
+
+            for attempt in range(6):
+                recorder = PlacementRecorder()
+                Engine(FakeBackend()).execute(
+                    planned.program, record_placement=recorder
+                ).close()
+                placement = compute_placement(recorder, physical_limit_bytes=2**62)
+                if placement.extent_bytes <= cap:
+                    break
+                eff = int(eff * cap / placement.extent_bytes)
+                print(f"  extent {placement.extent_bytes / GIB:.2f} GiB > budget; "
+                      f"re-planning at {eff / GIB:.2f} GiB")
+                planned = plan_at(eff)
+            else:
+                print(f"  extent-budget search did not converge at {gib:g} GiB — skipping")
+                continue
+
         sim_tok_s = tokens_per_step / (planned.makespan_us / 1e6)
         print(f"\n=== budget {gib:g} GiB: sim predicts {planned.makespan_us/1e3:.1f} ms/step "
               f"({sim_tok_s:.0f} tok/s), peak {planned.peak_fast_bytes/GIB:.2f} GiB, "
@@ -114,12 +157,18 @@ def main() -> None:
               f"{len(planned.recompute_levels)} ===")
 
         torch.cuda.empty_cache()  # release prior budget's torch scratch
-        report = train(planned.program, cfg, backend, steps=args.steps, seed=11)
+        report = train(
+            planned.program, cfg, backend, steps=args.steps, seed=11,
+            placement_mode=args.placement, placement=placement,
+        )
         steady_us = report.steady_state_makespan_us
         real_tok_s = tokens_per_step / (steady_us / 1e6)
         gap = replay_gap_pct(planned.program, report.last_trace, report.step_makespan_us[-1])
         row = {
             "budget_gib": gib,
+            "planned_budget_gib": eff / GIB,
+            "placement_mode": args.placement,
+            "extent_budget": args.extent_budget,
             "sim_ms_per_step": planned.makespan_us / 1e3,
             "real_ms_per_step_steady": steady_us / 1e3,
             "sim_tokens_per_s": sim_tok_s,
@@ -131,6 +180,8 @@ def main() -> None:
             "step_makespans_ms": [m / 1e3 for m in report.step_makespan_us],
             "step_wall_s": report.step_wall_s,
             "step_slab_overflows": report.step_slab_overflows,
+            "placement_extent_gib": report.placement_extent_bytes / GIB,
+            "placement_overhead": report.placement_overhead,
             "recompute_chosen": sum(1 for v in planned.recompute_levels.values() if v),
         }
         rows.append(row)

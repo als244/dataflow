@@ -1,46 +1,47 @@
 {
   "config": "8b",
-  "steps": 4,
+  "steps": 3,
   "pcie": {
-    "uni_h2d": 36377,
-    "uni_d2h": 56548,
-    "bidi_h2d": 25151,
-    "bidi_d2h": 25468
+    "uni_h2d": 35555,
+    "uni_d2h": 56720,
+    "bidi_h2d": 25557,
+    "bidi_d2h": 25811
   },
   "sweep": [
     {
       "budget_gib": 8.0,
-      "sim_ms_per_step": 3909.6412822265625,
-      "real_ms_per_step_steady": 3818.9053548177085,
-      "sim_tokens_per_s": 1047.666449252169,
-      "real_tokens_per_s": 1072.5586573735652,
-      "real_vs_sim_pct": 2.3759669061812927,
-      "replay_fidelity_gap_pct": 0.6342928606655948,
+      "planned_budget_gib": 8.0,
+      "placement_mode": "static",
+      "extent_budget": false,
+      "sim_ms_per_step": 3855.8622734375,
+      "real_ms_per_step_steady": 3802.3016357421875,
+      "sim_tokens_per_s": 1062.2786058041481,
+      "real_tokens_per_s": 1077.2422580831055,
+      "real_vs_sim_pct": 1.40863726306808,
+      "replay_fidelity_gap_pct": 1.6551664362499316,
       "losses": [
         12.543389320373535,
-        12.589900970458984,
-        12.575569152832031,
-        12.576934814453125
+        12.5875825881958,
+        12.577651977539062
       ],
       "peak_fast_gib": 7.976715087890625,
       "step_makespans_ms": [
-        3789.928466796875,
-        3811.0595703125,
-        3834.10107421875,
-        3811.555419921875
+        3819.745849609375,
+        3805.04833984375,
+        3799.554931640625
       ],
       "step_wall_s": [
-        7.29808313306421,
-        4.033327194978483,
-        4.056951176025905,
-        4.034797608037479
+        23.190160810016096,
+        4.03453022998292,
+        4.028386311023496
       ],
       "step_slab_overflows": [
-        2,
-        2,
-        1,
+        0,
+        0,
         0
       ],
+      "placement_extent_gib": 8.78924560546875,
+      "placement_overhead": 1.1018627979845512,
       "recompute_chosen": 2
     }
   ]

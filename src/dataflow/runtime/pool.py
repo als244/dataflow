@@ -36,6 +36,15 @@ class BufferPool:
     slab_overflows: int = 0  # requests that escaped to the vendor allocator
     arena_carves: int = 0    # requests served by the pre-reserved overflow arena
     _seq: int = 0
+    # --- static placement (fast location) ---
+    # recording mode: dry runs log the instance stream for compute_placement
+    recorder: object = None
+    # assigned mode: instance offsets fixed offline; get() refuses ("busy")
+    # while a prior overlapping instance is live — callers stall like capacity
+    placement: object = None
+    _placement_base: Buffer = None  # type: ignore[assignment]
+    _incarnations: dict[str, int] = field(default_factory=dict)
+    _live_ranges: dict[tuple, tuple[int, int]] = field(default_factory=dict)
     # (location, size) -> total buffers ever created: a completed run's map is
     # the exact prewarm demand for a repeat run (direct regime only).
     allocated_by_key: dict[tuple[str, int], int] = field(default_factory=dict)
@@ -54,7 +63,80 @@ class BufferPool:
                 capacity_bytes=overflow_bytes, headroom_factor=0.0,
             )
 
-    def get(self, location: Location, size_bytes: int) -> Buffer:
+    # --- static placement ------------------------------------------------------
+
+    def enable_placement(self, placement) -> None:
+        """Assigned mode for 'fast': one base allocation of the packing's
+        proven extent; instance offsets are fixed. Replaces slab/arena/
+        headroom heuristics entirely for this location."""
+        self.placement = placement
+        self._placement_base = self.backend.alloc("fast", placement.extent_bytes)
+        self.reset_placement_epoch()
+
+    def reset_placement_epoch(self) -> None:
+        """Multi-step replay: each execute() reproduces the same instance
+        keys, so incarnation counters restart per run."""
+        self._incarnations = {}
+        self._live_ranges = {}
+
+    def _next_key(self, tag: str) -> tuple:
+        return (tag, self._incarnations.get(tag, 0))
+
+    def can_get(self, location: Location, size_bytes: int, tag: str | None = None) -> bool:
+        """Side-effect-free admission check. Dynamic mode: always True.
+        Assigned mode: False while a prior overlapping instance is live —
+        callers stall exactly like a capacity block."""
+        if self.placement is None or location != "fast" or tag is None:
+            return True
+        key = self._next_key(tag)
+        offset = self.placement.offsets.get(key)
+        if offset is None:
+            return True  # unplanned instance: falls through to dynamic path
+        end = offset + size_bytes
+        for lo, hi in self._live_ranges.values():
+            if lo < end and offset < hi:
+                return False
+        return True
+
+    def get(self, location: Location, size_bytes: int, tag: str | None = None) -> Buffer:
+        if self.recorder is not None and location == "fast" and tag is not None:
+            key = self._next_key(tag)
+            self._incarnations[tag] = key[1] + 1
+            self.recorder.on_get(key, size_bytes)
+            buf = self._get_dynamic(location, size_bytes)
+            buf.tag = key
+            return buf
+        if self.placement is not None and location == "fast" and tag is not None:
+            key = self._next_key(tag)
+            offset = self.placement.offsets.get(key)
+            if offset is not None:
+                placed_size = self.placement.sizes[key]
+                if size_bytes != placed_size:
+                    raise RuntimeError(
+                        f"placed instance {key} was recorded at {placed_size} bytes "
+                        f"but is requested at {size_bytes}: static placement requires "
+                        f"a shape-stable program (same object sizes every round/step). "
+                        f"For variable-length training run with placement disabled "
+                        f"(dynamic slab mode)."
+                    )
+                assert self.can_get(location, size_bytes, tag), (
+                    f"assigned-mode get for {key} while offset range is live — "
+                    f"callers must gate on can_get"
+                )
+                self._incarnations[tag] = key[1] + 1
+                self._live_ranges[key] = (offset, offset + size_bytes)
+                self._seq += 1
+                return Buffer(
+                    id=f"placed:{key[0]}:{key[1]}",
+                    location="fast",
+                    size_bytes=size_bytes,
+                    ptr=self._placement_base.ptr + offset,
+                    raw=("placed",),
+                    tag=key,
+                )
+        return self._get_dynamic(location, size_bytes)
+
+    def _get_dynamic(self, location: Location, size_bytes: int) -> Buffer:
         stack = self.free_lists.get((location, size_bytes))
         if stack:
             self.reused_count += 1
@@ -103,6 +185,11 @@ class BufferPool:
         return slab.make_buffer(offset, size_bytes, self._seq)
 
     def put(self, buffer: Buffer) -> None:
+        if self.recorder is not None and buffer.tag is not None:
+            self.recorder.on_put(buffer.tag)
+        if isinstance(buffer.raw, tuple) and buffer.raw and buffer.raw[0] == "placed":
+            self._live_ranges.pop(buffer.tag, None)
+            return  # placed offsets are identity-managed, never free-listed
         self.free_lists.setdefault((buffer.location, buffer.size_bytes), []).append(buffer)
 
     def prewarm(self, demand: dict[tuple[str, int], int]) -> None:
@@ -112,6 +199,8 @@ class BufferPool:
         for (location, size_bytes), count in sorted(demand.items()):
             if location in self.slabs:
                 continue
+            if location == "fast" and self.placement is not None:
+                continue  # placed instances live in the placement base
             stack = self.free_lists.setdefault((location, size_bytes), [])
             while len(stack) < count:
                 self.allocated_count += 1
@@ -135,3 +224,7 @@ class BufferPool:
             slab.close()
         self.slabs.clear()
         self.overflow_slabs.clear()
+        if self._placement_base is not None:
+            self.backend.free(self._placement_base)
+            self._placement_base = None
+            self.placement = None

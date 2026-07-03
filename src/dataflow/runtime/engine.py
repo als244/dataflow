@@ -106,9 +106,10 @@ class Session:
             )
         return self.streams
 
-    def pool_for(self, program: Program) -> "BufferPool":
+    def pool_for(self, program: Program, *, placed: bool = False) -> "BufferPool":
         caps = {}
-        if program.fast_memory_capacity is not None:
+        if program.fast_memory_capacity is not None and not placed:
+            # static placement replaces the fast slab + overflow arena wholesale
             caps["fast"] = program.fast_memory_capacity
         if program.backing_memory_capacity is not None:
             caps["backing"] = program.backing_memory_capacity
@@ -154,6 +155,8 @@ class Engine:
         *,
         initial_buffers: Mapping[str, Buffer] | None = None,
         pool_prewarm: Mapping[tuple[str, int], int] | None = None,
+        placement=None,           # runtime.placement.Placement: assigned mode
+        record_placement=None,    # runtime.placement.PlacementRecorder: dry runs
     ) -> RunResult:
         if self.validate:
             validate_program(program)
@@ -181,20 +184,26 @@ class Engine:
         if self.session is not None:
             if self.session.backend is not self.backend:
                 raise ValueError("session backend differs from engine backend")
-            pool = self.session.pool_for(program)
+            pool = self.session.pool_for(program, placed=placement is not None)
         else:
             pool = BufferPool(self.backend)
             if getattr(self.backend, "physical", False):
                 # one upfront device allocation sized to the budget (+headroom
                 # +overflow arena): physical usage then tracks the ledger
-                # instead of summing per-size-class maxima over time
-                if program.fast_memory_capacity is not None:
+                # instead of summing per-size-class maxima over time. Static
+                # placement replaces the fast slab/arena wholesale.
+                if program.fast_memory_capacity is not None and placement is None:
                     pool.add_slab(
                         "fast", program.fast_memory_capacity,
                         overflow_bytes=3 * 1024**3,
                     )
                 if program.backing_memory_capacity is not None:
                     pool.add_slab("backing", program.backing_memory_capacity)
+        pool.recorder = record_placement
+        if placement is not None and pool.placement is None:
+            pool.enable_placement(placement)
+        elif pool.placement is not None:
+            pool.reset_placement_epoch()
         table = ObjectTable()
 
         poison = None
@@ -277,8 +286,15 @@ class Engine:
                     break
                 state.step(f"task {task.id!r} waiting for inputs {waiting} to be live in fast memory")
 
-            # 2. fast capacity for outputs (the simulator's task stall)
-            while not ledger.can_reserve("fast", fast_out):
+            # 2. fast capacity for outputs (the simulator's task stall) —
+            # assigned mode adds per-offset availability to the same condition
+            while not (
+                ledger.can_reserve("fast", fast_out)
+                and all(
+                    pool.can_get(o.location, o.size_bytes, tag=o.id)
+                    for o in task.outputs if o.location == "fast"
+                )
+            ):
                 state.step(
                     f"task {task.id!r} waiting to reserve {fast_out} fast bytes "
                     f"(used={ledger.used['fast']}, cap={ledger.fast_capacity})"
@@ -295,7 +311,7 @@ class Engine:
             out_buffers: dict[str, Buffer] = {}
             for out in task.outputs:
                 ledger.charge(out.location, out.size_bytes)
-                buf = pool.get(out.location, out.size_bytes)
+                buf = pool.get(out.location, out.size_bytes, tag=out.id)
                 rec = table.add(
                     ObjectRecord(id=out.id, size_bytes=out.size_bytes, role=out.role, tensor=out.tensor)
                 )
@@ -408,7 +424,7 @@ class Engine:
         if provided is not None and provided.location == spec.location:
             buf = provided
         else:
-            buf = pool.get(spec.location, spec.size_bytes)
+            buf = pool.get(spec.location, spec.size_bytes, tag=spec.id)
             if provided is not None and spec.location == "fast" and provided.location == "backing":
                 # provided pinned values feed a pre-placed fast copy at setup
                 setup_copies.append((buf, provided, spec.size_bytes))

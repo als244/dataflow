@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 
 from .device.base import Buffer, DeviceBackend, Location
 
-_ALIGN = 256
+_ALIGN = 512  # vendor-grade: cuBLASLt algo choice is alignment-sensitive
 
 
 class SlabError(RuntimeError):

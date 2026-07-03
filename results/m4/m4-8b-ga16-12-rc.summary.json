@@ -1,0 +1,48 @@
+{
+  "config": "8b-ga16",
+  "steps": 3,
+  "pcie": {
+    "uni_h2d": 35433,
+    "uni_d2h": 56863,
+    "bidi_h2d": 25076,
+    "bidi_d2h": 25360
+  },
+  "sweep": [
+    {
+      "budget_gib": 12.0,
+      "planned_budget_gib": 12.0,
+      "placement_mode": "static",
+      "extent_budget": false,
+      "sim_ms_per_step": 32620.283659179688,
+      "real_ms_per_step_steady": 32236.0400390625,
+      "sim_tokens_per_s": 2009.0567171250664,
+      "real_tokens_per_s": 2033.004051384282,
+      "real_vs_sim_pct": 1.1919690497082636,
+      "replay_fidelity_gap_pct": 4.683206112541438,
+      "losses": [
+        12.543389320373535,
+        12.600616455078125,
+        12.560558319091797
+      ],
+      "peak_fast_gib": 11.993011478334665,
+      "step_makespans_ms": [
+        31999.998046875,
+        32098.7578125,
+        32373.322265625
+      ],
+      "step_wall_s": [
+        51.453813523985445,
+        32.446179053978994,
+        32.71720122604165
+      ],
+      "step_slab_overflows": [
+        0,
+        0,
+        0
+      ],
+      "placement_extent_gib": 13.28271484375,
+      "placement_overhead": 1.1075379080346233,
+      "recompute_chosen": 256
+    }
+  ]
+}

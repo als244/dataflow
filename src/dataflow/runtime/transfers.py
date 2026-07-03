@@ -124,9 +124,11 @@ class TransferEngine:
                 )
             if not self.ledger.can_reserve("fast", job.size_bytes):
                 return  # head blocks; re-attempted on frees
+            if not self.pool.can_get("fast", job.size_bytes, tag=job.object_id):
+                return  # assigned offset still live; blocks like capacity
             self.queue.popleft()
             self.ledger.charge("fast", job.size_bytes)
-            dst_buffer = self.pool.get("fast", job.size_bytes)
+            dst_buffer = self.pool.get("fast", job.size_bytes, tag=job.object_id)
             rec.fast = Slot(buffer=dst_buffer, state="inbound", version=src_slot.version)
             job.version = src_slot.version
             src_buffer = src_slot.buffer

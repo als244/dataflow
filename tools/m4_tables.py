@@ -27,8 +27,16 @@ def main() -> None:
             baselines[data["config"]] = data
 
     print("# M4 results: llama3-8B full-bf16 training, budget vs throughput\n")
+    print("**Kernel set: `eager-v1`** — row-chunked eager-torch ops (+ aten flash-attention,")
+    print("cuBLAS GEMMs). Costs are measured per task signature and feed the plans, so the")
+    print("fused-kernel set (M4.2 registry) will move BOTH columns: real throughput directly,")
+    print("sim throughput via cheaper measured costs — and may change recompute choices.")
+    print("This table is the eager baseline for that A/B.\n")
     print("RTX 5090 (31.3 GiB) · bf16 params+grads+AdamW state · seq 4096 ·")
     print("measured task costs · plans built on measured bidirectional PCIe ·")
+    print("static buffer placement (offsets packed offline from plan lifetimes,")
+    print("validated against physical VRAM at planning time; 'geom. tax' = packed")
+    print("extent / peak concurrent load, the price of contiguous placement) ·")
     print("steady-state excludes the warm-up step · full methodology in docs/m4-report.md\n")
 
     pretty = {
@@ -45,16 +53,21 @@ def main() -> None:
             continue
         rows = sorted(rows, key=lambda r: r["budget_gib"])
         print(f"\n## {config} — {pretty.get(config, '')}\n")
-        print("| budget (GiB) | sim ms/step | real ms/step | sim tok/s | real tok/s | real vs sim | replay gap | recompute | losses |")
-        print("|---:|---:|---:|---:|---:|---:|---:|---:|:---|")
+        print("| budget (GiB) | sim ms/step | real ms/step | sim tok/s | real tok/s | real vs sim | replay gap | recompute | placed extent | geom. tax | losses |")
+        print("|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|:---|")
         for r in rows:
             losses = ", ".join(f"{x:.3f}" for x in r["losses"])
+            extent = r.get("placement_extent_gib")
+            extent_s = f"{extent:.2f} GiB" if extent else "—"
+            tax = r.get("placement_overhead")
+            tax_s = f"×{tax:.2f}" if tax else "—"
             print(
                 f"| {r['budget_gib']:g} | {r['sim_ms_per_step']:.0f} | "
                 f"{r['real_ms_per_step_steady']:.0f} | {r['sim_tokens_per_s']:.0f} | "
                 f"{r['real_tokens_per_s']:.0f} | {r['real_vs_sim_pct']:+.1f}% | "
                 f"{r['replay_fidelity_gap_pct']:+.2f}% | "
-                f"{r.get('recompute_chosen', 0)}/{32 * max(1, _rounds(r))} | {losses} |"
+                f"{r.get('recompute_chosen', 0)}/{_rewrite_count(r)} | "
+                f"{extent_s} | {tax_s} | {losses} |"
             )
 
     if baselines:
@@ -83,11 +96,35 @@ def main() -> None:
                 cells.append(f"{match[0]['real_tokens_per_s']:.0f}" if match else "—")
             print(f"| {b:g} | " + " | ".join(cells) + " |")
 
+    # correctness at very tight budgets (tools/m4_correctness.py output)
+    corr_path = args.dir / "correctness.json"
+    if corr_path.exists():
+        corr = json.loads(corr_path.read_text())
+        c = corr["config"]
+        print("\n## Correctness under pressure: runtime vs plain-torch golden\n")
+        print(f"Full train step through the real engine vs the golden eager-torch model "
+              f"({c['n_layers']}L, d={c['d_model']}, seq {c['seq_len']}): relative-L2 of "
+              f"loss + every final weight after the optimizer step. Memory pressure must "
+              f"not perturb the math — errors stay at bf16 noise at every budget.\n")
+        print("| budget (GiB) | recompute | worst tensor | worst rel-L2 | status |")
+        print("|---:|:---:|:---|---:|:---|")
+        for p in corr["points"]:
+            if p["status"] not in ("ok", "FAILED"):
+                print(f"| {p['budget_gib']:g} | {'all' if p['recompute'] else '—'} | — | — | {p['status'].split(':')[0]} |")
+            else:
+                print(
+                    f"| {p['budget_gib']:g} | {'all' if p['recompute'] else '—'} | "
+                    f"{p['worst_tensor']} | {p['worst_rel_l2']:.2e} | {p['status']} |"
+                )
 
-def _rounds(row: dict) -> int:
-    return {
-        "8b": 1, "8b-bs4ga4": 4, "8b-ga16": 16, "baseline1b": 1, "mini": 1,
-    }.get(row.get("_config", ""), 1)
+
+def _rewrite_count(row: dict) -> int:
+    """Recompute-decision denominator = n_layers x grad-accum rounds."""
+    layers, rounds = {
+        "8b": (32, 1), "8b-bs4ga4": (32, 4), "8b-ga16": (32, 16),
+        "baseline1b": (16, 1), "mini": (4, 1),
+    }.get(row.get("_config", ""), (1, 1))
+    return layers * rounds
 
 
 if __name__ == "__main__":

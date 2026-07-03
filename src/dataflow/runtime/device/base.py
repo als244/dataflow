@@ -63,6 +63,9 @@ class Buffer:
     # set when the buffer's bytes were touched after release (debug poison);
     # a reusing stream must wait on it before writing
     guard_event: Any = None
+    # static-placement instance key (object_id, incarnation); None outside
+    # assigned/recording modes
+    tag: Any = None
 
 
 class DeviceBackend(Protocol):

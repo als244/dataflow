@@ -38,6 +38,8 @@ class TrainReport:
     # state must not — overflowed buffers join the free lists and get reused
     step_slab_overflows: list[int] = field(default_factory=list)
     last_trace: object = None  # RunTrace of the final step (replay-gap analysis)
+    placement_extent_bytes: int = 0
+    placement_overhead: float = 1.0  # extent / peak load (contiguity geometry tax)
 
     @property
     def steady_state_makespan_us(self) -> float:
@@ -55,6 +57,9 @@ def train(
     hyper: AdamWHyper = AdamWHyper(),
     token_stream=None,
     values: dict | None = None,
+    physical_limit_bytes: int = 27 * 1024**3,
+    placement_mode: str = "static",
+    placement=None,
 ) -> TrainReport:
     """Run `steps` optimizer steps of the (single-step) annotated program.
 
@@ -64,12 +69,27 @@ def train(
     across sweep budgets exhausts host RAM); pass your own dict to keep final
     state readable afterwards.
     """
+    from dataflow.runtime.placement import PlacementRecorder, compute_placement
+
     dims = dims_of(cfg)
     owns_values = values is None
     if values is None:
         values = initial_values(annotated, cfg, backend, seed=seed)
     resolver = build_resolver(dims, hyper)
-    dry = Engine(FakeBackend()).execute(annotated, initial_buffers=values)
+    if placement is None and placement_mode == "static":
+        # static placement (default): packing proven against physical VRAM at
+        # planning time. placement_mode="dynamic" keeps the online slab+arena
+        # path — required for shape-UNstable programs (variable-length
+        # sequences change object sizes per round/step, invalidating any
+        # recorded instance stream). A pre-computed placement (e.g. from an
+        # extent-budget search) can also be injected directly.
+        recorder = PlacementRecorder()
+        dry = Engine(FakeBackend()).execute(
+            annotated, initial_buffers=values, record_placement=recorder
+        )
+        placement = compute_placement(recorder, physical_limit_bytes=physical_limit_bytes)
+    else:
+        dry = Engine(FakeBackend()).execute(annotated, initial_buffers=values)
     session = Session(backend=backend)
     gen = torch.Generator().manual_seed(seed + 1)
 
@@ -80,6 +100,9 @@ def train(
 
     token_stream = token_stream or default_stream
     report = TrainReport()
+    if placement is not None:
+        report.placement_extent_bytes = placement.extent_bytes
+        report.placement_overhead = placement.overhead
     rounds = cfg.grad_accum_rounds
     round_views = [
         (
@@ -100,7 +123,8 @@ def train(
 
             t0 = time.perf_counter()
             result = Engine(backend, session=session).execute(
-                stepped, resolver=resolver, initial_buffers=values, pool_prewarm=dry.pool_demand,
+                stepped, resolver=resolver, initial_buffers=values,
+                pool_prewarm=dry.pool_demand, placement=placement,
             )
             report.step_wall_s.append(time.perf_counter() - t0)
             report.step_makespan_us.append(result.makespan_us)
