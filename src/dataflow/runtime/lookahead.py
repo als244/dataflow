@@ -54,13 +54,6 @@ class LookaheadPlan:
         return 1.0 - len(self.sync_points) / self.total_tasks
 
 
-@dataclass
-class _Window:
-    charged: int = 0                      # bytes charged since last sync
-    live_offsets: list = field(default_factory=list)  # (lo, hi) placed ranges born in window
-    dying: set = field(default_factory=set)           # instance keys dying in window
-
-
 def compute_lookahead(
     program: Program,
     placement=None,
@@ -69,11 +62,17 @@ def compute_lookahead(
 ) -> LookaheadPlan:
     """Conservative sync-point analysis (see module docstring).
 
-    ``placement`` enables offset-overlap checks (assigned mode); without it
-    only capacity analysis applies (dynamic-slab mode is pointer-agnostic:
-    the pool serves any free bytes, and stream FIFO orders reuse of a
-    recycled buffer after its releasing task — but capacity credits still
-    lag, so those sync points remain).
+    Assigned mode (``placement`` given): the only dispatcher-side hazard is
+    an output whose placed offset overlaps an instance whose death has not
+    been SETTLED (its pool.put happens at a completion token the dispatcher
+    may not have processed). Capacity is not a dispatcher concern there —
+    physical safety is the placement proof, and the ledger stays
+    token-paced so transfer admission is identical to strict mode (v1
+    pre-charged at enqueue and starved prefetch admission: −20% measured).
+
+    Dynamic mode (no placement): the ledger IS the physical guard, so
+    reservations that need not-yet-credited frees become sync points
+    (conservative: no frees credited between syncs).
     """
     capacity = fast_capacity or program.fast_memory_capacity
     sizes = {o.id: o.size_bytes for o in program.initial_objects}
@@ -81,71 +80,96 @@ def compute_lookahead(
         for o in t.outputs:
             sizes[o.id] = o.size_bytes
 
-    # ledger state as of the LAST sync (all credits applied there)
-    settled = sum(o.size_bytes for o in program.initial_objects if o.location == "fast")
-    # per-object pending frees between syncs: releases + fast-frees from
-    # offload completions (dead-everywhere handled by release accounting)
-    incarnation: dict[str, int] = {}
-    if placement is not None:
-        deaths: dict[tuple, int] = {}   # instance key -> task index of death
-        births: dict[tuple, int] = {}
-        # reconstruct instance lifetimes in chain order (matches recorder
-        # semantics: task outputs + h2d dst gets advance incarnations; we
-        # approximate with task-order events, which is the same total order
-        # the packer used)
     sync_points: set[int] = set()
-    window = _Window()
-    pending_free = 0                     # bytes freed inside the window (not credited)
 
-    def placed_ranges(task_index: int, task) -> list[tuple[int, int]]:
+    if placement is None:
+        # --- dynamic mode: capacity-only analysis -------------------------------
+        settled = sum(
+            o.size_bytes for o in program.initial_objects if o.location == "fast"
+        )
+        window_charged = 0
+        pending_free = 0
+        for i, task in enumerate(program.tasks):
+            fast_out = sum(
+                o.size_bytes for o in task.outputs if o.location == "fast"
+            )
+            if capacity is not None and settled + window_charged + fast_out > capacity:
+                sync_points.add(i)
+                settled += window_charged - pending_free
+                window_charged = 0
+                pending_free = 0
+            window_charged += fast_out
+            for oid in task.releases_after:
+                pending_free += sizes.get(oid, 0)
+            for d in task.offload_after:
+                pending_free += sizes.get(d.object_id, 0)
+            for d in task.prefetch_after:
+                window_charged += sizes.get(d.object_id, 0)
+        return LookaheadPlan(
+            sync_points=frozenset(sync_points), total_tasks=len(program.tasks)
+        )
+
+    # --- assigned mode: offset-conflict analysis --------------------------------
+    incarnation: dict[str, int] = {}
+    alive: dict[tuple, tuple[int, int]] = {}      # key -> (lo, hi)
+    unsettled: dict[tuple, tuple[int, int]] = {}  # died since last sync
+
+    def birth(oid: str) -> tuple | None:
+        key = (oid, incarnation.get(oid, 0))
+        incarnation[oid] = key[1] + 1
+        off = placement.offsets.get(key)
+        if off is None:
+            return None
+        rng = (off, off + placement.sizes[key])
+        alive[key] = rng
+        return rng
+
+    def death(oid: str) -> None:
+        # the currently-alive (latest) incarnation of this object dies;
+        # its put settles only at a token -> unsettled until next sync
+        for inc in range(incarnation.get(oid, 0) - 1, -1, -1):
+            key = (oid, inc)
+            rng = alive.pop(key, None)
+            if rng is not None:
+                unsettled[key] = rng
+                return
+
+    # initial fast objects occupy their instance-0 offsets from the start
+    for o in program.initial_objects:
+        if o.location == "fast":
+            birth(o.id)
+
+    def candidate_ranges(task) -> list[tuple[int, int]]:
         out = []
-        if placement is None:
-            return out
         for o in task.outputs:
             if o.location != "fast":
                 continue
             key = (o.id, incarnation.get(o.id, 0))
             off = placement.offsets.get(key)
             if off is not None:
-                out.append((off, off + o.size_bytes))
+                out.append((off, off + placement.sizes[key]))
         return out
 
-    def overlaps(a: list[tuple[int, int]], b: list[tuple[int, int]]) -> bool:
-        return any(lo < hi2 and lo2 < hi for lo, hi in a for lo2, hi2 in b)
-
     for i, task in enumerate(program.tasks):
-        fast_out = sum(o.size_bytes for o in task.outputs if o.location == "fast")
-        ranges = placed_ranges(i, task)
+        cands = candidate_ranges(task)
+        if cands and unsettled:
+            hit = any(
+                lo < hi2 and lo2 < hi
+                for lo, hi in cands
+                for lo2, hi2 in unsettled.values()
+            )
+            if hit:
+                sync_points.add(i)
+                unsettled.clear()   # drain applies every pending put
 
-        need_sync = False
-        if capacity is not None and settled + window.charged + fast_out > capacity:
-            need_sync = True
-        if not need_sync and ranges and overlaps(ranges, window.live_offsets):
-            # output offset overlaps an instance born in this window whose
-            # death has not been settled — conservative sync
-            need_sync = True
-
-        if need_sync:
-            sync_points.add(i)
-            settled += window.charged - pending_free
-            window = _Window()
-            pending_free = 0
-
-        window.charged += fast_out
-        window.live_offsets.extend(ranges)
         for o in task.outputs:
             if o.location == "fast":
-                incarnation[o.id] = incarnation.get(o.id, 0) + 1
-        # releases and offloads free fast bytes at their completion tokens —
-        # credit them only at the next sync
+                birth(o.id)
         for oid in task.releases_after:
-            pending_free += sizes.get(oid, 0)
+            death(oid)
         for d in task.offload_after:
-            pending_free += sizes.get(d.object_id, 0)
-        # prefetches charge fast at transfer START (token-side); treat their
-        # destination bytes as window charges so capacity stays conservative
+            death(d.object_id)      # fast copy freed at d2h completion
         for d in task.prefetch_after:
-            window.charged += sizes.get(d.object_id, 0)
-            incarnation[d.object_id] = incarnation.get(d.object_id, 0) + 1
+            birth(d.object_id)      # dst occupies from transfer start
 
     return LookaheadPlan(sync_points=frozenset(sync_points), total_tasks=len(program.tasks))

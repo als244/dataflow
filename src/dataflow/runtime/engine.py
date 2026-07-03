@@ -270,6 +270,7 @@ class Engine:
             final_locations=dict(program.final_locations),
             provided_buffer_ids={id(b) for b in initial_buffers.values()},
             outstanding=set(),
+            charge_at_token=set(),
         )
         annotator = getattr(self.backend, "annotator", None) or _NOOP_ANNOTATOR
         lookahead = None
@@ -312,9 +313,13 @@ class Engine:
                     )
             else:
                 # dispatch-ahead: consume any ALREADY-arrived tokens (keeps
-                # ledger/pool state fresh) but never block on them
-                while True:
-                    token = self.backend.next_completion()
+                # ledger/pool state fresh) but never block on them.
+                # poll_completion is genuinely non-blocking; next_completion
+                # BLOCKS while work is in flight (v2 used it here and
+                # serialized every boundary: -15% measured).
+                poll = getattr(self.backend, "poll_completion", None)
+                while poll is not None:
+                    token = poll()
                     if token is None:
                         break
                     state.handle(token)
@@ -357,9 +362,11 @@ class Engine:
             # 2. fast capacity for outputs (the simulator's task stall) —
             # assigned mode adds per-offset availability to the same condition
             escaped_outputs: set[str] = set()
+            token_paced_charge = lookahead is not None and placement is not None
             _t = _time.perf_counter() if stats is not None else 0.0
             while True:
-                can_res = ledger.can_reserve("fast", fast_out)
+                can_res = (True if token_paced_charge
+                           else ledger.can_reserve("fast", fast_out))
                 busy = [
                     o.id for o in task.outputs
                     if o.location == "fast" and o.id not in escaped_outputs
@@ -403,7 +410,10 @@ class Engine:
             _t = _time.perf_counter() if stats is not None else 0.0
             out_buffers: dict[str, Buffer] = {}
             for out in task.outputs:
-                ledger.charge(out.location, out.size_bytes)
+                if token_paced_charge and out.location == "fast":
+                    pass  # charged in the task-done handler (token-paced)
+                else:
+                    ledger.charge(out.location, out.size_bytes)
                 if out.id in escaped_outputs:
                     buf = pool.get_escaped(out.location, out.size_bytes, tag=out.id)
                 else:
@@ -450,6 +460,8 @@ class Engine:
             if stats is not None:
                 stats["launch_enqueue"] += _time.perf_counter() - _t
             state.outstanding.add(task.id)
+            if token_paced_charge:
+                state.charge_at_token.add(task.id)
 
         # --- drain -------------------------------------------------------------
         while True:
@@ -582,6 +594,7 @@ class _RunState:
     final_locations: dict[str, str] = None  # type: ignore[assignment]
     provided_buffer_ids: set[int] = None  # type: ignore[assignment]
     outstanding: set = None  # type: ignore[assignment]
+    charge_at_token: set = None  # type: ignore[assignment]
     stats: dict | None = None
 
     def step(self, waiting_reason: str) -> None:
@@ -623,6 +636,11 @@ class _RunState:
         task = tok.task
         now = self.engine.backend.host_now_us()
         self.outstanding.discard(task.id)
+        if task.id in self.charge_at_token:
+            self.charge_at_token.discard(task.id)
+            for out in task.outputs:
+                if out.location == "fast":
+                    self.ledger.charge(out.location, out.size_bytes)
 
         # outputs become live
         for out in task.outputs:

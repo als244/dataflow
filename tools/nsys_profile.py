@@ -70,6 +70,7 @@ def build_nsys_cmd(args, report: Path) -> list[str]:
     ]
     if args.annotated is not None:
         cmd += ["--annotated", str(args.annotated)]
+    cmd += ["--dispatch", args.dispatch]
     return cmd
 
 
@@ -93,6 +94,8 @@ def main() -> None:
     parser.add_argument("--annotated", type=Path, default=None,
                         help="profile an exact SAVED plan (passed through to "
                              "m4_train --annotated; --config must match)")
+    parser.add_argument("--dispatch", choices=["strict", "ahead"], default="strict",
+                        help="dispatcher mode (passed through to m4_train)")
     args = parser.parse_args()
 
     if shutil.which("nsys") is None:
@@ -101,7 +104,7 @@ def main() -> None:
         sys.exit("run from the repository root")
 
     args.out.mkdir(parents=True, exist_ok=True)
-    report = args.out / f"{args.config}-{args.budget:g}gib-{args.steps}steps"
+    report = args.out / f"{args.config}-{args.budget:g}gib-{args.steps}steps-{args.dispatch}"
     cmd = build_nsys_cmd(args, report)
     env = {**os.environ, "DATAFLOW_NVTX": "1"}
 
