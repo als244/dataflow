@@ -351,7 +351,21 @@ def main() -> None:
         def plan_at(budget: int):
             return _plan(budget)
 
-        planned = plan_at(cap)
+        try:
+            planned = plan_at(cap)
+        except Exception as exc:
+            # PressureFit/recompute ANNOTATION infeasible at this budget (a
+            # known near-capacity corner, e.g. llama interleaved @24) — record
+            # the cell and keep sweeping the config's remaining budgets
+            print(f"planning infeasible at {gib:g} GiB: {exc}")
+            rows.append({
+                "budget_gib": quoted_gib,
+                "budget_semantics": semantics,
+                "planned_budget_gib": gib,
+                "placement_mode": args.placement,
+                "status": f"planning_infeasible: {exc}",
+            })
+            continue
         eff = cap
         placement = None
         if args.placement == "static" and args.extent_budget:
