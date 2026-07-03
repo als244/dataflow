@@ -29,4 +29,11 @@ from .registry import (  # noqa: F401
 )
 
 # registration side effects: one module per op family
-from . import adamw, cross_entropy, rmsnorm, rope, swiglu  # noqa: F401,E402
+from . import (  # noqa: F401,E402
+    adamw,
+    cross_entropy,
+    gated_rmsnorm,
+    rmsnorm,
+    rope,
+    swiglu,
+)

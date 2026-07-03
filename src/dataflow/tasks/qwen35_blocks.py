@@ -22,12 +22,12 @@ Every fla call follows the contracts pinned by tests/tasks/test_qwen35_math.py:
   corrupts the gate gradients (dA_log off by ~4x rel — the ladder-2
   divergence). ``.contiguous()`` at each boundary is the contract.
 
-Correctness-first policy: the gated-RMSNorm and output-gate segments run
-their backward via ``torch.autograd.grad`` through the REFERENCE forms (no
-hand-derived formulas to get subtly wrong); the fused-kernel pass replaces
-them once the ladder is green (flextrain's fused kernels as porting
-references). cu_seqlens resets the conv window and the recurrence at
-packed-sequence boundaries whenever batch > 1.
+The gated-RMSNorm runs through the ``gated_rmsnorm_fwd/bwd`` registry ops
+(fla's fused Triton kernels by default, eager reference fallback; the bwd
+consumes the saved ``rstd_gate`` and recomputes y for the out-projection
+grad). The attention output gate is closed-form sigmoid math. cu_seqlens
+resets the conv window and the recurrence at packed-sequence boundaries
+whenever batch > 1.
 """
 from __future__ import annotations
 
@@ -158,13 +158,16 @@ class Qwen35LinBlockFwd(BlockFwd):
     @staticmethod
     def _stage_norm_out(kctx, K, d, st):
         t = st["x"].shape[0]
-        z = st["qkvz"][:, d.conv_dim :].view(t, d.num_v_heads, d.head_v_dim)
-        o_normed = ops.gated_rmsnorm_reference(
-            st["core_out"].view(t, d.num_v_heads, d.head_v_dim), z, st["w"]["lin_norm_w"],
-        )
-        xo = torch.addmm(st["x"], o_normed.reshape(t, d.value_dim), st["w"]["w_out"])
+        rows = t * d.num_v_heads
+        o2 = st["core_out"].reshape(rows, d.head_v_dim)
+        z2 = st["qkvz"][:, d.conv_dim :].contiguous().view(rows, d.head_v_dim)
+        y2 = torch.empty_like(o2)
+        rstd = torch.empty(rows, dtype=torch.float32, device=o2.device)
+        K.gated_rmsnorm_fwd(kctx, o2, z2, st["w"]["lin_norm_w"], y2, rstd)
+        xo = torch.addmm(st["x"], y2.view(t, d.value_dim), st["w"]["w_out"])
         st["h_mid"] = xo  # feeds the shared MLP-tail stages
         if st["a"] is not None:
+            st["a"]["rstd_gate"].copy_(rstd)
             st["a"]["xo"].copy_(xo)
 
     @staticmethod
@@ -195,7 +198,7 @@ class Qwen35LinBlockFwd(BlockFwd):
         ("conv", _stage_conv.__func__, ()),
         ("heads_l2norm", _stage_heads_l2norm.__func__, ()),
         ("fla", _stage_fla.__func__, ("g_post", "A_int", "core_out")),
-        ("norm_out", _stage_norm_out.__func__, ("xo",)),
+        ("norm_out", _stage_norm_out.__func__, ("rstd_gate", "xo")),
         ("ffn_norm", _stage_ffn_norm.__func__, ("rstd_ffn",)),
         ("up_proj", _stage_up_proj.__func__, ("x1", "x3")),
         ("swiglu", _stage_swiglu.__func__, ()),
@@ -290,19 +293,23 @@ class Qwen35LinBlockBwd(_Base):
         acc("ffn_norm_w", dffn)
         dxo = dy + dxo_n
 
-        # --- gated norm + out projection (autograd through the reference) ---
-        z = a["qkvz"][:, d.conv_dim :].view(t, d.num_v_heads, d.head_v_dim)
-        core = a["core_out"]
-        with torch.enable_grad():
-            core_l = core.detach().requires_grad_()
-            z_l = z.detach().requires_grad_()
-            wn_l = w["lin_norm_w"].detach().requires_grad_()
-            y_ref = ops.gated_rmsnorm_reference(core_l, z_l, wn_l)
-        o_normed = y_ref.detach().reshape(t, d.value_dim)
-        acc("w_out", o_normed.T @ dxo)
-        do_normed = (dxo @ w["w_out"].T).view(t, d.num_v_heads, d.head_v_dim)
-        dcore, dz, dwn = torch.autograd.grad(y_ref, (core_l, z_l, wn_l), grad_outputs=do_normed)
-        acc("lin_norm_w", dwn.float())
+        # --- gated norm + out projection (fused kernel; y recomputed for
+        # free by the bwd and reused for the out-projection weight grad) ---
+        rows = t * d.num_v_heads
+        z2 = a["qkvz"][:, d.conv_dim :].contiguous().view(rows, d.head_v_dim)
+        o2 = a["core_out"].reshape(rows, d.head_v_dim)
+        do_normed = (dxo @ w["w_out"].T).contiguous().view(rows, d.head_v_dim)
+        dcore = torch.empty_like(o2)
+        dz2 = torch.empty_like(z2)
+        dwn = torch.empty(d.head_v_dim, dtype=torch.float32, device=o2.device)
+        y2 = torch.empty_like(o2)
+        K.gated_rmsnorm_bwd(
+            kctx, do_normed, o2, z2, w["lin_norm_w"], a["rstd_gate"],
+            dcore, dz2, dwn, y2,
+        )
+        acc("w_out", y2.view(t, d.value_dim).T @ dxo)
+        acc("lin_norm_w", dwn)
+        dz = dz2.view(t, d.num_v_heads, d.head_v_dim)
 
         # --- recompute conv/l2norm inputs from saved qkvz ---
         conv_in = a["qkvz"][:, : d.conv_dim].contiguous()

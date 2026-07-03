@@ -316,6 +316,7 @@ def qwen35_lin_context_layout(dims: Qwen35Dims) -> PackedLayout:
         ("g_post", (t, hv), "fp32"),
         ("A_int", (t, hv, 64), "bf16"),
         ("core_out", (t, hv, dims.head_v_dim), "bf16"),
+        ("rstd_gate", (t * hv,), "fp32"),
         ("xo", (t, d), "bf16"),
         ("rstd_ffn", (t,), "fp32"),
         ("x1", (t, ff), "bf16"),
