@@ -84,7 +84,33 @@ truncated recompute is DERIVED per block (run stages until the last
 context-emitting stage) instead of hand-written — see the extending-guide
 plan; plus a waste tripwire (warn when recompute cost ≈ full-forward cost).
 
-## 5. Smaller, known, deliberately deferred
+## 5. Embed-on-host (built, measured, REVERTED — recover at 53cf971)
+
+Shein's design: the embedding's sparse access lets the table live on CPU
+(host gather -> pinned X staging, dy_embed offloaded home, host
+scatter-add + host AdamW). Mechanism verified in nsys: the exposed ~30 ms
+W_embed prefetch per round boundary and ~4.2 GB/step of embed traffic
+genuinely disappeared, and makespans improved +1-2%.
+
+Why it lost anyway — three lessons:
+1. **Measurement error (caught by Shein in nsys)**: v1 reported
+   makespan-based tok/s while the host update ran OUTSIDE the measured
+   window (~2.2 s/step invisible). The wall metric was fixed to cover the
+   full step (kept permanently: `wall_tokens_per_s` in every row).
+2. **The host update is bytes-bound**: eager torch chain 1,503 ms; fused
+   via torch.compile 299 ms — right at the host-bandwidth floor Shein
+   estimated (~15 GB of W/M/V/g traffic).
+3. **Synthetic-random tokens defeat sparsity**: 65k draws over a 128k
+   vocab touch ~40% of the table, so even the split-update (sync rows the
+   next gather needs; threaded dense remainder under GPU execution) left
+   ~0.9 s of synchronous boundary. Honest wall verdict: +0.7% @ 16 GiB,
+   −1.0% @ 20 GiB — below the agreed keep bar (≥1% at two budgets).
+
+Revisit-if: real token distributions (SFT data is far sparser than
+uniform-random — the touched set shrinks 5-20x and the economics flip),
+or a resident-embed GPU variant at generous budgets (flextrain's choice).
+
+## 6. Smaller, known, deliberately deferred
 
 - Torch reserved-vs-allocated slack can exceed the 256 MiB device-envelope
   pad (~1 GiB observed once); post-run envelope check is the backstop.

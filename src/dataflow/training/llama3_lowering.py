@@ -167,10 +167,6 @@ def initial_values(program: Program, cfg: ShapedLlamaConfig, backend, *, seed: i
         elif spec.id.startswith(("tokens_", "targets_")):
             ids = torch.randint(0, dims.vocab_size, (dims.tokens,), generator=gen, dtype=torch.int32)
             torch_view(buf, (dims.tokens,), torch.int32).copy_(ids)
-        elif spec.id.startswith("X_"):
-            # embed-on-host staging: the host gathers W_embed rows here each
-            # round (train_loop); zero until then
-            torch_view(buf, (spec.size_bytes // 2,), torch.bfloat16).zero_()
     return buffers
 
 
@@ -195,21 +191,3 @@ def host_embed_state(cfg: ShapedLlamaConfig, *, seed: int = 0):
         "dW": torch.zeros(dims.vocab_size, dims.d_model, dtype=accum),
     }
 
-
-def host_embed_adamw(host, *, lr, beta1, beta2, eps, weight_decay, step) -> None:
-    """CPU AdamW on the host embedding table, mirroring ops.adamw_step's
-    structure (moments stored in the configured accum dtype; when that is
-    bf16 the round-trip matches the GPU path bit-for-bit in structure)."""
-    import torch
-
-    w32 = host["W"].float()
-    g = host["dW"].float()
-    m = host["M"].float().mul_(beta1).add_(g, alpha=1 - beta1)
-    v = host["V"].float().mul_(beta2).addcmul_(g, g, value=1 - beta2)
-    host["M"].copy_(m.to(host["M"].dtype))
-    host["V"].copy_(v.to(host["V"].dtype))
-    mhat = host["M"].float() / (1 - beta1 ** step)
-    vhat = host["V"].float() / (1 - beta2 ** step)
-    w32 -= lr * (mhat / (vhat.sqrt() + eps) + weight_decay * w32)
-    host["W"].copy_(w32.to(torch.bfloat16))
-    host["dW"].zero_()

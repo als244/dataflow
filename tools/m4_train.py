@@ -77,12 +77,6 @@ def main() -> None:
     parser.add_argument("--steps", type=int, default=4)
     parser.add_argument("--recompute", action="store_true")
     parser.add_argument(
-        "--embed-host", action="store_true",
-        help="embed-on-host: table lives on CPU (sparse gather/scatter + "
-             "host optimizer); removes W/O/dW_embed and embed tasks from "
-             "the chain",
-    )
-    parser.add_argument(
         "--placement", choices=["static", "dynamic"], default="static",
         help="static (default): offsets packed offline from dry-run lifetimes, "
              "fragmentation impossible; dynamic: online slab+arena — required "
@@ -122,10 +116,6 @@ def main() -> None:
     from dataflow.tasks.kernels import resolve_kernels
 
     cfg = CONFIGS[args.config]
-    if args.embed_host:
-        from dataclasses import replace as _replace
-
-        cfg = _replace(cfg, embed_on_host=True)
     dims = dims_of(cfg)
     tokens_per_step = float(cfg.tokens * cfg.grad_accum_rounds)
 
@@ -146,6 +136,7 @@ def main() -> None:
             "annotated": str(args.annotated),
             "sim_tokens_per_s": sim_tok_s,
             "real_tokens_per_s": real_tok_s,
+            "wall_tokens_per_s": wall_tok_s,
             "real_vs_sim_pct": (real_tok_s / sim_tok_s - 1) * 100,
             "placement_escapes": report.placement_escapes,
             "losses": [round(x, 4) for x in report.losses],
@@ -338,6 +329,8 @@ def main() -> None:
             continue
         steady_us = report.steady_state_makespan_us
         real_tok_s = tokens_per_step / (steady_us / 1e6)
+        steady_wall = sum(report.step_wall_s[1:]) / max(len(report.step_wall_s) - 1, 1)
+        wall_tok_s = tokens_per_step / steady_wall
         gap = replay_gap_pct(planned.program, report.last_trace, report.step_makespan_us[-1])
         if gib in device_meta:
             # verify the envelope claim against reality: base extent (ours,
@@ -363,6 +356,7 @@ def main() -> None:
             "real_ms_per_step_steady": steady_us / 1e3,
             "sim_tokens_per_s": sim_tok_s,
             "real_tokens_per_s": real_tok_s,
+            "wall_tokens_per_s": wall_tok_s,
             "real_vs_sim_pct": (real_tok_s / sim_tok_s - 1) * 100,
             "replay_fidelity_gap_pct": gap,
             "losses": report.losses,
