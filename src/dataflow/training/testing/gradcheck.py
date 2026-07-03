@@ -203,6 +203,9 @@ def check_model_step(
     errors["W_head"] = rel_l2(final_bytes("W_head"), golden.w_head.detach().to(torch.bfloat16).reshape(-1))
     result.close()  # release the engine-local slab/arena for the next check
     dry.close()
+    from dataflow.tasks.interop import clear_view_cache
+
+    clear_view_cache()
     for buf in values.values():
         backend.free(buf)
     return CheckReport(errors=errors, tol=tol)

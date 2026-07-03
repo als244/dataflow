@@ -83,6 +83,22 @@ _capsule_new.restype = ctypes.py_object
 _capsule_new.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_void_p]
 
 
+# --- view cache -----------------------------------------------------------------
+# Building a DLPack view costs ~2.2 us; a block task fans out to ~30 of them
+# (~50-70 us of the exposed time-to-first-kernel). Under static placement and
+# pool reuse, buffers recur at IDENTICAL addresses every step, so views are
+# cached by (address, offset, dtype, shape, device-kind). The cached tensor
+# does not own memory; the pool retains allocations for the session, and
+# training clears the cache at teardown (clear_view_cache).
+_VIEW_CACHE: dict = {}
+_VIEW_CACHE_MAX = 8192
+
+
+def clear_view_cache() -> None:
+    _VIEW_CACHE.clear()
+    _STREAM_CACHE.clear()
+
+
 def torch_view(
     src: Union[Buffer, int],
     shape: tuple[int, ...],
@@ -110,6 +126,11 @@ def torch_view(
     else:
         ptr = int(src) + offset_bytes
 
+    cache_key = (ptr, dtype, shape, pinned_host, device_id)
+    cached = _VIEW_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
     code, bits = _DLPACK_DTYPE[dtype]
     ndim = len(shape)
     shape_arr = (ctypes.c_int64 * max(ndim, 1))(*shape)
@@ -129,11 +150,21 @@ def torch_view(
     tensor = torch.from_dlpack(capsule)
     # keep the ctypes structures alive as long as the tensor view exists
     tensor._dataflow_dlpack_holder = (holder, shape_arr)  # type: ignore[attr-defined]
+    if len(_VIEW_CACHE) >= _VIEW_CACHE_MAX:
+        _VIEW_CACHE.clear()
+    _VIEW_CACHE[cache_key] = tensor
     return tensor
 
 
+_STREAM_CACHE: dict = {}
+
+
 def external_stream(stream: Stream, *, device_id: int = 0) -> torch.cuda.ExternalStream:
-    return torch.cuda.ExternalStream(int(stream.raw), device=device_id)
+    key = (int(stream.raw), device_id)
+    es = _STREAM_CACHE.get(key)
+    if es is None:
+        es = _STREAM_CACHE[key] = torch.cuda.ExternalStream(int(stream.raw), device=device_id)
+    return es
 
 
 def _numel(shape: tuple[int, ...]) -> int:

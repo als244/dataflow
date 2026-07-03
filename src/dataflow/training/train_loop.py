@@ -195,6 +195,9 @@ def train(
     finally:
         if annotator is not None and annotator.enabled:
             annotator.range_pop()  # train_steps
+        from dataflow.tasks.interop import clear_view_cache
+
+        clear_view_cache()  # cached views must not outlive the pool's buffers
         session.close()
         dry.close()
         if owns_values:
