@@ -146,6 +146,37 @@ the plain-torch golden model at bf16 noise at every budget down to 2 GiB
 with full recompute — worst per-tensor rel-L2 6.8e-4 at every point.
 Memory pressure changes *when* bytes move, never *what* they are.
 
+## M4.2: kernel registry + fused kernel set (A/B in results/m4/README.md)
+
+The elementwise/reduction ops now dispatch through a registry of swappable
+implementations (`tasks/kernels/`, one file per op family; opaque-callable
+ABI so any toolchain can register; eager fallback always present;
+`DATAFLOW_KERNELS=eager` forces the baseline). The fused Triton set —
+swiglu, rope, rmsnorm family, online-softmax CE, single-pass AdamW —
+replaces eager chains that materialized fp32 intermediates with kernels
+that keep fp32 in registers only. Both sets pass the identical ladder;
+fused-vs-eager equivalence is tolerance-based (FMA/transcendental ulps),
+match-to-golden is the contract.
+
+Re-running the full 11-point table (results/m4/eager-v1/ vs fused-v1/):
+
+- **Real throughput +8.7% to +28.7%**; sim predictions moved in lockstep
+  (fidelity −6.3%…+11.1%), confirming that measured costs propagate
+  through planning end-to-end.
+- **The planner responded, not just the runtime**: at ga16/20 GiB the
+  recompute choice jumped 1/512 → 275/512 — with compute cheaper relative
+  to PCIe, recomputation displaces transfers wholesale. This inverted the
+  naive expectation that tight budgets would gain least: ga16 gained MORE
+  at 8 GiB (+15.8%) than at 20 GiB (+11.7%), because re-planning escapes
+  the transfer floor instead of sitting on it.
+- **bs=4 gained most (+28%)**: compute-bound at every budget, and its
+  4×-larger rows amortize per-launch overheads best.
+- **Residual cost-model conservatism**: base-8b real runs +10–11% above
+  sim at generous budgets — short-burst profiling under-boosts SM clocks,
+  and the brief memory-bound fused kernels feel it most. Replay-fidelity
+  gaps stay ≤1% (scheduling faithful); sustained-clock calibration remains
+  the follow-up.
+
 ## What M4 leaves open (→ M5)
 
 - Aggressive dispatch mode to close the small-task pacing gap.

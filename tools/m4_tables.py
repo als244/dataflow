@@ -1,6 +1,9 @@
 """Consolidate results/m4/*.summary.json into comparison tables (markdown).
 
-Usage: python tools/m4_tables.py [--dir results/m4] > results/m4/README.md
+Usage:
+    python tools/m4_tables.py --dir results/m4/fused-v1 > .../README.md
+    python tools/m4_tables.py --compare results/m4/eager-v1 results/m4/fused-v1
+        > results/m4/README.md   # kernel-set A/B (real + sim per cell)
 """
 from __future__ import annotations
 
@@ -10,10 +13,64 @@ from collections import defaultdict
 from pathlib import Path
 
 
+def _load_rows(directory: Path) -> dict[str, dict[float, dict]]:
+    out: dict[str, dict[float, dict]] = defaultdict(dict)
+    for path in sorted(directory.glob("*.summary.json")):
+        data = json.loads(path.read_text())
+        for row in data.get("sweep", []):
+            out[data["config"]][row["budget_gib"]] = row
+    return out
+
+
+def compare(dir_a: Path, dir_b: Path) -> None:
+    a_rows, b_rows = _load_rows(dir_a), _load_rows(dir_b)
+    name_a, name_b = dir_a.name, dir_b.name
+    pretty = {
+        "8b": "bs=1, ga=1 (4,096 tokens/step)",
+        "8b-bs4ga4": "bs=4, ga=4 (65,536 tokens/step)",
+        "8b-ga16": "bs=1, ga=16 (65,536 tokens/step)",
+    }
+    print(f"# Kernel-set A/B: `{name_a}` vs `{name_b}`\n")
+    print("Same programs, plans re-derived per set from re-measured task costs —")
+    print("kernel changes move BOTH the sim prediction and the real run (and can")
+    print("shift the planner's recompute choices). tok/s = real steady-state;")
+    print("(sim NNNN) = the simulator's prediction for that set's plan.\n")
+    for config in ("8b", "8b-bs4ga4", "8b-ga16"):
+        if config not in a_rows and config not in b_rows:
+            continue
+        budgets = sorted(set(a_rows.get(config, {})) | set(b_rows.get(config, {})))
+        print(f"\n## {config} — {pretty.get(config, '')}\n")
+        print(f"| budget (GiB) | {name_a} tok/s | {name_b} tok/s | real speedup | "
+              f"{name_a} recompute | {name_b} recompute |")
+        print("|---:|---:|---:|---:|---:|---:|")
+        for budget in budgets:
+            ra = a_rows.get(config, {}).get(budget)
+            rb = b_rows.get(config, {}).get(budget)
+
+            def cell(r):
+                if r is None:
+                    return "—"
+                return (f"{r['real_tokens_per_s']:.0f} "
+                        f"(sim {r['sim_tokens_per_s']:.0f})")
+
+            speedup = (
+                f"{(rb['real_tokens_per_s'] / ra['real_tokens_per_s'] - 1) * 100:+.1f}%"
+                if ra and rb else "—"
+            )
+            rc = lambda r: f"{r['recompute_chosen']}" if r else "—"
+            print(f"| {budget:g} | {cell(ra)} | {cell(rb)} | {speedup} | "
+                  f"{rc(ra)} | {rc(rb)} |")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dir", type=Path, default=Path("results/m4"))
+    parser.add_argument("--compare", nargs=2, type=Path, metavar=("DIR_A", "DIR_B"))
     args = parser.parse_args()
+
+    if args.compare:
+        compare(*args.compare)
+        return
 
     by_config: dict[str, list[dict]] = defaultdict(list)
     baselines: dict[str, dict] = {}
