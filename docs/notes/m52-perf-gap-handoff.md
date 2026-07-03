@@ -1,5 +1,12 @@
 # M5.2 handoff — qwen3.5-9B perf gap vs flextrain (2026-07-03)
 
+> **RESOLVED 2026-07-03 — see docs/notes/m52-perf-gap-findings.md.**
+> The kernel-cost hypothesis below did NOT survive measurement: the
+> matched-workload flextrain number is 2,981 (not ~3,160), varlen==dense
+> at our shapes, and the real cause is the PLAN (PCIe-bound save-all +
+> 8-round weight re-streaming, amplified by unpriced transfer/compute
+> contention). Kept for the reasoning trail.
+
 Session handoff: correctness for the qwen3.5 family is DONE and committed;
 the open task is a ~14–19% throughput gap vs flextrain that the evidence
 places in per-task KERNEL costs, not scheduling. Read this top to bottom,
