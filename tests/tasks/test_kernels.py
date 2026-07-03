@@ -188,6 +188,37 @@ def test_ce_fused(rows, vocab):
     assert rel_l2(f_dl.float(), al.grad) < 3e-2
 
 
+def test_ce_fused_past_int32_elements():
+    """rows x vocab > 2^31: the row offset must be computed in int64.
+
+    Regression for the M5.2 bs16 crash — qwen3.5's 248,320 vocab overflows
+    int32 pointer math at row 8,650 (illegal memory access pre-fix). Needs
+    ~8.7 GB free VRAM for logits + dlogits; verifies rows past the boundary
+    against a per-row fp32 reference.
+    """
+    rows, vocab = 8704, 248320
+    assert rows * vocab > 2**31
+    free, _total = torch.cuda.mem_get_info()
+    if free < 10 * 2**30:
+        pytest.skip("needs ~10 GB free VRAM")
+    logits = _rand(rows, vocab, seed=21)
+    gen = torch.Generator(device="cuda").manual_seed(22)
+    targets = torch.randint(0, vocab, (rows,), device="cuda", generator=gen,
+                            dtype=torch.int32)
+    loss = torch.empty(1, device="cuda", dtype=torch.float32)
+    dl = torch.empty_like(logits)
+    FUSED.ce_loss_fwd_bwd(KCTX, logits, targets, loss, dl)
+    assert torch.isfinite(loss).all()
+    # rows beyond the int32 line: compare against per-row reference math
+    for r in (8650, rows - 1):
+        row = logits[r].float()
+        soft = torch.softmax(row, dim=-1)
+        soft[targets[r].long()] -= 1.0
+        assert rel_l2(dl[r].float(), soft / rows) < 2e-3
+    del logits, dl
+    torch.cuda.empty_cache()
+
+
 @pytest.mark.parametrize("n", [129, 1 << 20, (1 << 24) + 3])
 def test_adamw_fused(n):
     def fresh(seed):

@@ -46,7 +46,10 @@ if triton is not None:
         logits_ptr, targets_ptr, dlogits_ptr, nll_ptr,
         n_rows, vocab, BLOCK: tl.constexpr,
     ):
-        row = tl.program_id(0)
+        # int64 row index: row * vocab overflows int32 once rows x vocab
+        # crosses 2^31 elements (qwen3.5's 248,320 vocab hits it at 8,650
+        # rows — a bs16 s1k round; bs8 sat 5% under the line)
+        row = tl.program_id(0).to(tl.int64)
         cols = tl.arange(0, BLOCK)
         base = logits_ptr + row * vocab
 
