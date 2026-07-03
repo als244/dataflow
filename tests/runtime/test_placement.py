@@ -173,3 +173,52 @@ def test_annotator_ranges_balanced_over_full_run():
     pushes = [name for kind, name in rec.events if kind == "push"]
     task_ids = {t.id for t in annotated.tasks}
     assert task_ids.issubset(set(pushes))  # every task got a range
+
+
+def test_dispatch_ahead_completes_and_respects_capacity():
+    """Aggressive mode on the full 8B chain (fake backend): completes with
+    no deadlock, final locations intact, and the enqueue-time ledger peak
+    never exceeds capacity (the lookahead analysis's guarantee)."""
+    from dataflow.runtime.lookahead import compute_lookahead
+
+    program = build_shaped_llama3(ShapedLlamaConfig.llama3_8b())
+    cap = 16 * 1024**3
+    annotated = plan_program(program, fast_memory_capacity=cap).program
+
+    recorder = PlacementRecorder()
+    Engine(FakeBackend()).execute(annotated, record_placement=recorder).close()
+    placement = compute_placement(recorder, physical_limit_bytes=28 * 1024**3)
+
+    la = compute_lookahead(annotated, placement, fast_capacity=cap)
+    assert 0.0 < la.free_running_fraction <= 1.0
+
+    result = Engine(FakeBackend()).execute(
+        annotated, placement=placement, dispatch="ahead"
+    )
+    assert not result.final_location_violations
+    assert result.peak_fast_bytes <= cap
+    assert result.placement_escapes == 0
+    result.close()
+
+
+def test_lookahead_capacity_forces_sync_points():
+    """A chain whose reservations only fit if prior releases are credited
+    must sync exactly there; a generous budget must free-run."""
+    from dataflow.core.program import ObjectSpec, OutputSpec, Program, TaskSpec
+    from dataflow.runtime.lookahead import compute_lookahead
+
+    KB = 1024
+    tasks = []
+    for i in range(6):
+        rel = (f"o{i-1}",) if i > 0 else ()
+        tasks.append(TaskSpec(
+            id=f"t{i}", runtime_us=10, inputs=(f"o{i-1}",) if i else (),
+            outputs=(OutputSpec(id=f"o{i}", size_bytes=40 * KB, location="fast"),),
+            releases_after=rel,
+        ))
+    chain = Program(name="caps", tasks=tuple(tasks), fast_memory_capacity=100 * KB)
+
+    tight = compute_lookahead(chain, None, fast_capacity=100 * KB)
+    assert tight.sync_points, "tight budget must produce sync points"
+    loose = compute_lookahead(chain, None, fast_capacity=10_000 * KB)
+    assert not loose.sync_points, "generous budget must free-run"

@@ -109,3 +109,28 @@ def test_dynamic_mode_matches_static():
             assert report.placement_extent_bytes == 0  # knob honored
     for a, b in zip(losses["static"], losses["dynamic"]):
         assert abs(a - b) / max(abs(b), 1e-9) < 1e-4, losses
+
+
+def test_dispatch_ahead_matches_strict_bitwise():
+    """Dispatch-ahead must be a pure scheduling change: identical chain
+    order, identical pool sequences, identical buffers => bitwise-identical
+    training trajectory vs strict pacing (same allocator layout, so even
+    cuBLAS algorithm selection matches)."""
+    dims = dims_of(CFG)
+    planned = plan_program(lower_llama3(CFG), fast_memory_capacity=8 * 1024 * 1024)
+    backend = CudaBackend()
+
+    gen = torch.Generator().manual_seed(77)
+    batch = (
+        torch.randint(0, dims.vocab_size, (dims.tokens,), generator=gen, dtype=torch.int32),
+        torch.randint(0, dims.vocab_size, (dims.tokens,), generator=gen, dtype=torch.int32),
+    )
+    losses = {}
+    for mode in ("strict", "ahead"):
+        report = train(
+            planned.program, CFG, backend, steps=2, seed=23,
+            token_stream=lambda s: batch, dispatch=mode,
+        )
+        losses[mode] = report.losses
+        assert report.placement_escapes == 0
+    assert losses["strict"] == losses["ahead"], losses

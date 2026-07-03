@@ -160,6 +160,7 @@ class Engine:
         resolver: ExecutableResolver | None = None,
         *,
         initial_buffers: Mapping[str, Buffer] | None = None,
+        dispatch: str = "strict",  # "strict" (parity reference) | "ahead"
         pool_prewarm: Mapping[tuple[str, int], int] | None = None,
         placement=None,           # runtime.placement.Placement: assigned mode
         record_placement=None,    # runtime.placement.PlacementRecorder: dry runs
@@ -268,8 +269,16 @@ class Engine:
             last_ref=last_ref, task_index=task_index,
             final_locations=dict(program.final_locations),
             provided_buffer_ids={id(b) for b in initial_buffers.values()},
+            outstanding=set(),
         )
         annotator = getattr(self.backend, "annotator", None) or _NOOP_ANNOTATOR
+        lookahead = None
+        if dispatch == "ahead":
+            from .lookahead import compute_lookahead
+
+            lookahead = compute_lookahead(
+                program, placement, fast_capacity=ledger.fast_capacity,
+            )
         import os as _os
         import time as _time
         stats = None
@@ -282,7 +291,7 @@ class Engine:
             stats["token_detect_lat"] = 0.0
             stats["token_detect_n"] = 0
             state.stats = stats
-        for task in program.tasks:
+        for task_index, task in enumerate(program.tasks):
             fast_out = sum(o.size_bytes for o in task.outputs if o.location == "fast")
             backing_out = sum(o.size_bytes for o in task.outputs if o.location == "backing")
 
@@ -293,19 +302,52 @@ class Engine:
             # about to release/re-prefetch (stale-read), and no-input tasks
             # would reserve outputs earlier than the simulator charges them.
             _t = _time.perf_counter() if stats is not None else 0.0
-            while state.outstanding_task is not None:
-                state.step(f"waiting for task {state.outstanding_task!r} to retire")
+            if lookahead is None or task_index in lookahead.sync_points:
+                # strict pacing / sync point: drain every outstanding token so
+                # all credits (releases, offload frees, puts) are applied
+                while state.outstanding:
+                    state.step(
+                        f"waiting for {len(state.outstanding)} outstanding "
+                        f"task(s) to retire (sync)"
+                    )
+            else:
+                # dispatch-ahead: consume any ALREADY-arrived tokens (keeps
+                # ledger/pool state fresh) but never block on them
+                while True:
+                    token = self.backend.next_completion()
+                    if token is None:
+                        break
+                    state.handle(token)
             if stats is not None:
                 stats["prev_token_wait"] += _time.perf_counter() - _t
                 stats["tasks"] += 1
 
-            # 1. inputs host-observed live in fast memory
+            # 1. inputs host-observed live in fast memory. Dispatch-ahead:
+            # an inbound slot with a recorded done-event is admissible — the
+            # compute stream waits on the event DEVICE-side; host state
+            # catches up at its token. Anything else (transfer not yet
+            # enqueued because its firing task's token is pending; mutated
+            # input still outbound) is a SOFT SYNC: drain one token and
+            # re-check.
             _t = _time.perf_counter() if stats is not None else 0.0
+            device_waits: list = []
             while True:
-                waiting = [
-                    obj for obj in task.inputs
-                    if table.fast_state(obj) != "live"
-                ]
+                waiting = []
+                device_waits = []
+                for obj in task.inputs:
+                    st = table.fast_state(obj)
+                    if st == "live":
+                        continue
+                    if lookahead is not None and st == "inbound" and obj not in task.mutates:
+                        ev = table.get(obj).fast.ready_event or None
+                        job_ev = None
+                        if h2d.inflight is not None and h2d.inflight.object_id == obj:
+                            job_ev = h2d.inflight.done_event
+                        ev = job_ev or ev
+                        if ev is not None:
+                            device_waits.append(ev)
+                            continue
+                    waiting.append(obj)
                 if not waiting:
                     break
                 state.step(f"task {task.id!r} waiting for inputs {waiting} to be live in fast memory")
@@ -386,6 +428,8 @@ class Engine:
             # resolved in the token handler — identical mechanism on fake and
             # real backends)
             _t = _time.perf_counter() if stats is not None else 0.0
+            for ev in device_waits:
+                self.backend.stream_wait_event(compute, ev)
             in_buffers = {obj: table.get(obj).fast.buffer for obj in task.inputs}  # type: ignore[union-attr]
             mut_buffers = {obj: in_buffers[obj] for obj in task.mutates}
             self.backend.align_stream_to_host(compute)
@@ -405,7 +449,7 @@ class Engine:
             )
             if stats is not None:
                 stats["launch_enqueue"] += _time.perf_counter() - _t
-            state.outstanding_task = task.id
+            state.outstanding.add(task.id)
 
         # --- drain -------------------------------------------------------------
         while True:
@@ -537,7 +581,7 @@ class _RunState:
     task_index: dict[str, int] = None  # type: ignore[assignment]
     final_locations: dict[str, str] = None  # type: ignore[assignment]
     provided_buffer_ids: set[int] = None  # type: ignore[assignment]
-    outstanding_task: str | None = None
+    outstanding: set = None  # type: ignore[assignment]
     stats: dict | None = None
 
     def step(self, waiting_reason: str) -> None:
@@ -578,8 +622,7 @@ class _RunState:
     def _on_task_done(self, tok: _TaskDone) -> None:
         task = tok.task
         now = self.engine.backend.host_now_us()
-        if self.outstanding_task == task.id:
-            self.outstanding_task = None
+        self.outstanding.discard(task.id)
 
         # outputs become live
         for out in task.outputs:
