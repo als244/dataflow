@@ -84,10 +84,25 @@ save+bwd), and 2x-accumulation semantics.
 
 A hand-written plain-autograd model of the same family: it composes the
 ops' *reference* forms, replicates the optimizer update exactly (including
-bf16 state round-trips), and shares the packed-weight layouts so state is
-comparable buffer-to-buffer (`from_packed_bytes` constructors). This is the
+the storage-dtype round-trips of grads and moments), and shares the
+packed-weight layouts so state is comparable field-by-field
+(`from_packed_bytes` constructors, per-field typed leaves,
+`final_leaves(object_id)` for the gate comparisons). This is the
 independent witness — it catches composition-graph mistakes that per-block
 checks cannot. See `models/llama3_reference.py`.
+
+### Dtypes are policy, not convention
+
+Nothing in a family may hardcode a trainable dtype. Weight layouts pull
+each field's dtype from `dims.dtypes` (a `DTypePolicy` riding the Shaped
+config: per-field `param`/`grad`/`opt` roles, fnmatch overrides, first
+match wins — `docs/notes/dtype-policy-design.md`). dW layouts come from
+`grad_layout(wl, policy)`, optimizer state from `opt_state_layout(...)`
+(per-field `[m_f | v_f]` pairs — never a flat view), and `AdamWStep`
+updates per field through typed views. Embed/head tables are
+policy-addressed `"embed.w"` / `"head.w"`; a heterogeneous family's
+optimizer resolves its layout per task (`layout_for`, size-verified).
+Mixed-policy E2E gates: `tests/training/test_dtype_policy_e2e.py`.
 
 ## 4. Lower it (`training/`)
 
