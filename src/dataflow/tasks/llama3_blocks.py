@@ -35,7 +35,14 @@ from dataflow.runtime.executable import TaskContext
 from . import ops
 from .interop import external_stream, torch_view
 from .kernels import KernelCtx, KernelSet, resolve_kernels
-from .layouts import LlamaDims, PackedLayout, adamw_state_layout, context_layout, weight_layout
+from .layouts import (
+    LlamaDims,
+    PackedLayout,
+    adamw_state_layout,
+    context_layout,
+    head_weight_layout,
+    weight_layout,
+)
 
 
 @dataclass(frozen=True)
@@ -313,17 +320,22 @@ class BlockBwd(_Base):
 
 @dataclass(frozen=True)
 class HeadFwd(_Base):
+    @property
+    def hl(self) -> PackedLayout:
+        return head_weight_layout(self.dims)
+
     def launch(self, ctx: TaskContext) -> None:
         d = self.dims
         es, kctx = self._stream_ctx(ctx)
         with torch.cuda.stream(es):
             y = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
-            wh = torch_view(self._in(ctx, 1), (d.vocab_size, d.d_model), torch.bfloat16)
+            wh = self.hl.views(self._in(ctx, 1))
             logits = torch_view(self._out(ctx, 0), (d.tokens, d.vocab_size), torch.bfloat16)
             yn = torch.empty_like(y)
             rstd = torch.empty(d.tokens, dtype=torch.float32, device=y.device)
-            self.kernels.rmsnorm_noweight(kctx, y, yn, rstd)  # final model norm
-            torch.matmul(yn, wh.T, out=logits)
+            # final model norm: a REAL learned weight (packed with the table)
+            self.kernels.rmsnorm_fwd(kctx, y, wh["final_norm_w"], yn, rstd)
+            torch.matmul(yn, wh["w"].T, out=logits)
 
 
 @dataclass(frozen=True)
@@ -341,6 +353,10 @@ class LossBwd(_Base):
 
 @dataclass(frozen=True)
 class HeadBwd(_Base):
+    @property
+    def hl(self) -> PackedLayout:
+        return head_weight_layout(self.dims)
+
     def launch(self, ctx: TaskContext) -> None:
         d = self.dims
         es, kctx = self._stream_ctx(ctx)
@@ -348,23 +364,24 @@ class HeadBwd(_Base):
             K = self.kernels
             dlogits = torch_view(self._in(ctx, 0), (d.tokens, d.vocab_size), torch.bfloat16)
             y = torch_view(self._in(ctx, 1), (d.tokens, d.d_model), torch.bfloat16)
-            wh = torch_view(self._in(ctx, 2), (d.vocab_size, d.d_model), torch.bfloat16)
+            wh = self.hl.views(self._in(ctx, 2))
             accum = bool(ctx.task.mutates)
             dy = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
-            # final-norm recompute (cheap: one reduce over y) + backward
+            # final-norm recompute (cheap: one reduce over y) + weighted backward
             yn = torch.empty_like(y)
             rstd = torch.empty(d.tokens, dtype=torch.float32, device=y.device)
-            K.rmsnorm_noweight(kctx, y, yn, rstd)
-            dyn = dlogits @ wh
-            ones = torch.ones(d.d_model, device=dyn.device, dtype=torch.bfloat16)
-            dw_scratch = torch.empty(d.d_model, dtype=torch.float32, device=y.device)
-            K.rmsnorm_bwd(kctx, dyn, y, rstd, ones, dy, dw_scratch)
+            K.rmsnorm_fwd(kctx, y, wh["final_norm_w"], yn, rstd)
+            dyn = dlogits @ wh["w"]
+            dnorm = torch.empty(d.d_model, dtype=torch.float32, device=y.device)
+            K.rmsnorm_bwd(kctx, dyn, y, rstd, wh["final_norm_w"], dy, dnorm)
             if accum:
-                dwh = torch_view(ctx.mutates[ctx.task.mutates[0]], (d.vocab_size, d.d_model), torch.bfloat16)
-                dwh.add_(dlogits.T @ yn)
+                dwh = self.hl.views(ctx.mutates[ctx.task.mutates[0]])
+                dwh["w"].add_(dlogits.T @ yn)
+                dwh["final_norm_w"].add_(dnorm.to(torch.bfloat16))
             else:
-                dwh = torch_view(self._out(ctx, 1), (d.vocab_size, d.d_model), torch.bfloat16)
-                torch.matmul(dlogits.T, yn, out=dwh)  # write straight into dW
+                dwh = self.hl.views(self._out(ctx, 1))
+                torch.matmul(dlogits.T, yn, out=dwh["w"])  # write straight into dW
+                dwh["final_norm_w"].copy_(dnorm.to(torch.bfloat16))
 
 
 @dataclass(frozen=True)

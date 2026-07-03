@@ -217,6 +217,16 @@ def embed_weight_layout(dims) -> PackedLayout:
     return PackedLayout.build([("w", (dims.vocab_size, dims.d_model), "bf16")])
 
 
+def head_weight_layout(dims) -> PackedLayout:
+    """LM head object: the projection table PLUS the model's final RMSNorm
+    weight (a real learned parameter in llama3/qwen3/qwen3.5 — packed here
+    so its gradient and optimizer state ride the head object)."""
+    return PackedLayout.build([
+        ("w", (dims.vocab_size, dims.d_model), "bf16"),
+        ("final_norm_w", (dims.d_model,), "bf16"),
+    ])
+
+
 def adamw_state_layout(param_elems: int) -> PackedLayout:
     """Optimizer state for one parameter object: bf16 first/second moments."""
     return PackedLayout.build([

@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 import torch
 
 from dataflow.tasks import ops
-from dataflow.tasks.layouts import LlamaDims, PackedLayout, weight_layout
+from dataflow.tasks.layouts import LlamaDims, PackedLayout, head_weight_layout, weight_layout
 from dataflow.tasks.llama3_blocks import AdamWHyper
 
 
@@ -51,14 +51,26 @@ class GoldenLlama3:
             w_embed_bytes.clone().view(torch.bfloat16).view(dims.vocab_size, dims.d_model)
             .cuda().requires_grad_()
         )
+        # head leaf stays PACKED FLAT: [table | final_norm_w] (the final
+        # model norm is a real learned parameter riding the head object)
         model.w_head = (
-            w_head_bytes.clone().view(torch.bfloat16).view(dims.vocab_size, dims.d_model)
-            .cuda().requires_grad_()
+            w_head_bytes.clone().view(torch.bfloat16).cuda().requires_grad_()
         )
         model.w_blocks = [
             b.clone().view(torch.bfloat16).cuda().requires_grad_() for b in w_block_bytes
         ]
         return model
+
+    def _head_views(self, flat_bf16: torch.Tensor) -> dict[str, torch.Tensor]:
+        hl = head_weight_layout(self.dims)
+        out: dict[str, torch.Tensor] = {}
+        for f in hl.fields:
+            n = 1
+            for dim in f.shape:
+                n *= int(dim)
+            start = f.offset_bytes // 2
+            out[f.name] = flat_bf16[start : start + n].view(f.shape)
+        return out
 
     def _block_views(self, flat_bf16: torch.Tensor) -> dict[str, torch.Tensor]:
         wl = weight_layout(self.dims)
@@ -90,7 +102,8 @@ class GoldenLlama3:
         x = self.w_embed[tokens.long()]
         for flat in self.w_blocks:
             x = self.block_forward(x, self._block_views(flat))
-        logits = ops.rmsnorm_noweight_reference(x) @ self.w_head.T
+        hv = self._head_views(self.w_head)
+        logits = ops.rmsnorm_reference(x, hv["final_norm_w"]) @ hv["w"].T
         return ops.ce_loss_reference(logits, targets)
 
     # --- training -------------------------------------------------------------

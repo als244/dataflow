@@ -13,6 +13,7 @@ from dataflow.tasks.layouts import (
     Qwen3Dims,
     adamw_state_layout,
     embed_weight_layout,
+    head_weight_layout,
     qwen3_context_layout,
     qwen3_weight_layout,
 )
@@ -38,14 +39,17 @@ def _exact_sizes(cfg: ShapedQwen3Config) -> dict[str, int]:
     dims = dims_of_qwen3(cfg)
     wl = qwen3_weight_layout(dims)
     el = embed_weight_layout(dims)
+    hl = head_weight_layout(dims)
     cl = qwen3_context_layout(dims)
     # state sized from packed bytes, padding included — see llama3_lowering
     return {
         "__W_block": wl.total_bytes,
         "__W_embed": el.total_bytes,
+        "__W_head": hl.total_bytes,
         "__A": cl.total_bytes,
         "__O_block": adamw_state_layout(wl.total_bytes // 2).total_bytes,
         "__O_embed": adamw_state_layout(el.total_bytes // 2).total_bytes,
+        "__O_head": adamw_state_layout(hl.total_bytes // 2).total_bytes,
     }
 
 
@@ -64,4 +68,7 @@ def lower_qwen3(
 
 def initial_values_qwen3(program: Program, cfg: ShapedQwen3Config, backend, *, seed: int = 0):
     dims = dims_of_qwen3(cfg)
-    return fill_initial_values(program, dims, qwen3_weight_layout(dims), backend, seed=seed)
+    return fill_initial_values(
+        program, dims, qwen3_weight_layout(dims), backend, seed=seed,
+        head_layout=head_weight_layout(dims),
+    )

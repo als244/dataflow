@@ -25,6 +25,7 @@ from dataflow.tasks.layouts import (
     adamw_state_layout,
     context_layout,
     embed_weight_layout,
+    head_weight_layout,
     weight_layout,
 )
 from .shaped_llama3 import ShapedHardware, ShapedLlamaConfig, build_shaped_llama3
@@ -46,6 +47,7 @@ def _exact_sizes(cfg: ShapedLlamaConfig) -> dict[str, int]:
     dims = dims_of(cfg)
     wl = weight_layout(dims)
     el = embed_weight_layout(dims)
+    hl = head_weight_layout(dims)
     cl = context_layout(dims)
     # optimizer state covers EVERY byte of the packed param object (padding
     # included): the AdamW executable derives its element count from the W
@@ -54,19 +56,25 @@ def _exact_sizes(cfg: ShapedLlamaConfig) -> dict[str, int]:
     return {
         "__W_block": wl.total_bytes,
         "__W_embed": el.total_bytes,
+        "__W_head": hl.total_bytes,
         "__A": cl.total_bytes,
         "__O_block": adamw_state_layout(wl.total_bytes // 2).total_bytes,
         "__O_embed": adamw_state_layout(el.total_bytes // 2).total_bytes,
+        "__O_head": adamw_state_layout(hl.total_bytes // 2).total_bytes,
     }
 
 
 def _mapped_size(object_id: str, sizes: dict[str, int]) -> int | None:
     if object_id.startswith("A_"):
         return sizes["__A"]
-    if object_id in ("W_embed", "W_head") or object_id.startswith(("dW_embed", "dW_head")):
+    if object_id == "W_embed" or object_id.startswith("dW_embed"):
         return sizes["__W_embed"]
-    if object_id in ("O_embed", "O_head"):
+    if object_id == "W_head" or object_id.startswith("dW_head"):
+        return sizes["__W_head"]  # head packs [table | final_norm_w]
+    if object_id == "O_embed":
         return sizes["__O_embed"]
+    if object_id == "O_head":
+        return sizes["__O_head"]
     if object_id.startswith("O_"):
         return sizes["__O_block"]
     if object_id.startswith(("W_", "dW_")):
@@ -143,10 +151,13 @@ def initial_values(program: Program, cfg: ShapedLlamaConfig, backend, *, seed: i
     """
     from dataflow.tasks.layouts import weight_layout as _wl
 
-    return fill_initial_values(program, dims_of(cfg), _wl(dims_of(cfg)), backend, seed=seed)
+    d = dims_of(cfg)
+    return fill_initial_values(
+        program, d, _wl(d), backend, seed=seed, head_layout=head_weight_layout(d),
+    )
 
 
-def fill_initial_values(program: Program, dims, wl, backend, *, seed: int = 0):
+def fill_initial_values(program: Program, dims, wl, backend, *, seed: int = 0, head_layout=None):
     """Family-generic buffer filling: weights N(0, 0.02) bf16 with every
     ``*_norm_w`` layout field set to ones, optimizer state zeroed,
     tokens/targets uniform ints. The generation order is part of golden
@@ -172,6 +183,11 @@ def fill_initial_values(program: Program, dims, wl, backend, *, seed: int = 0):
         elif spec.id in ("W_embed", "W_head"):
             flat = torch_view(buf, (spec.size_bytes // 2,), torch.bfloat16)
             flat.copy_(torch.randn(spec.size_bytes // 2, generator=gen) * 0.02)
+            if spec.id == "W_head" and head_layout is not None:
+                for f in head_layout.fields:
+                    if f.name.endswith("_norm_w"):
+                        start = f.offset_bytes // 2
+                        flat[start : start + f.shape[0]] = 1.0
         elif spec.id.startswith("O_"):
             torch_view(buf, (spec.size_bytes // 2,), torch.bfloat16).zero_()
         elif spec.id.startswith(("tokens_", "targets_")):
