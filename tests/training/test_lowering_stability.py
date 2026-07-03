@@ -8,15 +8,18 @@ import json
 from dataclasses import replace
 
 from dataflow.core.jsonio import program_to_dict
-from dataflow.training.llama3 import lower_llama3
-from dataflow.training.qwen3 import lower_qwen3
-from dataflow.training.llama3 import ShapedLlamaConfig
-from dataflow.training.qwen3 import ShapedQwen3Config
+from dataflow.training.llama3 import ShapedLlamaConfig, lower_llama3
+from dataflow.training.qwen3 import ShapedQwen3Config, lower_qwen3
+from dataflow.training.qwen35 import ShapedQwen35Config, lower_qwen35
 
 EXPECTED = {
     "llama3-tiny-ga2-s2": "67cbd6d2dbe6e6bd",
     "llama3-tiny-tail": "ed3e3280fc2896eb",
     "qwen3-tiny-ga3": "999478c9e65e3345",
+    # qwen35 pins added POST-reorg (the family predates the tripwire's
+    # coverage): heterogeneous kinds + both embedding modes
+    "qwen35-tiny-ga2": "1288ba63e6b6d22d",
+    "qwen35-tiny-tied": "a2c9b05ead71b948",
 }
 
 
@@ -37,5 +40,9 @@ def test_lowered_programs_bit_identical():
         "qwen3-tiny-ga3": _hash(
             lower_qwen3(replace(ShapedQwen3Config.tiny(), grad_accum_rounds=3))
         ),
+        "qwen35-tiny-ga2": _hash(
+            lower_qwen35(replace(ShapedQwen35Config.tiny(), grad_accum_rounds=2))
+        ),
+        "qwen35-tiny-tied": _hash(lower_qwen35(ShapedQwen35Config.tiny_tied())),
     }
     assert got == EXPECTED, {k: (got[k], EXPECTED[k]) for k in got if got[k] != EXPECTED[k]}
