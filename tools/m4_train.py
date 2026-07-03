@@ -77,6 +77,12 @@ def main() -> None:
     parser.add_argument("--steps", type=int, default=4)
     parser.add_argument("--recompute", action="store_true")
     parser.add_argument(
+        "--embed-host", action="store_true",
+        help="embed-on-host: table lives on CPU (sparse gather/scatter + "
+             "host optimizer); removes W/O/dW_embed and embed tasks from "
+             "the chain",
+    )
+    parser.add_argument(
         "--placement", choices=["static", "dynamic"], default="static",
         help="static (default): offsets packed offline from dry-run lifetimes, "
              "fragmentation impossible; dynamic: online slab+arena — required "
@@ -116,6 +122,10 @@ def main() -> None:
     from dataflow.tasks.kernels import resolve_kernels
 
     cfg = CONFIGS[args.config]
+    if args.embed_host:
+        from dataclasses import replace as _replace
+
+        cfg = _replace(cfg, embed_on_host=True)
     dims = dims_of(cfg)
     tokens_per_step = float(cfg.tokens * cfg.grad_accum_rounds)
 

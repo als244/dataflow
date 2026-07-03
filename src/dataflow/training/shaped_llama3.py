@@ -55,6 +55,16 @@ class ShapedLlamaConfig:
     batch: int = 1
     grad_accum_rounds: int = 1
     num_steps: int = 1
+    # embed-on-host: the embedding is accessed SPARSELY (t rows of a
+    # vocab x d table), so the table can live on the CPU entirely: the host
+    # gathers each round's input X_0 into pinned staging (64 MB vs a 1 GiB
+    # W_embed prefetch), the chain returns dy_embed to backing, and the
+    # host does the scatter-add + optimizer update. Removes W_embed /
+    # O_embed / dW_embed and the embed tasks from the chain.
+    embed_on_host: bool = False
+    # dtype for the HOST-side grad accumulation + optimizer state
+    # ("float32" or "bfloat16") — a training-spec choice, not hardwired.
+    embed_host_accum: str = "float32"
 
     @property
     def tokens(self) -> int:
@@ -266,9 +276,10 @@ def build_shaped_llama3(
         if persist:
             final_locations[oid] = "backing"
 
-    add_initial("W_embed", w_embed, "parameter", persist=True,
-                tensor=TensorMeta(dtype="bf16", shape=(cfg.vocab_size, d)))
-    add_initial("O_embed", 2 * w_embed, "optimizer_state", persist=True)
+    if not cfg.embed_on_host:
+        add_initial("W_embed", w_embed, "parameter", persist=True,
+                    tensor=TensorMeta(dtype="bf16", shape=(cfg.vocab_size, d)))
+        add_initial("O_embed", 2 * w_embed, "optimizer_state", persist=True)
     for i in range(cfg.n_layers):
         add_initial(f"W_{i}", w_block, "parameter", persist=True)
         add_initial(f"O_{i}", 2 * w_block, "optimizer_state", persist=True)
@@ -277,15 +288,25 @@ def build_shaped_llama3(
     add_initial("O_head", 2 * w_head, "optimizer_state", persist=True)
     for s in range(cfg.num_steps):
         for r in range(cfg.grad_accum_rounds):
-            # The chain's very first task consumes tokens_0_0; following the
+            # The chain's very first task consumes tokens_0_0 (or the
+            # host-gathered X_0_0_0 in embed-on-host mode); following the
             # simulator's own builder convention it starts on fast. Everything
             # else starts on backing and is placed/prefetched by the planner.
             first = s == 0 and r == 0
-            initial.append(ObjectSpec(
-                id=f"tokens_{s}_{r}", size_bytes=ids_bytes,
-                location="fast" if first else "backing",
-                role="input", tensor=TensorMeta(dtype="int32", shape=(t,)),
-            ))
+            if cfg.embed_on_host:
+                # host gathers X_0 = W_embed[tokens] into pinned staging;
+                # tokens themselves never touch the GPU
+                initial.append(ObjectSpec(
+                    id=f"X_{s}_{r}", size_bytes=y_bytes,
+                    location="fast" if first else "backing",
+                    role="input", tensor=TensorMeta(dtype="bf16", shape=(t, d)),
+                ))
+            else:
+                initial.append(ObjectSpec(
+                    id=f"tokens_{s}_{r}", size_bytes=ids_bytes,
+                    location="fast" if first else "backing",
+                    role="input", tensor=TensorMeta(dtype="int32", shape=(t,)),
+                ))
             add_initial(f"targets_{s}_{r}", ids_bytes, "input", tensor=TensorMeta(dtype="int32", shape=(t,)))
 
     tasks: list[TaskSpec] = []
@@ -308,18 +329,20 @@ def build_shaped_llama3(
     for s in range(cfg.num_steps):
         for r in range(cfg.grad_accum_rounds):
             first_round = r == 0
+            block0_x = f"X_{s}_{r}" if cfg.embed_on_host else f"y_embed_{s}_{r}"
             # ---- forward ----
-            task(
-                f"embed_fwd_{s}_{r}", "embed_fwd",
-                [f"tokens_{s}_{r}", "W_embed"],
-                [OutputSpec(id=f"y_embed_{s}_{r}", size_bytes=y_bytes, role="activation",
-                            tensor=TensorMeta(dtype="bf16", shape=(t, d)))],
-                costs.embed_fwd_us, group="forward",
-            )
+            if not cfg.embed_on_host:
+                task(
+                    f"embed_fwd_{s}_{r}", "embed_fwd",
+                    [f"tokens_{s}_{r}", "W_embed"],
+                    [OutputSpec(id=f"y_embed_{s}_{r}", size_bytes=y_bytes, role="activation",
+                                tensor=TensorMeta(dtype="bf16", shape=(t, d)))],
+                    costs.embed_fwd_us, group="forward",
+                )
             for i in range(cfg.n_layers):
                 a_id = f"A_{s}_{r}_{i}"
                 level = levels.get(a_id, 0)
-                x_id = f"y_embed_{s}_{r}" if i == 0 else f"y_{s}_{r}_{i - 1}"
+                x_id = block0_x if i == 0 else f"y_{s}_{r}_{i - 1}"
                 outs = [OutputSpec(id=f"y_{s}_{r}_{i}", size_bytes=y_bytes, role="activation",
                                    tensor=TensorMeta(dtype="bf16", shape=(t, d)))]
                 if level == 0:
@@ -367,7 +390,7 @@ def build_shaped_llama3(
 
             for i in reversed(range(cfg.n_layers)):
                 a_id = f"A_{s}_{r}_{i}"
-                x_id = f"y_embed_{s}_{r}" if i == 0 else f"y_{s}_{r}_{i - 1}"
+                x_id = block0_x if i == 0 else f"y_{s}_{r}_{i - 1}"
                 if levels.get(a_id, 0) == 1:
                     task(f"block_recompute_{s}_{r}_{i}", "block_recompute", [x_id, f"W_{i}"],
                          [OutputSpec(id=a_id, size_bytes=a_bytes, role="activation")],
@@ -385,21 +408,27 @@ def build_shaped_llama3(
                 task(f"block_bwd_{s}_{r}_{i}", "block_bwd", bwd_inputs, outs,
                      costs.block_bwd_us, mutates=mutates, group="backward", params={"layer": i})
 
-            embed_bwd_inputs = [f"dy_embed_{s}_{r}", f"tokens_{s}_{r}"]
-            embed_outs: list[OutputSpec] = []
-            embed_mutates: tuple[str, ...] = ()
-            if first_round:
-                embed_outs.append(OutputSpec(id=f"dW_embed_{s}", size_bytes=w_embed, role="gradient"))
+            if cfg.embed_on_host:
+                # dy_embed goes home: the host scatter-adds it into its own
+                # dW_embed and runs the embed optimizer there
+                final_locations[f"dy_embed_{s}_{r}"] = "backing"
             else:
-                embed_bwd_inputs.append(f"dW_embed_{s}")
-                embed_mutates = (f"dW_embed_{s}",)
-            task(f"embed_bwd_{s}_{r}", "embed_bwd", embed_bwd_inputs, embed_outs,
-                 costs.embed_bwd_us, mutates=embed_mutates, group="backward")
+                embed_bwd_inputs = [f"dy_embed_{s}_{r}", f"tokens_{s}_{r}"]
+                embed_outs: list[OutputSpec] = []
+                embed_mutates: tuple[str, ...] = ()
+                if first_round:
+                    embed_outs.append(OutputSpec(id=f"dW_embed_{s}", size_bytes=w_embed, role="gradient"))
+                else:
+                    embed_bwd_inputs.append(f"dW_embed_{s}")
+                    embed_mutates = (f"dW_embed_{s}",)
+                task(f"embed_bwd_{s}_{r}", "embed_bwd", embed_bwd_inputs, embed_outs,
+                     costs.embed_bwd_us, mutates=embed_mutates, group="backward")
 
         # ---- optimizer (after all rounds of step s) ----
-        task(f"optimizer_embed_{s}", "optimizer_embed",
-             ["W_embed", f"dW_embed_{s}", "O_embed"], [],
-             costs.optimizer_us["embed"], mutates=("W_embed", "O_embed"), group="optimizer")
+        if not cfg.embed_on_host:
+            task(f"optimizer_embed_{s}", "optimizer_embed",
+                 ["W_embed", f"dW_embed_{s}", "O_embed"], [],
+                 costs.optimizer_us["embed"], mutates=("W_embed", "O_embed"), group="optimizer")
         for i in range(cfg.n_layers):
             task(f"optimizer_{s}_{i}", "optimizer_block",
                  [f"W_{i}", f"dW_{s}_{i}", f"O_{i}"], [],

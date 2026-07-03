@@ -110,3 +110,76 @@ def test_dynamic_mode_matches_static():
     for a, b in zip(losses["static"], losses["dynamic"]):
         assert abs(a - b) / max(abs(b), 1e-9) < 1e-4, losses
 
+
+
+def test_embed_on_host_matches_golden():
+    """embed-on-host: the CPU-resident table (host gather -> X staging,
+    dy_embed scatter-add, host AdamW) must train identically to the golden
+    model within bf16 tolerance — losses per step AND the final embedding
+    table. Exercises both accum dtypes (the training-spec knob)."""
+    from dataclasses import replace
+
+    from dataflow.models.llama3_reference import GoldenLlama3
+    from dataflow.tasks.interop import torch_view as tv
+    from dataflow.training.llama3_lowering import host_embed_state, initial_values
+    from dataflow.training.testing.gradcheck import rel_l2
+
+    for accum in ("float32", "bfloat16"):
+        cfg = replace(CFG, embed_on_host=True, embed_host_accum=accum,
+                      grad_accum_rounds=2)
+        dims = dims_of(cfg)
+        planned = plan_program(lower_llama3(cfg), fast_memory_capacity=8 * 1024 * 1024)
+        backend = CudaBackend()
+
+        gen = torch.Generator().manual_seed(31)
+        batches = [
+            (
+                torch.randint(0, dims.vocab_size, (dims.tokens,), generator=gen, dtype=torch.int32),
+                torch.randint(0, dims.vocab_size, (dims.tokens,), generator=gen, dtype=torch.int32),
+            )
+            for _ in range(2 * cfg.grad_accum_rounds)
+        ]
+
+        # golden built from the SAME host table + the runtime's block/head init
+        snapshot = initial_values(planned.program, cfg, backend, seed=5)
+        host_ref = host_embed_state(cfg, seed=5)
+
+        def pinned(name):
+            buf = snapshot[name]
+            return tv(buf, (buf.size_bytes,), torch.uint8).clone()
+
+        golden = GoldenLlama3.from_packed_bytes(
+            dims, cfg.n_layers,
+            host_ref["W"].view(torch.uint8).reshape(-1).clone(),
+            [pinned(f"W_{i}") for i in range(cfg.n_layers)],
+            pinned("W_head"),
+        )
+        golden_losses = []
+        for s in range(2):
+            for p_ in golden.parameters():
+                p_.grad = None
+            total = None
+            round0 = None
+            for r in range(cfg.grad_accum_rounds):
+                t_ids, tg = batches[s * cfg.grad_accum_rounds + r]
+                loss_r = golden.loss(t_ids.long().cuda(), tg.long().cuda())
+                if r == 0:
+                    round0 = float(loss_r.detach())  # the metric the runtime reports
+                total = loss_r if total is None else total + loss_r
+            total.backward()
+            golden.step_count += 1
+            golden._adamw("embed", golden.w_embed, golden.w_embed.grad.to(torch.bfloat16))
+            for i, flat in enumerate(golden.w_blocks):
+                golden._adamw(f"block_{i}", flat, flat.grad)
+            golden._adamw("head", golden.w_head, golden.w_head.grad.to(torch.bfloat16))
+            golden_losses.append(round0)
+
+        report = train(
+            planned.program, cfg, backend, steps=2, seed=5,
+            token_stream=lambda i: batches[i],
+        )
+        for ours, ref in zip(report.losses, golden_losses):
+            assert abs(ours - ref) / max(abs(ref), 1e-9) < 3e-2, (accum, report.losses, golden_losses)
+        err = rel_l2(report.host_embed["W"].float().cuda(),
+                     golden.w_embed.detach().float().reshape(report.host_embed["W"].shape))
+        assert err < 3e-2, (accum, err)

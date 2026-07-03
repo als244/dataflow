@@ -42,6 +42,7 @@ class TrainReport:
     placement_extent_bytes: int = 0
     placement_overhead: float = 1.0  # extent / peak load (contiguity geometry tax)
     peak_backing_bytes: int = 0      # ledger peak of plan-managed host bytes
+    host_embed: dict | None = None   # embed-on-host state (W/M/V) when enabled
     pinned_host_bytes: int = 0       # physically registered pinned memory
 
     @property
@@ -110,19 +111,38 @@ def train(
         report.placement_extent_bytes = placement.extent_bytes
         report.placement_overhead = placement.overhead
     rounds = cfg.grad_accum_rounds
-    round_views = [
-        (
-            torch_view(values[f"tokens_0_{r}"], (dims.tokens,), torch.int32),
-            torch_view(values[f"targets_0_{r}"], (dims.tokens,), torch.int32),
-        )
-        for r in range(rounds)
-    ]
+    if cfg.embed_on_host:
+        from dataflow.training.llama3_lowering import host_embed_adamw, host_embed_state
+
+        host_embed = host_embed_state(cfg, seed=seed)
+        host_tokens: list = [None] * rounds
+        round_views = [
+            (
+                torch_view(values[f"X_0_{r}"], (dims.tokens, dims.d_model), torch.bfloat16),
+                torch_view(values[f"targets_0_{r}"], (dims.tokens,), torch.int32),
+            )
+            for r in range(rounds)
+        ]
+    else:
+        host_embed = None
+        round_views = [
+            (
+                torch_view(values[f"tokens_0_{r}"], (dims.tokens,), torch.int32),
+                torch_view(values[f"targets_0_{r}"], (dims.tokens,), torch.int32),
+            )
+            for r in range(rounds)
+        ]
 
     try:
         for step in range(steps):
-            for r, (tokens_view, targets_view) in enumerate(round_views):
+            for r, (first_view, targets_view) in enumerate(round_views):
                 tokens, targets = token_stream(step * rounds + r)
-                tokens_view.copy_(tokens)
+                if host_embed is not None:
+                    # host gather: X_r = W_embed[tokens] into pinned staging
+                    host_tokens[r] = tokens.long()
+                    first_view.copy_(host_embed["W"][host_tokens[r]])
+                else:
+                    first_view.copy_(tokens)
                 targets_view.copy_(targets)
             # optimizer bias correction advances with the global step
             stepped = _with_step(annotated, step)
@@ -149,10 +169,29 @@ def train(
             report.step_slab_overflows.append(result.slab_overflows - prior)
             report.placement_escapes = result.placement_escapes
 
+            if host_embed is not None:
+                # scatter each round's dy_embed into the host accumulator,
+                # then run the host optimizer (v1: after execute returns —
+                # overlapping with the NEXT step's GPU tail is the follow-up)
+                accum_dtype = host_embed["dW"].dtype
+                for r in range(rounds):
+                    rec = result.objects.get(f"dy_embed_0_{r}")
+                    dy = torch_view(
+                        rec.backing.buffer, (dims.tokens, dims.d_model), torch.bfloat16
+                    )
+                    host_embed["dW"].index_add_(0, host_tokens[r], dy.to(accum_dtype))
+                from dataflow.tasks.llama3_blocks import AdamWHyper
+
+                hp = AdamWHyper()
+                host_embed_adamw(
+                    host_embed, lr=hp.lr, beta1=hp.beta1, beta2=hp.beta2,
+                    eps=hp.eps, weight_decay=hp.weight_decay, step=step + 1,
+                )
             loss_rec = result.objects.get("loss_0_0")
             slot = loss_rec.backing or loss_rec.fast
             report.losses.append(float(torch_view(slot.buffer, (1,), torch.float32)[0]))
             report.last_trace = result.trace
+            report.host_embed = host_embed
     finally:
         if annotator is not None and annotator.enabled:
             annotator.range_pop()  # train_steps
