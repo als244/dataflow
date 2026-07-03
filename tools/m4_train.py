@@ -96,7 +96,16 @@ def main() -> None:
              "packing fits). Actual device usage <= this number.",
     )
     parser.add_argument("--steps", type=int, default=4)
-    parser.add_argument("--recompute", action="store_true")
+    parser.add_argument(
+        "--recompute", action=argparse.BooleanOptionalAction, default=True,
+        help="recompute planning (simulator-verified greedy selection over "
+             "the rewrite table). ON by default since M5.2 — the qwen35 s1k "
+             "sweeps ran without it and shipped a save-all plan that was "
+             "h2d-bound (docs/notes/m52-perf-gap-findings.md); the planner "
+             "chooses 0 recompute when save-all genuinely wins, so leaving "
+             "this on costs only the recompute-variant profiling pass. "
+             "--no-recompute restores the bare save-all lowering.",
+    )
     parser.add_argument(
         "--force-recompute", choices=["all"], default=None,
         help="bypass the recompute planner and pin every rewrite to its "
