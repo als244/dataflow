@@ -1,8 +1,12 @@
-"""Execution-grade Qwen3.5 lowering: heterogeneous per-layer sizes.
+"""Qwen3.5 lowering: family declarations over the generic machinery.
 
-Embeddings follow the config: the 9B is UNTIED (bare-table W_embed +
-[table | final_norm_w] W_head, llama3/qwen3 shape); the 2B-style tied
-variant packs the head layout into the single W_embed."""
+Same contract as every family (docs/extending.md §4), with the two
+qwen3.5 particulars declared, not special-cased: per-KIND block layouts
+(DeltaNet vs gated-attention, chosen by ``dims.kind_of``) and the
+embedding mode — the 9B is UNTIED (bare-table W_embed + [table |
+final_norm_w] W_head); the 2B-style tied variant packs the head layout
+into the single W_embed (policy-addressed as head.*).
+"""
 from __future__ import annotations
 
 from typing import Mapping
@@ -10,80 +14,52 @@ from typing import Mapping
 from dataflow.core import Program
 from dataflow.tasks.layouts import (
     embed_weight_layout,
-    grad_layout,
     head_weight_layout,
-    opt_state_layout,
     qwen35_attn_context_layout,
     qwen35_attn_weight_layout,
     qwen35_lin_context_layout,
     qwen35_lin_weight_layout,
 )
-from .llama3_lowering import apply_exact_sizes, fill_weight_fields
-from .shaped_llama3 import ShapedHardware
+from .lowering import FamilyLayouts, apply_exact_sizes, initial_values_from_layouts, size_of_factory
+from .shaped_program import ShapedHardware
 from .shaped_qwen35 import ShapedQwen35Config, build_shaped_qwen35, dims_of_qwen35
 
+_WEIGHT_BUILDERS = {
+    "lin": qwen35_lin_weight_layout,
+    "full": qwen35_attn_weight_layout,
+}
 
-def _size_of_factory(cfg: ShapedQwen35Config):
+
+def _a_log_init(n, gen):
+    # decay magnitudes ~ U(1, 16) in log space (GDN convention)
+    import torch
+
+    return torch.empty(n).uniform_(1.0, 16.0, generator=gen).log()
+
+
+def _dt_bias_init(n, gen):
+    import torch
+
+    return torch.zeros(n)
+
+
+def family_layouts(cfg: ShapedQwen35Config):
     dims = dims_of_qwen35(cfg)
-    p = dims.dtypes
-    hl = head_weight_layout(dims)  # [table | final_norm_w]
-    el = embed_weight_layout(dims)  # bare table (untied W_embed)
-    _builders = {
-        "lin": qwen35_lin_weight_layout,
-        "full": qwen35_attn_weight_layout,
-    }
-
-    def wl_at(layer: int):
-        return _builders[dims.kind_of(layer)](dims, layer=layer)
-
-    cl = {
+    ctx = {
         "lin": qwen35_lin_context_layout(dims),
         "full": qwen35_attn_context_layout(dims),
     }
-    # tied (2B-style): ONE W_embed carries [table | final_norm_w] and serves
-    # embed AND head (policy-addressed as head.*). untied (the 9B): W_embed
-    # is the bare table (embed.*), the head layout rides W_head.
+    hl = head_weight_layout(dims)
     tied = cfg.tied_embeddings
-    embed_wl, embed_ns = (hl, "head") if tied else (el, "embed")
-    embed_bytes = embed_wl.total_bytes
-    dw_e = grad_layout(embed_wl, p, ns=embed_ns).total_bytes
-    dw_h = grad_layout(hl, p, ns="head").total_bytes
-    dw_block = [
-        grad_layout(wl_at(i), p, layer=i).total_bytes for i in range(cfg.n_layers)
-    ]
-    o_e = opt_state_layout(embed_wl, p, ns=embed_ns).total_bytes
-    o_h = opt_state_layout(hl, p, ns="head").total_bytes
-    o_block = [
-        opt_state_layout(wl_at(i), p, layer=i).total_bytes for i in range(cfg.n_layers)
-    ]
-
-    def kind(layer: int) -> str:
-        return dims.kind_of(layer)
-
-    def size_of(oid: str) -> int | None:
-        if oid == "W_embed":
-            return embed_bytes
-        if oid.startswith("dW_embed"):
-            return dw_e
-        if oid == "O_embed":
-            return o_e
-        if oid == "W_head":
-            return hl.total_bytes
-        if oid.startswith("dW_head"):
-            return dw_h
-        if oid == "O_head":
-            return o_h
-        if oid.startswith("A_"):            # A_{s}_{r}_{i}
-            return cl[kind(int(oid.rsplit("_", 1)[1]))].total_bytes
-        if oid.startswith("dW_"):           # dW_{s}_{i}
-            return dw_block[int(oid.rsplit("_", 1)[1])]
-        if oid.startswith("O_"):            # O_{i}
-            return o_block[int(oid.split("_")[1])]
-        if oid.startswith("W_"):            # W_{i}
-            return wl_at(int(oid.split("_")[1])).total_bytes
-        return None
-
-    return size_of
+    return dims, FamilyLayouts(
+        n_layers=cfg.n_layers,
+        block_weight_at=lambda i: _WEIGHT_BUILDERS[dims.kind_of(i)](dims, layer=i),
+        block_context_at=lambda i: ctx[dims.kind_of(i)],
+        embed=hl if tied else embed_weight_layout(dims),
+        head=hl,
+        embed_ns="head" if tied else "embed",
+        init_specials={"A_log": _a_log_init, "dt_bias": _dt_bias_init},
+    )
 
 
 def lower_qwen35(
@@ -96,48 +72,10 @@ def lower_qwen35(
     shaped = build_shaped_qwen35(
         cfg, hw=hw, recompute_levels=recompute_levels, fast_memory_capacity=fast_memory_capacity,
     )
-    return apply_exact_sizes(shaped, {}, "qwen35-exact-v1", size_of=_size_of_factory(cfg))
+    dims, fl = family_layouts(cfg)
+    return apply_exact_sizes(shaped, "qwen35-exact-v1", size_of=size_of_factory(dims, fl))
 
 
 def initial_values_qwen35(program: Program, cfg: ShapedQwen35Config, backend, *, seed: int = 0):
-    """Weights N(0, 0.02) bf16, *_norm_w fields ones (per-KIND layouts),
-    A_log ~ log U(1,16) and dt_bias zeros (the DeltaNet decay
-    parameterization), optimizer state zeros, tokens/targets ints."""
-    import torch
-
-    from dataflow.tasks.interop import torch_view
-
-    dims = dims_of_qwen35(cfg)
-    _builders = {
-        "lin": qwen35_lin_weight_layout,
-        "full": qwen35_attn_weight_layout,
-    }
-    # decay magnitudes ~ U(1, 16) in log space (GDN convention)
-    special = {
-        "A_log": lambda n, g: torch.empty(n).uniform_(1.0, 16.0, generator=g).log(),
-        "dt_bias": lambda n, g: torch.zeros(n),
-    }
-    # [table | final_norm_w] rides W_embed when tied, W_head when untied;
-    # the untied W_embed is the bare table
-    embed_wl = head_weight_layout(dims) if cfg.tied_embeddings else embed_weight_layout(dims)
-    gen = torch.Generator().manual_seed(seed)
-    buffers = {}
-    for spec in program.initial_objects:
-        if spec.id in buffers:
-            continue
-        buf = backend.alloc("backing", spec.size_bytes)
-        buffers[spec.id] = buf
-        if spec.id.startswith("W_") and spec.id not in ("W_embed", "W_head"):
-            layer = int(spec.id.split("_")[1])
-            layout = _builders[dims.kind_of(layer)](dims, layer=layer)
-            fill_weight_fields(buf, layout, gen, special=special)
-        elif spec.id == "W_embed":
-            fill_weight_fields(buf, embed_wl, gen)
-        elif spec.id == "W_head":
-            fill_weight_fields(buf, head_weight_layout(dims), gen)
-        elif spec.id.startswith("O_"):
-            torch_view(buf, (spec.size_bytes,), torch.uint8).zero_()
-        elif spec.id.startswith(("tokens_", "targets_")):
-            ids = torch.randint(0, dims.vocab_size, (dims.tokens,), generator=gen, dtype=torch.int32)
-            torch_view(buf, (dims.tokens,), torch.int32).copy_(ids)
-    return buffers
+    dims, fl = family_layouts(cfg)
+    return initial_values_from_layouts(program, dims, fl, backend, seed=seed)

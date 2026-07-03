@@ -21,7 +21,7 @@ from dataflow.tasks.layouts import (
     qwen35_lin_context_layout,
     qwen35_lin_weight_layout,
 )
-from .shaped_llama3 import LayerKindSpec, ShapedHardware, build_shaped_llama3
+from .shaped_program import LayerKindSpec, ShapedHardware, build_shaped_program
 
 BF16 = 2
 
@@ -199,9 +199,9 @@ def build_shaped_qwen35(
         f"qwen35-shaped-{cfg.n_layers}L-d{cfg.d_model}-s{cfg.seq_len}-b{cfg.batch}"
         f"-r{cfg.grad_accum_rounds}-steps{cfg.num_steps}"
     )
-    program = build_shaped_llama3(
-        cfg, hw=hw, fast_memory_capacity=fast_memory_capacity,
+    return build_shaped_program(
+        cfg, hw=hw, family="qwen35-shaped",
+        fast_memory_capacity=fast_memory_capacity,
         recompute_levels=recompute_levels, name=label,
         kinds=_kind_specs(cfg, hw), kind_of=dims.kind_of,
     )
-    return replace(program, metadata={**program.metadata, "family": "qwen35-shaped"})

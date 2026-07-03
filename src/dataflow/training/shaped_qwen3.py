@@ -14,7 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 
 from dataflow.tasks.layouts import DTypePolicy
-from .shaped_llama3 import ShapedHardware, build_shaped_llama3
+from .shaped_program import ShapedHardware, build_shaped_program, roofline_block_kind_spec
 
 
 @dataclass(frozen=True)
@@ -99,12 +99,10 @@ def build_shaped_qwen3(
     recompute_levels=None,
     name: str | None = None,
 ):
-    label = name or (
-        f"qwen3-shaped-{cfg.n_layers}L-d{cfg.d_model}-s{cfg.seq_len}-b{cfg.batch}"
-        f"-r{cfg.grad_accum_rounds}-steps{cfg.num_steps}"
+    hw = hw or ShapedHardware()
+    return build_shaped_program(
+        cfg, hw=hw, family="qwen3-shaped",
+        kinds={"block": roofline_block_kind_spec(cfg, hw)},
+        fast_memory_capacity=fast_memory_capacity,
+        recompute_levels=recompute_levels, name=name,
     )
-    program = build_shaped_llama3(
-        cfg, hw=hw, fast_memory_capacity=fast_memory_capacity,
-        recompute_levels=recompute_levels, name=label,
-    )
-    return replace(program, metadata={**program.metadata, "family": "qwen3-shaped"})

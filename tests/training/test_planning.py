@@ -50,7 +50,7 @@ def test_recompute_fires_under_starved_interconnect():
     choose recompute and beat the save-all pressurefit plan. (At healthy
     PCIe the same config correctly chooses zero recompute — transfers hide
     under compute; verified in tools/golden_path.py runs.)"""
-    from dataflow.training.shaped_llama3 import ShapedHardware
+    from dataflow.training.shaped_program import ShapedHardware
 
     cfg = ShapedLlamaConfig.llama3_8b()
     hw = ShapedHardware(pcie_gbs=10.0)

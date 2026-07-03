@@ -156,7 +156,7 @@ def test_tied_embeddings_chain_structure():
 def test_heterogeneous_kinds_emit_per_kind_keys_and_sizes():
     """LayerKindSpec table: task IDS stay uniform (tooling contract) while
     compute_block_keys, W/A sizes, and rewrite keys follow the layer kind."""
-    from dataflow.training.shaped_llama3 import LayerKindSpec
+    from dataflow.training.shaped_program import LayerKindSpec
 
     cfg = ShapedLlamaConfig.tiny()  # 2 layers
     sub = [{"kind": "roofline", "name": "x", "flops": 1, "memory_bytes": 1, "efficiency": "matmul"}]

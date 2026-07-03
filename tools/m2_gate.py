@@ -26,7 +26,8 @@ from dataflow.runtime import Engine
 from dataflow.runtime.device.cuda import CudaBackend, _check
 from dataflow.runtime.device.cuda_spin import make_spin_resolver
 from dataflow.training.planning import plan_program
-from dataflow.training.shaped_llama3 import ShapedHardware, ShapedLlamaConfig, build_shaped_llama3
+from dataflow.training.shaped_llama3 import ShapedLlamaConfig, build_shaped_llama3
+from dataflow.training.shaped_program import ShapedHardware
 
 GIB = 1024**3
 

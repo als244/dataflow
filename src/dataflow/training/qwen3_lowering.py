@@ -1,8 +1,8 @@
-"""Execution-grade Qwen3 lowering: shaped structure + layout-exact sizes.
+"""Qwen3 lowering: family declarations over the generic machinery.
 
-Mirrors ``llama3_lowering`` through the shared helpers: the shaped chain is
-family-generic; this module supplies the Qwen3 size map (packed layouts with
-qk-norm weights) and the dims object executables consume.
+Same contract as every family (docs/extending.md §4): a config->dims
+mapping plus a ``FamilyLayouts`` declaration (qk-norm weights live in the
+qwen3 block layout); the chain, sizes, and initial values are generic.
 """
 from __future__ import annotations
 
@@ -13,14 +13,12 @@ from dataflow.tasks.layouts import (
     DTypePolicy,
     Qwen3Dims,
     embed_weight_layout,
-    grad_layout,
     head_weight_layout,
-    opt_state_layout,
     qwen3_context_layout,
     qwen3_weight_layout,
 )
-from .llama3_lowering import apply_exact_sizes, fill_initial_values
-from .shaped_llama3 import ShapedHardware
+from .lowering import FamilyLayouts, apply_exact_sizes, initial_values_from_layouts, size_of_factory
+from .shaped_program import ShapedHardware
 from .shaped_qwen3 import ShapedQwen3Config, build_shaped_qwen3
 
 
@@ -39,46 +37,16 @@ def dims_of_qwen3(cfg: ShapedQwen3Config) -> Qwen3Dims:
     )
 
 
-def _size_of_factory(cfg: ShapedQwen3Config):
-    """Per-object exact sizes; per-layer block layouts (depth-dependent
-    dtype policies) — see llama3_lowering._size_of_factory."""
+def family_layouts(cfg: ShapedQwen3Config) -> tuple[Qwen3Dims, FamilyLayouts]:
     dims = dims_of_qwen3(cfg)
-    p = dims.dtypes
-    el = embed_weight_layout(dims)
-    hl = head_weight_layout(dims)
     cl = qwen3_context_layout(dims)
-    wl_i = [qwen3_weight_layout(dims, layer=i) for i in range(cfg.n_layers)]
-    dw_i = [grad_layout(wl_i[i], p, layer=i).total_bytes for i in range(cfg.n_layers)]
-    o_i = [opt_state_layout(wl_i[i], p, layer=i).total_bytes for i in range(cfg.n_layers)]
-    dw_e = grad_layout(el, p, ns="embed").total_bytes
-    dw_h = grad_layout(hl, p, ns="head").total_bytes
-    o_e = opt_state_layout(el, p, ns="embed").total_bytes
-    o_h = opt_state_layout(hl, p, ns="head").total_bytes
-
-    def size_of(oid: str) -> int | None:
-        if oid.startswith("A_"):
-            return cl.total_bytes
-        if oid.startswith("dW_embed"):
-            return dw_e
-        if oid == "W_embed":
-            return el.total_bytes
-        if oid.startswith("dW_head"):
-            return dw_h
-        if oid == "W_head":
-            return hl.total_bytes
-        if oid == "O_embed":
-            return o_e
-        if oid == "O_head":
-            return o_h
-        if oid.startswith("O_"):
-            return o_i[int(oid.split("_")[1])]
-        if oid.startswith("dW_"):
-            return dw_i[int(oid.rsplit("_", 1)[1])]
-        if oid.startswith("W_"):
-            return wl_i[int(oid.split("_")[1])].total_bytes
-        return None
-
-    return size_of
+    return dims, FamilyLayouts(
+        n_layers=cfg.n_layers,
+        block_weight_at=lambda i: qwen3_weight_layout(dims, layer=i),
+        block_context_at=lambda i: cl,
+        embed=embed_weight_layout(dims),
+        head=head_weight_layout(dims),
+    )
 
 
 def lower_qwen3(
@@ -91,13 +59,10 @@ def lower_qwen3(
     shaped = build_shaped_qwen3(
         cfg, hw=hw, recompute_levels=recompute_levels, fast_memory_capacity=fast_memory_capacity,
     )
-    return apply_exact_sizes(shaped, {}, "qwen3-exact-v1", size_of=_size_of_factory(cfg))
+    dims, fl = family_layouts(cfg)
+    return apply_exact_sizes(shaped, "qwen3-exact-v1", size_of=size_of_factory(dims, fl))
 
 
 def initial_values_qwen3(program: Program, cfg: ShapedQwen3Config, backend, *, seed: int = 0):
-    dims = dims_of_qwen3(cfg)
-    return fill_initial_values(
-        program, dims, qwen3_weight_layout(dims), backend, seed=seed,
-        head_layout=head_weight_layout(dims),
-        block_layout_of=lambda i: qwen3_weight_layout(dims, layer=i),
-    )
+    dims, fl = family_layouts(cfg)
+    return initial_values_from_layouts(program, dims, fl, backend, seed=seed)

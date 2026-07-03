@@ -252,7 +252,7 @@ def opt_state_layout(weight: PackedLayout, policy: DTypePolicy,
                      ns: str | None = None, layer: int | None = None) -> PackedLayout:
     """AdamW state for one weight object: per-field first/second moments at
     the policy's opt dtype. Under the all-bf16 default this packs to the
-    same total bytes as the historical flat ``adamw_state_layout`` (every
+    same total bytes as the historical flat bf16-halves layout (every
     m/v span is the field's byte span, alignment included) but the interior
     MAPPING is per-field [m_f | v_f] pairs, never covering padding gaps."""
     key = (lambda n: f"{ns}.{n}") if ns else (lambda n: n)
@@ -523,13 +523,3 @@ def head_weight_layout(dims) -> PackedLayout:
         ("final_norm_w", (dims.d_model,)),
     ], ns="head"))
 
-
-def adamw_state_layout(param_elems: int) -> PackedLayout:
-    """DEPRECATED flat form (bf16 halves over raw element counts, padding
-    included). Kept only for byte-size back-compat call sites while the
-    per-field ``opt_state_layout`` rollout completes; new code must use
-    ``opt_state_layout(weight, policy)``."""
-    return PackedLayout.build([
-        ("m", (param_elems,), "bf16"),
-        ("v", (param_elems,), "bf16"),
-    ])

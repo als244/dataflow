@@ -113,15 +113,23 @@ executables derive their layer from the task's `W_{i}` object
 
 Lowering emits the bare task chain plus the pieces planning needs:
 
-- **Structure**: per step, grad-accum rounds of
-  `fwd → head/loss → (recompute?, bwd)` then optimizer tasks. Copy the
-  conventions from `shaped_llama3.py`: task/object **naming** (step index
-  first: `block_fwd_{step}_{round}_{layer}`, `A_{step}_{round}_{layer}`,
-  globals `W_{layer}`/`O_{layer}` carry NO step index), the grad-accum
-  mutation pattern (round 0 creates dW, later rounds mutate it), recompute
-  tasks + `RecomputeRewrite`s per saved context, optimizer `step` in
-  `block_params` and `group="optimizer"` (the train loop patches the step
-  number by group).
+- **Structure**: you don't write it. `shaped_program.build_shaped_program`
+  owns the family-generic chain grammar — per step, grad-accum rounds of
+  `fwd → head/loss → (recompute?, bwd)` then optimizer tasks; task/object
+  **naming** (step index first: `block_fwd_{step}_{round}_{layer}`,
+  `A_{step}_{round}_{layer}`, globals `W_{layer}`/`O_{layer}` carry NO
+  step index); the grad-accum mutation pattern (round 0 creates dW, later
+  rounds mutate it); recompute tasks + `RecomputeRewrite`s per saved
+  context; optimizer `step` in `block_params` and `group="optimizer"`.
+  A family passes its config + explicit `kinds=` (one `LayerKindSpec`
+  per layer kind; uniform dense families seed theirs with
+  `roofline_block_kind_spec`) — see `shaped_llama3.py` /
+  `shaped_qwen3.py` / `shaped_qwen35.py`, all three of which are thin
+  declarations. Sizes + initial values are generic too
+  (`training/lowering.py`): declare a `FamilyLayouts` (which packed
+  layout backs each weight object, per layer; init specials) and call
+  `size_of_factory` / `initial_values_from_layouts` — a family lowering
+  module is ~70 lines of declarations.
 - **Optimizer placement**: emit each optimizer task immediately after the
   LAST mutation of its gradient (`optimizer_placement="interleaved"`, the
   default) — the legacy all-optimizers-at-the-end order costs a 1.5–2 s
@@ -193,7 +201,7 @@ embeddings) added to the machinery — reuse, don't reinvent:
 - **Heterogeneous layer kinds**: build one `LayerKindSpec` per kind
   (sizes from the packed layouts, roofline cost seeds, distinct
   `key_prefix` for the compute-block keys) and pass `kinds=` +
-  `kind_of=` to `build_shaped_llama3`. Task IDs stay uniform
+  `kind_of=` to `build_shaped_program`. Task IDs stay uniform
   (`block_fwd_{s}_{r}_{i}`); only the compute keys differ per kind, so
   the train loop/NVTX/window-oracle regexes need nothing. Lowering sizes
   per-layer via `apply_exact_sizes(..., size_of=)`. The `Family` entry
