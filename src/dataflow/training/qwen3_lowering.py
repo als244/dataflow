@@ -10,10 +10,12 @@ from typing import Mapping
 
 from dataflow.core import Program
 from dataflow.tasks.layouts import (
+    DTypePolicy,
     Qwen3Dims,
-    adamw_state_layout,
     embed_weight_layout,
+    grad_layout,
     head_weight_layout,
+    opt_state_layout,
     qwen3_context_layout,
     qwen3_weight_layout,
 )
@@ -32,24 +34,29 @@ def dims_of_qwen3(cfg: ShapedQwen3Config) -> Qwen3Dims:
         vocab_size=cfg.vocab_size,
         tokens=cfg.tokens,
         seq_len=cfg.seq_len,
+        dtypes=getattr(cfg, "dtypes", None) or DTypePolicy(),
     )
 
 
 def _exact_sizes(cfg: ShapedQwen3Config) -> dict[str, int]:
     dims = dims_of_qwen3(cfg)
+    p = dims.dtypes
     wl = qwen3_weight_layout(dims)
     el = embed_weight_layout(dims)
     hl = head_weight_layout(dims)
     cl = qwen3_context_layout(dims)
-    # state sized from packed bytes, padding included — see llama3_lowering
+    # dW/O sized from their own field-mirrored layouts — see llama3_lowering
     return {
         "__W_block": wl.total_bytes,
         "__W_embed": el.total_bytes,
         "__W_head": hl.total_bytes,
+        "__dW_block": grad_layout(wl, p).total_bytes,
+        "__dW_embed": grad_layout(el, p, ns="embed").total_bytes,
+        "__dW_head": grad_layout(hl, p, ns="head").total_bytes,
         "__A": cl.total_bytes,
-        "__O_block": adamw_state_layout(wl.total_bytes // 2).total_bytes,
-        "__O_embed": adamw_state_layout(el.total_bytes // 2).total_bytes,
-        "__O_head": adamw_state_layout(hl.total_bytes // 2).total_bytes,
+        "__O_block": opt_state_layout(wl, p).total_bytes,
+        "__O_embed": opt_state_layout(el, p, ns="embed").total_bytes,
+        "__O_head": opt_state_layout(hl, p, ns="head").total_bytes,
     }
 
 

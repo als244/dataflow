@@ -38,9 +38,11 @@ from .kernels import KernelCtx, KernelSet, resolve_kernels
 from .layouts import (
     LlamaDims,
     PackedLayout,
-    adamw_state_layout,
     context_layout,
+    embed_weight_layout,
+    grad_layout,
     head_weight_layout,
+    opt_state_layout,
     weight_layout,
 )
 
@@ -62,6 +64,12 @@ class _Base:
     @property
     def wl(self) -> PackedLayout:
         return weight_layout(self.dims)
+
+    @property
+    def gl(self) -> PackedLayout:
+        """dW layout: mirrors wl field-by-field at the policy's grad dtypes
+        (identical to wl under the default all-bf16 policy)."""
+        return grad_layout(self.wl, self.dims.dtypes)
 
     @property
     def cl(self) -> PackedLayout:
@@ -255,11 +263,11 @@ class BlockBwd(_Base):
             w = self.wl.views(self._in(ctx, 3))
             accum = bool(ctx.task.mutates)
             if accum:
-                dw = self.wl.views(ctx.mutates[ctx.task.mutates[0]])
+                dw = self.gl.views(ctx.mutates[ctx.task.mutates[0]])
                 dx = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
             else:
                 dx = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
-                dw = self.wl.views(self._out(ctx, 1))
+                dw = self.gl.views(self._out(ctx, 1))
             self._backward(kctx, dy, a, x, w, dx, dw, accum)
 
     def _backward(self, kctx, dy, a, x, w, dx_out, dw, accum: bool) -> None:
@@ -357,6 +365,10 @@ class HeadBwd(_Base):
     def hl(self) -> PackedLayout:
         return head_weight_layout(self.dims)
 
+    @property
+    def hgl(self) -> PackedLayout:
+        return grad_layout(self.hl, self.dims.dtypes, ns="head")
+
     def launch(self, ctx: TaskContext) -> None:
         d = self.dims
         es, kctx = self._stream_ctx(ctx)
@@ -375,33 +387,71 @@ class HeadBwd(_Base):
             dnorm = torch.empty(d.d_model, dtype=torch.float32, device=y.device)
             K.rmsnorm_bwd(kctx, dyn, y, rstd, wh["final_norm_w"], dy, dnorm)
             if accum:
-                dwh = self.hl.views(ctx.mutates[ctx.task.mutates[0]])
+                dwh = self.hgl.views(ctx.mutates[ctx.task.mutates[0]])
                 dwh["w"].add_(dlogits.T @ yn)
-                dwh["final_norm_w"].add_(dnorm.to(torch.bfloat16))
+                dwh["final_norm_w"].add_(dnorm.to(dwh["final_norm_w"].dtype))
             else:
-                dwh = self.hl.views(self._out(ctx, 1))
-                torch.matmul(dlogits.T, yn, out=dwh["w"])  # write straight into dW
-                dwh["final_norm_w"].copy_(dnorm.to(torch.bfloat16))
+                dwh = self.hgl.views(self._out(ctx, 1))
+                if dwh["w"].dtype == torch.bfloat16:
+                    torch.matmul(dlogits.T, yn, out=dwh["w"])  # write straight into dW
+                else:
+                    dwh["w"].copy_(dlogits.T @ yn)
+                dwh["final_norm_w"].copy_(dnorm.to(dwh["final_norm_w"].dtype))
 
 
 @dataclass(frozen=True)
 class EmbedBwd(_Base):
+    @property
+    def egl(self) -> PackedLayout:
+        return grad_layout(embed_weight_layout(self.dims), self.dims.dtypes, ns="embed")
+
     def launch(self, ctx: TaskContext) -> None:
         d = self.dims
         with torch.cuda.stream(external_stream(ctx.stream)):
             dy = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
             tokens = torch_view(self._in(ctx, 1), (d.tokens,), torch.int32)
             accum = bool(ctx.task.mutates)
-            if accum:
-                dwe = torch_view(ctx.mutates[ctx.task.mutates[0]], (d.vocab_size, d.d_model), torch.bfloat16)
-            else:
-                dwe = torch_view(self._out(ctx, 0), (d.vocab_size, d.d_model), torch.bfloat16)
+            buf = ctx.mutates[ctx.task.mutates[0]] if accum else self._out(ctx, 0)
+            dwe = self.egl.view(buf, "w")
             ops.embed_bwd_accum(tokens, dy, dwe, zero_first=not accum)
 
 
 @dataclass(frozen=True)
 class AdamWStep(_Base):
+    """Per-FIELD AdamW over one packed weight object.
+
+    Each field updates through its own w/g/m/v views at the dtype policy's
+    storage dtypes (fp32 in registers regardless — the kernels are
+    dtype-generic); padding gaps are never touched. ``kind`` selects the
+    llama-shaped default layout ("block" | "embed" | "head");
+    ``layout_for(dims, task, w_size_bytes) -> (PackedLayout, ns)`` overrides
+    it for families whose optimizer key spans several layouts (qwen3's own
+    block layout, qwen3.5's per-kind blocks / tied embed). The chosen
+    layout's total_bytes must equal the W buffer size — a mismatch is a
+    loud error, never a silent misview.
+    """
+
     hyper: AdamWHyper = AdamWHyper()
+    kind: str = "block"
+    layout_for: object = None
+
+    def _layouts(self, task, w_size: int):
+        d = self.dims
+        if self.layout_for is not None:
+            wl_, ns = self.layout_for(d, task, w_size)
+        elif self.kind == "embed":
+            wl_, ns = embed_weight_layout(d), "embed"
+        elif self.kind == "head":
+            wl_, ns = head_weight_layout(d), "head"
+        else:
+            wl_, ns = weight_layout(d), None
+        if wl_.total_bytes != w_size:
+            raise ValueError(
+                f"optimizer layout mismatch for {task.id!r}: layout "
+                f"{wl_.total_bytes} bytes vs W buffer {w_size} bytes"
+            )
+        p = d.dtypes
+        return wl_, grad_layout(wl_, p, ns=ns), opt_state_layout(wl_, p, ns=ns)
 
     def launch(self, ctx: TaskContext) -> None:
         es, kctx = self._stream_ctx(ctx)
@@ -409,19 +459,19 @@ class AdamWStep(_Base):
             w_buf = ctx.mutates[ctx.task.mutates[0]]
             g_buf = ctx.inputs[ctx.task.inputs[1]]
             o_buf = ctx.mutates[ctx.task.mutates[1]]
-            elems = w_buf.size_bytes // 2  # bf16 params
-            w = torch_view(w_buf, (elems,), torch.bfloat16)
-            g = torch_view(g_buf, (elems,), torch.bfloat16)
-            ol = adamw_state_layout(elems)
-            m = ol.view(o_buf, "m")
-            v = ol.view(o_buf, "v")
+            wl_, gl_, ol_ = self._layouts(ctx.task, w_buf.size_bytes)
             step = int(ctx.task.block_params.get("step", 0)) + 1
             hp = self.hyper
-            self.kernels.adamw_step(
-                kctx, w, g, m, v,
-                lr=hp.lr, beta1=hp.beta1, beta2=hp.beta2, eps=hp.eps,
-                weight_decay=hp.weight_decay, step=step,
-            )
+            for f in wl_.fields:
+                self.kernels.adamw_step(
+                    kctx,
+                    wl_.view(w_buf, f.name).view(-1),
+                    gl_.view(g_buf, f.name).view(-1),
+                    ol_.view(o_buf, f"m_{f.name}").view(-1),
+                    ol_.view(o_buf, f"v_{f.name}").view(-1),
+                    lr=hp.lr, beta1=hp.beta1, beta2=hp.beta2, eps=hp.eps,
+                    weight_decay=hp.weight_decay, step=step,
+                )
 
 
 def build_resolver(
@@ -444,9 +494,9 @@ def build_resolver(
         "loss_bwd": LossBwd(dims, kernels),
         "head_bwd": HeadBwd(dims, kernels),
         "embed_bwd": EmbedBwd(dims, kernels),
-        "optimizer_block": AdamWStep(dims, kernels, hyper),
-        "optimizer_embed": AdamWStep(dims, kernels, hyper),
-        "optimizer_head": AdamWStep(dims, kernels, hyper),
+        "optimizer_block": AdamWStep(dims, kernels, hyper, kind="block"),
+        "optimizer_embed": AdamWStep(dims, kernels, hyper, kind="embed"),
+        "optimizer_head": AdamWStep(dims, kernels, hyper, kind="head"),
     }
 
     def resolver(task: TaskSpec):

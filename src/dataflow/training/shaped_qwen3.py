@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
+from dataflow.tasks.layouts import DTypePolicy
 from .shaped_llama3 import ShapedHardware, build_shaped_llama3
 
 
@@ -30,6 +31,7 @@ class ShapedQwen3Config:
     grad_accum_rounds: int = 1
     num_steps: int = 1
     optimizer_placement: str = "interleaved"
+    dtypes: DTypePolicy = DTypePolicy()
 
     @property
     def tokens(self) -> int:

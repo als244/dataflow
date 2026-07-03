@@ -42,6 +42,8 @@ from .kernels import KernelSet, resolve_kernels
 from .layouts import (
     PackedLayout,
     Qwen35Dims,
+    embed_weight_layout,
+    head_weight_layout,
     qwen35_attn_context_layout,
     qwen35_attn_weight_layout,
     qwen35_lin_context_layout,
@@ -244,9 +246,9 @@ class Qwen35LinBlockBwd(_Base):
             accum = bool(ctx.task.mutates)
             dx = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
             if accum:
-                dw = self.wl.views(ctx.mutates[ctx.task.mutates[0]])
+                dw = self.gl.views(ctx.mutates[ctx.task.mutates[0]])
             else:
-                dw = self.wl.views(self._out(ctx, 1))
+                dw = self.gl.views(self._out(ctx, 1))
             self._backward(kctx, dy, a, x, w, dx, dw, accum)
 
     def _backward(self, kctx, dy, a, x, w, dx_out, dw, accum: bool) -> None:
@@ -510,9 +512,9 @@ class Qwen35AttnBlockBwd(_Base):
             accum = bool(ctx.task.mutates)
             dx = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
             if accum:
-                dw = self.wl.views(ctx.mutates[ctx.task.mutates[0]])
+                dw = self.gl.views(ctx.mutates[ctx.task.mutates[0]])
             else:
-                dw = self.wl.views(self._out(ctx, 1))
+                dw = self.gl.views(self._out(ctx, 1))
             self._backward(kctx, dy, a, x, w, dx, dw, accum)
 
     def _backward(self, kctx, dy, a, x, w, dx_out, dw, accum: bool) -> None:
@@ -592,6 +594,31 @@ class Qwen35AttnBlockBwd(_Base):
         dx_out.copy_(dxo + dx_n)
 
 
+def _opt_block_layout(d, task, w_size):
+    """optimizer_block spans BOTH layer kinds; pick the kind whose packed
+    weight layout matches the W buffer byte-for-byte (loud error otherwise)."""
+    for wl_ in (qwen35_lin_weight_layout(d), qwen35_attn_weight_layout(d)):
+        if wl_.total_bytes == w_size:
+            return wl_, None
+    raise ValueError(
+        f"no qwen35 block weight layout matches W of {w_size} bytes ({task.id!r})"
+    )
+
+
+def _opt_embed_layout(d, task, w_size):
+    """Untied: bare table (policy names embed.*). Tied: W_embed IS the head
+    layout [table | final_norm_w] and stays policy-addressed as head.*."""
+    el = embed_weight_layout(d)
+    if el.total_bytes == w_size:
+        return el, "embed"
+    hl = head_weight_layout(d)
+    if hl.total_bytes == w_size:
+        return hl, "head"
+    raise ValueError(
+        f"no embed/tied weight layout matches W of {w_size} bytes ({task.id!r})"
+    )
+
+
 def build_qwen35_resolver(
     dims: Qwen35Dims,
     hyper: AdamWHyper = AdamWHyper(),
@@ -610,9 +637,9 @@ def build_qwen35_resolver(
         "loss_bwd": LossBwd(dims, kernels),
         "head_bwd": HeadBwd(dims, kernels),
         "embed_bwd": EmbedBwd(dims, kernels),
-        "optimizer_block": AdamWStep(dims, kernels, hyper),
-        "optimizer_embed": AdamWStep(dims, kernels, hyper),
-        "optimizer_head": AdamWStep(dims, kernels, hyper),  # untied only
+        "optimizer_block": AdamWStep(dims, kernels, hyper, layout_for=_opt_block_layout),
+        "optimizer_embed": AdamWStep(dims, kernels, hyper, layout_for=_opt_embed_layout),
+        "optimizer_head": AdamWStep(dims, kernels, hyper, kind="head"),  # untied only
     }
 
     def resolver(task: TaskSpec):

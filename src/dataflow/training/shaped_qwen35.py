@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 
 from dataflow.tasks.layouts import (
+    DTypePolicy,
     Qwen35Dims,
     qwen35_attn_context_layout,
     qwen35_attn_weight_layout,
@@ -53,6 +54,7 @@ class ShapedQwen35Config:
     # untied ~8.96B params = the "9B"). The 2B DOES tie — tied stays a
     # supported config choice, exercised by the tiny_tied ladder tests.
     tied_embeddings: bool = False
+    dtypes: DTypePolicy = DTypePolicy()
     rope_base: float = 10_000_000.0
 
     @property
@@ -114,6 +116,7 @@ def dims_of_qwen35(cfg: ShapedQwen35Config) -> Qwen35Dims:
         head_k_dim=cfg.head_k_dim, head_v_dim=cfg.head_v_dim,
         conv_kernel=cfg.conv_kernel, d_ff=cfg.d_ff, vocab_size=cfg.vocab_size,
         tokens=cfg.tokens, seq_len=cfg.seq_len, rope_base=cfg.rope_base,
+        dtypes=getattr(cfg, "dtypes", None) or DTypePolicy(),
     )
 
 

@@ -135,6 +135,7 @@ class LlamaDims:
     tokens: int
     seq_len: int
     rope_base: float = 500_000.0
+    dtypes: DTypePolicy = DTypePolicy()
 
     @property
     def head_dim(self) -> int:
@@ -162,6 +163,7 @@ class Qwen3Dims:
     tokens: int
     seq_len: int
     rope_base: float = 1_000_000.0
+    dtypes: DTypePolicy = DTypePolicy()
 
     @property
     def q_dim(self) -> int:
@@ -172,19 +174,62 @@ class Qwen3Dims:
         return self.n_kv_heads * self.head_dim
 
 
+def _param_specs(dims, names_shapes, ns: str | None = None,
+                 ) -> list[tuple[str, tuple[int, ...], str]]:
+    """Trainable-field specs at the dims' dtype policy (param role).
+
+    ``ns`` prefixes the POLICY LOOKUP name (not the field name): the embed
+    and head tables both pack a field literally named "w", so policies
+    address them as "embed.w" / "head.w" / "head.final_norm_w". Block
+    fields are looked up bare ("wq", "A_log", "*_norm_w", ...).
+    """
+    policy = getattr(dims, "dtypes", None) or DTypePolicy()
+    key = (lambda n: f"{ns}.{n}") if ns else (lambda n: n)
+    return [(n, s, policy.for_field(key(n)).param) for n, s in names_shapes]
+
+
+def _policy_of(dims) -> DTypePolicy:
+    return getattr(dims, "dtypes", None) or DTypePolicy()
+
+
+def grad_layout(weight: PackedLayout, policy: DTypePolicy,
+                ns: str | None = None) -> PackedLayout:
+    """dW layout mirroring a weight layout field-by-field at grad dtypes."""
+    key = (lambda n: f"{ns}.{n}") if ns else (lambda n: n)
+    return PackedLayout.build(
+        [(f.name, f.shape, policy.for_field(key(f.name)).grad) for f in weight.fields]
+    )
+
+
+def opt_state_layout(weight: PackedLayout, policy: DTypePolicy,
+                     ns: str | None = None) -> PackedLayout:
+    """AdamW state for one weight object: per-field first/second moments at
+    the policy's opt dtype. Under the all-bf16 default this packs to the
+    same total bytes as the historical flat ``adamw_state_layout`` (every
+    m/v span is the field's byte span, alignment included) but the interior
+    MAPPING is per-field [m_f | v_f] pairs, never covering padding gaps."""
+    key = (lambda n: f"{ns}.{n}") if ns else (lambda n: n)
+    specs: list[tuple[str, tuple[int, ...], str]] = []
+    for f in weight.fields:
+        o = policy.for_field(key(f.name)).opt
+        specs.append((f"m_{f.name}", f.shape, o))
+        specs.append((f"v_{f.name}", f.shape, o))
+    return PackedLayout.build(specs)
+
+
 def weight_layout(dims: LlamaDims) -> PackedLayout:
     d, kv, ff = dims.d_model, dims.kv_dim, dims.d_ff
-    return PackedLayout.build([
-        ("attn_norm_w", (d,), "bf16"),
-        ("wq", (d, d), "bf16"),
-        ("wk", (d, kv), "bf16"),
-        ("wv", (d, kv), "bf16"),
-        ("wo", (d, d), "bf16"),
-        ("ffn_norm_w", (d,), "bf16"),
-        ("w1", (d, ff), "bf16"),
-        ("w3", (d, ff), "bf16"),
-        ("w2", (ff, d), "bf16"),
-    ])
+    return PackedLayout.build(_param_specs(dims, [
+        ("attn_norm_w", (d,)),
+        ("wq", (d, d)),
+        ("wk", (d, kv)),
+        ("wv", (d, kv)),
+        ("wo", (d, d)),
+        ("ffn_norm_w", (d,)),
+        ("w1", (d, ff)),
+        ("w3", (d, ff)),
+        ("w2", (ff, d)),
+    ]))
 
 
 def context_layout(dims: LlamaDims) -> PackedLayout:
@@ -211,19 +256,19 @@ def context_layout(dims: LlamaDims) -> PackedLayout:
 
 def qwen3_weight_layout(dims: Qwen3Dims) -> PackedLayout:
     d, q, kv, ff, hd = dims.d_model, dims.q_dim, dims.kv_dim, dims.d_ff, dims.head_dim
-    return PackedLayout.build([
-        ("attn_norm_w", (d,), "bf16"),
-        ("wq", (d, q), "bf16"),
-        ("wk", (d, kv), "bf16"),
-        ("wv", (d, kv), "bf16"),
-        ("q_norm_w", (hd,), "bf16"),
-        ("k_norm_w", (hd,), "bf16"),
-        ("wo", (q, d), "bf16"),
-        ("ffn_norm_w", (d,), "bf16"),
-        ("w1", (d, ff), "bf16"),
-        ("w3", (d, ff), "bf16"),
-        ("w2", (ff, d), "bf16"),
-    ])
+    return PackedLayout.build(_param_specs(dims, [
+        ("attn_norm_w", (d,)),
+        ("wq", (d, q)),
+        ("wk", (d, kv)),
+        ("wv", (d, kv)),
+        ("q_norm_w", (hd,)),
+        ("k_norm_w", (hd,)),
+        ("wo", (q, d)),
+        ("ffn_norm_w", (d,)),
+        ("w1", (d, ff)),
+        ("w3", (d, ff)),
+        ("w2", (ff, d)),
+    ]))
 
 
 def qwen3_context_layout(dims: Qwen3Dims) -> PackedLayout:
@@ -286,6 +331,7 @@ class Qwen35Dims:
     tokens: int
     seq_len: int
     rope_base: float = 10_000_000.0
+    dtypes: DTypePolicy = DTypePolicy()
 
     @property
     def attn_dim(self) -> int:
@@ -324,24 +370,25 @@ class Qwen35Dims:
 
 
 def qwen35_lin_weight_layout(dims: Qwen35Dims) -> PackedLayout:
-    """DeltaNet layer weights. A_log/dt_bias stored bf16 (family keeps bf16
-    params throughout, golden identical — fla receives fp32 casts at call
-    time; bf16-ULP-vs-AdamW caveat recorded in docs/notes/qwen35-design.md)."""
+    """DeltaNet layer weights. Default policy stores A_log/dt_bias bf16
+    (golden identical — fla receives fp32 casts at call time; bf16-ULP-vs-
+    AdamW caveat recorded in docs/notes/qwen35-design.md); a dtype policy
+    override ("A_log"/"dt_bias" -> fp32) lifts that."""
     d, ff = dims.d_model, dims.d_ff
-    return PackedLayout.build([
-        ("attn_norm_w", (d,), "bf16"),
-        ("w_qkvz", (d, dims.qkvz_dim), "bf16"),
-        ("w_ba", (d, dims.ba_dim), "bf16"),
-        ("w_conv", (dims.conv_dim, dims.conv_kernel), "bf16"),
-        ("A_log", (dims.num_v_heads,), "bf16"),
-        ("dt_bias", (dims.num_v_heads,), "bf16"),
-        ("lin_norm_w", (dims.head_v_dim,), "bf16"),
-        ("w_out", (dims.value_dim, d), "bf16"),
-        ("ffn_norm_w", (d,), "bf16"),
-        ("w1", (d, ff), "bf16"),
-        ("w3", (d, ff), "bf16"),
-        ("w2", (ff, d), "bf16"),
-    ])
+    return PackedLayout.build(_param_specs(dims, [
+        ("attn_norm_w", (d,)),
+        ("w_qkvz", (d, dims.qkvz_dim)),
+        ("w_ba", (d, dims.ba_dim)),
+        ("w_conv", (dims.conv_dim, dims.conv_kernel)),
+        ("A_log", (dims.num_v_heads,)),
+        ("dt_bias", (dims.num_v_heads,)),
+        ("lin_norm_w", (dims.head_v_dim,)),
+        ("w_out", (dims.value_dim, d)),
+        ("ffn_norm_w", (d,)),
+        ("w1", (d, ff)),
+        ("w3", (d, ff)),
+        ("w2", (ff, d)),
+    ]))
 
 
 def qwen35_lin_context_layout(dims: Qwen35Dims) -> PackedLayout:
@@ -367,19 +414,19 @@ def qwen35_lin_context_layout(dims: Qwen35Dims) -> PackedLayout:
 def qwen35_attn_weight_layout(dims: Qwen35Dims) -> PackedLayout:
     """Gated-attention layer weights: w_q projects [Q_all | gate_all]."""
     d, ff = dims.d_model, dims.d_ff
-    return PackedLayout.build([
-        ("attn_norm_w", (d,), "bf16"),
-        ("wq", (d, 2 * dims.attn_dim), "bf16"),
-        ("wk", (d, dims.kv_dim), "bf16"),
-        ("wv", (d, dims.kv_dim), "bf16"),
-        ("q_norm_w", (dims.head_dim,), "bf16"),
-        ("k_norm_w", (dims.head_dim,), "bf16"),
-        ("wo", (dims.attn_dim, d), "bf16"),
-        ("ffn_norm_w", (d,), "bf16"),
-        ("w1", (d, ff), "bf16"),
-        ("w3", (d, ff), "bf16"),
-        ("w2", (ff, d), "bf16"),
-    ])
+    return PackedLayout.build(_param_specs(dims, [
+        ("attn_norm_w", (d,)),
+        ("wq", (d, 2 * dims.attn_dim)),
+        ("wk", (d, dims.kv_dim)),
+        ("wv", (d, dims.kv_dim)),
+        ("q_norm_w", (dims.head_dim,)),
+        ("k_norm_w", (dims.head_dim,)),
+        ("wo", (dims.attn_dim, d)),
+        ("ffn_norm_w", (d,)),
+        ("w1", (d, ff)),
+        ("w3", (d, ff)),
+        ("w2", (ff, d)),
+    ]))
 
 
 def qwen35_attn_context_layout(dims: Qwen35Dims) -> PackedLayout:
@@ -406,21 +453,27 @@ def qwen35_attn_context_layout(dims: Qwen35Dims) -> PackedLayout:
 
 
 def embed_weight_layout(dims) -> PackedLayout:
-    return PackedLayout.build([("w", (dims.vocab_size, dims.d_model), "bf16")])
+    return PackedLayout.build(
+        _param_specs(dims, [("w", (dims.vocab_size, dims.d_model))], ns="embed")
+    )
 
 
 def head_weight_layout(dims) -> PackedLayout:
     """LM head object: the projection table PLUS the model's final RMSNorm
     weight (a real learned parameter in llama3/qwen3/qwen3.5 — packed here
-    so its gradient and optimizer state ride the head object)."""
-    return PackedLayout.build([
-        ("w", (dims.vocab_size, dims.d_model), "bf16"),
-        ("final_norm_w", (dims.d_model,), "bf16"),
-    ])
+    so its gradient and optimizer state ride the head object). Policy names:
+    "head.w", "head.final_norm_w" (also matched by "*_norm_w")."""
+    return PackedLayout.build(_param_specs(dims, [
+        ("w", (dims.vocab_size, dims.d_model)),
+        ("final_norm_w", (dims.d_model,)),
+    ], ns="head"))
 
 
 def adamw_state_layout(param_elems: int) -> PackedLayout:
-    """Optimizer state for one parameter object: bf16 first/second moments."""
+    """DEPRECATED flat form (bf16 halves over raw element counts, padding
+    included). Kept only for byte-size back-compat call sites while the
+    per-field ``opt_state_layout`` rollout completes; new code must use
+    ``opt_state_layout(weight, policy)``."""
     return PackedLayout.build([
         ("m", (param_elems,), "bf16"),
         ("v", (param_elems,), "bf16"),

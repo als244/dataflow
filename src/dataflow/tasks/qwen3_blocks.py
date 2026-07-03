@@ -226,9 +226,12 @@ def build_qwen3_resolver(
         "loss_bwd": LossBwd(dims, kernels),
         "head_bwd": HeadBwd(dims, kernels),
         "embed_bwd": EmbedBwd(dims, kernels),
-        "optimizer_block": AdamWStep(dims, kernels, hyper),
-        "optimizer_embed": AdamWStep(dims, kernels, hyper),
-        "optimizer_head": AdamWStep(dims, kernels, hyper),
+        "optimizer_block": AdamWStep(
+            dims, kernels, hyper,
+            layout_for=lambda d, task, size: (qwen3_weight_layout(d), None),
+        ),
+        "optimizer_embed": AdamWStep(dims, kernels, hyper, kind="embed"),
+        "optimizer_head": AdamWStep(dims, kernels, hyper, kind="head"),
     }
 
     def resolver(task: TaskSpec):

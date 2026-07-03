@@ -39,6 +39,7 @@ from dataflow.core import (
     TensorMeta,
     dtype_nbytes,
 )
+from dataflow.tasks.layouts import DTypePolicy
 
 BF16 = 2  # bytes
 
@@ -63,6 +64,9 @@ class ShapedLlamaConfig:
     # GPU-idle PCIe phase at the end of every step (measured 1.5-2.0 s at
     # 8B/seq-1K). Task ids are identical in both modes; only order changes.
     optimizer_placement: str = "interleaved"
+    # per-field dtype policy for params/grads/opt state (default: all bf16,
+    # the historical convention; docs/notes/dtype-policy-design.md)
+    dtypes: DTypePolicy = DTypePolicy()
 
     @property
     def tokens(self) -> int:
