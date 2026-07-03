@@ -65,6 +65,7 @@ class Qwen3BlockFwd(BlockFwd):
         kn = torch.empty_like(km)
         rstd_k = torch.empty(t * kvh, dtype=torch.float32, device=km.device)
         K.rmsnorm_fwd(kctx, km.view(t * kvh, hd), w["k_norm_w"], kn.view(t * kvh, hd), rstd_k)
+        st.pop("h1")
         st.update(qn=qn, kn=kn, v=v)
         if st["a"] is not None:
             st["a"]["qm"].copy_(qm)
@@ -80,6 +81,7 @@ class Qwen3BlockFwd(BlockFwd):
         K.rope_fwd(kctx, st["qn"], q, pos, d.n_heads, d.head_dim, d.rope_base)
         k = torch.empty_like(st["kn"])
         K.rope_fwd(kctx, st["kn"], k, pos, d.n_kv_heads, d.head_dim, d.rope_base)
+        st.pop("qn"), st.pop("kn")
         st.update(q=q, k=k)
 
     @staticmethod
@@ -147,6 +149,9 @@ class Qwen3BlockBwd(BlockBwd):
             K.rmsnorm_bwd(kctx, dyv, xv, rstd, wv, dxv, dwv)
             return dxv, dwv
 
+        # Scratch discipline: del each (t, .) temporary at last use;
+        # additive joins in place (see llama3_blocks.BlockBwd._backward).
+
         # --- mlp (identical to llama) ---
         h2 = torch.empty_like(a["h_mid"])
         K.rmsnorm_apply(kctx, a["h_mid"], a["rstd_ffn"], w["ffn_norm_w"], h2)
@@ -154,16 +159,21 @@ class Qwen3BlockBwd(BlockBwd):
         K.swiglu_fwd_out(kctx, a["x1"], a["x3"], s)
         ds = dy @ w["w2"].T
         acc("w2", s.T @ dy)
+        del s
         dx1 = torch.empty_like(a["x1"])
         dx3 = torch.empty_like(a["x3"])
         K.swiglu_bwd(kctx, ds, a["x1"], a["x3"], dx1, dx3)
-        del s
+        del ds
         acc("w1", h2.T @ dx1)
         acc("w3", h2.T @ dx3)
-        dh2 = dx1 @ w["w1"].T + dx3 @ w["w3"].T
-        dh_mid_n, dffn_norm = norm_bwd(dh2, a["h_mid"], a["rstd_ffn"], w["ffn_norm_w"])
+        del h2
+        dh2 = dx1 @ w["w1"].T
+        dh2.addmm_(dx3, w["w3"].T)
+        del dx1, dx3
+        dh_mid, dffn_norm = norm_bwd(dh2, a["h_mid"], a["rstd_ffn"], w["ffn_norm_w"])
+        del dh2
         acc("ffn_norm_w", dffn_norm)
-        dh_mid = dy + dh_mid_n
+        dh_mid.add_(dy)
 
         # --- attention (qk-norm variant) ---
         d_attn = dh_mid @ w["wo"].T
@@ -178,20 +188,27 @@ class Qwen3BlockBwd(BlockBwd):
         q = torch.empty_like(qn)
         pos = ops.positions_for(d.seq_spec, qn.shape[0], qn.device)
         K.rope_fwd(kctx, qn, q, pos, h, hd, d.rope_base)
+        del qn
         k = torch.empty_like(kn)
         K.rope_fwd(kctx, kn, k, pos, kvh, hd, d.rope_base)
+        del kn
 
         dq, dk, dv = ops.flash_bwd(
             d_attn, q, k, a["v"], a["attn_out"], a["lse"], h, kvh, hd, d.seq_spec,
         )
+        del d_attn, q, k
         dqn = torch.empty_like(dq)
         K.rope_bwd(kctx, dq, dqn, pos, h, hd, d.rope_base)
+        del dq
         dkn = torch.empty_like(dk)
         K.rope_bwd(kctx, dk, dkn, pos, kvh, hd, d.rope_base)
+        del dk
 
         dqm, dq_norm = norm_bwd(dqn.view(t * h, hd), qm2, a["rstd_q"], w["q_norm_w"])
+        del dqn
         acc("q_norm_w", dq_norm)
         dkm, dk_norm = norm_bwd(dkn.view(t * kvh, hd), km2, a["rstd_k"], w["k_norm_w"])
+        del dkn
         acc("k_norm_w", dk_norm)
         dqm = dqm.view(t, d.q_dim)
         dkm = dkm.view(t, d.kv_dim)
@@ -201,10 +218,16 @@ class Qwen3BlockBwd(BlockBwd):
         acc("wq", h1.T @ dqm)
         acc("wk", h1.T @ dkm)
         acc("wv", h1.T @ dv)
-        dh1 = dqm @ w["wq"].T + dkm @ w["wk"].T + dv @ w["wv"].T
+        del h1
+        dh1 = dqm @ w["wq"].T
+        dh1.addmm_(dkm, w["wk"].T)
+        dh1.addmm_(dv, w["wv"].T)
+        del dqm, dkm, dv
         dx_n, dattn_norm = norm_bwd(dh1, x, a["rstd_attn"], w["attn_norm_w"])
+        del dh1
         acc("attn_norm_w", dattn_norm)
-        dx_out.copy_(dh_mid + dx_n)
+        dh_mid.add_(dx_n)
+        dx_out.copy_(dh_mid)
 
 
 def build_qwen3_resolver(

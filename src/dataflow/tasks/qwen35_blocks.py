@@ -98,6 +98,7 @@ class Qwen35LinBlockFwd(BlockFwd):
         h1, w = st["h1"], st["w"]
         qkvz = h1 @ w["w_qkvz"]
         ba = h1 @ w["w_ba"]
+        st.pop("h1")
         st.update(qkvz=qkvz, ba=ba)
         if st["a"] is not None:
             st["a"]["qkvz"].copy_(qkvz)
@@ -144,6 +145,7 @@ class Qwen35LinBlockFwd(BlockFwd):
             use_gate_in_kernel=True,
             A_log=w["A_log"].float(), dt_bias=w["dt_bias"].float(),
         )
+        st.pop("qn"), st.pop("kn"), st.pop("v_h"), st.pop("post_conv"), st.pop("ba")
         st["core_out"] = o.squeeze(0).to(torch.bfloat16)
         if st["a"] is not None:
             st["a"]["g_post"].copy_(g_post.squeeze(0))
@@ -160,6 +162,7 @@ class Qwen35LinBlockFwd(BlockFwd):
         rstd = torch.empty(rows, dtype=torch.float32, device=o2.device)
         K.gated_rmsnorm_fwd(kctx, o2, z2, st["w"]["lin_norm_w"], y2, rstd)
         xo = torch.addmm(st["x"], y2.view(t, d.value_dim), st["w"]["w_out"])
+        st.pop("core_out"), st.pop("qkvz")
         st["h_mid"] = xo  # feeds the shared MLP-tail stages
         if st["a"] is not None:
             st["a"]["rstd_gate"].copy_(rstd)
@@ -268,6 +271,12 @@ class Qwen35LinBlockBwd(_Base):
             K.rmsnorm_bwd(kctx, dyv, xv, rstd, wv, dxv, dwv)
             return dxv, dwv
 
+        # Scratch discipline (M5.2: bs32 measured 9.5 GiB of task-internal
+        # torch scratch): every (t, .) temporary is del'd at its LAST use so
+        # the caching allocator can recycle it within the task, and additive
+        # joins run in place (addmm_/add_ — same epilogue convention the
+        # forward already uses). Kernel-call order is unchanged.
+
         # --- MLP tail (xo plays h_mid) ---
         h2 = torch.empty_like(a["xo"])
         K.rmsnorm_apply(kctx, a["xo"], a["rstd_ffn"], w["ffn_norm_w"], h2)
@@ -275,16 +284,21 @@ class Qwen35LinBlockBwd(_Base):
         K.swiglu_fwd_out(kctx, a["x1"], a["x3"], s)
         ds = dy @ w["w2"].T
         acc("w2", s.T @ dy)
+        del s
         dx1 = torch.empty_like(a["x1"])
         dx3 = torch.empty_like(a["x3"])
         K.swiglu_bwd(kctx, ds, a["x1"], a["x3"], dx1, dx3)
-        del s
+        del ds
         acc("w1", h2.T @ dx1)
         acc("w3", h2.T @ dx3)
-        dh2 = dx1 @ w["w1"].T + dx3 @ w["w3"].T
-        dxo_n, dffn = norm_bwd(dh2, a["xo"], a["rstd_ffn"], w["ffn_norm_w"])
+        del h2
+        dh2 = dx1 @ w["w1"].T
+        dh2.addmm_(dx3, w["w3"].T)
+        del dx1, dx3
+        dxo, dffn = norm_bwd(dh2, a["xo"], a["rstd_ffn"], w["ffn_norm_w"])
+        del dh2
         acc("ffn_norm_w", dffn)
-        dxo = dy + dxo_n
+        dxo.add_(dy)
 
         # --- gated norm + out projection (fused kernel; y recomputed for
         # free by the bwd and reused for the out-projection weight grad) ---
@@ -300,7 +314,9 @@ class Qwen35LinBlockBwd(_Base):
             kctx, do_normed, o2, z2, w["lin_norm_w"], a["rstd_gate"],
             dcore, dz2, dwn, y2,
         )
+        del do_normed, z2
         acc("w_out", y2.view(t, d.value_dim).T @ dxo)
+        del y2
         acc("lin_norm_w", dwn)
         dz = dz2.view(t, d.num_v_heads, d.head_v_dim)
 
@@ -310,9 +326,11 @@ class Qwen35LinBlockBwd(_Base):
         post = torch.empty_like(conv_in)
         K.causal_conv1d_silu_fwd(kctx, conv_in, w["w_conv"], post, cu)
         q2 = post[:, : d.key_dim].reshape(t * d.num_k_heads, d.head_k_dim).contiguous()
-        k2 = post[:, d.key_dim : 2 * d.key_dim].reshape(t * d.num_k_heads, d.head_k_dim).contiguous()
         qn, q_rstd = l2norm_fwd(q2)
+        del q2
+        k2 = post[:, d.key_dim : 2 * d.key_dim].reshape(t * d.num_k_heads, d.head_k_dim).contiguous()
         kn, k_rstd = l2norm_fwd(k2)
+        del k2
         v_h = post[:, 2 * d.key_dim :].reshape(t, d.num_v_heads, d.head_v_dim)
 
         b = a["ba"][:, : d.num_v_heads]
@@ -335,12 +353,15 @@ class Qwen35LinBlockBwd(_Base):
             use_gate_in_kernel=True, g_input=a_raw.unsqueeze(0),
             A_log=w["A_log"].float(), dt_bias=w["dt_bias"].float(),
         )
+        del post, v_h, dcore
         acc("A_log", dA_log)
         acc("dt_bias", ddt)
 
         # --- l2norm bwd (takes OUTPUT + rstd) ---
         dq_pre = l2norm_bwd(qn, q_rstd, dq.squeeze(0).reshape(t * d.num_k_heads, d.head_k_dim))
+        del qn, dq
         dk_pre = l2norm_bwd(kn, k_rstd, dk.squeeze(0).reshape(t * d.num_k_heads, d.head_k_dim))
+        del kn, dk
 
         # --- conv bwd (silu recomputed internally by the kernel) ---
         d_post = torch.cat([
@@ -348,23 +369,31 @@ class Qwen35LinBlockBwd(_Base):
             dk_pre.view(t, d.key_dim),
             dv.squeeze(0).reshape(t, d.value_dim),
         ], dim=-1)
+        del dq_pre, dk_pre, dv
         dconv_in = torch.empty_like(conv_in)
         dwconv = torch.empty_like(w["w_conv"])
         K.causal_conv1d_silu_bwd(kctx, conv_in, d_post, w["w_conv"], dconv_in, dwconv, cu)
+        del conv_in, d_post
         acc("w_conv", dwconv)
 
         # --- assemble projection grads ---
         db_raw = (db.squeeze(0).float() * (beta.float() * (1 - beta.float()))).to(torch.bfloat16)
         d_qkvz = torch.cat([dconv_in, dz.reshape(t, d.value_dim)], dim=-1)
+        del dconv_in, dz, dz2
         d_ba = torch.cat([db_raw, da.squeeze(0).to(torch.bfloat16)], dim=-1)
         h1 = torch.empty_like(x)
         K.rmsnorm_apply(kctx, x, a["rstd_attn"], w["attn_norm_w"], h1)
         acc("w_qkvz", h1.T @ d_qkvz)
         acc("w_ba", h1.T @ d_ba)
-        dh1 = d_qkvz @ w["w_qkvz"].T + d_ba @ w["w_ba"].T
+        del h1
+        dh1 = d_qkvz @ w["w_qkvz"].T
+        dh1.addmm_(d_ba, w["w_ba"].T)
+        del d_qkvz, d_ba
         dx_n, dattn = norm_bwd(dh1, x, a["rstd_attn"], w["attn_norm_w"])
+        del dh1
         acc("attn_norm_w", dattn)
-        dx_out.copy_(dxo + dx_n)
+        dxo.add_(dx_n)
+        dx_out.copy_(dxo)
 
 
 # ---------------------------------------------------------------------------
@@ -410,6 +439,7 @@ class Qwen35AttnBlockFwd(BlockFwd):
         qm, gate = qg[:, : d.attn_dim], qg[:, d.attn_dim :]
         km = h1 @ w["wk"]
         v = h1 @ w["wv"]
+        st.pop("h1")
         st.update(qm=qm.contiguous(), gate=gate.contiguous(), km=km, v=v)
         if st["a"] is not None:
             st["a"]["qm"].copy_(qm)
@@ -429,6 +459,7 @@ class Qwen35AttnBlockFwd(BlockFwd):
         K.rmsnorm_fwd(kctx, st["km"].view(t * kvh, hd), st["w"]["k_norm_w"], kn.view(t * kvh, hd), rstd_k)
         st["q"] = Qwen35AttnBlockFwd._partial_rope(kctx, K, d, qn, h)
         st["k"] = Qwen35AttnBlockFwd._partial_rope(kctx, K, d, kn, kvh)
+        st.pop("qm"), st.pop("km")
         if st["a"] is not None:
             st["a"]["rstd_q"].copy_(rstd_q)
             st["a"]["rstd_k"].copy_(rstd_k)
@@ -438,6 +469,7 @@ class Qwen35AttnBlockFwd(BlockFwd):
         attn_out, lse = ops.flash_fwd(
             st["q"], st["k"], st["v"], d.n_heads, d.n_kv_heads, d.head_dim, d.seq_spec,
         )
+        st.pop("q"), st.pop("k"), st.pop("v")
         st["attn_out"] = attn_out
         if st["a"] is not None:
             st["a"]["lse"].copy_(lse)
@@ -446,7 +478,7 @@ class Qwen35AttnBlockFwd(BlockFwd):
     @staticmethod
     def _stage_gate_o(kctx, K, d, st):
         t = st["x"].shape[0]
-        gated = st["attn_out"] * torch.sigmoid(st["gate"].float()).to(torch.bfloat16)
+        gated = st.pop("attn_out") * torch.sigmoid(st.pop("gate").float()).to(torch.bfloat16)
         xo = torch.addmm(st["x"], gated, st["w"]["wo"])
         st["h_mid"] = xo
         if st["a"] is not None:
@@ -531,6 +563,9 @@ class Qwen35AttnBlockBwd(_Base):
             K.rmsnorm_bwd(kctx, dyv, xv, rstd, wv, dxv, dwv)
             return dxv, dwv
 
+        # Scratch discipline: del each (t, .) temporary at last use;
+        # additive joins in place (see the lin-block backward note).
+
         # --- MLP tail ---
         h2 = torch.empty_like(a["xo"])
         K.rmsnorm_apply(kctx, a["xo"], a["rstd_ffn"], w["ffn_norm_w"], h2)
@@ -538,24 +573,31 @@ class Qwen35AttnBlockBwd(_Base):
         K.swiglu_fwd_out(kctx, a["x1"], a["x3"], s)
         ds = dy @ w["w2"].T
         acc("w2", s.T @ dy)
+        del s
         dx1 = torch.empty_like(a["x1"])
         dx3 = torch.empty_like(a["x3"])
         K.swiglu_bwd(kctx, ds, a["x1"], a["x3"], dx1, dx3)
-        del s
+        del ds
         acc("w1", h2.T @ dx1)
         acc("w3", h2.T @ dx3)
-        dh2 = dx1 @ w["w1"].T + dx3 @ w["w3"].T
-        dxo_n, dffn = norm_bwd(dh2, a["xo"], a["rstd_ffn"], w["ffn_norm_w"])
+        del h2
+        dh2 = dx1 @ w["w1"].T
+        dh2.addmm_(dx3, w["w3"].T)
+        del dx1, dx3
+        dxo, dffn = norm_bwd(dh2, a["xo"], a["rstd_ffn"], w["ffn_norm_w"])
+        del dh2
         acc("ffn_norm_w", dffn)
-        dxo = dy + dxo_n
+        dxo.add_(dy)
 
         # --- output gate + o projection ---
         sig = torch.sigmoid(a["gate"].float())
         gated = a["attn_out"] * sig.to(torch.bfloat16)
         acc("wo", gated.T @ dxo)
+        del gated
         dgated = dxo @ w["wo"].T
         d_attn = (dgated.float() * sig).to(torch.bfloat16)
         d_gate = (dgated.float() * a["attn_out"].float() * sig * (1 - sig)).to(torch.bfloat16)
+        del dgated, sig
 
         # --- flash bwd needs post-norm/post-rope q, k (rebuild from saved) ---
         qn = torch.empty_like(a["qm"])
@@ -563,16 +605,23 @@ class Qwen35AttnBlockBwd(_Base):
         kn = torch.empty_like(a["km"])
         K.rmsnorm_apply(kctx, a["km"].view(t * kvh, hd), a["rstd_k"], w["k_norm_w"], kn.view(t * kvh, hd))
         q = Qwen35AttnBlockFwd._partial_rope(kctx, K, d, qn, h)
+        del qn
         k = Qwen35AttnBlockFwd._partial_rope(kctx, K, d, kn, kvh)
+        del kn
         dq, dk, dv = ops.flash_bwd(
             d_attn, q, k, a["v"], a["attn_out"], a["lse"], h, kvh, hd, d.seq_spec,
         )
+        del d_attn, q, k
         dqn = Qwen35AttnBlockFwd._partial_rope(kctx, K, d, dq, h, bwd=True)
+        del dq
         dkn = Qwen35AttnBlockFwd._partial_rope(kctx, K, d, dk, kvh, bwd=True)
+        del dk
 
         dqm, dqnorm = norm_bwd(dqn.view(t * h, hd), a["qm"].view(t * h, hd), a["rstd_q"], w["q_norm_w"])
+        del dqn
         acc("q_norm_w", dqnorm)
         dkm, dknorm = norm_bwd(dkn.view(t * kvh, hd), a["km"].view(t * kvh, hd), a["rstd_k"], w["k_norm_w"])
+        del dkn
         acc("k_norm_w", dknorm)
         dqm = dqm.view(t, d.attn_dim)
         dkm = dkm.view(t, d.kv_dim)
@@ -581,13 +630,20 @@ class Qwen35AttnBlockBwd(_Base):
         h1 = torch.empty_like(x)
         K.rmsnorm_apply(kctx, x, a["rstd_attn"], w["attn_norm_w"], h1)
         d_qg = torch.cat([dqm, d_gate], dim=-1)
+        del dqm, d_gate
         acc("wq", h1.T @ d_qg)
         acc("wk", h1.T @ dkm)
         acc("wv", h1.T @ dv)
-        dh1 = d_qg @ w["wq"].T + dkm @ w["wk"].T + dv @ w["wv"].T
+        del h1
+        dh1 = d_qg @ w["wq"].T
+        dh1.addmm_(dkm, w["wk"].T)
+        dh1.addmm_(dv, w["wv"].T)
+        del d_qg, dkm, dv
         dx_n, dattn_norm = norm_bwd(dh1, x, a["rstd_attn"], w["attn_norm_w"])
+        del dh1
         acc("attn_norm_w", dattn_norm)
-        dx_out.copy_(dxo + dx_n)
+        dxo.add_(dx_n)
+        dx_out.copy_(dxo)
 
 
 def _opt_block_layout(d, task, w_size):

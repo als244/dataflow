@@ -173,6 +173,7 @@ class BlockFwd(_Base):
         k = torch.empty_like(km)
         K.rope_fwd(kctx, km, k, pos, d.n_kv_heads, d.head_dim, d.rope_base)
         v = h1 @ w["wv"]
+        st.pop("h1")
         st.update(q=q, k=k, v=v)
         if st["a"] is not None:
             st["a"]["q"].copy_(q)
@@ -184,6 +185,7 @@ class BlockFwd(_Base):
         attn_out, lse = ops.flash_fwd(
             st["q"], st["k"], st["v"], d.n_heads, d.n_kv_heads, d.head_dim, d.seq_spec
         )
+        st.pop("q"), st.pop("k"), st.pop("v")
         st["attn_out"] = attn_out
         if st["a"] is not None:
             st["a"]["lse"].copy_(lse)
@@ -195,6 +197,7 @@ class BlockFwd(_Base):
         h2 = torch.empty_like(h_mid)
         rstd = torch.empty(d.tokens, dtype=torch.float32, device=h_mid.device)
         K.rmsnorm_fwd(kctx, h_mid, st["w"]["ffn_norm_w"], h2, rstd)
+        st.pop("attn_out")
         st.update(h_mid=h_mid, h2=h2)
         if st["a"] is not None:
             st["a"]["h_mid"].copy_(h_mid)
@@ -210,16 +213,19 @@ class BlockFwd(_Base):
         else:
             st["x1"] = h2 @ w["w1"]
             st["x3"] = h2 @ w["w3"]
+        st.pop("h2")
 
     @staticmethod
     def _stage_swiglu(kctx, K, d, st):
         s_out = torch.empty_like(st["x1"])
         K.swiglu_fwd_out(kctx, st["x1"], st["x3"], s_out)
+        st.pop("x1"), st.pop("x3")
         st["s"] = s_out
 
     @staticmethod
     def _stage_down_resid(kctx, K, d, st):
-        st["y"].copy_(st["h_mid"] + st["s"] @ st["w"]["w2"])
+        st["y"].copy_(torch.addmm(st["h_mid"], st.pop("s"), st["w"]["w2"]))
+        st.pop("h_mid")
 
     # (stage_name, fn, emitted context fields)
     STAGES = (
@@ -309,6 +315,11 @@ class BlockBwd(_Base):
             K.rmsnorm_bwd(kctx, dyv, xv, rstd, wv, dxv, dwv)
             return dxv, dwv
 
+        # Scratch discipline (M5.2): del each (t, .) temporary at last use
+        # so the caching allocator recycles it within the task; additive
+        # joins run in place (addmm_/add_, the forward's epilogue
+        # convention). Kernel-call order is unchanged.
+
         # --- mlp ---
         h2 = torch.empty_like(a["h_mid"])
         K.rmsnorm_apply(kctx, a["h_mid"], a["rstd_ffn"], w["ffn_norm_w"], h2)
@@ -316,16 +327,21 @@ class BlockBwd(_Base):
         K.swiglu_fwd_out(kctx, a["x1"], a["x3"], s)
         ds = dy @ w["w2"].T
         acc("w2", s.T @ dy)
+        del s
         dx1 = torch.empty_like(a["x1"])
         dx3 = torch.empty_like(a["x3"])
         K.swiglu_bwd(kctx, ds, a["x1"], a["x3"], dx1, dx3)
-        del s
+        del ds
         acc("w1", h2.T @ dx1)
         acc("w3", h2.T @ dx3)
-        dh2 = dx1 @ w["w1"].T + dx3 @ w["w3"].T
-        dh_mid_n, dffn_norm = norm_bwd(dh2, a["h_mid"], a["rstd_ffn"], w["ffn_norm_w"])
+        del h2
+        dh2 = dx1 @ w["w1"].T
+        dh2.addmm_(dx3, w["w3"].T)
+        del dx1, dx3
+        dh_mid, dffn_norm = norm_bwd(dh2, a["h_mid"], a["rstd_ffn"], w["ffn_norm_w"])
+        del dh2
         acc("ffn_norm_w", dffn_norm)
-        dh_mid = dy + dh_mid_n
+        dh_mid.add_(dy)
 
         # --- attention ---
         d_attn = dh_mid @ w["wo"].T
@@ -334,20 +350,29 @@ class BlockBwd(_Base):
             d_attn, a["q"], a["k"], a["v"], a["attn_out"], a["lse"],
             d.n_heads, d.n_kv_heads, d.head_dim, d.seq_spec,
         )
+        del d_attn
         dq_r = torch.empty_like(dq)
         pos = ops.positions_for(d.seq_spec, dq.shape[0], dq.device)
         K.rope_bwd(kctx, dq, dq_r, pos, d.n_heads, d.head_dim, d.rope_base)
+        del dq
         dk_r = torch.empty_like(dk)
         K.rope_bwd(kctx, dk, dk_r, pos, d.n_kv_heads, d.head_dim, d.rope_base)
+        del dk
         h1 = torch.empty_like(x)
         K.rmsnorm_apply(kctx, x, a["rstd_attn"], w["attn_norm_w"], h1)
         acc("wq", h1.T @ dq_r)
         acc("wk", h1.T @ dk_r)
         acc("wv", h1.T @ dv)
-        dh1 = dq_r @ w["wq"].T + dk_r @ w["wk"].T + dv @ w["wv"].T
+        del h1
+        dh1 = dq_r @ w["wq"].T
+        dh1.addmm_(dk_r, w["wk"].T)
+        dh1.addmm_(dv, w["wv"].T)
+        del dq_r, dk_r, dv
         dx_n, dattn_norm = norm_bwd(dh1, x, a["rstd_attn"], w["attn_norm_w"])
+        del dh1
         acc("attn_norm_w", dattn_norm)
-        dx_out.copy_(dh_mid + dx_n)
+        dh_mid.add_(dx_n)
+        dx_out.copy_(dh_mid)
 
 
 HEAD_CHUNK_SCRATCH_BYTES = 512 << 20  # per (chunk, vocab) bf16 buffer
@@ -422,8 +447,13 @@ class HeadLoss(_Base):
                 else:
                     dwh["w"].copy_(dw_c.to(dwh["w"].dtype))
                 dyn = dlogits @ wh["w"]                      # (c, d)
+                del logits, dlogits
                 K.rmsnorm_bwd(kctx, dyn, y_c, rstd, wh["final_norm_w"], dy[lo:hi], dnorm_c)
                 dnorm_acc += dnorm_c
+                # del before the next iteration's allocs: Python rebinding
+                # would otherwise keep the previous chunk's buffers live
+                # while the new ones allocate (2x peak)
+                del yn, rstd, dyn, dw_c
             if accum:
                 dwh["final_norm_w"].add_(dnorm_acc.to(dwh["final_norm_w"].dtype))
             else:
