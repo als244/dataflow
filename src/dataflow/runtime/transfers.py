@@ -72,6 +72,7 @@ class TransferEngine:
     trace: RunTrace
     bandwidth: int | None
     poison: object = None  # optional debug hook: poison(buffer) before pooling
+    annotate_rename: object = None  # NVTX display names only (see Engine.execute)
     queue: deque[TransferJob] = field(default_factory=deque)
     inflight: TransferJob | None = None
     _name_seq: dict[str, int] = field(default_factory=dict)
@@ -189,7 +190,9 @@ class TransferEngine:
         duration = self.transfer_runtime_us(job.size_bytes, job.runtime_override)
         annotator = getattr(self.backend, "annotator", None)
         if annotator is not None and annotator.enabled:
-            annotator.range_push(f"{self.direction}:{job.object_id}")
+            shown = (self.annotate_rename(job.object_id)  # type: ignore[operator]
+                     if self.annotate_rename else job.object_id)
+            annotator.range_push(f"{self.direction}:{shown}")
         self.backend.memcpy_async(
             dst_buffer, src_buffer, job.size_bytes, self.stream, duration_us=duration
         )

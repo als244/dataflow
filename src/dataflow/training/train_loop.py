@@ -12,6 +12,7 @@ One annotated chain, replayed once per optimizer step:
 """
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass, field
 
@@ -135,6 +136,7 @@ def train(
                 result = Engine(backend, session=session).execute(
                     stepped, resolver=resolver, initial_buffers=values,
                     pool_prewarm=dry.pool_demand, placement=placement,
+                    annotate_rename=_annotate_step(step),
                 )
             finally:
                 if annotator is not None and annotator.enabled:
@@ -167,6 +169,25 @@ def train(
             for buf in values.values():
                 backend.free(buf)
     return report
+
+
+# Step-scoped id families from the lowering, longest-prefix first. A replayed
+# single-step plan bakes step 0 into these; NVTX display names substitute the
+# GLOBAL step so profiler rows read block_fwd_{step}_{round}_{layer}. W_{i} /
+# O_{i} carry a LAYER index, not a step - deliberately absent from this list.
+_STEP0_ID = re.compile(
+    r"^(embed_fwd|block_fwd|head_fwd|loss_bwd|head_bwd|block_recompute|block_bwd"
+    r"|embed_bwd|optimizer_embed|optimizer_head|optimizer"
+    r"|tokens|targets|y_embed|y|A|dlogits|logits|dy_embed|dy|loss"
+    r"|dW_embed|dW_head|dW)_0(?=_|$)"
+)
+
+
+def _annotate_step(step: int):
+    '''NVTX-only renamer: rewrite the baked step-0 field to the global step.'''
+    if step == 0:
+        return None
+    return lambda name: _STEP0_ID.sub(rf"\g<1>_{step}", name, count=1)
 
 
 def _with_step(program: Program, step: int) -> Program:

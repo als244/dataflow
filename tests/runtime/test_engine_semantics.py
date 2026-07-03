@@ -272,3 +272,36 @@ def test_ledger_inversion_without_valve_deadlocks(monkeypatch):
     )
     with pytest.raises(DeadlockError, match="t2"):
         Engine(backend).execute(_inversion_program())
+
+
+def test_annotate_rename_rewrites_nvtx_only():
+    """NVTX display names get the caller's rename (global step substituted);
+    trace intervals and plan ids stay plan-relative (they key replay-gap
+    matching and the pinned-buffer registry)."""
+    from dataflow.runtime.device.annotate import RecordingAnnotator
+
+    program = Program(
+        name="rename",
+        initial_objects=(ObjectSpec(id="x", size_bytes=64, location="backing"),),
+        tasks=(
+            TaskSpec(
+                id="t_0_1", runtime_us=5.0,
+                prefetch_after=(TransferDirective(object_id="x", runtime_us=3.0),),
+            ),
+            TaskSpec(id="t_0_2", inputs=("x",), runtime_us=5.0),
+        ),
+        fast_memory_capacity=1_000,
+    )
+    backend = FakeBackend()
+    backend.annotator = RecordingAnnotator()
+    result = Engine(backend).execute(
+        program,
+        annotate_rename=lambda name: name.replace("_0_", "_7_"),
+    )
+    pushes = [n for kind, n in backend.annotator.events if kind == "push"]
+    assert "t_7_1" in pushes and "t_7_2" in pushes
+    assert "from_slow:x" in pushes  # no step field: unchanged
+    assert not any("_0_" in n for n in pushes)
+    # trace keeps plan-relative ids
+    trace_ids = {iv.task_id for iv in result.trace.intervals}
+    assert {"t_0_1", "t_0_2", "from_slow:x"} <= trace_ids

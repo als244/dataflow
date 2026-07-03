@@ -164,6 +164,10 @@ class Engine:
         pool_prewarm: Mapping[tuple[str, int], int] | None = None,
         placement=None,           # runtime.placement.Placement: assigned mode
         record_placement=None,    # runtime.placement.PlacementRecorder: dry runs
+        annotate_rename=None,     # Callable[[str], str]: NVTX display names only
+                                  # (a replayed 1-step plan bakes step 0 into every
+                                  # id; the caller knows the GLOBAL step and rewrites
+                                  # names for the profiler — trace/plan ids untouched)
     ) -> RunResult:
         if self.validate:
             validate_program(program)
@@ -225,11 +229,13 @@ class Engine:
             direction="from_slow", backend=self.backend, stream=h2d_stream,
             ledger=ledger, pool=pool, table=table, trace=trace,
             bandwidth=program.bandwidth_from_slow, poison=poison,
+            annotate_rename=annotate_rename,
         )
         d2h = TransferEngine(
             direction="to_slow", backend=self.backend, stream=d2h_stream,
             ledger=ledger, pool=pool, table=table, trace=trace,
             bandwidth=program.bandwidth_to_slow, poison=poison,
+            annotate_rename=annotate_rename,
         )
         deferred_prefetches: dict[str, list[TransferJob]] = {}
 
@@ -405,7 +411,7 @@ class Engine:
             mut_buffers = {obj: in_buffers[obj] for obj in task.mutates}
             self.backend.align_stream_to_host(compute)
             start_ev = self.backend.record_event(compute)
-            annotator.range_push(task.id)
+            annotator.range_push(annotate_rename(task.id) if annotate_rename else task.id)
             try:
                 resolver(task).launch(TaskContext(
                     task=task, stream=compute, inputs=in_buffers, outputs=out_buffers,
