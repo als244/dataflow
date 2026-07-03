@@ -39,3 +39,36 @@ See `docs/extending.md`: implement launch + reference + costs, register in
 the block composition, and run the gradcheck ladder
 (`dataflow.training.testing`): op backward → block backward (incl.
 recompute-equivalence + accumulation semantics) → model step.
+
+## Kernel registry (`kernels/`)
+
+Elementwise/reduction ops dispatch through a registry of swappable
+implementations — one file per op family (`swiglu.py`, `rope.py`,
+`rmsnorm.py`, `cross_entropy.py`, `adamw.py`), each registering an eager
+fallback (always available) and a fused Triton default. GEMMs (cuBLAS),
+flash attention and embed scatter/gather (aten) stay direct calls.
+
+Implementations are opaque callables under a fixed ABI — how one is built
+(Triton, CuTe DSL, TileLang, a ctypes binding, a cubin launch) is invisible
+to the registry:
+
+- ``fn(kctx, *args)`` enqueues all work and returns; no syncs; torch impls
+  may use the ambient stream, foreign toolchains use ``kctx.stream_handle``.
+- Tensors are contiguous torch views over runtime buffers (``.data_ptr()``
+  freely); no references retained past the call; callers own all outputs.
+- Workspace is declared: ``none`` | ``arena(bytes_fn)`` | ``internal(hint)``
+  — internal allocation is legal but discouraged; hints are validated
+  against profiled peaks. ``allocates="vendor"`` flags possible implicit
+  syncs.
+- ``deterministic`` gates the plan-invariance test mode; ``requires(caps)``
+  gates per-device availability (how an AMD/HIP impl will register later).
+
+Selection is pinned once per resolve (override > requires > priority) and
+recorded (``KernelSet.describe()``) in profiles and result summaries —
+measured task costs are measurements of a *specific* kernel set, so a
+mismatch at reuse time is loud, not silent. ``DATAFLOW_KERNELS=eager``
+forces the eager set process-wide (numerics bisection / A-B baseline).
+Cross-implementation equivalence is tolerance-based against the shared
+op references (FMA contraction and transcendental ulps make bitwise
+cross-impl equality a non-goal); every impl passes the same gradcheck
+ladder.

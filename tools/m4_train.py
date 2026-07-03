@@ -82,9 +82,14 @@ def main() -> None:
     parser.add_argument("--out", type=Path, default=Path("artifacts/m4"))
     args = parser.parse_args()
 
+    from dataflow.tasks.kernels import resolve_kernels
+
     cfg = CONFIGS[args.config]
     dims = dims_of(cfg)
     tokens_per_step = float(cfg.tokens * cfg.grad_accum_rounds)
+    kernel_set = resolve_kernels().describe()
+    impls = sorted(set(kernel_set.values()))
+    print(f"kernel set: {impls} ({len(kernel_set)} registry ops)")
     backend = CudaBackend()
     pcie = backend.measure_pcie()
     print(f"PCIe GB/s: uni {pcie.uni_h2d/1e3:.1f}/{pcie.uni_d2h/1e3:.1f}  "
@@ -194,7 +199,8 @@ def main() -> None:
             json.dumps(to_webapp_program(measured), indent=2) + "\n"
         )
 
-    result = {"config": args.config, "steps": args.steps, "pcie": pcie.__dict__, "sweep": rows}
+    result = {"config": args.config, "steps": args.steps, "pcie": pcie.__dict__,
+              "kernel_set": kernel_set, "sweep": rows}
 
     if args.baseline:
         from dataflow.models.llama3_reference import GoldenLlama3

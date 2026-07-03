@@ -1,10 +1,8 @@
 # M4 results: llama3-8B full-bf16 training, budget vs throughput
 
-**Kernel set: `eager-v1`** — row-chunked eager-torch ops (+ aten flash-attention,
-cuBLAS GEMMs). Costs are measured per task signature and feed the plans, so the
-fused-kernel set (M4.2 registry) will move BOTH columns: real throughput directly,
-sim throughput via cheaper measured costs — and may change recompute choices.
-This table is the eager baseline for that A/B.
+**Kernel set: `eager-v1`** — row-chunked eager-torch ops (+ aten flash-
+attention, cuBLAS GEMMs), predating the kernel registry. The fused set
+moves BOTH columns: real throughput directly, sim via measured costs.
 
 RTX 5090 (31.3 GiB) · bf16 params+grads+AdamW state · seq 4096 ·
 measured task costs · plans built on measured bidirectional PCIe ·

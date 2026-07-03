@@ -82,19 +82,23 @@ def check_block_backward(dims: LlamaDims, *, seed: int = 0, tol: float = 3e-2) -
     """Ladder level 2 for the transformer block (fwd/bwd/recompute/accum)."""
     from dataflow.models.llama3_reference import GoldenLlama3
 
+    from dataflow.tasks.kernels import KernelCtx, resolve_kernels
+
     flat, w, x, dy = _random_block_state(dims, seed)
-    fwd = BlockFwd(dims)
-    bwd = BlockBwd(dims)
+    kernels = resolve_kernels()
+    kctx = KernelCtx()
+    fwd = BlockFwd(dims, kernels)
+    bwd = BlockBwd(dims, kernels)
 
     # our forward with saved context
     a = _ctx_tensors(dims)
     y = torch.empty_like(x)
-    fwd._forward(x, w, y, a)
+    fwd._forward(kctx, x, w, y, a)
 
     # recompute-path equivalence: a fresh context from the same x must match
     a2 = _ctx_tensors(dims)
     y2 = torch.empty_like(x)
-    fwd._forward(x, w, y2, a2)
+    fwd._forward(kctx, x, w, y2, a2)
     errors = {f"recompute:{k}": rel_l2(a2[k], a[k]) for k in a}
     errors["recompute:y"] = rel_l2(y2, y)
 
@@ -109,7 +113,7 @@ def check_block_backward(dims: LlamaDims, *, seed: int = 0, tol: float = 3e-2) -
         start = f.offset_bytes // 2
         dw[f.name] = dwflat[start : start + n].view(f.shape)
     dx = torch.empty_like(x)
-    bwd._backward(dy, a, x, w, dx, dw, accum=False)
+    bwd._backward(kctx, dy, a, x, w, dx, dw, accum=False)
 
     # golden: autograd through the reference block forward
     golden = GoldenLlama3(dims=dims, n_layers=1)
@@ -125,7 +129,7 @@ def check_block_backward(dims: LlamaDims, *, seed: int = 0, tol: float = 3e-2) -
         errors[f"bwd:d{name}"] = rel_l2(dw[name], ref_dw[name])
 
     # accumulation semantics: running backward again with accum=True doubles
-    bwd._backward(dy, a, x, w, dx, dw, accum=True)
+    bwd._backward(kctx, dy, a, x, w, dx, dw, accum=True)
     errors["accum:2x"] = rel_l2(dwflat, 2.0 * flat_ref.grad)
 
     return CheckReport(errors=errors, tol=tol)

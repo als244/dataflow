@@ -17,8 +17,11 @@ def main() -> None:
 
     by_config: dict[str, list[dict]] = defaultdict(list)
     baselines: dict[str, dict] = {}
+    kernel_sets: list[dict] = []
     for path in sorted(args.dir.glob("*.summary.json")):
         data = json.loads(path.read_text())
+        if "kernel_set" in data:
+            kernel_sets.append(data["kernel_set"])
         for row in data.get("sweep", []):
             row["_config"] = data["config"]
             row["_steps"] = data.get("steps")
@@ -27,11 +30,17 @@ def main() -> None:
             baselines[data["config"]] = data
 
     print("# M4 results: llama3-8B full-bf16 training, budget vs throughput\n")
-    print("**Kernel set: `eager-v1`** — row-chunked eager-torch ops (+ aten flash-attention,")
-    print("cuBLAS GEMMs). Costs are measured per task signature and feed the plans, so the")
-    print("fused-kernel set (M4.2 registry) will move BOTH columns: real throughput directly,")
-    print("sim throughput via cheaper measured costs — and may change recompute choices.")
-    print("This table is the eager baseline for that A/B.\n")
+    if kernel_sets and all(k == kernel_sets[0] for k in kernel_sets):
+        impls = sorted(set(kernel_sets[0].values()))
+        label = "fused-v1" if impls == ["triton"] else "+".join(impls)
+        print(f"**Kernel set: `{label}`** — registry ops all resolved to "
+              f"{impls} (aten flash-attention + cuBLAS GEMMs stay direct).")
+        print("Costs are measured per task signature and feed the plans: kernel changes")
+        print("move BOTH real throughput and the sim prediction.\n")
+    else:
+        print("**Kernel set: `eager-v1`** — row-chunked eager-torch ops (+ aten flash-")
+        print("attention, cuBLAS GEMMs), predating the kernel registry. The fused set")
+        print("moves BOTH columns: real throughput directly, sim via measured costs.\n")
     print("RTX 5090 (31.3 GiB) · bf16 params+grads+AdamW state · seq 4096 ·")
     print("measured task costs · plans built on measured bidirectional PCIe ·")
     print("static buffer placement (offsets packed offline from plan lifetimes,")
