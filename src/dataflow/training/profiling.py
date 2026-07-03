@@ -228,6 +228,12 @@ def apply_measured_costs(program: Program, profiles: dict[tuple, TaskProfile]) -
     return replace(program, tasks=tuple(new_tasks))
 
 
+# bump when task-internals change measured behavior (runtime or workspace):
+# the cache key cannot see code, so this is the manual invalidation lever.
+# rev 2: BlockRecompute stops at w1/w3 (down-proj/swiglu/y removed).
+PROFILE_CACHE_REV = "2"
+
+
 def load_or_profile(
     program: Program,
     resolver,
@@ -264,6 +270,7 @@ def load_or_profile(
         "contend_pcie": kwargs.get("contend_pcie", False),
         "repeats": kwargs.get("repeats", 9),
         "torch": torch.__version__,
+        "code_rev": PROFILE_CACHE_REV,
     }
     key = hashlib.sha256(json.dumps(env, sort_keys=True).encode()).hexdigest()[:16]
     cache_dir = Path(cache_dir) if cache_dir is not None else Path("artifacts/profile-cache")

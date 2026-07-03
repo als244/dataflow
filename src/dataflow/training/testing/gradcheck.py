@@ -95,12 +95,15 @@ def check_block_backward(dims: LlamaDims, *, seed: int = 0, tol: float = 3e-2) -
     y = torch.empty_like(x)
     fwd._forward(kctx, x, w, y, a)
 
-    # recompute-path equivalence: a fresh context from the same x must match
+    # recompute-path equivalence: the RECOMPUTE executable's truncated
+    # forward must rebuild an identical context from the same x
+    from dataflow.tasks.llama3_blocks import BlockRecompute
+
     a2 = _ctx_tensors(dims)
-    y2 = torch.empty_like(x)
-    fwd._forward(kctx, x, w, y2, a2)
+    BlockRecompute(dims, kernels)._forward_context(kctx, x, w, a2)
+    # the truncated recompute intentionally does NOT produce y (the block
+    # output is never a backward dependency) — context equality is the claim
     errors = {f"recompute:{k}": rel_l2(a2[k], a[k]) for k in a}
-    errors["recompute:y"] = rel_l2(y2, y)
 
     # our backward
     wl = weight_layout(dims)

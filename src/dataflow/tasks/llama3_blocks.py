@@ -146,8 +146,41 @@ class BlockRecompute(BlockFwd):
             x = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
             w = self.wl.views(self._in(ctx, 1))
             a = self.cl.views(self._out(ctx, 0))
-            y_scratch = torch.empty_like(x)
-            self._forward(kctx, x, w, y_scratch, a)
+            self._forward_context(kctx, x, w, a)
+
+    def _forward_context(self, kctx, x, w, a) -> None:
+        """Rebuild ONLY the saved context. The backward never reads the
+        block output y (the next block's x is saved separately) and rebuilds
+        s from x1/x3 itself, so recompute stops at the w1/w3 GEMMs — the
+        swiglu, down-projection GEMM, residual add, and y copy of the full
+        forward are pure waste here (~15-20% of the task's FLOPs)."""
+        d = self.dims
+        K = self.kernels
+        h1 = torch.empty_like(x)
+        rstd_attn = torch.empty(d.tokens, dtype=torch.float32, device=x.device)
+        K.rmsnorm_fwd(kctx, x, w["attn_norm_w"], h1, rstd_attn)
+        qm = h1 @ w["wq"]
+        q = torch.empty_like(qm)
+        K.rope_fwd(kctx, qm, q, d.seq_len, d.n_heads, d.head_dim, d.rope_base)
+        km = h1 @ w["wk"]
+        k = torch.empty_like(km)
+        K.rope_fwd(kctx, km, k, d.seq_len, d.n_kv_heads, d.head_dim, d.rope_base)
+        v = h1 @ w["wv"]
+        attn_out, lse = ops.flash_fwd(q, k, v, d.n_heads, d.n_kv_heads, d.head_dim, d.seq_len)
+        h_mid = x + attn_out @ w["wo"]
+        h2 = torch.empty_like(h_mid)
+        rstd_ffn = torch.empty(d.tokens, dtype=torch.float32, device=x.device)
+        K.rmsnorm_fwd(kctx, h_mid, w["ffn_norm_w"], h2, rstd_ffn)
+        a["rstd_attn"].copy_(rstd_attn)
+        a["q"].copy_(q)
+        a["k"].copy_(k)
+        a["v"].copy_(v)
+        a["lse"].copy_(lse)
+        a["attn_out"].copy_(attn_out)
+        a["h_mid"].copy_(h_mid)
+        a["rstd_ffn"].copy_(rstd_ffn)
+        torch.matmul(h2, w["w1"], out=a["x1"])
+        torch.matmul(h2, w["w3"], out=a["x3"])
 
 
 @dataclass(frozen=True)
