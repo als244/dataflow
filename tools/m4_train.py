@@ -67,6 +67,14 @@ CONFIGS = {
     "qwen35-9b-s1k-bs8ga8": ShapedQwen35Config.qwen35_9b(
         seq_len=1024, batch=8, grad_accum_rounds=8,
     ),
+    # fewer/larger rounds: same 65,536 tok/step, 2-4x less per-step weight
+    # re-streaming — the M5.2 findings put the s1k config h2d-bound
+    "qwen35-9b-s1k-bs16ga4": ShapedQwen35Config.qwen35_9b(
+        seq_len=1024, batch=16, grad_accum_rounds=4,
+    ),
+    "qwen35-9b-s1k-bs32ga2": ShapedQwen35Config.qwen35_9b(
+        seq_len=1024, batch=32, grad_accum_rounds=2,
+    ),
 }
 
 
@@ -89,6 +97,13 @@ def main() -> None:
     )
     parser.add_argument("--steps", type=int, default=4)
     parser.add_argument("--recompute", action="store_true")
+    parser.add_argument(
+        "--force-recompute", choices=["all"], default=None,
+        help="bypass the recompute planner and pin every rewrite to its "
+             "recompute level (M5.2 contention probe: the greedy planner "
+             "prices transfers at uncontended profiled costs, so it "
+             "underestimates what recompute buys on transfer-heavy plans)",
+    )
     parser.add_argument(
         "--placement", choices=["static", "dynamic"], default="static",
         help="static (default): offsets packed offline from dry-run lifetimes, "
@@ -197,7 +212,7 @@ def main() -> None:
     profiles = load_or_profile(
         program, fam.build_resolver(dims), backend, refresh=args.refresh_profiles,
     )
-    if args.recompute:
+    if args.recompute or args.force_recompute:
         # recompute variants contain distinct signatures: block_fwd without a
         # context output, and block_recompute tasks — profile them too
         rc_all = {rw.object_id: 1 for rw in program.recompute_rewrites}
@@ -211,6 +226,13 @@ def main() -> None:
     args.out.mkdir(parents=True, exist_ok=True)
 
     def _plan(budget: int):
+        if args.force_recompute == "all":
+            levels = {rw.object_id: 1 for rw in program.recompute_rewrites}
+            forced = apply_measured_costs(build_raw(levels), profiles)
+            planned = plan_program(
+                forced, fast_memory_capacity=budget, preplace=args.preplace,
+            )
+            return replace(planned, recompute_levels=levels)
         return plan_program(
             measured, fast_memory_capacity=budget, recompute=args.recompute,
             build_variant=(
