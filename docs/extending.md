@@ -102,7 +102,12 @@ match wins — `docs/notes/dtype-policy-design.md`). dW layouts come from
 updates per field through typed views. Embed/head tables are
 policy-addressed `"embed.w"` / `"head.w"`; a heterogeneous family's
 optimizer resolves its layout per task (`layout_for`, size-verified).
-Mixed-policy E2E gates: `tests/training/test_dtype_policy_e2e.py`.
+Policies can be DEPTH-DEPENDENT (`layer_overrides`: first matching
+layer-set wins, its sub-policy owns that layer); per-layer dtypes mean
+per-layer packed sizes, so layouts resolve per layer everywhere — block
+executables derive their layer from the task's `W_{i}` object
+(`_Base.layer_of`). Mixed-policy E2E gates:
+`tests/training/test_dtype_policy_e2e.py`.
 
 ## 4. Lower it (`training/`)
 

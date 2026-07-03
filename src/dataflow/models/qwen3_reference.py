@@ -21,8 +21,8 @@ from dataflow.models.llama3_reference import GoldenLlama3
 class GoldenQwen3(GoldenLlama3):
     dims: Qwen3Dims  # re-typed, position and (lack of) default inherited
 
-    def block_layout(self) -> PackedLayout:
-        return qwen3_weight_layout(self.dims)
+    def block_layout(self, layer: int | None = None) -> PackedLayout:
+        return qwen3_weight_layout(self.dims, layer=layer)
 
     def block_forward(self, x: torch.Tensor, w: dict[str, torch.Tensor]) -> torch.Tensor:
         d = self.dims

@@ -57,8 +57,8 @@ class GoldenLlama3:
 
     # --- family layout hooks (overridden by subclasses) -----------------------
 
-    def block_layout(self) -> PackedLayout:
-        return weight_layout(self.dims)
+    def block_layout(self, layer: int | None = None) -> PackedLayout:
+        return weight_layout(self.dims, layer=layer)
 
     def embed_layout(self) -> PackedLayout:
         return embed_weight_layout(self.dims)
@@ -76,8 +76,9 @@ class GoldenLlama3:
         model = cls(dims=dims, n_layers=n_layers, hyper=hyper)
         model.w_embed = unpack_leaves(model.embed_layout(), w_embed_bytes)
         model.w_head = unpack_leaves(model.head_layout(), w_head_bytes)
-        bl = model.block_layout()
-        model.w_blocks = [unpack_leaves(bl, b) for b in w_block_bytes]
+        model.w_blocks = [
+            unpack_leaves(model.block_layout(i), b) for i, b in enumerate(w_block_bytes)
+        ]
         return model
 
     def final_leaves(self, object_id: str) -> tuple[PackedLayout, Leaves]:
@@ -87,7 +88,8 @@ class GoldenLlama3:
             return self.embed_layout(), self.w_embed
         if object_id == "W_head":
             return self.head_layout(), self.w_head
-        return self.block_layout(), self.w_blocks[int(object_id.split("_")[1])]
+        i = int(object_id.split("_")[1])
+        return self.block_layout(i), self.w_blocks[i]
 
     # --- forward --------------------------------------------------------------
 
@@ -116,7 +118,8 @@ class GoldenLlama3:
 
     def _field_dtypes(self, obj: str, name: str):
         ns = {"embed": "embed", "head": "head"}.get(obj)
-        return self.dims.dtypes.for_field(f"{ns}.{name}" if ns else name)
+        layer = int(obj.split("_")[1]) if obj.startswith("block_") else None
+        return self.dims.dtypes.for_field(f"{ns}.{name}" if ns else name, layer)
 
     def _adamw_obj(self, obj: str, leaves: Leaves) -> None:
         """Per-field AdamW mirroring the runtime executor: the gradient

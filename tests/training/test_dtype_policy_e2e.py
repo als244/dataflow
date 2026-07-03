@@ -29,10 +29,12 @@ MIXED = DTypePolicy(
 
 
 def _llama_cfg(**over):
-    return ShapedLlamaConfig(
+    kw = dict(
         n_layers=2, d_model=256, n_heads=8, n_kv_heads=2, d_ff=512,
-        vocab_size=512, seq_len=128, batch=1, dtypes=MIXED, **over,
+        vocab_size=512, seq_len=128, batch=1, dtypes=MIXED,
     )
+    kw.update(over)
+    return ShapedLlamaConfig(**kw)
 
 
 def test_mixed_policy_layout_shapes():
@@ -74,6 +76,55 @@ def test_qwen35_model_step_mixed_policy():
             ("A_log", FP32_ALL),
             ("dt_bias", FP32_ALL),
             ("*_norm_w", FP32_ALL),
+        ),
+    )
+    cfg = replace(ShapedQwen35Config.tiny(), dtypes=policy)
+    check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2).assert_ok()
+
+
+DEPTH = DTypePolicy(
+    layer_overrides=(
+        # layer 0 trains "hot": fp32 params/grads/moments on the norms,
+        # fp32 moments on everything
+        ((0,), DTypePolicy(default=ParamDTypes(opt="fp32"),
+                           overrides=(("*_norm_w", FP32_ALL),))),
+    ),
+)
+
+
+def test_depth_dependent_layer_sizes_diverge():
+    from dataflow.training.llama3_lowering import lower_llama3
+
+    prog = lower_llama3(_llama_cfg(dtypes=DEPTH))
+    sizes = {o.id: o.size_bytes for o in prog.initial_objects}
+    for t in prog.tasks:
+        sizes.update({o.id: o.size_bytes for o in t.outputs})
+    assert sizes["O_0"] > sizes["O_1"]          # fp32 moments on layer 0
+    assert sizes["W_0"] > sizes["W_1"]          # fp32 norm weights on layer 0
+    assert sizes["dW_0_0"] > sizes["dW_0_1"]    # fp32 norm grads on layer 0
+
+
+def test_llama_model_step_depth_dependent():
+    check_model_step(
+        _llama_cfg(dtypes=DEPTH), fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
+    ).assert_ok()
+
+
+def test_qwen35_model_step_depth_dependent():
+    from dataclasses import replace
+
+    from dataflow.training.shaped_qwen35 import ShapedQwen35Config
+
+    policy = DTypePolicy(
+        default=ParamDTypes(),
+        layer_overrides=(
+            # one lin layer (0) and THE attn layer (3) of the LLLF tiny get
+            # fp32 elementwise params + fp32 moments; layers 1-2 stay bf16
+            ((0, 3), DTypePolicy(default=ParamDTypes(opt="fp32"), overrides=(
+                ("*_norm_w", FP32_ALL),
+                ("A_log", FP32_ALL),
+                ("dt_bias", FP32_ALL),
+            ))),
         ),
     )
     cfg = replace(ShapedQwen35Config.tiny(), dtypes=policy)

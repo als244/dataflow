@@ -53,12 +53,31 @@ class DTypePolicy:
 
     default: ParamDTypes = ParamDTypes()
     overrides: tuple[tuple[str, ParamDTypes], ...] = ()
+    # depth-dependent policies: ordered (layer-index tuple, sub-policy);
+    # the FIRST entry containing the layer wins and its sub-policy answers
+    # ALL lookups for that layer (no fallthrough into the outer overrides —
+    # one policy owns a layer). Loose objects (embed/head tables) have no
+    # layer and always use the outer policy. Indices are explicit ints —
+    # write tuple(range(4)) for "the first four layers".
+    layer_overrides: tuple[tuple[tuple[int, ...], "DTypePolicy"], ...] = ()
 
-    def for_field(self, name: str) -> ParamDTypes:
-        for pattern, dts in self.overrides:
+    def for_layer(self, layer: int | None) -> "DTypePolicy":
+        if layer is not None:
+            for layers, sub in self.layer_overrides:
+                if layer in layers:
+                    return sub
+        return self
+
+    def for_field(self, name: str, layer: int | None = None) -> ParamDTypes:
+        pol = self.for_layer(layer)
+        for pattern, dts in pol.overrides:
             if fnmatchcase(name, pattern):
                 return dts
-        return self.default
+        return pol.default
+
+    @property
+    def depth_dependent(self) -> bool:
+        return bool(self.layer_overrides)
 
 
 @dataclass(frozen=True)
@@ -191,6 +210,7 @@ class Qwen3Dims:
 
 
 def _param_specs(dims, names_shapes, ns: str | None = None,
+                 layer: int | None = None,
                  ) -> list[tuple[str, tuple[int, ...], str]]:
     """Trainable-field specs at the dims' dtype policy (param role).
 
@@ -201,7 +221,7 @@ def _param_specs(dims, names_shapes, ns: str | None = None,
     """
     policy = getattr(dims, "dtypes", None) or DTypePolicy()
     key = (lambda n: f"{ns}.{n}") if ns else (lambda n: n)
-    return [(n, s, policy.for_field(key(n)).param) for n, s in names_shapes]
+    return [(n, s, policy.for_field(key(n), layer).param) for n, s in names_shapes]
 
 
 def _policy_of(dims) -> DTypePolicy:
@@ -219,16 +239,17 @@ def _lse_spec(dims, n_heads: int) -> tuple[str, tuple[int, ...], str]:
 
 
 def grad_layout(weight: PackedLayout, policy: DTypePolicy,
-                ns: str | None = None) -> PackedLayout:
+                ns: str | None = None, layer: int | None = None) -> PackedLayout:
     """dW layout mirroring a weight layout field-by-field at grad dtypes."""
     key = (lambda n: f"{ns}.{n}") if ns else (lambda n: n)
     return PackedLayout.build(
-        [(f.name, f.shape, policy.for_field(key(f.name)).grad) for f in weight.fields]
+        [(f.name, f.shape, policy.for_field(key(f.name), layer).grad)
+         for f in weight.fields]
     )
 
 
 def opt_state_layout(weight: PackedLayout, policy: DTypePolicy,
-                     ns: str | None = None) -> PackedLayout:
+                     ns: str | None = None, layer: int | None = None) -> PackedLayout:
     """AdamW state for one weight object: per-field first/second moments at
     the policy's opt dtype. Under the all-bf16 default this packs to the
     same total bytes as the historical flat ``adamw_state_layout`` (every
@@ -237,13 +258,13 @@ def opt_state_layout(weight: PackedLayout, policy: DTypePolicy,
     key = (lambda n: f"{ns}.{n}") if ns else (lambda n: n)
     specs: list[tuple[str, tuple[int, ...], str]] = []
     for f in weight.fields:
-        o = policy.for_field(key(f.name)).opt
+        o = policy.for_field(key(f.name), layer).opt
         specs.append((f"m_{f.name}", f.shape, o))
         specs.append((f"v_{f.name}", f.shape, o))
     return PackedLayout.build(specs)
 
 
-def weight_layout(dims: LlamaDims) -> PackedLayout:
+def weight_layout(dims: LlamaDims, layer: int | None = None) -> PackedLayout:
     d, kv, ff = dims.d_model, dims.kv_dim, dims.d_ff
     return PackedLayout.build(_param_specs(dims, [
         ("attn_norm_w", (d,)),
@@ -255,7 +276,7 @@ def weight_layout(dims: LlamaDims) -> PackedLayout:
         ("w1", (d, ff)),
         ("w3", (d, ff)),
         ("w2", (ff, d)),
-    ]))
+    ], layer=layer))
 
 
 def context_layout(dims: LlamaDims) -> PackedLayout:
@@ -280,7 +301,7 @@ def context_layout(dims: LlamaDims) -> PackedLayout:
     ])
 
 
-def qwen3_weight_layout(dims: Qwen3Dims) -> PackedLayout:
+def qwen3_weight_layout(dims: Qwen3Dims, layer: int | None = None) -> PackedLayout:
     d, q, kv, ff, hd = dims.d_model, dims.q_dim, dims.kv_dim, dims.d_ff, dims.head_dim
     return PackedLayout.build(_param_specs(dims, [
         ("attn_norm_w", (d,)),
@@ -294,7 +315,7 @@ def qwen3_weight_layout(dims: Qwen3Dims) -> PackedLayout:
         ("w1", (d, ff)),
         ("w3", (d, ff)),
         ("w2", (ff, d)),
-    ]))
+    ], layer=layer))
 
 
 def qwen3_context_layout(dims: Qwen3Dims) -> PackedLayout:
@@ -403,7 +424,7 @@ class Qwen35Dims:
         return "full" if (layer + 1) % self.full_attention_interval == 0 else "lin"
 
 
-def qwen35_lin_weight_layout(dims: Qwen35Dims) -> PackedLayout:
+def qwen35_lin_weight_layout(dims: Qwen35Dims, layer: int | None = None) -> PackedLayout:
     """DeltaNet layer weights. Default policy stores A_log/dt_bias bf16
     (golden identical — fla receives fp32 casts at call time; bf16-ULP-vs-
     AdamW caveat recorded in docs/notes/qwen35-design.md); a dtype policy
@@ -422,7 +443,7 @@ def qwen35_lin_weight_layout(dims: Qwen35Dims) -> PackedLayout:
         ("w1", (d, ff)),
         ("w3", (d, ff)),
         ("w2", (ff, d)),
-    ]))
+    ], layer=layer))
 
 
 def qwen35_lin_context_layout(dims: Qwen35Dims) -> PackedLayout:
@@ -445,7 +466,7 @@ def qwen35_lin_context_layout(dims: Qwen35Dims) -> PackedLayout:
     ])
 
 
-def qwen35_attn_weight_layout(dims: Qwen35Dims) -> PackedLayout:
+def qwen35_attn_weight_layout(dims: Qwen35Dims, layer: int | None = None) -> PackedLayout:
     """Gated-attention layer weights: w_q projects [Q_all | gate_all]."""
     d, ff = dims.d_model, dims.d_ff
     return PackedLayout.build(_param_specs(dims, [
@@ -460,7 +481,7 @@ def qwen35_attn_weight_layout(dims: Qwen35Dims) -> PackedLayout:
         ("w1", (d, ff)),
         ("w3", (d, ff)),
         ("w2", (ff, d)),
-    ]))
+    ], layer=layer))
 
 
 def qwen35_attn_context_layout(dims: Qwen35Dims) -> PackedLayout:

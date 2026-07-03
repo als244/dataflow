@@ -49,10 +49,11 @@ class GoldenQwen35:
 
     def layer_layout(self, i: int) -> PackedLayout:
         d = self.dims
-        return (
-            qwen35_attn_weight_layout(d) if d.kind_of(i) == "full"
-            else qwen35_lin_weight_layout(d)
+        build = (
+            qwen35_attn_weight_layout if d.kind_of(i) == "full"
+            else qwen35_lin_weight_layout
         )
+        return build(d, layer=i)
 
     def embed_layout(self) -> PackedLayout:
         # tied packs the head layout into W_embed
@@ -147,13 +148,14 @@ class GoldenQwen35:
         logits = ops.rmsnorm_reference(x, hv["final_norm_w"]) @ hv["w"].T
         return ops.ce_loss_reference(logits, targets)
 
-    def _field_dtypes(self, ns: str | None, name: str):
-        return self.dims.dtypes.for_field(f"{ns}.{name}" if ns else name)
+    def _field_dtypes(self, ns: str | None, name: str, layer: int | None = None):
+        return self.dims.dtypes.for_field(f"{ns}.{name}" if ns else name, layer)
 
     def _adamw_obj(self, obj: str, ns: str | None, leaves: Leaves) -> None:
         hp = self.hyper
+        layer = int(obj.split("_")[1]) if obj.startswith("block_") else None
         for name, w in leaves.items():
-            dts = self._field_dtypes(ns, name)
+            dts = self._field_dtypes(ns, name, layer)
             key = f"{obj}.{name}"
             if key not in self._adam_m:
                 odt = TORCH_DTYPE_BY_NAME[dts.opt]

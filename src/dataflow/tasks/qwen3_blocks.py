@@ -41,9 +41,8 @@ from .llama3_blocks import (
 class Qwen3BlockFwd(BlockFwd):
     dims: Qwen3Dims = None  # type: ignore[assignment]
 
-    @property
-    def wl(self) -> PackedLayout:
-        return qwen3_weight_layout(self.dims)
+    def _weight_layout(self, layer: int | None = None) -> PackedLayout:
+        return qwen3_weight_layout(self.dims, layer=layer)
 
     @property
     def cl(self) -> PackedLayout:
@@ -126,9 +125,8 @@ class Qwen3BlockRecompute(Qwen3BlockFwd, BlockRecompute):
 class Qwen3BlockBwd(BlockBwd):
     dims: Qwen3Dims = None  # type: ignore[assignment]
 
-    @property
-    def wl(self) -> PackedLayout:
-        return qwen3_weight_layout(self.dims)
+    def _weight_layout(self, layer: int | None = None) -> PackedLayout:
+        return qwen3_weight_layout(self.dims, layer=layer)
 
     @property
     def cl(self) -> PackedLayout:
@@ -230,7 +228,9 @@ def build_qwen3_resolver(
         "embed_bwd": EmbedBwd(dims, kernels),
         "optimizer_block": AdamWStep(
             dims, kernels, hyper,
-            layout_for=lambda d, task, size: (qwen3_weight_layout(d), None),
+            layout_for=lambda d, task, size: (
+                qwen3_weight_layout(d, layer=AdamWStep.layer_of(task)), None,
+            ),
         ),
         "optimizer_embed": AdamWStep(dims, kernels, hyper, kind="embed"),
         "optimizer_head": AdamWStep(dims, kernels, hyper, kind="head"),

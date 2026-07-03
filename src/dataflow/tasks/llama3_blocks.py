@@ -61,15 +61,37 @@ class _Base:
     dims: LlamaDims
     kernels: KernelSet = None  # type: ignore[assignment]
 
+    def _weight_layout(self, layer: int | None = None) -> PackedLayout:
+        """Family/kind weight layout; subclasses override. ``layer`` selects
+        a depth-dependent dtype sub-policy (None = base policy)."""
+        return weight_layout(self.dims, layer=layer)
+
     @property
     def wl(self) -> PackedLayout:
-        return weight_layout(self.dims)
+        return self._weight_layout()
 
     @property
     def gl(self) -> PackedLayout:
         """dW layout: mirrors wl field-by-field at the policy's grad dtypes
         (identical to wl under the default all-bf16 policy)."""
         return grad_layout(self.wl, self.dims.dtypes)
+
+    @staticmethod
+    def layer_of(task) -> int | None:
+        """Layer index of a block-scoped task, derived from its W_{i}
+        object (inputs for fwd/recompute/bwd, mutates for the optimizer).
+        None for loose tasks (embed/head/loss)."""
+        for oid in tuple(task.inputs) + tuple(task.mutates):
+            if oid.startswith("W_") and oid not in ("W_embed", "W_head"):
+                return int(oid.split("_")[1])
+        return None
+
+    def wl_for(self, task) -> PackedLayout:
+        return self._weight_layout(self.layer_of(task))
+
+    def gl_for(self, task) -> PackedLayout:
+        layer = self.layer_of(task)
+        return grad_layout(self._weight_layout(layer), self.dims.dtypes, layer=layer)
 
     @property
     def cl(self) -> PackedLayout:
@@ -106,7 +128,7 @@ class BlockFwd(_Base):
         es, kctx = self._stream_ctx(ctx)
         with torch.cuda.stream(es):
             x = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
-            w = self.wl.views(self._in(ctx, 1))
+            w = self.wl_for(ctx.task).views(self._in(ctx, 1))
             emit_ctx = len(ctx.task.outputs) > 1 and self.emit_context
             if emit_ctx:
                 y = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
@@ -240,7 +262,7 @@ class BlockRecompute(BlockFwd):
         es, kctx = self._stream_ctx(ctx)
         with torch.cuda.stream(es):
             x = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
-            w = self.wl.views(self._in(ctx, 1))
+            w = self.wl_for(ctx.task).views(self._in(ctx, 1))
             a = self.cl.views(self._out(ctx, 0))
             self._forward_context(kctx, x, w, a)
 
@@ -261,14 +283,14 @@ class BlockBwd(_Base):
             dy = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
             a = self.cl.views(self._in(ctx, 1))
             x = torch_view(self._in(ctx, 2), (d.tokens, d.d_model), torch.bfloat16)
-            w = self.wl.views(self._in(ctx, 3))
+            w = self.wl_for(ctx.task).views(self._in(ctx, 3))
             accum = bool(ctx.task.mutates)
             if accum:
-                dw = self.gl.views(ctx.mutates[ctx.task.mutates[0]])
+                dw = self.gl_for(ctx.task).views(ctx.mutates[ctx.task.mutates[0]])
                 dx = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
             else:
                 dx = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
-                dw = self.gl.views(self._out(ctx, 1))
+                dw = self.gl_for(ctx.task).views(self._out(ctx, 1))
             self._backward(kctx, dy, a, x, w, dx, dw, accum)
 
     def _backward(self, kctx, dy, a, x, w, dx_out, dw, accum: bool) -> None:
@@ -439,6 +461,7 @@ class AdamWStep(_Base):
 
     def _layouts(self, task, w_size: int):
         d = self.dims
+        layer = self.layer_of(task)
         if self.layout_for is not None:
             wl_, ns = self.layout_for(d, task, w_size)
         elif self.kind == "embed":
@@ -446,14 +469,15 @@ class AdamWStep(_Base):
         elif self.kind == "head":
             wl_, ns = head_weight_layout(d), "head"
         else:
-            wl_, ns = weight_layout(d), None
+            wl_, ns = weight_layout(d, layer=layer), None
         if wl_.total_bytes != w_size:
             raise ValueError(
                 f"optimizer layout mismatch for {task.id!r}: layout "
                 f"{wl_.total_bytes} bytes vs W buffer {w_size} bytes"
             )
         p = d.dtypes
-        return wl_, grad_layout(wl_, p, ns=ns), opt_state_layout(wl_, p, ns=ns)
+        return (wl_, grad_layout(wl_, p, ns=ns, layer=layer),
+                opt_state_layout(wl_, p, ns=ns, layer=layer))
 
     def launch(self, ctx: TaskContext) -> None:
         es, kctx = self._stream_ctx(ctx)

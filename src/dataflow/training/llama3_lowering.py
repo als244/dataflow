@@ -47,52 +47,49 @@ def dims_of(cfg: ShapedLlamaConfig) -> LlamaDims:
     )
 
 
-def _exact_sizes(cfg: ShapedLlamaConfig) -> dict[str, int]:
+def _size_of_factory(cfg: ShapedLlamaConfig):
+    """Per-object exact sizes. dW and O are sized from their OWN layouts
+    (field-mirrored at grad/opt dtypes); block sizes are PER LAYER (a
+    depth-dependent dtype policy makes W_0 and W_1 different bytes).
+    Under the default all-bf16 policy every layer coincides with the
+    historical uniform sizes."""
     dims = dims_of(cfg)
     p = dims.dtypes
-    wl = weight_layout(dims)
     el = embed_weight_layout(dims)
     hl = head_weight_layout(dims)
     cl = context_layout(dims)
-    # dW and O are sized from their OWN layouts (field-mirrored at grad/opt
-    # dtypes); under the default all-bf16 policy the totals coincide with
-    # the historical W-sized dW and flat bf16-halves O.
-    return {
-        "__W_block": wl.total_bytes,
-        "__W_embed": el.total_bytes,
-        "__W_head": hl.total_bytes,
-        "__dW_block": grad_layout(wl, p).total_bytes,
-        "__dW_embed": grad_layout(el, p, ns="embed").total_bytes,
-        "__dW_head": grad_layout(hl, p, ns="head").total_bytes,
-        "__A": cl.total_bytes,
-        "__O_block": opt_state_layout(wl, p).total_bytes,
-        "__O_embed": opt_state_layout(el, p, ns="embed").total_bytes,
-        "__O_head": opt_state_layout(hl, p, ns="head").total_bytes,
-    }
+    wl_i = [weight_layout(dims, layer=i) for i in range(cfg.n_layers)]
+    dw_i = [grad_layout(wl_i[i], p, layer=i).total_bytes for i in range(cfg.n_layers)]
+    o_i = [opt_state_layout(wl_i[i], p, layer=i).total_bytes for i in range(cfg.n_layers)]
+    dw_e = grad_layout(el, p, ns="embed").total_bytes
+    dw_h = grad_layout(hl, p, ns="head").total_bytes
+    o_e = opt_state_layout(el, p, ns="embed").total_bytes
+    o_h = opt_state_layout(hl, p, ns="head").total_bytes
 
+    def size_of(oid: str) -> int | None:
+        if oid.startswith("A_"):
+            return cl.total_bytes
+        if oid.startswith("dW_embed"):
+            return dw_e
+        if oid == "W_embed":
+            return el.total_bytes
+        if oid.startswith("dW_head"):
+            return dw_h
+        if oid == "W_head":
+            return hl.total_bytes  # head packs [table | final_norm_w]
+        if oid == "O_embed":
+            return o_e
+        if oid == "O_head":
+            return o_h
+        if oid.startswith("O_"):            # O_{i}
+            return o_i[int(oid.split("_")[1])]
+        if oid.startswith("dW_"):           # dW_{s}_{i}
+            return dw_i[int(oid.rsplit("_", 1)[1])]
+        if oid.startswith("W_"):            # W_{i}
+            return wl_i[int(oid.split("_")[1])].total_bytes
+        return None
 
-def _mapped_size(object_id: str, sizes: dict[str, int]) -> int | None:
-    if object_id.startswith("A_"):
-        return sizes["__A"]
-    if object_id.startswith("dW_embed"):
-        return sizes["__dW_embed"]
-    if object_id == "W_embed":
-        return sizes["__W_embed"]
-    if object_id.startswith("dW_head"):
-        return sizes["__dW_head"]
-    if object_id == "W_head":
-        return sizes["__W_head"]  # head packs [table | final_norm_w]
-    if object_id == "O_embed":
-        return sizes["__O_embed"]
-    if object_id == "O_head":
-        return sizes["__O_head"]
-    if object_id.startswith("O_"):
-        return sizes["__O_block"]
-    if object_id.startswith("dW_"):
-        return sizes["__dW_block"]
-    if object_id.startswith("W_"):
-        return sizes["__W_block"]
-    return None
+    return size_of
 
 
 def apply_exact_sizes(
@@ -100,11 +97,12 @@ def apply_exact_sizes(
 ) -> Program:
     """Rewrite a shaped program's object sizes to packed-layout truth and
     stamp optimizer tasks with their step index — shared by every family's
-    lowering. ``size_of(object_id) -> bytes | None`` overrides the default
-    uniform map (heterogeneous families size W_{i}/A_*_{i} by layer kind)."""
+    lowering. ``size_of(object_id) -> bytes | None`` is the family's size
+    map (every family now supplies one — per-layer for depth-dependent
+    dtype policies, per-kind for heterogeneous families); ``sizes`` only
+    feeds the legacy recompute-option fallback."""
+    assert size_of is not None, "families must supply a size_of callable"
 
-    if size_of is None:
-        size_of = lambda oid: _mapped_size(oid, sizes)  # noqa: E731
 
     def fix_obj(o: ObjectSpec) -> ObjectSpec:
         size = size_of(o.id)
@@ -162,7 +160,7 @@ def lower_llama3(
     shaped = build_shaped_llama3(
         cfg, hw=hw, recompute_levels=recompute_levels, fast_memory_capacity=fast_memory_capacity,
     )
-    return apply_exact_sizes(shaped, _exact_sizes(cfg), "llama3-exact-v1")
+    return apply_exact_sizes(shaped, {}, "llama3-exact-v1", size_of=_size_of_factory(cfg))
 
 
 def initial_values(program: Program, cfg: ShapedLlamaConfig, backend, *, seed: int = 0):
@@ -177,6 +175,7 @@ def initial_values(program: Program, cfg: ShapedLlamaConfig, backend, *, seed: i
     d = dims_of(cfg)
     return fill_initial_values(
         program, d, _wl(d), backend, seed=seed, head_layout=head_weight_layout(d),
+        block_layout_of=lambda i: _wl(d, layer=i),
     )
 
 
@@ -211,7 +210,7 @@ def fill_weight_fields(buf, layout, gen, *, special=None) -> None:
 
 
 def fill_initial_values(program: Program, dims, wl, backend, *, seed: int = 0,
-                        head_layout=None, embed_layout=None):
+                        head_layout=None, embed_layout=None, block_layout_of=None):
     """Family-generic buffer filling: per-field weight init (see
     ``fill_weight_fields``), optimizer state zeroed, tokens/targets uniform
     ints."""
@@ -227,7 +226,9 @@ def fill_initial_values(program: Program, dims, wl, backend, *, seed: int = 0,
         buf = backend.alloc("backing", spec.size_bytes)
         buffers[spec.id] = buf
         if spec.id.startswith("W_") and spec.id not in ("W_embed", "W_head"):
-            fill_weight_fields(buf, wl, gen)
+            layer = int(spec.id.split("_")[1])
+            layout = block_layout_of(layer) if block_layout_of is not None else wl
+            fill_weight_fields(buf, layout, gen)
         elif spec.id == "W_embed":
             fill_weight_fields(buf, embed_layout or embed_weight_layout(dims), gen)
         elif spec.id == "W_head":

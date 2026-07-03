@@ -28,10 +28,14 @@ def _size_of_factory(cfg: ShapedQwen35Config):
     p = dims.dtypes
     hl = head_weight_layout(dims)  # [table | final_norm_w]
     el = embed_weight_layout(dims)  # bare table (untied W_embed)
-    wl = {
-        "lin": qwen35_lin_weight_layout(dims),
-        "full": qwen35_attn_weight_layout(dims),
+    _builders = {
+        "lin": qwen35_lin_weight_layout,
+        "full": qwen35_attn_weight_layout,
     }
+
+    def wl_at(layer: int):
+        return _builders[dims.kind_of(layer)](dims, layer=layer)
+
     cl = {
         "lin": qwen35_lin_context_layout(dims),
         "full": qwen35_attn_context_layout(dims),
@@ -44,10 +48,14 @@ def _size_of_factory(cfg: ShapedQwen35Config):
     embed_bytes = embed_wl.total_bytes
     dw_e = grad_layout(embed_wl, p, ns=embed_ns).total_bytes
     dw_h = grad_layout(hl, p, ns="head").total_bytes
-    dw_block = {k: grad_layout(v, p).total_bytes for k, v in wl.items()}
+    dw_block = [
+        grad_layout(wl_at(i), p, layer=i).total_bytes for i in range(cfg.n_layers)
+    ]
     o_e = opt_state_layout(embed_wl, p, ns=embed_ns).total_bytes
     o_h = opt_state_layout(hl, p, ns="head").total_bytes
-    o_block = {k: opt_state_layout(v, p).total_bytes for k, v in wl.items()}
+    o_block = [
+        opt_state_layout(wl_at(i), p, layer=i).total_bytes for i in range(cfg.n_layers)
+    ]
 
     def kind(layer: int) -> str:
         return dims.kind_of(layer)
@@ -68,11 +76,11 @@ def _size_of_factory(cfg: ShapedQwen35Config):
         if oid.startswith("A_"):            # A_{s}_{r}_{i}
             return cl[kind(int(oid.rsplit("_", 1)[1]))].total_bytes
         if oid.startswith("dW_"):           # dW_{s}_{i}
-            return dw_block[kind(int(oid.rsplit("_", 1)[1]))]
+            return dw_block[int(oid.rsplit("_", 1)[1])]
         if oid.startswith("O_"):            # O_{i}
-            return o_block[kind(int(oid.split("_")[1]))]
+            return o_block[int(oid.split("_")[1])]
         if oid.startswith("W_"):            # W_{i}
-            return wl[kind(int(oid.split("_")[1]))].total_bytes
+            return wl_at(int(oid.split("_")[1])).total_bytes
         return None
 
     return size_of
@@ -100,9 +108,9 @@ def initial_values_qwen35(program: Program, cfg: ShapedQwen35Config, backend, *,
     from dataflow.tasks.interop import torch_view
 
     dims = dims_of_qwen35(cfg)
-    wl = {
-        "lin": qwen35_lin_weight_layout(dims),
-        "full": qwen35_attn_weight_layout(dims),
+    _builders = {
+        "lin": qwen35_lin_weight_layout,
+        "full": qwen35_attn_weight_layout,
     }
     # decay magnitudes ~ U(1, 16) in log space (GDN convention)
     special = {
@@ -121,7 +129,8 @@ def initial_values_qwen35(program: Program, cfg: ShapedQwen35Config, backend, *,
         buffers[spec.id] = buf
         if spec.id.startswith("W_") and spec.id not in ("W_embed", "W_head"):
             layer = int(spec.id.split("_")[1])
-            fill_weight_fields(buf, wl[dims.kind_of(layer)], gen, special=special)
+            layout = _builders[dims.kind_of(layer)](dims, layer=layer)
+            fill_weight_fields(buf, layout, gen, special=special)
         elif spec.id == "W_embed":
             fill_weight_fields(buf, embed_wl, gen)
         elif spec.id == "W_head":

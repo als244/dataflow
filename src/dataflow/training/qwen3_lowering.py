@@ -39,26 +39,46 @@ def dims_of_qwen3(cfg: ShapedQwen3Config) -> Qwen3Dims:
     )
 
 
-def _exact_sizes(cfg: ShapedQwen3Config) -> dict[str, int]:
+def _size_of_factory(cfg: ShapedQwen3Config):
+    """Per-object exact sizes; per-layer block layouts (depth-dependent
+    dtype policies) — see llama3_lowering._size_of_factory."""
     dims = dims_of_qwen3(cfg)
     p = dims.dtypes
-    wl = qwen3_weight_layout(dims)
     el = embed_weight_layout(dims)
     hl = head_weight_layout(dims)
     cl = qwen3_context_layout(dims)
-    # dW/O sized from their own field-mirrored layouts — see llama3_lowering
-    return {
-        "__W_block": wl.total_bytes,
-        "__W_embed": el.total_bytes,
-        "__W_head": hl.total_bytes,
-        "__dW_block": grad_layout(wl, p).total_bytes,
-        "__dW_embed": grad_layout(el, p, ns="embed").total_bytes,
-        "__dW_head": grad_layout(hl, p, ns="head").total_bytes,
-        "__A": cl.total_bytes,
-        "__O_block": opt_state_layout(wl, p).total_bytes,
-        "__O_embed": opt_state_layout(el, p, ns="embed").total_bytes,
-        "__O_head": opt_state_layout(hl, p, ns="head").total_bytes,
-    }
+    wl_i = [qwen3_weight_layout(dims, layer=i) for i in range(cfg.n_layers)]
+    dw_i = [grad_layout(wl_i[i], p, layer=i).total_bytes for i in range(cfg.n_layers)]
+    o_i = [opt_state_layout(wl_i[i], p, layer=i).total_bytes for i in range(cfg.n_layers)]
+    dw_e = grad_layout(el, p, ns="embed").total_bytes
+    dw_h = grad_layout(hl, p, ns="head").total_bytes
+    o_e = opt_state_layout(el, p, ns="embed").total_bytes
+    o_h = opt_state_layout(hl, p, ns="head").total_bytes
+
+    def size_of(oid: str) -> int | None:
+        if oid.startswith("A_"):
+            return cl.total_bytes
+        if oid.startswith("dW_embed"):
+            return dw_e
+        if oid == "W_embed":
+            return el.total_bytes
+        if oid.startswith("dW_head"):
+            return dw_h
+        if oid == "W_head":
+            return hl.total_bytes
+        if oid == "O_embed":
+            return o_e
+        if oid == "O_head":
+            return o_h
+        if oid.startswith("O_"):
+            return o_i[int(oid.split("_")[1])]
+        if oid.startswith("dW_"):
+            return dw_i[int(oid.rsplit("_", 1)[1])]
+        if oid.startswith("W_"):
+            return wl_i[int(oid.split("_")[1])].total_bytes
+        return None
+
+    return size_of
 
 
 def lower_qwen3(
@@ -71,7 +91,7 @@ def lower_qwen3(
     shaped = build_shaped_qwen3(
         cfg, hw=hw, recompute_levels=recompute_levels, fast_memory_capacity=fast_memory_capacity,
     )
-    return apply_exact_sizes(shaped, _exact_sizes(cfg), "qwen3-exact-v1")
+    return apply_exact_sizes(shaped, {}, "qwen3-exact-v1", size_of=_size_of_factory(cfg))
 
 
 def initial_values_qwen3(program: Program, cfg: ShapedQwen3Config, backend, *, seed: int = 0):
@@ -79,4 +99,5 @@ def initial_values_qwen3(program: Program, cfg: ShapedQwen3Config, backend, *, s
     return fill_initial_values(
         program, dims, qwen3_weight_layout(dims), backend, seed=seed,
         head_layout=head_weight_layout(dims),
+        block_layout_of=lambda i: qwen3_weight_layout(dims, layer=i),
     )

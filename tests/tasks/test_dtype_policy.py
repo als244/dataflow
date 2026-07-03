@@ -40,3 +40,25 @@ def test_unknown_dtype_rejected_with_role():
         ParamDTypes(param="fp13")
     with pytest.raises(ValueError, match="opt"):
         ParamDTypes(opt="quaternion")
+
+
+def test_layer_overrides_select_sub_policy():
+    fp32_all = ParamDTypes(param="fp32", grad="fp32", opt="fp32")
+    deep = DTypePolicy(default=ParamDTypes(opt="fp32"),
+                       overrides=(("*_norm_w", fp32_all),))
+    p = DTypePolicy(overrides=(("wq", fp32_all),),
+                    layer_overrides=(((0, 1), deep), ((1, 2), DTypePolicy())))
+    # no layer -> outer policy (loose objects)
+    assert p.for_field("wq") is fp32_all
+    assert p.for_field("attn_norm_w").opt == "bf16"
+    # layer in the first entry -> its sub-policy owns ALL lookups (no
+    # fallthrough into the outer overrides)
+    assert p.for_field("wq", layer=0).param == "bf16"
+    assert p.for_field("wq", layer=0).opt == "fp32"
+    assert p.for_field("attn_norm_w", layer=0) is fp32_all
+    # first matching entry wins for overlapping layer sets
+    assert p.for_field("attn_norm_w", layer=1) is fp32_all
+    assert p.for_field("attn_norm_w", layer=2).param == "bf16"
+    # unlisted layer -> outer policy
+    assert p.for_field("wq", layer=7) is fp32_all
+    assert p.depth_dependent and not DTypePolicy().depth_dependent

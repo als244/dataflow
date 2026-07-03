@@ -84,9 +84,8 @@ def _cu_seqlens(dims: Qwen35Dims, device) -> tuple:
 class Qwen35LinBlockFwd(BlockFwd):
     dims: Qwen35Dims = None  # type: ignore[assignment]
 
-    @property
-    def wl(self) -> PackedLayout:
-        return qwen35_lin_weight_layout(self.dims)
+    def _weight_layout(self, layer: int | None = None) -> PackedLayout:
+        return qwen35_lin_weight_layout(self.dims, layer=layer)
 
     @property
     def cl(self) -> PackedLayout:
@@ -211,7 +210,7 @@ class Qwen35LinBlockRecompute(Qwen35LinBlockFwd):
         es, kctx = self._stream_ctx(ctx)
         with torch.cuda.stream(es):
             x = self._x_view(ctx)
-            w = self.wl.views(self._in(ctx, 1))
+            w = self.wl_for(ctx.task).views(self._in(ctx, 1))
             a = self.cl.views(self._out(ctx, 0))
             self._run_stages(kctx, x, w, a, count=self.recompute_stage_count())
 
@@ -226,9 +225,8 @@ class Qwen35LinBlockRecompute(Qwen35LinBlockFwd):
 class Qwen35LinBlockBwd(_Base):
     dims: Qwen35Dims = None  # type: ignore[assignment]
 
-    @property
-    def wl(self) -> PackedLayout:
-        return qwen35_lin_weight_layout(self.dims)
+    def _weight_layout(self, layer: int | None = None) -> PackedLayout:
+        return qwen35_lin_weight_layout(self.dims, layer=layer)
 
     @property
     def cl(self) -> PackedLayout:
@@ -243,13 +241,13 @@ class Qwen35LinBlockBwd(_Base):
             dy = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
             a = self.cl.views(self._in(ctx, 1))
             x = torch_view(self._in(ctx, 2), (d.tokens, d.d_model), torch.bfloat16)
-            w = self.wl.views(self._in(ctx, 3))
+            w = self.wl_for(ctx.task).views(self._in(ctx, 3))
             accum = bool(ctx.task.mutates)
             dx = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
             if accum:
-                dw = self.gl.views(ctx.mutates[ctx.task.mutates[0]])
+                dw = self.gl_for(ctx.task).views(ctx.mutates[ctx.task.mutates[0]])
             else:
-                dw = self.gl.views(self._out(ctx, 1))
+                dw = self.gl_for(ctx.task).views(self._out(ctx, 1))
             self._backward(kctx, dy, a, x, w, dx, dw, accum)
 
     def _backward(self, kctx, dy, a, x, w, dx_out, dw, accum: bool) -> None:
@@ -380,9 +378,8 @@ class Qwen35LinBlockBwd(_Base):
 class Qwen35AttnBlockFwd(BlockFwd):
     dims: Qwen35Dims = None  # type: ignore[assignment]
 
-    @property
-    def wl(self) -> PackedLayout:
-        return qwen35_attn_weight_layout(self.dims)
+    def _weight_layout(self, layer: int | None = None) -> PackedLayout:
+        return qwen35_attn_weight_layout(self.dims, layer=layer)
 
     @property
     def cl(self) -> PackedLayout:
@@ -493,9 +490,8 @@ class Qwen35AttnBlockRecompute(Qwen35AttnBlockFwd, Qwen35LinBlockRecompute):
 class Qwen35AttnBlockBwd(_Base):
     dims: Qwen35Dims = None  # type: ignore[assignment]
 
-    @property
-    def wl(self) -> PackedLayout:
-        return qwen35_attn_weight_layout(self.dims)
+    def _weight_layout(self, layer: int | None = None) -> PackedLayout:
+        return qwen35_attn_weight_layout(self.dims, layer=layer)
 
     @property
     def cl(self) -> PackedLayout:
@@ -510,13 +506,13 @@ class Qwen35AttnBlockBwd(_Base):
             dy = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
             a = self.cl.views(self._in(ctx, 1))
             x = torch_view(self._in(ctx, 2), (d.tokens, d.d_model), torch.bfloat16)
-            w = self.wl.views(self._in(ctx, 3))
+            w = self.wl_for(ctx.task).views(self._in(ctx, 3))
             accum = bool(ctx.task.mutates)
             dx = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
             if accum:
-                dw = self.gl.views(ctx.mutates[ctx.task.mutates[0]])
+                dw = self.gl_for(ctx.task).views(ctx.mutates[ctx.task.mutates[0]])
             else:
-                dw = self.gl.views(self._out(ctx, 1))
+                dw = self.gl_for(ctx.task).views(self._out(ctx, 1))
             self._backward(kctx, dy, a, x, w, dx, dw, accum)
 
     def _backward(self, kctx, dy, a, x, w, dx_out, dw, accum: bool) -> None:
@@ -597,14 +593,15 @@ class Qwen35AttnBlockBwd(_Base):
 
 
 def _opt_block_layout(d, task, w_size):
-    """optimizer_block spans BOTH layer kinds; pick the kind whose packed
-    weight layout matches the W buffer byte-for-byte (loud error otherwise)."""
-    for wl_ in (qwen35_lin_weight_layout(d), qwen35_attn_weight_layout(d)):
-        if wl_.total_bytes == w_size:
-            return wl_, None
-    raise ValueError(
-        f"no qwen35 block weight layout matches W of {w_size} bytes ({task.id!r})"
+    """optimizer_block spans BOTH layer kinds: derive the layer from the
+    mutated W_{i}, pick the kind's layout at that layer's dtype sub-policy
+    (the AdamWStep size assert stays as the tripwire)."""
+    layer = AdamWStep.layer_of(task)
+    build = (
+        qwen35_attn_weight_layout if d.kind_of(layer) == "full"
+        else qwen35_lin_weight_layout
     )
+    return build(d, layer=layer), None
 
 
 def _opt_embed_layout(d, task, w_size):

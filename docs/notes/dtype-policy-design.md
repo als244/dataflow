@@ -20,7 +20,33 @@ cfg = ShapedLlamaConfig(..., dtypes=DTypePolicy(
 Field-name patterns are fnmatch, first match wins; embed/head tables are
 addressed "embed.w" / "head.w" / "head.final_norm_w" (both pack a field
 named "w"); qwen3.5 TIED embeddings pack the head layout into W_embed and
-stay addressed as head.*. v1 validated recipes: fp32 on elementwise
+stay addressed as head.*.
+
+**Depth-dependent policies (Shein 2026-07-03 follow-up, same day):**
+`layer_overrides` on DTypePolicy — ordered `(layer-index tuple,
+sub-policy)` entries; the first entry containing the layer wins and its
+sub-policy answers ALL lookups for that layer (no fallthrough into the
+outer overrides); loose objects (embed/head) always use the outer
+policy. Layer indices are explicit ints (`tuple(range(4))` for "first
+four layers"):
+
+```python
+DTypePolicy(layer_overrides=(
+    ((0, 31), DTypePolicy(default=ParamDTypes(opt="fp32"),
+                          overrides=(("*_norm_w", FP32_ALL),))),
+))
+```
+
+Per-layer dtypes mean per-layer packed SIZES, so the whole path is
+layer-resolved: layout builders take `layer=`; block executables derive
+the layer from their `W_{i}` object (`_Base.layer_of(task)` →
+`wl_for/gl_for`); AdamWStep and the qwen3.5 per-kind optimizer dispatch
+build the layout at the task's layer (size assert stays the tripwire);
+lowerings size every W_i/dW_i/O_i from its own layer's layouts
+(`_size_of_factory` in all three families); fills and goldens unpack
+per layer. Gates: `test_depth_dependent_layer_sizes_diverge` (W_0/dW/O
+bytes differ from layer 1's) + llama and qwen35 depth-dependent
+model-steps vs golden. v1 validated recipes: fp32 on elementwise
 fields (*_norm_w, A_log, dt_bias) and fp32 moments anywhere; fp32 on
 GEMM/table fields is NOT plumbed (matmul dtype mismatch raises loudly —
 the cast-at-use cost model needs its own decision). Grad-accum caveat:
