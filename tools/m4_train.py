@@ -92,6 +92,12 @@ def main() -> None:
              "save-all context across rounds can exceed system memory)",
     )
     parser.add_argument("--out", type=Path, default=Path("artifacts/m4"))
+    parser.add_argument(
+        "--annotated", type=Path, default=None,
+        help="skip profiling/planning and train a SAVED annotated program "
+             "(exact replay of a prior plan; --config must still match its "
+             "shapes for token generation and the resolver)",
+    )
     parser.add_argument("--refresh-profiles", action="store_true",
                         help="ignore the profile cache and re-measure")
     args = parser.parse_args()
@@ -101,6 +107,30 @@ def main() -> None:
     cfg = CONFIGS[args.config]
     dims = dims_of(cfg)
     tokens_per_step = float(cfg.tokens * cfg.grad_accum_rounds)
+
+    if args.annotated is not None:
+        from dataflow.core import load_program
+        from dataflow.training.planning import simulate_program
+
+        program = load_program(args.annotated)
+        log = simulate_program(program)
+        sim_us = max(iv.end for iv in log.task_intervals)
+        sim_tok_s = tokens_per_step / (sim_us / 1e6)
+        print(f"replaying saved plan {args.annotated.name}: "
+              f"sim {sim_us / 1e3:.1f} ms/step ({sim_tok_s:.0f} tok/s)")
+        backend = CudaBackend()
+        report = train(program, cfg, backend, steps=args.steps, seed=11)
+        real_tok_s = tokens_per_step / (report.steady_state_makespan_us / 1e6)
+        print(json.dumps({
+            "annotated": str(args.annotated),
+            "sim_tokens_per_s": sim_tok_s,
+            "real_tokens_per_s": real_tok_s,
+            "real_vs_sim_pct": (real_tok_s / sim_tok_s - 1) * 100,
+            "placement_escapes": report.placement_escapes,
+            "losses": [round(x, 4) for x in report.losses],
+        }, indent=2))
+        return
+
     kernel_set = resolve_kernels().describe()
     impls = sorted(set(kernel_set.values()))
     print(f"kernel set: {impls} ({len(kernel_set)} registry ops)")

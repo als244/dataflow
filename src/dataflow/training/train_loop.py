@@ -102,6 +102,9 @@ def train(
         return tokens, targets
 
     token_stream = token_stream or default_stream
+    annotator = getattr(backend, "annotator", None)
+    if annotator is not None and annotator.enabled:
+        annotator.range_push("train_steps")  # nsys --capture-range=nvtx target
     report = TrainReport()
     if placement is not None:
         report.placement_extent_bytes = placement.extent_bytes
@@ -125,10 +128,16 @@ def train(
             stepped = _with_step(annotated, step)
 
             t0 = time.perf_counter()
-            result = Engine(backend, session=session).execute(
-                stepped, resolver=resolver, initial_buffers=values,
-                pool_prewarm=dry.pool_demand, placement=placement,
-            )
+            if annotator is not None and annotator.enabled:
+                annotator.range_push(f"step:{step}")
+            try:
+                result = Engine(backend, session=session).execute(
+                    stepped, resolver=resolver, initial_buffers=values,
+                    pool_prewarm=dry.pool_demand, placement=placement,
+                )
+            finally:
+                if annotator is not None and annotator.enabled:
+                    annotator.range_pop()
             report.step_wall_s.append(time.perf_counter() - t0)
             report.step_makespan_us.append(result.makespan_us)
             report.peak_fast_bytes = max(report.peak_fast_bytes, result.peak_fast_bytes)
@@ -145,6 +154,8 @@ def train(
             report.losses.append(float(torch_view(slot.buffer, (1,), torch.float32)[0]))
             report.last_trace = result.trace
     finally:
+        if annotator is not None and annotator.enabled:
+            annotator.range_pop()  # train_steps
         session.close()
         dry.close()
         if owns_values:

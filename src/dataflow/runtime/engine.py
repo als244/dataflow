@@ -33,12 +33,16 @@ from .executable import ExecutableResolver, TaskContext, synthetic_resolver
 from .ledger import Ledger
 from .objects import ObjectRecord, ObjectTable, Slot
 from .pool import BufferPool
+from .device.annotate import NoopAnnotator
 from .trace import Interval, RunTrace, TraceEvent
 from .transfers import TransferDone, TransferEngine, TransferJob
 
 
 class ExecutionError(RuntimeError):
     """A directive or task hit an invalid object state (plan/runtime bug)."""
+
+
+_NOOP_ANNOTATOR = NoopAnnotator()
 
 
 class DeadlockError(RuntimeError):
@@ -265,6 +269,7 @@ class Engine:
             final_locations=dict(program.final_locations),
             provided_buffer_ids={id(b) for b in initial_buffers.values()},
         )
+        annotator = getattr(self.backend, "annotator", None) or _NOOP_ANNOTATOR
         for task in program.tasks:
             fast_out = sum(o.size_bytes for o in task.outputs if o.location == "fast")
             backing_out = sum(o.size_bytes for o in task.outputs if o.location == "backing")
@@ -359,10 +364,14 @@ class Engine:
             mut_buffers = {obj: in_buffers[obj] for obj in task.mutates}
             self.backend.align_stream_to_host(compute)
             start_ev = self.backend.record_event(compute)
-            resolver(task).launch(TaskContext(
-                task=task, stream=compute, inputs=in_buffers, outputs=out_buffers,
-                mutates=mut_buffers, backend=self.backend,
-            ))
+            annotator.range_push(task.id)
+            try:
+                resolver(task).launch(TaskContext(
+                    task=task, stream=compute, inputs=in_buffers, outputs=out_buffers,
+                    mutates=mut_buffers, backend=self.backend,
+                ))
+            finally:
+                annotator.range_pop()
             done = self.backend.record_event(compute)
             self.backend.notify_after(
                 compute, done, _TaskDone(task=task, start_event=start_ev, done_event=done),

@@ -153,3 +153,23 @@ def test_quiescent_lifetime_inversion_escapes_instead_of_deadlocking():
     result = Engine(FakeBackend()).execute(program, placement=placement)
     assert result.placement_escapes == 1, result.placement_escapes
     result.close()
+
+
+def test_annotator_ranges_balanced_over_full_run():
+    """Every task launch opens and closes exactly one range (depth never
+    exceeds 1 from the engine side), so profiler timelines nest correctly."""
+    from dataflow.runtime.device.annotate import RecordingAnnotator
+
+    program = build_shaped_llama3(ShapedLlamaConfig.tiny())
+    annotated = plan_program(program, fast_memory_capacity=600_000).program
+
+    backend = FakeBackend()
+    backend.annotator = RecordingAnnotator()
+    result = Engine(backend).execute(annotated)
+    result.close()
+
+    rec = backend.annotator
+    assert rec.depth == 0, "unbalanced push/pop"
+    pushes = [name for kind, name in rec.events if kind == "push"]
+    task_ids = {t.id for t in annotated.tasks}
+    assert task_ids.issubset(set(pushes))  # every task got a range

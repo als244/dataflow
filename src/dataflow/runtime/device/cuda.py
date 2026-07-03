@@ -133,6 +133,17 @@ class CudaBackend:
     pinned_bytes: int = 0
     pinned_peak: int = 0
 
+    @property
+    def annotator(self):
+        # cached; DATAFLOW_NVTX=1 enables NVTX ranges (nsys wrapper sets it)
+        a = getattr(self, "_annotator", None)
+        if a is None:
+            from .annotate import annotator_from_env
+
+            a = annotator_from_env()
+            self._annotator = a
+        return a
+
     def alloc(self, location: Location, size_bytes: int) -> Buffer:
         if location == "fast":
             (ptr,) = _check(cudart.cudaMalloc(size_bytes))

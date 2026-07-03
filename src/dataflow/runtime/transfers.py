@@ -187,9 +187,14 @@ class TransferEngine:
         self.backend.align_stream_to_host(self.stream)
         job.start_event = self.backend.record_event(self.stream)
         duration = self.transfer_runtime_us(job.size_bytes, job.runtime_override)
+        annotator = getattr(self.backend, "annotator", None)
+        if annotator is not None and annotator.enabled:
+            annotator.range_push(f"{self.direction}:{job.object_id}")
         self.backend.memcpy_async(
             dst_buffer, src_buffer, job.size_bytes, self.stream, duration_us=duration
         )
+        if annotator is not None and annotator.enabled:
+            annotator.range_pop()
         job.done_event = self.backend.record_event(self.stream)
         job.interval_name = self._interval_name(job.object_id)
         priority = PRIORITY_H2D_DONE if self.direction == "from_slow" else PRIORITY_D2H_DONE

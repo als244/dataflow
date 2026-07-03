@@ -58,3 +58,26 @@ What the pieces guarantee:
 Visualize any program in the webapp (https://dataflowsim.sunshein.net/):
 `dataflow.core.convert.to_webapp_program(program)` produces the upload JSON
 (cost subops included, so hardware sliders re-resolve runtimes).
+
+## Profiling a run with Nsight Systems (device metrics + NVTX)
+
+```
+python tools/nsys_profile.py                              # bs8/ga8 @ 24 GiB, 3 steps
+python tools/nsys_profile.py --config 8b-s1k-bs2ga32 --budget 16 --steps 2
+python tools/nsys_profile.py --no-gpu-metrics --capture full --stats
+```
+
+Produces `artifacts/nsys/<config>-<budget>gib-<steps>steps.nsys-rep` with:
+GPU metrics sampled on the timeline (`--gpu-metrics-devices=all`; needs
+perf-counter permission — the script prints the fix if denied), CUDA +
+NVTX + OS-runtime traces, and the runtime's own NVTX ranges: one per task
+(`block_bwd_0_3_16`), one per transfer (`from_slow:A_0_3_16`), one per
+optimizer step (`step:N`). Open in the nsys GUI and use the NVTX
+projection rows to read ranges on the stream timelines. By default capture
+is limited to the `train_steps` range, so planning/setup stay out of the
+report; profiles and PCIe numbers come from the disk caches.
+
+The annotation layer is vendor-portable (`runtime/device/annotate.py`):
+the engine calls a 3-method protocol (`range_push/range_pop/mark`),
+enabled by `DATAFLOW_NVTX=1`. An AMD backend implements the same protocol
+with roctx and the same script structure wraps `rocprofv3`.
