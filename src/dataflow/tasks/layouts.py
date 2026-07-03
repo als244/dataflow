@@ -14,11 +14,51 @@ Offsets are 256-byte aligned (copy-engine/vector-load safe).
 from __future__ import annotations
 
 from dataclasses import dataclass
+from fnmatch import fnmatchcase
 
 from dataflow.core import DTYPE_BITS
 from dataflow.runtime.device.base import Buffer
 
 _ALIGN = 256
+
+
+@dataclass(frozen=True)
+class ParamDTypes:
+    """Storage dtypes for one trainable field: the parameter itself, its
+    gradient, and its AdamW moments (design: docs/notes/dtype-policy-design.md).
+    Defaults reproduce the historical all-bf16 convention."""
+
+    param: str = "bf16"
+    grad: str = "bf16"
+    opt: str = "bf16"
+
+    def __post_init__(self) -> None:
+        for role in ("param", "grad", "opt"):
+            name = getattr(self, role)
+            if name not in DTYPE_BITS:
+                raise ValueError(f"unknown dtype {name!r} for {role} "
+                                 f"(known: {sorted(DTYPE_BITS)})")
+
+
+@dataclass(frozen=True)
+class DTypePolicy:
+    """Per-field dtype selection over packed WEIGHT-layout field names.
+
+    ``overrides`` is an ordered tuple of (fnmatch pattern, ParamDTypes);
+    the FIRST matching pattern wins, else ``default``. Field names are the
+    user-visible parameter unit everywhere else in the system ("w_qkvz",
+    "A_log", "attn_norm_w", ...), so patterns like "*_norm_w" select the
+    natural groups.
+    """
+
+    default: ParamDTypes = ParamDTypes()
+    overrides: tuple[tuple[str, ParamDTypes], ...] = ()
+
+    def for_field(self, name: str) -> ParamDTypes:
+        for pattern, dts in self.overrides:
+            if fnmatchcase(name, pattern):
+                return dts
+        return self.default
 
 
 @dataclass(frozen=True)
