@@ -309,7 +309,7 @@ def main() -> None:
         print(f"\nplain-torch golden baseline: {base_ms:.1f} ms/step "
               f"({result['baseline_tokens_per_s']:.0f} tok/s)")
 
-    tag = args.budgets.replace(",", "_") + ("-rc" if args.recompute else "")
+    tag = "_".join(f"{b:g}" for b in budget_list) + ("-rc" if args.recompute else "")
     (args.out / f"m4-{args.config}-{tag}.summary.json").write_text(json.dumps(result, indent=2) + "\n")
     print(f"\nwrote {args.out}/m4-{args.config}-{tag}.summary.json")
 
