@@ -294,3 +294,99 @@ def embed_bwd_accum(tokens: torch.Tensor, dy: torch.Tensor, dw_embed: torch.Tens
     if zero_first:
         dw_embed.zero_()
     dw_embed.index_add_(0, tokens.int(), dy)
+
+
+# --- qwen3.5 reference forms (DeltaNet + gated attention) ---------------------
+#
+# Pure, autograd-able torch: the math SPEC for the qwen35 family. The golden
+# model composes these; ladder tests pin the fla kernels against them (the
+# sequential delta-rule recurrence is additionally cross-checked against
+# fla.ops.gated_delta_rule.naive at fp32 — spec vs spec).
+
+L2NORM_EPS = 1e-6  # fla.modules.l2norm convention
+
+
+def l2norm_reference(x: torch.Tensor) -> torch.Tensor:
+    """Per-row (last-dim) L2 normalization, fla convention."""
+    xf = x.float()
+    rstd = torch.rsqrt(xf.pow(2).sum(-1, keepdim=True) + L2NORM_EPS)
+    return (xf * rstd).to(x.dtype)
+
+
+def gated_rmsnorm_reference(o: torch.Tensor, z: torch.Tensor, w: torch.Tensor) -> torch.Tensor:
+    """RMSNormGated: silu(z) * rmsnorm(o) * w, all over the last dim
+    (head_v_dim). Matches the flextrain/HF gated-delta output norm."""
+    of = o.float()
+    rstd = torch.rsqrt(of.pow(2).mean(-1, keepdim=True) + RMS_EPS)
+    zf = z.float()
+    y = torch.nn.functional.silu(zf) * (of * rstd)
+    return (y * w.float()).to(o.dtype)
+
+
+def causal_conv1d_silu_reference(x: torch.Tensor, w: torch.Tensor) -> torch.Tensor:
+    """Depthwise causal conv1d + silu. x: (T, D) token-major; w: (D, W)."""
+    T, D = x.shape
+    W = w.shape[-1]
+    xf = x.float().T.unsqueeze(0)                      # (1, D, T)
+    wf = w.float().unsqueeze(1)                        # (D, 1, W)
+    y = torch.nn.functional.conv1d(
+        torch.nn.functional.pad(xf, (W - 1, 0)), wf, groups=D,
+    )
+    return torch.nn.functional.silu(y).squeeze(0).T.to(x.dtype)
+
+
+def gated_delta_gate_reference(a: torch.Tensor, A_log: torch.Tensor, dt_bias: torch.Tensor) -> torch.Tensor:
+    """Per-token decay log: g = -exp(A_log) * softplus(a + dt_bias), fp32."""
+    return -A_log.float().exp() * torch.nn.functional.softplus(a.float() + dt_bias.float())
+
+
+def gated_delta_rule_reference(
+    q: torch.Tensor,      # (T, HK, K) post-l2norm
+    k: torch.Tensor,      # (T, HK, K) post-l2norm
+    v: torch.Tensor,      # (T, HV, V)
+    beta: torch.Tensor,   # (T, HV)
+    g: torch.Tensor,      # (T, HV) decay log, fp32
+    *,
+    scale: float | None = None,
+) -> torch.Tensor:
+    """Sequential gated delta rule (the recurrence itself; fp32 state):
+
+        S_t = S_{t-1} * exp(g_t)
+        u_t = beta_t * (v_t - k_t^T S_{t-1..gated})
+        S_t = S_t + k_t (x) u_t
+        o_t = (scale * q_t)^T S_t
+
+    GVA: q/k arrive with HK heads and are expanded so v-head i reads
+    k-head i // (HV // HK) — same mapping fla's kernels apply internally.
+    """
+    T, HK, K = q.shape
+    HV, V = v.shape[1], v.shape[2]
+    rep = HV // HK
+    qf = q.float().repeat_interleave(rep, dim=1)
+    kf = k.float().repeat_interleave(rep, dim=1)
+    vf = v.float()
+    betaf = beta.float()
+    gf = g.float()
+    if scale is None:
+        scale = K ** -0.5
+    state = torch.zeros(HV, K, V, dtype=torch.float32, device=q.device)
+    outs = []
+    for t in range(T):
+        state = state * gf[t].exp()[:, None, None]
+        err = vf[t] - torch.einsum("hk,hkv->hv", kf[t], state)
+        upd = betaf[t][:, None] * err
+        state = state + kf[t][:, :, None] * upd[:, None, :]
+        outs.append(torch.einsum("hk,hkv->hv", qf[t] * scale, state))
+    return torch.stack(outs).to(v.dtype)
+
+
+def partial_rope_reference(
+    x: torch.Tensor, seq_len: int, n_heads: int, head_dim: int, rot_dim: int, base: float,
+) -> torch.Tensor:
+    """Partial RoPE: rotate only the first rot_dim channels of each head
+    (pair-interleaved, via the family rope reference); the rest pass through."""
+    t = x.shape[0]
+    xh = x.view(t, n_heads, head_dim)
+    rot = rope_fwd(xh[:, :, :rot_dim].reshape(t, n_heads * rot_dim), seq_len, n_heads, rot_dim, base)
+    return torch.cat([rot.view(t, n_heads, rot_dim), xh[:, :, rot_dim:]], dim=-1).view(t, n_heads * head_dim)
+

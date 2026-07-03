@@ -82,17 +82,23 @@ def _mapped_size(object_id: str, sizes: dict[str, int]) -> int | None:
     return None
 
 
-def apply_exact_sizes(shaped: Program, sizes: dict[str, int], lowering_tag: str) -> Program:
+def apply_exact_sizes(
+    shaped: Program, sizes: dict[str, int], lowering_tag: str, *, size_of=None,
+) -> Program:
     """Rewrite a shaped program's object sizes to packed-layout truth and
     stamp optimizer tasks with their step index — shared by every family's
-    lowering (the size MAP is family-specific; the id families are not)."""
+    lowering. ``size_of(object_id) -> bytes | None`` overrides the default
+    uniform map (heterogeneous families size W_{i}/A_*_{i} by layer kind)."""
+
+    if size_of is None:
+        size_of = lambda oid: _mapped_size(oid, sizes)  # noqa: E731
 
     def fix_obj(o: ObjectSpec) -> ObjectSpec:
-        size = _mapped_size(o.id, sizes)
+        size = size_of(o.id)
         return o if size is None else replace(o, size_bytes=size, tensor=None)
 
     def fix_out(o: OutputSpec) -> OutputSpec:
-        size = _mapped_size(o.id, sizes)
+        size = size_of(o.id)
         return o if size is None else replace(o, size_bytes=size, tensor=None)
 
     def fix_task(t: TaskSpec, step: int) -> TaskSpec:
@@ -112,7 +118,11 @@ def apply_exact_sizes(shaped: Program, sizes: dict[str, int], lowering_tag: str)
         replace(
             rw,
             options=(
-                RecomputeOption(level=0, saved_bytes=sizes["__A"], recompute_us=0.0, label="save"),
+                RecomputeOption(
+                    level=0,
+                    saved_bytes=size_of(rw.object_id) or sizes.get("__A", 0),
+                    recompute_us=0.0, label="save",
+                ),
             ) + tuple(o for o in rw.options if o.level != 0),
         )
         for rw in shaped.recompute_rewrites

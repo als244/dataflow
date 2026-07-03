@@ -213,6 +213,157 @@ def qwen3_context_layout(dims: Qwen3Dims) -> PackedLayout:
     ])
 
 
+@dataclass(frozen=True)
+class Qwen35Dims:
+    """Qwen3.5-dense dims: hybrid Gated-DeltaNet + gated-attention layers.
+
+    Full-attn: n_heads x head_dim with output gate (w_q projects 2x),
+    per-head qk-norm, PARTIAL rope (rot_dim = partial_rotary * head_dim).
+    Linear-attn: num_k_heads x head_k_dim (keys/queries), num_v_heads x
+    head_v_dim (values, GVA: v-head i reads k-head i // (HV/HK)), causal
+    conv (kernel conv_kernel) over [q|k|v], gated RMSNorm over head_v_dim.
+    All layers share the dense SwiGLU MLP. Embeddings tied ([table |
+    final_norm_w] rides W_embed via head_weight_layout).
+    """
+
+    d_model: int
+    n_layers: int
+    full_attention_interval: int
+    # full-attention sub-block
+    n_heads: int
+    n_kv_heads: int
+    head_dim: int
+    partial_rotary_factor: float
+    # linear-attention sub-block
+    num_k_heads: int
+    num_v_heads: int
+    head_k_dim: int
+    head_v_dim: int
+    conv_kernel: int
+    # shared
+    d_ff: int
+    vocab_size: int
+    tokens: int
+    seq_len: int
+    rope_base: float = 10_000_000.0
+
+    @property
+    def attn_dim(self) -> int:
+        return self.n_heads * self.head_dim
+
+    @property
+    def kv_dim(self) -> int:
+        return self.n_kv_heads * self.head_dim
+
+    @property
+    def rot_dim(self) -> int:
+        return int(self.head_dim * self.partial_rotary_factor)
+
+    @property
+    def key_dim(self) -> int:
+        return self.num_k_heads * self.head_k_dim
+
+    @property
+    def value_dim(self) -> int:
+        return self.num_v_heads * self.head_v_dim
+
+    @property
+    def conv_dim(self) -> int:
+        return 2 * self.key_dim + self.value_dim
+
+    @property
+    def qkvz_dim(self) -> int:
+        return 2 * self.key_dim + 2 * self.value_dim
+
+    @property
+    def ba_dim(self) -> int:
+        return 2 * self.num_v_heads
+
+    def kind_of(self, layer: int) -> str:
+        return "full" if (layer + 1) % self.full_attention_interval == 0 else "lin"
+
+
+def qwen35_lin_weight_layout(dims: Qwen35Dims) -> PackedLayout:
+    """DeltaNet layer weights. A_log/dt_bias stored bf16 (family keeps bf16
+    params throughout, golden identical — fla receives fp32 casts at call
+    time; bf16-ULP-vs-AdamW caveat recorded in docs/notes/qwen35-design.md)."""
+    d, ff = dims.d_model, dims.d_ff
+    return PackedLayout.build([
+        ("attn_norm_w", (d,), "bf16"),
+        ("w_qkvz", (d, dims.qkvz_dim), "bf16"),
+        ("w_ba", (d, dims.ba_dim), "bf16"),
+        ("w_conv", (dims.conv_dim, dims.conv_kernel), "bf16"),
+        ("A_log", (dims.num_v_heads,), "bf16"),
+        ("dt_bias", (dims.num_v_heads,), "bf16"),
+        ("lin_norm_w", (dims.head_v_dim,), "bf16"),
+        ("w_out", (dims.value_dim, d), "bf16"),
+        ("ffn_norm_w", (d,), "bf16"),
+        ("w1", (d, ff), "bf16"),
+        ("w3", (d, ff), "bf16"),
+        ("w2", (ff, d), "bf16"),
+    ])
+
+
+def qwen35_lin_context_layout(dims: Qwen35Dims) -> PackedLayout:
+    """DeltaNet saved context (design §3d): projections + fla's saved
+    outputs; post-conv and q/k l2norms are recomputed in backward."""
+    t, d, ff = dims.tokens, dims.d_model, dims.d_ff
+    hv = dims.num_v_heads
+    return PackedLayout.build([
+        ("rstd_attn", (t,), "fp32"),
+        ("qkvz", (t, dims.qkvz_dim), "bf16"),
+        ("ba", (t, dims.ba_dim), "bf16"),
+        ("g_post", (t, hv), "fp32"),
+        ("A_int", (t, hv, 64), "bf16"),
+        ("core_out", (t, hv, dims.head_v_dim), "bf16"),
+        ("xo", (t, d), "bf16"),
+        ("rstd_ffn", (t,), "fp32"),
+        ("x1", (t, ff), "bf16"),
+        ("x3", (t, ff), "bf16"),
+    ])
+
+
+def qwen35_attn_weight_layout(dims: Qwen35Dims) -> PackedLayout:
+    """Gated-attention layer weights: w_q projects [Q_all | gate_all]."""
+    d, ff = dims.d_model, dims.d_ff
+    return PackedLayout.build([
+        ("attn_norm_w", (d,), "bf16"),
+        ("wq", (d, 2 * dims.attn_dim), "bf16"),
+        ("wk", (d, dims.kv_dim), "bf16"),
+        ("wv", (d, dims.kv_dim), "bf16"),
+        ("q_norm_w", (dims.head_dim,), "bf16"),
+        ("k_norm_w", (dims.head_dim,), "bf16"),
+        ("wo", (dims.attn_dim, d), "bf16"),
+        ("ffn_norm_w", (d,), "bf16"),
+        ("w1", (d, ff), "bf16"),
+        ("w3", (d, ff), "bf16"),
+        ("w2", (ff, d), "bf16"),
+    ])
+
+
+def qwen35_attn_context_layout(dims: Qwen35Dims) -> PackedLayout:
+    """Gated-attention saved context: pre-norm q (qm) + per-head rstds
+    (qwen3 pattern — backward rebuilds post-norm/rope), k likewise, v,
+    pre-sigmoid gate, flash outputs, xo, MLP projections."""
+    t, d, ff = dims.tokens, dims.d_model, dims.d_ff
+    h, kvh = dims.n_heads, dims.n_kv_heads
+    return PackedLayout.build([
+        ("rstd_attn", (t,), "fp32"),
+        ("qm", (t, dims.attn_dim), "bf16"),
+        ("km", (t, dims.kv_dim), "bf16"),
+        ("rstd_q", (t * h,), "fp32"),
+        ("rstd_k", (t * kvh,), "fp32"),
+        ("gate", (t, dims.attn_dim), "bf16"),
+        ("v", (t, dims.kv_dim), "bf16"),
+        ("lse", ((t // dims.seq_len) * h, dims.seq_len), "fp32"),
+        ("attn_out", (t, dims.attn_dim), "bf16"),
+        ("xo", (t, d), "bf16"),
+        ("rstd_ffn", (t,), "fp32"),
+        ("x1", (t, ff), "bf16"),
+        ("x3", (t, ff), "bf16"),
+    ])
+
+
 def embed_weight_layout(dims) -> PackedLayout:
     return PackedLayout.build([("w", (dims.vocab_size, dims.d_model), "bf16")])
 
