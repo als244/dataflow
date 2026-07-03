@@ -123,11 +123,12 @@ qwen3/llama pattern:
 - `Qwen35AttnBlockFwd.STAGES`: attn_norm → qkv_split_gate(xk, xv,
   attn_gate emitted) → qknorm+partial-rope(xq emitted) →
   flash(lse, attn_result) → gate_o(xo) → ffn stages.
-- fla kernels called DIRECT (like flash-attn today, per tasks/README
-  rule); gated-rmsnorm + silu_bwd as eager ops first (registry-fuse
-  later); l2norm via fla's helpers; conv via fla Triton kernels
-  (`causal-conv1d` package NOT needed — verified imports + sm_120 fwd
-  smoke of `chunk_gated_delta_rule_fwd` finite on the 5090).
+- fla's delta-rule kernels called DIRECT (like flash-attn today, per
+  tasks/README rule); gated-rmsnorm + silu_bwd as eager ops first
+  (registry-fuse later); l2norm via fla's helpers; **conv as a
+  kernel-REGISTRY op with two impls** — fla-triton (token-major-native,
+  default) and causal-conv1d CUDA (channel-major) — measured tie at
+  ~1,400 GB/s on the 5090, see §6 deps.
 
 ### 3d. Context layouts (per kind)
 - Linear: rstd_attn(t), qkvz(t,12288), ba(t,64), g_post(t,32,f32),
