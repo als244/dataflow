@@ -323,16 +323,23 @@ def gated_rmsnorm_reference(o: torch.Tensor, z: torch.Tensor, w: torch.Tensor) -
     return (y * w.float()).to(o.dtype)
 
 
-def causal_conv1d_silu_reference(x: torch.Tensor, w: torch.Tensor) -> torch.Tensor:
-    """Depthwise causal conv1d + silu. x: (T, D) token-major; w: (D, W)."""
+def causal_conv1d_silu_reference(
+    x: torch.Tensor, w: torch.Tensor, *, seq_len: int | None = None,
+) -> torch.Tensor:
+    """Depthwise causal conv1d + silu. x: (T, D) token-major; w: (D, W).
+    ``seq_len`` resets the causal window at packed-sequence boundaries
+    (positions 0..W-2 of every sequence see zero padding, never the previous
+    sequence's tail)."""
     T, D = x.shape
     W = w.shape[-1]
-    xf = x.float().T.unsqueeze(0)                      # (1, D, T)
-    wf = w.float().unsqueeze(1)                        # (D, 1, W)
+    B = 1 if seq_len is None else T // seq_len
+    xf = x.float().T.reshape(D, B, -1).transpose(0, 1)  # (B, D, seq)
+    wf = w.float().unsqueeze(1)                         # (D, 1, W)
     y = torch.nn.functional.conv1d(
         torch.nn.functional.pad(xf, (W - 1, 0)), wf, groups=D,
     )
-    return torch.nn.functional.silu(y).squeeze(0).T.to(x.dtype)
+    y = y.transpose(0, 1).reshape(D, T).T
+    return torch.nn.functional.silu(y).to(x.dtype)
 
 
 def gated_delta_gate_reference(a: torch.Tensor, A_log: torch.Tensor, dt_bias: torch.Tensor) -> torch.Tensor:
@@ -348,6 +355,7 @@ def gated_delta_rule_reference(
     g: torch.Tensor,      # (T, HV) decay log, fp32
     *,
     scale: float | None = None,
+    seq_len: int | None = None,
 ) -> torch.Tensor:
     """Sequential gated delta rule (the recurrence itself; fp32 state):
 
@@ -358,6 +366,7 @@ def gated_delta_rule_reference(
 
     GVA: q/k arrive with HK heads and are expanded so v-head i reads
     k-head i // (HV // HK) — same mapping fla's kernels apply internally.
+    ``seq_len`` resets the recurrent state at packed-sequence boundaries.
     """
     T, HK, K = q.shape
     HV, V = v.shape[1], v.shape[2]
@@ -369,9 +378,12 @@ def gated_delta_rule_reference(
     gf = g.float()
     if scale is None:
         scale = K ** -0.5
+    reset = seq_len or T
     state = torch.zeros(HV, K, V, dtype=torch.float32, device=q.device)
     outs = []
     for t in range(T):
+        if t % reset == 0:
+            state = torch.zeros(HV, K, V, dtype=torch.float32, device=q.device)
         state = state * gf[t].exp()[:, None, None]
         err = vf[t] - torch.einsum("hk,hkv->hv", kf[t], state)
         upd = betaf[t][:, None] * err

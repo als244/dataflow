@@ -213,7 +213,15 @@ leaf.
       fwd/bwd contracts documented above.
 - [x] Deps: fla 0.5.1 + causal-conv1d 1.6.2.post1 (our pins), sm_120
       smokes green, conv A/B measured (tie at bandwidth).
-- [ ] Heterogeneous builder + tied-embeddings lowering generalization.
-- [ ] Layouts + blocks + golden + lowering + families entry.
-- [ ] Ladder + gates.
+- [x] Heterogeneous builder + tied-embeddings lowering generalization.
+- [x] Layouts + blocks + golden + lowering (families entry pending).
+- [x] Ladder 1-2: kernel contracts pinned; per-kind block gradcheck green
+      (fwd / recompute-equivalence / bwd all dW / 2x accumulation).
+      Hard-won contract: **every tensor handed to an fla/conv Triton
+      kernel must be contiguous** — the packed ``ba[:, HV:]`` column
+      slice fed to ``g_input`` was read with the wrong row stride and
+      silently corrupted dA_log/ddt_bias/da (~4x rel error, scaling
+      with init magnitude). Not an fla version bug; 0.5.1 stands.
+- [ ] Families entry + ladder 3-4 + gates (tied 2-leaf golden hook in
+      check_model_step; plan-invariance; multistep; batch>1 cu_seqlens).
 - [ ] First sweep.

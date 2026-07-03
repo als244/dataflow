@@ -78,7 +78,7 @@ class GoldenQwen35:
         z = qkvz[:, d.conv_dim :].view(t, d.num_v_heads, d.head_v_dim)
         b = ba[:, : d.num_v_heads]
         a = ba[:, d.num_v_heads :]
-        post = ops.causal_conv1d_silu_reference(conv_in, w["w_conv"])
+        post = ops.causal_conv1d_silu_reference(conv_in, w["w_conv"], seq_len=d.seq_len)
         q = ops.l2norm_reference(post[:, : d.key_dim].reshape(t, d.num_k_heads, d.head_k_dim))
         k = ops.l2norm_reference(
             post[:, d.key_dim : 2 * d.key_dim].reshape(t, d.num_k_heads, d.head_k_dim)
@@ -86,7 +86,7 @@ class GoldenQwen35:
         v = post[:, 2 * d.key_dim :].reshape(t, d.num_v_heads, d.head_v_dim)
         beta = torch.sigmoid(b.float()).to(x.dtype)
         g = ops.gated_delta_gate_reference(a, w["A_log"], w["dt_bias"])
-        core = ops.gated_delta_rule_reference(q, k, v, beta, g)
+        core = ops.gated_delta_rule_reference(q, k, v, beta, g, seq_len=d.seq_len)
         o_normed = ops.gated_rmsnorm_reference(core, z, w["lin_norm_w"])
         xo = x + o_normed.reshape(t, d.value_dim) @ w["w_out"]
         h2 = ops.rmsnorm_reference(xo, w["ffn_norm_w"])

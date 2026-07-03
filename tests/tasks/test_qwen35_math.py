@@ -197,3 +197,119 @@ def test_golden_qwen35_trains():
     assert all(x == x for x in losses)                       # finite
     assert abs(losses[0] - math.log(dims.vocab_size)) < 0.5  # random-init sanity
     assert losses[-1] < losses[0]
+
+
+def _tiny_dims():
+    from dataflow.training.shaped_qwen35 import ShapedQwen35Config, dims_of_qwen35
+
+    return dims_of_qwen35(ShapedQwen35Config.tiny())
+
+
+def _block_state(dims, wl, seed):
+    # NOTE init scale: at 0.02-scale weights and tiny d the DeltaNet gate is
+    # near-constant per head and the TRUE per-token gate gradient (~3e-6)
+    # sits BELOW the bf16 chunk kernel's noise floor (~1e-6 abs, uniform,
+    # no chunk structure — measured; not an fla or block bug). 0.06 makes
+    # the gate observable so the ladder validates MATH, not noise.
+    gen = torch.Generator(device="cuda").manual_seed(seed)
+    flat = (torch.randn(wl.total_bytes // 2, generator=gen, device="cuda") * 0.06).to(torch.bfloat16)
+    views = {}
+    for f in wl.fields:
+        n = int(torch.tensor(f.shape).prod())
+        start = f.offset_bytes // 2
+        views[f.name] = flat[start : start + n].view(f.shape)
+        if f.name.endswith("_norm_w"):
+            views[f.name].fill_(1.0)
+        elif f.name == "A_log":
+            views[f.name].copy_(
+                torch.empty(n, device="cuda").uniform_(1.0, 16.0, generator=gen).log().to(torch.bfloat16)
+            )
+        elif f.name == "dt_bias":
+            views[f.name].zero_()
+    x = (torch.randn(dims.tokens, dims.d_model, generator=gen, device="cuda") * 0.5).to(torch.bfloat16)
+    dy = (torch.randn(dims.tokens, dims.d_model, generator=gen, device="cuda") * 0.5).to(torch.bfloat16)
+    return flat, views, x, dy
+
+
+def _ladder2(kind: str, tol: float = 4e-2):
+    from dataflow.models.qwen35_reference import GoldenQwen35
+    from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME
+    from dataflow.tasks.kernels import KernelCtx, resolve_kernels
+    from dataflow.tasks.qwen35_blocks import (
+        Qwen35AttnBlockBwd,
+        Qwen35AttnBlockFwd,
+        Qwen35AttnBlockRecompute,
+        Qwen35LinBlockBwd,
+        Qwen35LinBlockFwd,
+        Qwen35LinBlockRecompute,
+    )
+
+    dims = _tiny_dims()
+    if kind == "lin":
+        fwd_cls, rc_cls, bwd_cls = Qwen35LinBlockFwd, Qwen35LinBlockRecompute, Qwen35LinBlockBwd
+    else:
+        fwd_cls, rc_cls, bwd_cls = Qwen35AttnBlockFwd, Qwen35AttnBlockRecompute, Qwen35AttnBlockBwd
+    kernels = resolve_kernels()
+    kctx = KernelCtx()
+    fwd = fwd_cls(dims, kernels)
+    bwd = bwd_cls(dims, kernels)
+    wl, cl = fwd.wl, fwd.cl
+
+    flat, w, x, dy = _block_state(dims, wl, seed=11 if kind == "lin" else 12)
+    a = {
+        f.name: torch.empty(f.shape, dtype=TORCH_DTYPE_BY_NAME[f.dtype], device="cuda")
+        for f in cl.fields
+    }
+    y = torch.empty_like(x)
+    fwd._forward(kctx, x, w, y, a)
+
+    # recompute-path equivalence (derived boundary)
+    a2 = {
+        f.name: torch.empty(f.shape, dtype=TORCH_DTYPE_BY_NAME[f.dtype], device="cuda")
+        for f in cl.fields
+    }
+    rc_cls(dims, kernels)._run_stages(kctx, x, w, a2, count=rc_cls.recompute_stage_count())
+    errors = {f"recompute:{k}": rel_l2(a2[k], a[k]) for k in a}
+
+    # backward vs autograd through the golden block
+    dwflat = torch.zeros_like(flat)
+    dwv = {}
+    for f in wl.fields:
+        n = int(torch.tensor(f.shape).prod())
+        start = f.offset_bytes // 2
+        dwv[f.name] = dwflat[start : start + n].view(f.shape)
+    dx = torch.empty_like(x)
+    bwd._backward(kctx, dy, a, x, w, dx, dwv, accum=False)
+
+    golden = GoldenQwen35(dims=dims)
+    flat_ref = flat.clone().requires_grad_()
+    x_ref = x.clone().requires_grad_()
+    from dataflow.models.qwen35_reference import _views as gviews
+
+    wref = gviews(wl, flat_ref)
+    y_ref = (
+        golden.lin_block_forward(x_ref, wref) if kind == "lin"
+        else golden.full_block_forward(x_ref, wref)
+    )
+    y_ref.backward(dy)
+
+    errors["fwd:y"] = rel_l2(y, y_ref)
+    errors["bwd:dx"] = rel_l2(dx, x_ref.grad)
+    ref_dw = gviews(wl, flat_ref.grad)
+    for name in dwv:
+        errors[f"bwd:d{name}"] = rel_l2(dwv[name], ref_dw[name])
+
+    # accumulation: second backward doubles every field
+    bwd._backward(kctx, dy, a, x, w, dx, dwv, accum=True)
+    errors["accum:2x"] = rel_l2(dwflat, 2.0 * flat_ref.grad)
+
+    bad = {k: round(v, 4) for k, v in errors.items() if v > tol}
+    assert not bad, bad
+
+
+def test_qwen35_lin_block_ladder2():
+    _ladder2("lin")
+
+
+def test_qwen35_attn_block_ladder2():
+    _ladder2("full")

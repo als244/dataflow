@@ -1,0 +1,629 @@
+"""Qwen3.5-dense block executables: hybrid Gated-DeltaNet + gated attention.
+
+Same buffer-order contract and staged authoring as llama3/qwen3; two block
+kinds resolved by distinct compute_block_keys (``linattn_*`` / ``gattn_*``)
+while the shared embed/head/loss/optimizer executables are reused verbatim
+(the head reads the TIED ``W_embed`` object — same packed [table |
+final_norm_w] layout).
+
+Every fla call follows the contracts pinned by tests/tasks/test_qwen35_math.py:
+- ``chunk_gated_delta_rule_fwd`` returns
+  ``(g_post, o, A_int, final_state, initial_state, g_input)``; the blocks
+  save g_post/A_int/core_out and DISCARD g_input (it equals the raw ``a``
+  slice of the saved ``ba``, which backward reuses).
+- ``chunk_gated_delta_rule_bwd(g=g_post, g_input=a_raw, A=A_int, ...)``
+  returns ``(dq, dk, dv, dbeta, da, dh0, dA_log, ddt_bias)``.
+- ``l2norm_bwd(y, rstd, dy)`` consumes the OUTPUT + rstd.
+- ``causal_conv1d_bwd(x, dy, ..., activation="silu")`` recomputes the silu
+  internally and returns ``(dx, dweight, dbias, dresidual, dinit)``.
+- Every tensor handed to an fla/conv Triton kernel must be CONTIGUOUS.
+  The kernels index with contiguous strides; a strided column slice such
+  as ``ba[:, HV:]`` is read with the wrong row stride and SILENTLY
+  corrupts the gate gradients (dA_log off by ~4x rel — the ladder-2
+  divergence). ``.contiguous()`` at each boundary is the contract.
+
+Correctness-first policy: the gated-RMSNorm and output-gate segments run
+their backward via ``torch.autograd.grad`` through the REFERENCE forms (no
+hand-derived formulas to get subtly wrong); the fused-kernel pass replaces
+them once the ladder is green (flextrain's fused kernels as porting
+references). cu_seqlens resets the conv window and the recurrence at
+packed-sequence boundaries whenever batch > 1.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import torch
+
+from dataflow.core import TaskSpec
+
+from . import ops
+from .kernels import KernelSet, resolve_kernels
+from .layouts import (
+    PackedLayout,
+    Qwen35Dims,
+    qwen35_attn_context_layout,
+    qwen35_attn_weight_layout,
+    qwen35_lin_context_layout,
+    qwen35_lin_weight_layout,
+)
+from .llama3_blocks import (
+    AdamWHyper,
+    AdamWStep,
+    BlockFwd,
+    EmbedBwd,
+    EmbedFwd,
+    HeadBwd,
+    HeadFwd,
+    LossBwd,
+    _Base,
+)
+
+
+def _cu_seqlens(dims: Qwen35Dims, device) -> tuple:
+    """(cu_seqlens, chunk_indices) for packed rounds; (None, None) when the
+    round is a single sequence."""
+    if dims.tokens == dims.seq_len:
+        return None, None
+    from fla.modules.conv.triton.ops import prepare_chunk_indices
+
+    n = dims.tokens // dims.seq_len
+    cu = torch.arange(n + 1, device=device, dtype=torch.int64) * dims.seq_len
+    return cu, prepare_chunk_indices(cu, 64)
+
+
+# ---------------------------------------------------------------------------
+# Gated DeltaNet block
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Qwen35LinBlockFwd(BlockFwd):
+    dims: Qwen35Dims = None  # type: ignore[assignment]
+
+    @property
+    def wl(self) -> PackedLayout:
+        return qwen35_lin_weight_layout(self.dims)
+
+    @property
+    def cl(self) -> PackedLayout:
+        return qwen35_lin_context_layout(self.dims)
+
+    @staticmethod
+    def _stage_attn_norm(kctx, K, d, st):
+        BlockFwd._stage_attn_norm(kctx, K, d, st)
+
+    @staticmethod
+    def _stage_proj(kctx, K, d, st):
+        h1, w = st["h1"], st["w"]
+        qkvz = h1 @ w["w_qkvz"]
+        ba = h1 @ w["w_ba"]
+        st.update(qkvz=qkvz, ba=ba)
+        if st["a"] is not None:
+            st["a"]["qkvz"].copy_(qkvz)
+            st["a"]["ba"].copy_(ba)
+
+    @staticmethod
+    def _stage_conv(kctx, K, d, st):
+        import fla.modules.conv.triton.ops as fops
+
+        conv_in = st["qkvz"][:, : d.conv_dim].contiguous()
+        cu, _ci = _cu_seqlens(d, conv_in.device)
+        post = fops.causal_conv1d_fwd(
+            conv_in.unsqueeze(0), st["w"]["w_conv"], None, None,
+            activation="silu", cu_seqlens=cu,
+        )
+        post = post[0] if isinstance(post, tuple) else post
+        st["post_conv"] = post.squeeze(0) if post.dim() == 3 else post
+
+    @staticmethod
+    def _stage_heads_l2norm(kctx, K, d, st):
+        from fla.modules.l2norm import l2norm_fwd
+
+        post = st["post_conv"]
+        t = post.shape[0]
+        q = post[:, : d.key_dim].reshape(t * d.num_k_heads, d.head_k_dim)
+        k = post[:, d.key_dim : 2 * d.key_dim].reshape(t * d.num_k_heads, d.head_k_dim)
+        qn, _ = l2norm_fwd(q.contiguous())
+        kn, _ = l2norm_fwd(k.contiguous())
+        st["qn"] = qn.view(t, d.num_k_heads, d.head_k_dim)
+        st["kn"] = kn.view(t, d.num_k_heads, d.head_k_dim)
+        st["v_h"] = post[:, 2 * d.key_dim :].reshape(t, d.num_v_heads, d.head_v_dim)
+
+    @staticmethod
+    def _stage_fla(kctx, K, d, st):
+        from fla.ops.gated_delta_rule.chunk import chunk_gated_delta_rule_fwd
+
+        w = st["w"]
+        b = st["ba"][:, : d.num_v_heads]
+        a_raw = st["ba"][:, d.num_v_heads :].contiguous()
+        beta = torch.sigmoid(b.float()).to(b.dtype)
+        cu, ci = _cu_seqlens(d, b.device)
+        g_post, o, A_int, _fs, _is, _gi = chunk_gated_delta_rule_fwd(
+            st["qn"].unsqueeze(0), st["kn"].unsqueeze(0),
+            st["v_h"].unsqueeze(0).contiguous(),
+            a_raw.unsqueeze(0), beta.unsqueeze(0),
+            scale=d.head_k_dim ** -0.5,
+            initial_state=None, output_final_state=False,
+            cu_seqlens=cu, chunk_indices=ci,
+            use_gate_in_kernel=True,
+            A_log=w["A_log"].float(), dt_bias=w["dt_bias"].float(),
+        )
+        st["core_out"] = o.squeeze(0).to(torch.bfloat16)
+        if st["a"] is not None:
+            st["a"]["g_post"].copy_(g_post.squeeze(0))
+            st["a"]["A_int"].copy_(A_int.squeeze(0).to(torch.bfloat16))
+            st["a"]["core_out"].copy_(st["core_out"])
+
+    @staticmethod
+    def _stage_norm_out(kctx, K, d, st):
+        t = st["x"].shape[0]
+        z = st["qkvz"][:, d.conv_dim :].view(t, d.num_v_heads, d.head_v_dim)
+        o_normed = ops.gated_rmsnorm_reference(
+            st["core_out"].view(t, d.num_v_heads, d.head_v_dim), z, st["w"]["lin_norm_w"],
+        )
+        xo = torch.addmm(st["x"], o_normed.reshape(t, d.value_dim), st["w"]["w_out"])
+        st["h_mid"] = xo  # feeds the shared MLP-tail stages
+        if st["a"] is not None:
+            st["a"]["xo"].copy_(xo)
+
+    @staticmethod
+    def _stage_ffn_norm(kctx, K, d, st):
+        h_mid = st["h_mid"]
+        h2 = torch.empty_like(h_mid)
+        rstd = torch.empty(d.tokens, dtype=torch.float32, device=h_mid.device)
+        K.rmsnorm_fwd(kctx, h_mid, st["w"]["ffn_norm_w"], h2, rstd)
+        st["h2"] = h2
+        if st["a"] is not None:
+            st["a"]["rstd_ffn"].copy_(rstd)
+
+    @staticmethod
+    def _stage_up_proj(kctx, K, d, st):
+        BlockFwd._stage_up_proj(kctx, K, d, st)
+
+    @staticmethod
+    def _stage_swiglu(kctx, K, d, st):
+        BlockFwd._stage_swiglu(kctx, K, d, st)
+
+    @staticmethod
+    def _stage_down_resid(kctx, K, d, st):
+        BlockFwd._stage_down_resid(kctx, K, d, st)
+
+    STAGES = (
+        ("attn_norm", _stage_attn_norm.__func__, ("rstd_attn",)),
+        ("proj", _stage_proj.__func__, ("qkvz", "ba")),
+        ("conv", _stage_conv.__func__, ()),
+        ("heads_l2norm", _stage_heads_l2norm.__func__, ()),
+        ("fla", _stage_fla.__func__, ("g_post", "A_int", "core_out")),
+        ("norm_out", _stage_norm_out.__func__, ("xo",)),
+        ("ffn_norm", _stage_ffn_norm.__func__, ("rstd_ffn",)),
+        ("up_proj", _stage_up_proj.__func__, ("x1", "x3")),
+        ("swiglu", _stage_swiglu.__func__, ()),
+        ("down_resid", _stage_down_resid.__func__, ()),
+    )
+
+
+@dataclass(frozen=True)
+class Qwen35LinBlockRecompute(Qwen35LinBlockFwd):
+    def launch(self, ctx) -> None:
+        d = self.dims
+        es, kctx = self._stream_ctx(ctx)
+        with torch.cuda.stream(es):
+            x = self._x_view(ctx)
+            w = self.wl.views(self._in(ctx, 1))
+            a = self.cl.views(self._out(ctx, 0))
+            self._run_stages(kctx, x, w, a, count=self.recompute_stage_count())
+
+    def _x_view(self, ctx):
+        from .interop import torch_view
+
+        d = self.dims
+        return torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
+
+
+@dataclass(frozen=True)
+class Qwen35LinBlockBwd(_Base):
+    dims: Qwen35Dims = None  # type: ignore[assignment]
+
+    @property
+    def wl(self) -> PackedLayout:
+        return qwen35_lin_weight_layout(self.dims)
+
+    @property
+    def cl(self) -> PackedLayout:
+        return qwen35_lin_context_layout(self.dims)
+
+    def launch(self, ctx) -> None:
+        from .interop import torch_view
+
+        d = self.dims
+        es, kctx = self._stream_ctx(ctx)
+        with torch.cuda.stream(es):
+            dy = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
+            a = self.cl.views(self._in(ctx, 1))
+            x = torch_view(self._in(ctx, 2), (d.tokens, d.d_model), torch.bfloat16)
+            w = self.wl.views(self._in(ctx, 3))
+            accum = bool(ctx.task.mutates)
+            dx = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
+            if accum:
+                dw = self.wl.views(ctx.mutates[ctx.task.mutates[0]])
+            else:
+                dw = self.wl.views(self._out(ctx, 1))
+            self._backward(kctx, dy, a, x, w, dx, dw, accum)
+
+    def _backward(self, kctx, dy, a, x, w, dx_out, dw, accum: bool) -> None:
+        import fla.modules.conv.triton.ops as fops
+        from fla.modules.l2norm import l2norm_bwd, l2norm_fwd
+        from fla.ops.gated_delta_rule.chunk import chunk_gated_delta_rule_bwd
+
+        d = self.dims
+        K = self.kernels
+        t = d.tokens
+
+        def acc(name, value):
+            if accum:
+                dw[name].add_(value.to(dw[name].dtype))
+            else:
+                dw[name].copy_(value.to(dw[name].dtype))
+
+        def norm_bwd(dyv, xv, rstd, wv):
+            dxv = torch.empty_like(xv)
+            dwv = torch.empty(wv.numel(), dtype=torch.float32, device=xv.device)
+            K.rmsnorm_bwd(kctx, dyv, xv, rstd, wv, dxv, dwv)
+            return dxv, dwv
+
+        # --- MLP tail (xo plays h_mid) ---
+        h2 = torch.empty_like(a["xo"])
+        K.rmsnorm_apply(kctx, a["xo"], a["rstd_ffn"], w["ffn_norm_w"], h2)
+        s = torch.empty_like(a["x1"])
+        K.swiglu_fwd_out(kctx, a["x1"], a["x3"], s)
+        ds = dy @ w["w2"].T
+        acc("w2", s.T @ dy)
+        dx1 = torch.empty_like(a["x1"])
+        dx3 = torch.empty_like(a["x3"])
+        K.swiglu_bwd(kctx, ds, a["x1"], a["x3"], dx1, dx3)
+        del s
+        acc("w1", h2.T @ dx1)
+        acc("w3", h2.T @ dx3)
+        dh2 = dx1 @ w["w1"].T + dx3 @ w["w3"].T
+        dxo_n, dffn = norm_bwd(dh2, a["xo"], a["rstd_ffn"], w["ffn_norm_w"])
+        acc("ffn_norm_w", dffn)
+        dxo = dy + dxo_n
+
+        # --- gated norm + out projection (autograd through the reference) ---
+        z = a["qkvz"][:, d.conv_dim :].view(t, d.num_v_heads, d.head_v_dim)
+        core = a["core_out"]
+        with torch.enable_grad():
+            core_l = core.detach().requires_grad_()
+            z_l = z.detach().requires_grad_()
+            wn_l = w["lin_norm_w"].detach().requires_grad_()
+            y_ref = ops.gated_rmsnorm_reference(core_l, z_l, wn_l)
+        o_normed = y_ref.detach().reshape(t, d.value_dim)
+        acc("w_out", o_normed.T @ dxo)
+        do_normed = (dxo @ w["w_out"].T).view(t, d.num_v_heads, d.head_v_dim)
+        dcore, dz, dwn = torch.autograd.grad(y_ref, (core_l, z_l, wn_l), grad_outputs=do_normed)
+        acc("lin_norm_w", dwn.float())
+
+        # --- recompute conv/l2norm inputs from saved qkvz ---
+        conv_in = a["qkvz"][:, : d.conv_dim].contiguous()
+        cu, ci = _cu_seqlens(d, dy.device)
+        post = fops.causal_conv1d_fwd(
+            conv_in.unsqueeze(0), w["w_conv"], None, None,
+            activation="silu", cu_seqlens=cu,
+        )
+        post = post[0] if isinstance(post, tuple) else post
+        post = post.squeeze(0) if post.dim() == 3 else post
+        q2 = post[:, : d.key_dim].reshape(t * d.num_k_heads, d.head_k_dim).contiguous()
+        k2 = post[:, d.key_dim : 2 * d.key_dim].reshape(t * d.num_k_heads, d.head_k_dim).contiguous()
+        qn, q_rstd = l2norm_fwd(q2)
+        kn, k_rstd = l2norm_fwd(k2)
+        v_h = post[:, 2 * d.key_dim :].reshape(t, d.num_v_heads, d.head_v_dim)
+
+        b = a["ba"][:, : d.num_v_heads]
+        a_raw = a["ba"][:, d.num_v_heads :].contiguous()
+        beta = torch.sigmoid(b.float()).to(b.dtype)
+
+        # --- fla chunk bwd (pinned contract) ---
+        dq, dk, dv, db, da, _dh0, dA_log, ddt = chunk_gated_delta_rule_bwd(
+            q=qn.view(t, d.num_k_heads, d.head_k_dim).unsqueeze(0),
+            k=kn.view(t, d.num_k_heads, d.head_k_dim).unsqueeze(0),
+            v=v_h.unsqueeze(0).contiguous(),
+            g=a["g_post"].unsqueeze(0),
+            beta=beta.unsqueeze(0),
+            A=a["A_int"].unsqueeze(0),
+            scale=d.head_k_dim ** -0.5,
+            initial_state=None,
+            do=dcore.reshape(t, d.num_v_heads, d.head_v_dim).unsqueeze(0).contiguous(),
+            dht=None,
+            cu_seqlens=cu, chunk_indices=ci,
+            use_gate_in_kernel=True, g_input=a_raw.unsqueeze(0),
+            A_log=w["A_log"].float(), dt_bias=w["dt_bias"].float(),
+        )
+        acc("A_log", dA_log)
+        acc("dt_bias", ddt)
+
+        # --- l2norm bwd (takes OUTPUT + rstd) ---
+        dq_pre = l2norm_bwd(qn, q_rstd, dq.squeeze(0).reshape(t * d.num_k_heads, d.head_k_dim))
+        dk_pre = l2norm_bwd(kn, k_rstd, dk.squeeze(0).reshape(t * d.num_k_heads, d.head_k_dim))
+
+        # --- conv bwd (silu handled internally; returns dx, dweight, ...) ---
+        d_post = torch.cat([
+            dq_pre.view(t, d.key_dim),
+            dk_pre.view(t, d.key_dim),
+            dv.squeeze(0).reshape(t, d.value_dim),
+        ], dim=-1)
+        dconv_in, dwconv, _db, _dr, _di = fops.causal_conv1d_bwd(
+            conv_in.unsqueeze(0), d_post.unsqueeze(0), None,
+            weight=w["w_conv"], bias=None, residual=None, initial_state=None,
+            activation="silu", cu_seqlens=cu,
+        )
+        acc("w_conv", dwconv)
+
+        # --- assemble projection grads ---
+        db_raw = (db.squeeze(0).float() * (beta.float() * (1 - beta.float()))).to(torch.bfloat16)
+        d_qkvz = torch.cat([dconv_in.squeeze(0), dz.reshape(t, d.value_dim)], dim=-1)
+        d_ba = torch.cat([db_raw, da.squeeze(0).to(torch.bfloat16)], dim=-1)
+        h1 = torch.empty_like(x)
+        K.rmsnorm_apply(kctx, x, a["rstd_attn"], w["attn_norm_w"], h1)
+        acc("w_qkvz", h1.T @ d_qkvz)
+        acc("w_ba", h1.T @ d_ba)
+        dh1 = d_qkvz @ w["w_qkvz"].T + d_ba @ w["w_ba"].T
+        dx_n, dattn = norm_bwd(dh1, x, a["rstd_attn"], w["attn_norm_w"])
+        acc("attn_norm_w", dattn)
+        dx_out.copy_(dxo + dx_n)
+
+
+# ---------------------------------------------------------------------------
+# Gated full-attention block
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Qwen35AttnBlockFwd(BlockFwd):
+    dims: Qwen35Dims = None  # type: ignore[assignment]
+
+    @property
+    def wl(self) -> PackedLayout:
+        return qwen35_attn_weight_layout(self.dims)
+
+    @property
+    def cl(self) -> PackedLayout:
+        return qwen35_attn_context_layout(self.dims)
+
+    @staticmethod
+    def _partial_rope(kctx, K, d, x, heads, *, bwd: bool = False):
+        """Rotate only the first rot_dim channels per head; pass the rest."""
+        t = x.shape[0]
+        rot = d.rot_dim
+        xh = x.view(t, heads, d.head_dim)
+        rs = xh[:, :, :rot].contiguous().view(t, heads * rot)
+        out = torch.empty_like(rs)
+        fn = K.rope_bwd if bwd else K.rope_fwd
+        fn(kctx, rs, out, d.seq_len, heads, rot, d.rope_base)
+        y = torch.empty_like(xh)
+        y[:, :, :rot] = out.view(t, heads, rot)
+        y[:, :, rot:] = xh[:, :, rot:]
+        return y.view(t, heads * d.head_dim)
+
+    @staticmethod
+    def _stage_attn_norm(kctx, K, d, st):
+        BlockFwd._stage_attn_norm(kctx, K, d, st)
+
+    @staticmethod
+    def _stage_qkv_gate(kctx, K, d, st):
+        h1, w = st["h1"], st["w"]
+        qg = h1 @ w["wq"]
+        qm, gate = qg[:, : d.attn_dim], qg[:, d.attn_dim :]
+        km = h1 @ w["wk"]
+        v = h1 @ w["wv"]
+        st.update(qm=qm.contiguous(), gate=gate.contiguous(), km=km, v=v)
+        if st["a"] is not None:
+            st["a"]["qm"].copy_(qm)
+            st["a"]["km"].copy_(km)
+            st["a"]["gate"].copy_(gate)
+            st["a"]["v"].copy_(v)
+
+    @staticmethod
+    def _stage_qknorm_rope(kctx, K, d, st):
+        t = st["x"].shape[0]
+        h, kvh, hd = d.n_heads, d.n_kv_heads, d.head_dim
+        qn = torch.empty_like(st["qm"])
+        rstd_q = torch.empty(t * h, dtype=torch.float32, device=qn.device)
+        K.rmsnorm_fwd(kctx, st["qm"].view(t * h, hd), st["w"]["q_norm_w"], qn.view(t * h, hd), rstd_q)
+        kn = torch.empty_like(st["km"])
+        rstd_k = torch.empty(t * kvh, dtype=torch.float32, device=kn.device)
+        K.rmsnorm_fwd(kctx, st["km"].view(t * kvh, hd), st["w"]["k_norm_w"], kn.view(t * kvh, hd), rstd_k)
+        st["q"] = Qwen35AttnBlockFwd._partial_rope(kctx, K, d, qn, h)
+        st["k"] = Qwen35AttnBlockFwd._partial_rope(kctx, K, d, kn, kvh)
+        if st["a"] is not None:
+            st["a"]["rstd_q"].copy_(rstd_q)
+            st["a"]["rstd_k"].copy_(rstd_k)
+
+    @staticmethod
+    def _stage_attn(kctx, K, d, st):
+        attn_out, lse = ops.flash_fwd(
+            st["q"], st["k"], st["v"], d.n_heads, d.n_kv_heads, d.head_dim, d.seq_len,
+        )
+        st["attn_out"] = attn_out
+        if st["a"] is not None:
+            st["a"]["lse"].copy_(lse)
+            st["a"]["attn_out"].copy_(attn_out)
+
+    @staticmethod
+    def _stage_gate_o(kctx, K, d, st):
+        t = st["x"].shape[0]
+        gated = st["attn_out"] * torch.sigmoid(st["gate"].float()).to(torch.bfloat16)
+        xo = torch.addmm(st["x"], gated, st["w"]["wo"])
+        st["h_mid"] = xo
+        if st["a"] is not None:
+            st["a"]["xo"].copy_(xo)
+
+    _stage_ffn_norm = staticmethod(Qwen35LinBlockFwd._stage_ffn_norm)
+
+    @staticmethod
+    def _stage_up_proj(kctx, K, d, st):
+        BlockFwd._stage_up_proj(kctx, K, d, st)
+
+    @staticmethod
+    def _stage_swiglu(kctx, K, d, st):
+        BlockFwd._stage_swiglu(kctx, K, d, st)
+
+    @staticmethod
+    def _stage_down_resid(kctx, K, d, st):
+        BlockFwd._stage_down_resid(kctx, K, d, st)
+
+    STAGES = (
+        ("attn_norm", _stage_attn_norm.__func__, ("rstd_attn",)),
+        ("qkv_gate", _stage_qkv_gate.__func__, ("qm", "km", "gate", "v")),
+        ("qknorm_rope", _stage_qknorm_rope.__func__, ("rstd_q", "rstd_k")),
+        ("attn", _stage_attn.__func__, ("lse", "attn_out")),
+        ("gate_o", _stage_gate_o.__func__, ("xo",)),
+        ("ffn_norm", _stage_ffn_norm.__func__, ("rstd_ffn",)),
+        ("up_proj", _stage_up_proj.__func__, ("x1", "x3")),
+        ("swiglu", _stage_swiglu.__func__, ()),
+        ("down_resid", _stage_down_resid.__func__, ()),
+    )
+
+
+@dataclass(frozen=True)
+class Qwen35AttnBlockRecompute(Qwen35AttnBlockFwd, Qwen35LinBlockRecompute):
+    pass
+
+
+@dataclass(frozen=True)
+class Qwen35AttnBlockBwd(_Base):
+    dims: Qwen35Dims = None  # type: ignore[assignment]
+
+    @property
+    def wl(self) -> PackedLayout:
+        return qwen35_attn_weight_layout(self.dims)
+
+    @property
+    def cl(self) -> PackedLayout:
+        return qwen35_attn_context_layout(self.dims)
+
+    def launch(self, ctx) -> None:
+        from .interop import torch_view
+
+        d = self.dims
+        es, kctx = self._stream_ctx(ctx)
+        with torch.cuda.stream(es):
+            dy = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
+            a = self.cl.views(self._in(ctx, 1))
+            x = torch_view(self._in(ctx, 2), (d.tokens, d.d_model), torch.bfloat16)
+            w = self.wl.views(self._in(ctx, 3))
+            accum = bool(ctx.task.mutates)
+            dx = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
+            if accum:
+                dw = self.wl.views(ctx.mutates[ctx.task.mutates[0]])
+            else:
+                dw = self.wl.views(self._out(ctx, 1))
+            self._backward(kctx, dy, a, x, w, dx, dw, accum)
+
+    def _backward(self, kctx, dy, a, x, w, dx_out, dw, accum: bool) -> None:
+        d = self.dims
+        K = self.kernels
+        t = d.tokens
+        h, kvh, hd = d.n_heads, d.n_kv_heads, d.head_dim
+
+        def acc(name, value):
+            if accum:
+                dw[name].add_(value.to(dw[name].dtype))
+            else:
+                dw[name].copy_(value.to(dw[name].dtype))
+
+        def norm_bwd(dyv, xv, rstd, wv):
+            dxv = torch.empty_like(xv)
+            dwv = torch.empty(wv.numel(), dtype=torch.float32, device=xv.device)
+            K.rmsnorm_bwd(kctx, dyv, xv, rstd, wv, dxv, dwv)
+            return dxv, dwv
+
+        # --- MLP tail ---
+        h2 = torch.empty_like(a["xo"])
+        K.rmsnorm_apply(kctx, a["xo"], a["rstd_ffn"], w["ffn_norm_w"], h2)
+        s = torch.empty_like(a["x1"])
+        K.swiglu_fwd_out(kctx, a["x1"], a["x3"], s)
+        ds = dy @ w["w2"].T
+        acc("w2", s.T @ dy)
+        dx1 = torch.empty_like(a["x1"])
+        dx3 = torch.empty_like(a["x3"])
+        K.swiglu_bwd(kctx, ds, a["x1"], a["x3"], dx1, dx3)
+        del s
+        acc("w1", h2.T @ dx1)
+        acc("w3", h2.T @ dx3)
+        dh2 = dx1 @ w["w1"].T + dx3 @ w["w3"].T
+        dxo_n, dffn = norm_bwd(dh2, a["xo"], a["rstd_ffn"], w["ffn_norm_w"])
+        acc("ffn_norm_w", dffn)
+        dxo = dy + dxo_n
+
+        # --- output gate + o projection ---
+        sig = torch.sigmoid(a["gate"].float())
+        gated = a["attn_out"] * sig.to(torch.bfloat16)
+        acc("wo", gated.T @ dxo)
+        dgated = dxo @ w["wo"].T
+        d_attn = (dgated.float() * sig).to(torch.bfloat16)
+        d_gate = (dgated.float() * a["attn_out"].float() * sig * (1 - sig)).to(torch.bfloat16)
+
+        # --- flash bwd needs post-norm/post-rope q, k (rebuild from saved) ---
+        qn = torch.empty_like(a["qm"])
+        K.rmsnorm_apply(kctx, a["qm"].view(t * h, hd), a["rstd_q"], w["q_norm_w"], qn.view(t * h, hd))
+        kn = torch.empty_like(a["km"])
+        K.rmsnorm_apply(kctx, a["km"].view(t * kvh, hd), a["rstd_k"], w["k_norm_w"], kn.view(t * kvh, hd))
+        q = Qwen35AttnBlockFwd._partial_rope(kctx, K, d, qn, h)
+        k = Qwen35AttnBlockFwd._partial_rope(kctx, K, d, kn, kvh)
+        dq, dk, dv = ops.flash_bwd(
+            d_attn, q, k, a["v"], a["attn_out"], a["lse"], h, kvh, hd, d.seq_len,
+        )
+        dqn = Qwen35AttnBlockFwd._partial_rope(kctx, K, d, dq, h, bwd=True)
+        dkn = Qwen35AttnBlockFwd._partial_rope(kctx, K, d, dk, kvh, bwd=True)
+
+        dqm, dqnorm = norm_bwd(dqn.view(t * h, hd), a["qm"].view(t * h, hd), a["rstd_q"], w["q_norm_w"])
+        acc("q_norm_w", dqnorm)
+        dkm, dknorm = norm_bwd(dkn.view(t * kvh, hd), a["km"].view(t * kvh, hd), a["rstd_k"], w["k_norm_w"])
+        acc("k_norm_w", dknorm)
+        dqm = dqm.view(t, d.attn_dim)
+        dkm = dkm.view(t, d.kv_dim)
+
+        # --- projections (wq is the doubled [Q_all | gate_all]) ---
+        h1 = torch.empty_like(x)
+        K.rmsnorm_apply(kctx, x, a["rstd_attn"], w["attn_norm_w"], h1)
+        d_qg = torch.cat([dqm, d_gate], dim=-1)
+        acc("wq", h1.T @ d_qg)
+        acc("wk", h1.T @ dkm)
+        acc("wv", h1.T @ dv)
+        dh1 = d_qg @ w["wq"].T + dkm @ w["wk"].T + dv @ w["wv"].T
+        dx_n, dattn_norm = norm_bwd(dh1, x, a["rstd_attn"], w["attn_norm_w"])
+        acc("attn_norm_w", dattn_norm)
+        dx_out.copy_(dxo + dx_n)
+
+
+def build_qwen35_resolver(
+    dims: Qwen35Dims,
+    hyper: AdamWHyper = AdamWHyper(),
+    kernels: KernelSet | None = None,
+):
+    kernels = kernels if kernels is not None else resolve_kernels()
+    table = {
+        "embed_fwd": EmbedFwd(dims, kernels),
+        "linattn_fwd": Qwen35LinBlockFwd(dims, kernels),
+        "linattn_recompute": Qwen35LinBlockRecompute(dims, kernels),
+        "linattn_bwd": Qwen35LinBlockBwd(dims, kernels),
+        "gattn_fwd": Qwen35AttnBlockFwd(dims, kernels),
+        "gattn_recompute": Qwen35AttnBlockRecompute(dims, kernels),
+        "gattn_bwd": Qwen35AttnBlockBwd(dims, kernels),
+        "head_fwd": HeadFwd(dims, kernels),
+        "loss_bwd": LossBwd(dims, kernels),
+        "head_bwd": HeadBwd(dims, kernels),
+        "embed_bwd": EmbedBwd(dims, kernels),
+        "optimizer_block": AdamWStep(dims, kernels, hyper),
+        "optimizer_embed": AdamWStep(dims, kernels, hyper),
+    }
+
+    def resolver(task: TaskSpec):
+        key = task.compute_block_key
+        if key not in table:
+            raise KeyError(f"no executable for compute_block_key {key!r} (task {task.id!r})")
+        return table[key]
+
+    resolver.kernel_set = kernels
+    return resolver
