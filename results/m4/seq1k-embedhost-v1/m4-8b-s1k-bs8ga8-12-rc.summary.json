@@ -1,0 +1,63 @@
+{
+  "config": "8b-s1k-bs8ga8",
+  "steps": 3,
+  "pcie": {
+    "uni_h2d": 35338,
+    "uni_d2h": 56756,
+    "bidi_h2d": 25529,
+    "bidi_d2h": 25783
+  },
+  "kernel_set": {
+    "adamw_step": "triton",
+    "ce_loss_fwd_bwd": "triton",
+    "rmsnorm_apply": "triton",
+    "rmsnorm_bwd": "triton",
+    "rmsnorm_fwd": "triton",
+    "rmsnorm_noweight": "triton",
+    "rope_bwd": "triton",
+    "rope_fwd": "triton",
+    "swiglu_bwd": "triton",
+    "swiglu_fwd_out": "triton"
+  },
+  "sweep": [
+    {
+      "budget_gib": 12.0,
+      "planned_budget_gib": 12.0,
+      "placement_mode": "static",
+      "extent_budget": false,
+      "sim_ms_per_step": 19656.6960703125,
+      "real_ms_per_step_steady": 20607.4501953125,
+      "sim_tokens_per_s": 3334.0292674606185,
+      "real_tokens_per_s": 3180.209068995214,
+      "real_vs_sim_pct": -4.613642716536881,
+      "replay_fidelity_gap_pct": 1.6131032850623894,
+      "losses": [
+        12.556785583496094,
+        12.587756156921387,
+        12.590343475341797
+      ],
+      "peak_fast_gib": 11.949691772460938,
+      "peak_backing_gib": 65.86045838147402,
+      "pinned_host_gib": 144.437255859375,
+      "step_makespans_ms": [
+        20487.345703125,
+        20576.857421875,
+        20638.04296875
+      ],
+      "step_wall_s": [
+        39.960429653991014,
+        20.899544119951315,
+        20.973788075963967
+      ],
+      "step_slab_overflows": [
+        0,
+        0,
+        0
+      ],
+      "placement_extent_gib": 13.237640380859375,
+      "placement_escapes": 0,
+      "placement_overhead": 1.1077809062294497,
+      "recompute_chosen": 128
+    }
+  ]
+}
