@@ -105,16 +105,11 @@ class Qwen35LinBlockFwd(BlockFwd):
 
     @staticmethod
     def _stage_conv(kctx, K, d, st):
-        import fla.modules.conv.triton.ops as fops
-
         conv_in = st["qkvz"][:, : d.conv_dim].contiguous()
         cu, _ci = _cu_seqlens(d, conv_in.device)
-        post = fops.causal_conv1d_fwd(
-            conv_in.unsqueeze(0), st["w"]["w_conv"], None, None,
-            activation="silu", cu_seqlens=cu,
-        )
-        post = post[0] if isinstance(post, tuple) else post
-        st["post_conv"] = post.squeeze(0) if post.dim() == 3 else post
+        post = torch.empty_like(conv_in)
+        K.causal_conv1d_silu_fwd(kctx, conv_in, st["w"]["w_conv"], post, cu)
+        st["post_conv"] = post
 
     @staticmethod
     def _stage_heads_l2norm(kctx, K, d, st):
@@ -255,7 +250,6 @@ class Qwen35LinBlockBwd(_Base):
             self._backward(kctx, dy, a, x, w, dx, dw, accum)
 
     def _backward(self, kctx, dy, a, x, w, dx_out, dw, accum: bool) -> None:
-        import fla.modules.conv.triton.ops as fops
         from fla.modules.l2norm import l2norm_bwd, l2norm_fwd
         from fla.ops.gated_delta_rule.chunk import chunk_gated_delta_rule_bwd
 
@@ -314,12 +308,8 @@ class Qwen35LinBlockBwd(_Base):
         # --- recompute conv/l2norm inputs from saved qkvz ---
         conv_in = a["qkvz"][:, : d.conv_dim].contiguous()
         cu, ci = _cu_seqlens(d, dy.device)
-        post = fops.causal_conv1d_fwd(
-            conv_in.unsqueeze(0), w["w_conv"], None, None,
-            activation="silu", cu_seqlens=cu,
-        )
-        post = post[0] if isinstance(post, tuple) else post
-        post = post.squeeze(0) if post.dim() == 3 else post
+        post = torch.empty_like(conv_in)
+        K.causal_conv1d_silu_fwd(kctx, conv_in, w["w_conv"], post, cu)
         q2 = post[:, : d.key_dim].reshape(t * d.num_k_heads, d.head_k_dim).contiguous()
         k2 = post[:, d.key_dim : 2 * d.key_dim].reshape(t * d.num_k_heads, d.head_k_dim).contiguous()
         qn, q_rstd = l2norm_fwd(q2)
@@ -353,22 +343,20 @@ class Qwen35LinBlockBwd(_Base):
         dq_pre = l2norm_bwd(qn, q_rstd, dq.squeeze(0).reshape(t * d.num_k_heads, d.head_k_dim))
         dk_pre = l2norm_bwd(kn, k_rstd, dk.squeeze(0).reshape(t * d.num_k_heads, d.head_k_dim))
 
-        # --- conv bwd (silu handled internally; returns dx, dweight, ...) ---
+        # --- conv bwd (silu recomputed internally by the kernel) ---
         d_post = torch.cat([
             dq_pre.view(t, d.key_dim),
             dk_pre.view(t, d.key_dim),
             dv.squeeze(0).reshape(t, d.value_dim),
         ], dim=-1)
-        dconv_in, dwconv, _db, _dr, _di = fops.causal_conv1d_bwd(
-            conv_in.unsqueeze(0), d_post.unsqueeze(0), None,
-            weight=w["w_conv"], bias=None, residual=None, initial_state=None,
-            activation="silu", cu_seqlens=cu,
-        )
+        dconv_in = torch.empty_like(conv_in)
+        dwconv = torch.empty_like(w["w_conv"])
+        K.causal_conv1d_silu_bwd(kctx, conv_in, d_post, w["w_conv"], dconv_in, dwconv, cu)
         acc("w_conv", dwconv)
 
         # --- assemble projection grads ---
         db_raw = (db.squeeze(0).float() * (beta.float() * (1 - beta.float()))).to(torch.bfloat16)
-        d_qkvz = torch.cat([dconv_in.squeeze(0), dz.reshape(t, d.value_dim)], dim=-1)
+        d_qkvz = torch.cat([dconv_in, dz.reshape(t, d.value_dim)], dim=-1)
         d_ba = torch.cat([db_raw, da.squeeze(0).to(torch.bfloat16)], dim=-1)
         h1 = torch.empty_like(x)
         K.rmsnorm_apply(kctx, x, a["rstd_attn"], w["attn_norm_w"], h1)

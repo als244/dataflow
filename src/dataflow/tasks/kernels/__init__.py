@@ -31,6 +31,7 @@ from .registry import (  # noqa: F401
 # registration side effects: one module per op family
 from . import (  # noqa: F401,E402
     adamw,
+    causal_conv,
     cross_entropy,
     gated_rmsnorm,
     rmsnorm,
