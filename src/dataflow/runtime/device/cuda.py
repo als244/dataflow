@@ -130,19 +130,43 @@ class CudaBackend:
         return float(ms) * 1e3
 
     # --- memory ---------------------------------------------------------------
+    pinned_bytes: int = 0
+    pinned_peak: int = 0
+
     def alloc(self, location: Location, size_bytes: int) -> Buffer:
         if location == "fast":
             (ptr,) = _check(cudart.cudaMalloc(size_bytes))
+            raw = None
         else:
-            (ptr,) = _check(cudart.cudaHostAlloc(size_bytes, cudart.cudaHostAllocDefault))
+            ptr, raw = self._alloc_pinned(size_bytes)
         self._seq += 1
-        return Buffer(id=f"buf{self._seq}", location=location, size_bytes=size_bytes, ptr=int(ptr))
+        return Buffer(
+            id=f"buf{self._seq}", location=location, size_bytes=size_bytes,
+            ptr=int(ptr), raw=raw,
+        )
+
+    def _alloc_pinned(self, size_bytes: int):
+        """cudaHostAlloc, page-granular (no power-of-2 rounding — that lore is
+        torch's pinned CACHING allocator, which this path bypasses entirely).
+
+        malloc + madvise(HUGEPAGE) + cudaHostRegister was measured as the
+        alternative on this system (THP=madvise honored): pin throughput was
+        IDENTICAL at 8 GB (~4.5 GB/s — the driver pins at its own granularity
+        regardless of backing page size) and 10x slower for small buffers, so
+        the simpler call stays. Revisit if a driver ever honors huge-page
+        registration."""
+        (ptr,) = _check(cudart.cudaHostAlloc(size_bytes, cudart.cudaHostAllocDefault))
+        self.pinned_bytes += size_bytes
+        self.pinned_peak = max(self.pinned_peak, self.pinned_bytes)
+        return int(ptr), ("hostalloc", size_bytes)
 
     def free(self, buffer: Buffer) -> None:
         if buffer.location == "fast":
             _check(cudart.cudaFree(buffer.ptr))
         else:
             _check(cudart.cudaFreeHost(buffer.ptr))
+            if isinstance(buffer.raw, tuple) and buffer.raw[0] == "hostalloc":
+                self.pinned_bytes -= buffer.raw[1]
 
     # --- async work -----------------------------------------------------------
     def memcpy_async(

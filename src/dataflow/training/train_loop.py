@@ -40,6 +40,8 @@ class TrainReport:
     last_trace: object = None  # RunTrace of the final step (replay-gap analysis)
     placement_extent_bytes: int = 0
     placement_overhead: float = 1.0  # extent / peak load (contiguity geometry tax)
+    peak_backing_bytes: int = 0      # ledger peak of plan-managed host bytes
+    pinned_host_bytes: int = 0       # physically registered pinned memory
 
     @property
     def steady_state_makespan_us(self) -> float:
@@ -129,6 +131,10 @@ def train(
             report.step_wall_s.append(time.perf_counter() - t0)
             report.step_makespan_us.append(result.makespan_us)
             report.peak_fast_bytes = max(report.peak_fast_bytes, result.peak_fast_bytes)
+            report.peak_backing_bytes = max(report.peak_backing_bytes, result.peak_backing_bytes)
+            report.pinned_host_bytes = max(
+                report.pinned_host_bytes, getattr(backend, "pinned_peak", 0)
+            )
             prior = sum(report.step_slab_overflows)
             report.step_slab_overflows.append(result.slab_overflows - prior)
 

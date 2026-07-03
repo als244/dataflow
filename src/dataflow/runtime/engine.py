@@ -61,6 +61,7 @@ class RunResult:
     buffers_allocated: int
     buffers_reused: int
     slab_overflows: int
+    peak_backing_bytes: int = 0
     # exact (location, size) -> count buffer demand of this run; feed it to a
     # subsequent run's `pool_prewarm` (e.g. fake dry run -> real run)
     pool_demand: dict[tuple[str, int], int] = None  # type: ignore[assignment]
@@ -387,6 +388,7 @@ class Engine:
             trace=trace,
             makespan_us=trace.makespan_us(),
             peak_fast_bytes=ledger.peak_fast_bytes,
+            peak_backing_bytes=ledger.peak_backing_bytes,
             final_location_violations=tuple(violations),
             buffers_allocated=pool.allocated_count,
             buffers_reused=pool.reused_count,

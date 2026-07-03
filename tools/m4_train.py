@@ -189,6 +189,8 @@ def main() -> None:
             "replay_fidelity_gap_pct": gap,
             "losses": report.losses,
             "peak_fast_gib": report.peak_fast_bytes / GIB,
+            "peak_backing_gib": report.peak_backing_bytes / GIB,
+            "pinned_host_gib": report.pinned_host_bytes / GIB,
             "step_makespans_ms": [m / 1e3 for m in report.step_makespan_us],
             "step_wall_s": report.step_wall_s,
             "step_slab_overflows": report.step_slab_overflows,

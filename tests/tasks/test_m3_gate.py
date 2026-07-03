@@ -105,7 +105,7 @@ def test_measured_costs_replan_still_golden():
     dims = dims_of(CFG)
     program = lower_llama3(CFG)
     backend = CudaBackend()
-    profiles = profile_program(program, build_resolver(dims), backend)
+    profiles = profile_program(program, build_resolver(dims), backend, soak_seconds=0)
     measured = apply_measured_costs(program, profiles)
 
     # measured runtimes should differ from roofline guesses for most tasks

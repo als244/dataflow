@@ -25,6 +25,7 @@ class Ledger:
     backing_capacity: int | None = None
     used: dict[str, int] = field(default_factory=lambda: {"fast": 0, "backing": 0})
     peak_fast_bytes: int = 0
+    peak_backing_bytes: int = 0
     # observer(t_us, used_fast) for memory tracing; wired by the engine
     on_change: Callable[[str, int], None] | None = None
 
@@ -56,6 +57,8 @@ class Ledger:
         self.used[location] += size_bytes
         if location == "fast":
             self.peak_fast_bytes = max(self.peak_fast_bytes, self.used["fast"])
+        if location == "backing":
+            self.peak_backing_bytes = max(self.peak_backing_bytes, self.used["backing"])
         if self.on_change is not None:
             self.on_change(location, self.used[location])
 
