@@ -68,3 +68,27 @@ poison-on-free and interleaving-stress runs from
 `tests/tasks/test_m3_gate.py`. A model that passes those is ready for
 throughput work (budget sweeps vs the simulator — see tools/m2_gate.py's
 replay-fidelity metric).
+
+
+## Authoring a block as stages (required for recompute-capable blocks)
+
+Write the forward as an ordered ``STAGES`` tuple of
+``(name, fn(kctx, kernels, dims, state), emitted_context_fields)`` — see
+``tasks/llama3_blocks.py:BlockFwd.STAGES``. Stages share a ``state`` dict
+(inputs, weight views, intermediates) and write any emitted fields into
+``state["a"]`` when a context is attached.
+
+Everything else derives from that one description:
+
+- the full forward runs every stage;
+- **the recompute variant is derived, never written**: it runs stages
+  through the last context-emitting one and stops — work that exists only
+  to produce the block output (e.g. a final down-projection) is excluded
+  by construction;
+- two structural tests come for free (copy
+  ``tests/tasks/test_staged_blocks.py``): every declared context field is
+  emitted by some stage, and the derived boundary excludes at least one
+  stage (the waste tripwire).
+
+Ordering rule: emit context fields as early as their values are final —
+the recompute boundary is only as tight as your last emission.

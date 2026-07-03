@@ -101,12 +101,33 @@ class BlockFwd(_Base):
                 a = None
             self._forward(kctx, x, w, y, a)
 
-    def _forward(self, kctx, x, w, y, a) -> None:
-        d = self.dims
-        K = self.kernels
+    # --- staged forward -------------------------------------------------------
+    #
+    # The forward is authored as an ordered list of named STAGES, each
+    # declaring which saved-context fields it emits. Everything downstream
+    # derives from this single description:
+    #   - full forward  = run every stage (+ the y epilogue)
+    #   - recompute     = run stages up to the LAST context-emitting stage —
+    #                     derived, never hand-written, so "work past the
+    #                     boundary" (e.g. the down-projection GEMM) cannot
+    #                     creep back in when blocks evolve
+    # A stage receives (kctx, kernels, dims, st) where ``st`` is the shared
+    # state dict; it reads/writes intermediates there and writes any emitted
+    # fields into st["a"] when a context is attached.
+
+    @staticmethod
+    def _stage_attn_norm(kctx, K, d, st):
+        x = st["x"]
         h1 = torch.empty_like(x)
-        rstd_attn = torch.empty(d.tokens, dtype=torch.float32, device=x.device)
-        K.rmsnorm_fwd(kctx, x, w["attn_norm_w"], h1, rstd_attn)
+        rstd = torch.empty(d.tokens, dtype=torch.float32, device=x.device)
+        K.rmsnorm_fwd(kctx, x, st["w"]["attn_norm_w"], h1, rstd)
+        st["h1"] = h1
+        if st["a"] is not None:
+            st["a"]["rstd_attn"].copy_(rstd)
+
+    @staticmethod
+    def _stage_qkv_rope(kctx, K, d, st):
+        h1, w = st["h1"], st["w"]
         qm = h1 @ w["wq"]
         q = torch.empty_like(qm)
         K.rope_fwd(kctx, qm, q, d.seq_len, d.n_heads, d.head_dim, d.rope_base)
@@ -114,27 +135,86 @@ class BlockFwd(_Base):
         k = torch.empty_like(km)
         K.rope_fwd(kctx, km, k, d.seq_len, d.n_kv_heads, d.head_dim, d.rope_base)
         v = h1 @ w["wv"]
-        attn_out, lse = ops.flash_fwd(q, k, v, d.n_heads, d.n_kv_heads, d.head_dim, d.seq_len)
-        h_mid = x + attn_out @ w["wo"]
+        st.update(q=q, k=k, v=v)
+        if st["a"] is not None:
+            st["a"]["q"].copy_(q)
+            st["a"]["k"].copy_(k)
+            st["a"]["v"].copy_(v)
+
+    @staticmethod
+    def _stage_attn(kctx, K, d, st):
+        attn_out, lse = ops.flash_fwd(
+            st["q"], st["k"], st["v"], d.n_heads, d.n_kv_heads, d.head_dim, d.seq_len
+        )
+        st["attn_out"] = attn_out
+        if st["a"] is not None:
+            st["a"]["lse"].copy_(lse)
+            st["a"]["attn_out"].copy_(attn_out)
+
+    @staticmethod
+    def _stage_resid1_norm2(kctx, K, d, st):
+        h_mid = st["x"] + st["attn_out"] @ st["w"]["wo"]
         h2 = torch.empty_like(h_mid)
-        rstd_ffn = torch.empty(d.tokens, dtype=torch.float32, device=x.device)
-        K.rmsnorm_fwd(kctx, h_mid, w["ffn_norm_w"], h2, rstd_ffn)
-        x1 = h2 @ w["w1"]
-        x3 = h2 @ w["w3"]
-        s = torch.empty_like(x1)
-        K.swiglu_fwd_out(kctx, x1, x3, s)
-        y.copy_(h_mid + s @ w["w2"])
+        rstd = torch.empty(d.tokens, dtype=torch.float32, device=h_mid.device)
+        K.rmsnorm_fwd(kctx, h_mid, st["w"]["ffn_norm_w"], h2, rstd)
+        st.update(h_mid=h_mid, h2=h2)
+        if st["a"] is not None:
+            st["a"]["h_mid"].copy_(h_mid)
+            st["a"]["rstd_ffn"].copy_(rstd)
+
+    @staticmethod
+    def _stage_up_proj(kctx, K, d, st):
+        h2, w, a = st["h2"], st["w"], st["a"]
         if a is not None:
-            a["rstd_attn"].copy_(rstd_attn)
-            a["q"].copy_(q)
-            a["k"].copy_(k)
-            a["v"].copy_(v)
-            a["lse"].copy_(lse)
-            a["attn_out"].copy_(attn_out)
-            a["h_mid"].copy_(h_mid)
-            a["rstd_ffn"].copy_(rstd_ffn)
-            a["x1"].copy_(x1)
-            a["x3"].copy_(x3)
+            torch.matmul(h2, w["w1"], out=a["x1"])
+            torch.matmul(h2, w["w3"], out=a["x3"])
+            st["x1"], st["x3"] = a["x1"], a["x3"]
+        else:
+            st["x1"] = h2 @ w["w1"]
+            st["x3"] = h2 @ w["w3"]
+
+    @staticmethod
+    def _stage_swiglu(kctx, K, d, st):
+        s_out = torch.empty_like(st["x1"])
+        K.swiglu_fwd_out(kctx, st["x1"], st["x3"], s_out)
+        st["s"] = s_out
+
+    @staticmethod
+    def _stage_down_resid(kctx, K, d, st):
+        st["y"].copy_(st["h_mid"] + st["s"] @ st["w"]["w2"])
+
+    # (stage_name, fn, emitted context fields)
+    STAGES = (
+        ("attn_norm", _stage_attn_norm.__func__, ("rstd_attn",)),
+        ("qkv_rope", _stage_qkv_rope.__func__, ("q", "k", "v")),
+        ("attn", _stage_attn.__func__, ("lse", "attn_out")),
+        ("resid1_norm2", _stage_resid1_norm2.__func__, ("h_mid", "rstd_ffn")),
+        ("up_proj", _stage_up_proj.__func__, ("x1", "x3")),
+        ("swiglu", _stage_swiglu.__func__, ()),
+        ("down_resid", _stage_down_resid.__func__, ()),
+    )
+
+    @classmethod
+    def recompute_stage_count(cls) -> int:
+        """Derived recompute boundary: stages up to the LAST one that emits
+        a context field. Everything after it exists only to produce y."""
+        last = 0
+        for i, (_, _, emits) in enumerate(cls.STAGES):
+            if emits:
+                last = i
+        return last + 1
+
+    @classmethod
+    def context_fields_emitted(cls) -> set:
+        return {f for _, _, emits in cls.STAGES for f in emits}
+
+    def _run_stages(self, kctx, x, w, a, *, count: int, y=None) -> None:
+        st = {"x": x, "w": w, "a": a, "y": y}
+        for name, fn, _ in self.STAGES[:count]:
+            fn(kctx, self.kernels, self.dims, st)
+
+    def _forward(self, kctx, x, w, y, a) -> None:
+        self._run_stages(kctx, x, w, a, count=len(self.STAGES), y=y)
 
 
 @dataclass(frozen=True)
@@ -149,38 +229,11 @@ class BlockRecompute(BlockFwd):
             self._forward_context(kctx, x, w, a)
 
     def _forward_context(self, kctx, x, w, a) -> None:
-        """Rebuild ONLY the saved context. The backward never reads the
-        block output y (the next block's x is saved separately) and rebuilds
-        s from x1/x3 itself, so recompute stops at the w1/w3 GEMMs — the
-        swiglu, down-projection GEMM, residual add, and y copy of the full
-        forward are pure waste here (~15-20% of the task's FLOPs)."""
-        d = self.dims
-        K = self.kernels
-        h1 = torch.empty_like(x)
-        rstd_attn = torch.empty(d.tokens, dtype=torch.float32, device=x.device)
-        K.rmsnorm_fwd(kctx, x, w["attn_norm_w"], h1, rstd_attn)
-        qm = h1 @ w["wq"]
-        q = torch.empty_like(qm)
-        K.rope_fwd(kctx, qm, q, d.seq_len, d.n_heads, d.head_dim, d.rope_base)
-        km = h1 @ w["wk"]
-        k = torch.empty_like(km)
-        K.rope_fwd(kctx, km, k, d.seq_len, d.n_kv_heads, d.head_dim, d.rope_base)
-        v = h1 @ w["wv"]
-        attn_out, lse = ops.flash_fwd(q, k, v, d.n_heads, d.n_kv_heads, d.head_dim, d.seq_len)
-        h_mid = x + attn_out @ w["wo"]
-        h2 = torch.empty_like(h_mid)
-        rstd_ffn = torch.empty(d.tokens, dtype=torch.float32, device=x.device)
-        K.rmsnorm_fwd(kctx, h_mid, w["ffn_norm_w"], h2, rstd_ffn)
-        a["rstd_attn"].copy_(rstd_attn)
-        a["q"].copy_(q)
-        a["k"].copy_(k)
-        a["v"].copy_(v)
-        a["lse"].copy_(lse)
-        a["attn_out"].copy_(attn_out)
-        a["h_mid"].copy_(h_mid)
-        a["rstd_ffn"].copy_(rstd_ffn)
-        torch.matmul(h2, w["w1"], out=a["x1"])
-        torch.matmul(h2, w["w3"], out=a["x3"])
+        """DERIVED from the stage list: run through the last context-emitting
+        stage and stop. The block output y is never a backward dependency,
+        so the trailing stages (swiglu, down-projection, residual) are
+        skipped by construction — not by hand-maintained duplication."""
+        self._run_stages(kctx, x, w, a, count=self.recompute_stage_count())
 
 
 @dataclass(frozen=True)
