@@ -30,7 +30,7 @@ from dataflow.runtime.device.cuda import CudaBackend
 from dataflow.tasks.llama3_blocks import build_resolver
 from dataflow.training.llama3_lowering import dims_of, lower_llama3
 from dataflow.training.planning import plan_program
-from dataflow.training.profiling import apply_measured_costs, load_or_profile
+from dataflow.training.profiling import apply_measured_costs, cached_pcie, load_or_profile
 from dataflow.training.replay import replay_gap_pct
 from dataflow.training.train_loop import train
 
@@ -56,7 +56,7 @@ def main() -> None:
     dims = dims_of(cfg)
     tokens_per_step = float(cfg.tokens * cfg.grad_accum_rounds)
     backend = CudaBackend()
-    pcie = backend.measure_pcie()
+    pcie = cached_pcie(backend)
 
     def build_raw(levels=None):
         return replace(

@@ -30,7 +30,7 @@ from dataflow.runtime.device.cuda import CudaBackend
 from dataflow.tasks.llama3_blocks import build_resolver
 from dataflow.training.llama3_lowering import dims_of, lower_llama3
 from dataflow.training.planning import plan_program
-from dataflow.training.profiling import apply_measured_costs, load_or_profile
+from dataflow.training.profiling import apply_measured_costs, cached_pcie, load_or_profile
 from dataflow.training.replay import replay_gap_pct
 from dataflow.training.shaped_llama3 import ShapedLlamaConfig
 from dataflow.training.train_loop import train
@@ -105,7 +105,7 @@ def main() -> None:
     impls = sorted(set(kernel_set.values()))
     print(f"kernel set: {impls} ({len(kernel_set)} registry ops)")
     backend = CudaBackend()
-    pcie = backend.measure_pcie()
+    pcie = cached_pcie(backend)
     print(f"PCIe GB/s: uni {pcie.uni_h2d/1e3:.1f}/{pcie.uni_d2h/1e3:.1f}  "
           f"bidi {pcie.bidi_h2d/1e3:.1f}/{pcie.bidi_d2h/1e3:.1f}")
 

@@ -282,3 +282,31 @@ def load_or_profile(
     }, indent=2) + "\n")
     print(f"profile cache MISS -> wrote {path.name}")
     return profiles
+
+
+def cached_pcie(backend, *, cache_dir=None, refresh: bool = False):
+    """Disk-cached backend.measure_pcie(): bandwidths are device properties,
+    and re-measuring per invocation makes plans non-reproducible (a few
+    percent of measurement noise is enough to tip the recompute planner to a
+    different variant, which changes lifetimes, packing, and even placement
+    feasibility). Pin them once; --refresh to re-measure."""
+    import json
+    from pathlib import Path
+
+    import torch
+
+    cache_dir = Path(cache_dir) if cache_dir is not None else Path("artifacts/profile-cache")
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    name = torch.cuda.get_device_name().replace(" ", "-") if torch.cuda.is_available() else "cpu"
+    path = cache_dir / f"pcie-{name}.json"
+    if path.exists() and not refresh:
+        d = json.loads(path.read_text())
+        print(f"pcie cache HIT {path.name}: "
+              f"bidi {d['bidi_h2d'] / 1e3:.1f}/{d['bidi_d2h'] / 1e3:.1f} GB/s")
+        from types import SimpleNamespace
+
+        return SimpleNamespace(**d)
+    pcie = backend.measure_pcie()
+    path.write_text(json.dumps(pcie.__dict__, indent=2) + "\n")
+    print(f"pcie cache MISS -> wrote {path.name}")
+    return pcie
