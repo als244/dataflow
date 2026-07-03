@@ -124,7 +124,7 @@ def main() -> None:
             )
         sys.exit(proc.returncode)
 
-    rep_file = report.with_suffix(".nsys-rep")
+    rep_file = Path(str(report) + ".nsys-rep")  # with_suffix mangles dotted budgets (23.5)
     if not rep_file.exists():
         sys.exit(
             f"nsys exited 0 but {rep_file} was not generated — with "
