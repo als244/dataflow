@@ -24,12 +24,14 @@ class Family:
     initial_values: Callable
     build_resolver: Callable
     golden: Callable  # zero-arg, returns the golden model class (lazy import)
-    # gradcheck bundle (ladder level 2)
-    block_fwd: type
-    block_bwd: type
-    block_recompute: type
-    weight_layout: Callable
-    context_layout: Callable
+    # gradcheck bundle (ladder level 2) — None for heterogeneous families,
+    # whose per-kind block ladders live in their own test module instead of
+    # the generic check_block_backward harness
+    block_fwd: type | None = None
+    block_bwd: type | None = None
+    block_recompute: type | None = None
+    weight_layout: Callable | None = None
+    context_layout: Callable | None = None
 
 
 def _llama3() -> Family:
@@ -96,9 +98,33 @@ def _qwen3() -> Family:
     )
 
 
+def _qwen35() -> Family:
+    from dataflow.tasks.qwen35_blocks import build_qwen35_resolver
+    from .qwen35_lowering import initial_values_qwen35, lower_qwen35
+    from .shaped_qwen35 import ShapedQwen35Config, dims_of_qwen35
+
+    def golden():
+        from dataflow.models.qwen35_reference import GoldenQwen35
+
+        return GoldenQwen35
+
+    # heterogeneous (lin/full kinds) — the per-kind block ladders live in
+    # tests/tasks/test_qwen35_math.py, so no generic gradcheck bundle here
+    return Family(
+        name="qwen35",
+        config_type=ShapedQwen35Config,
+        dims_of=dims_of_qwen35,
+        lower=lower_qwen35,
+        initial_values=initial_values_qwen35,
+        build_resolver=build_qwen35_resolver,
+        golden=golden,
+    )
+
+
 _FAMILIES: dict[str, Callable[[], Family]] = {
     "llama3": _llama3,
     "qwen3": _qwen3,
+    "qwen35": _qwen35,
 }
 _cache: dict[str, Family] = {}
 

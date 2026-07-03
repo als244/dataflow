@@ -87,6 +87,11 @@ def check_block_backward(dims, *, family=None, seed: int = 0, tol: float = 3e-2)
         from dataflow.training.families import family as _fam
 
         family = _fam("llama3")
+    if family.block_fwd is None:
+        raise TypeError(
+            f"family {family.name!r} is heterogeneous (no generic gradcheck "
+            "bundle); its per-kind block ladders live in its own test module"
+        )
 
     flat, w, x, dy = _random_block_state(dims, family.weight_layout(dims), seed)
     kernels = resolve_kernels()
@@ -170,12 +175,13 @@ def check_model_step(
         buf = values[name]
         return torch_view(buf, (buf.size_bytes,), torch.uint8).clone()
 
-    golden = fam.golden().from_packed_bytes(
-        dims, cfg.n_layers,
-        pinned("W_embed"),
-        [pinned(f"W_{i}") for i in range(cfg.n_layers)],
-        pinned("W_head"),
-    )
+    # tied embeddings: one W_embed leaf serves embedding AND head (the golden
+    # takes no head arg; the program has no W_head object)
+    tied = bool(getattr(cfg, "tied_embeddings", False))
+    leaves = [pinned("W_embed"), [pinned(f"W_{i}") for i in range(cfg.n_layers)]]
+    if not tied:
+        leaves.append(pinned("W_head"))
+    golden = fam.golden().from_packed_bytes(dims, cfg.n_layers, *leaves)
     tokens = torch_view(values["tokens_0_0"], (dims.tokens,), torch.int32).long().cuda()
     targets = torch_view(values["targets_0_0"], (dims.tokens,), torch.int32).long().cuda()
     golden_loss = golden.train_step(tokens.cuda(), targets.cuda())
@@ -201,7 +207,8 @@ def check_model_step(
     errors["W_embed"] = rel_l2(final_bytes("W_embed"), golden.w_embed.detach().to(torch.bfloat16).reshape(-1))
     for i in range(cfg.n_layers):
         errors[f"W_{i}"] = rel_l2(final_bytes(f"W_{i}"), golden.w_blocks[i].detach().reshape(-1))
-    errors["W_head"] = rel_l2(final_bytes("W_head"), golden.w_head.detach().to(torch.bfloat16).reshape(-1))
+    if not tied:
+        errors["W_head"] = rel_l2(final_bytes("W_head"), golden.w_head.detach().to(torch.bfloat16).reshape(-1))
     result.close()  # release the engine-local slab/arena for the next check
     dry.close()
     from dataflow.tasks.interop import clear_view_cache

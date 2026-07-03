@@ -313,3 +313,260 @@ def test_qwen35_lin_block_ladder2():
 
 def test_qwen35_attn_block_ladder2():
     _ladder2("full")
+
+
+# --- structure + ladder 3: full program through the real engine --------------
+
+
+def _tiny_cfg(**over):
+    from dataclasses import replace
+
+    from dataflow.training.shaped_qwen35 import ShapedQwen35Config
+
+    return replace(ShapedQwen35Config.tiny(), **over)
+
+
+def test_qwen35_stage_context_completeness():
+    from dataflow.tasks.layouts import (
+        qwen35_attn_context_layout,
+        qwen35_lin_context_layout,
+    )
+    from dataflow.tasks.qwen35_blocks import Qwen35AttnBlockFwd, Qwen35LinBlockFwd
+
+    dims = _tiny_dims()
+    for cls, cl in (
+        (Qwen35LinBlockFwd, qwen35_lin_context_layout(dims)),
+        (Qwen35AttnBlockFwd, qwen35_attn_context_layout(dims)),
+    ):
+        declared = {f.name for f in cl.fields}
+        emitted = cls.context_fields_emitted()
+        assert declared == emitted, (cls.__name__, declared ^ emitted)
+        assert cls.recompute_stage_count() < len(cls.STAGES)
+
+
+def test_qwen35_lowering_validates_and_plans():
+    from dataflow.core import validate_program
+    from dataflow.training.families import resolve_family
+    from dataflow.training.planning import plan_program, simulate_program
+
+    cfg = _tiny_cfg()
+    fam = resolve_family(cfg)
+    assert fam.name == "qwen35"
+    program = fam.lower(cfg)
+    validate_program(program)
+    assert program.metadata["family"] == "qwen35-shaped"
+    # tied embeddings: no W_head/O_head objects anywhere in the program
+    ids = {spec.id for spec in program.initial_objects}
+    assert "W_embed" in ids and "W_head" not in ids and "O_head" not in ids
+    planned = plan_program(program, fast_memory_capacity=8 * 1024 * 1024)
+    log = simulate_program(planned.program)
+    assert max(iv.end for iv in log.task_intervals) > 0
+
+
+def test_qwen35_model_step_vs_golden():
+    from dataflow.training.testing.gradcheck import check_model_step
+
+    check_model_step(_tiny_cfg(), fast_memory_capacity=64 * 1024 * 1024, tol=3e-2).assert_ok()
+
+
+def test_qwen35_plan_invariance():
+    """Different budgets + recompute plans must produce identical math."""
+    from dataflow.training.testing.gradcheck import check_model_step
+
+    cfg = _tiny_cfg()
+    r1 = check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2)
+    r2 = check_model_step(cfg, fast_memory_capacity=8 * 1024 * 1024, tol=3e-2)
+    levels = {f"A_0_0_{i}": 1 for i in range(cfg.n_layers)}
+    r3 = check_model_step(
+        cfg, fast_memory_capacity=8 * 1024 * 1024, recompute_levels=levels, tol=3e-2,
+    )
+    for r in (r1, r2, r3):
+        r.assert_ok()
+
+
+def test_qwen35_batch2_packed_sequences_vs_golden():
+    """batch=2 packs two sequences into one token axis: cu_seqlens must reset
+    the conv window and the DeltaNet recurrence at the boundary (the golden
+    reference resets by construction — agreement pins the kernels do too)."""
+    from dataflow.training.testing.gradcheck import check_model_step
+
+    cfg = _tiny_cfg(batch=2, seq_len=64)
+    check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2).assert_ok()
+
+
+def _run35(engine_kwargs=None, resolver_wrapper=None, program=None, seed=7):
+    """One engine run of the tiny qwen35 program; returns loss + final weights."""
+    from dataflow.runtime import Engine
+    from dataflow.runtime.device.cuda import CudaBackend
+    from dataflow.runtime.device.fake import FakeBackend
+    from dataflow.tasks.interop import torch_view
+    from dataflow.training.families import resolve_family
+    from dataflow.training.planning import plan_program
+
+    cfg = _tiny_cfg()
+    fam = resolve_family(cfg)
+    prog = program if program is not None else plan_program(
+        fam.lower(cfg), fast_memory_capacity=8 * 1024 * 1024,
+    ).program
+
+    backend = CudaBackend()
+    values = fam.initial_values(prog, cfg, backend, seed=seed)
+    dry = Engine(FakeBackend()).execute(prog, initial_buffers=values)
+    resolver = fam.build_resolver(fam.dims_of(cfg))
+    if resolver_wrapper is not None:
+        resolver = resolver_wrapper(resolver, backend)
+    result = Engine(backend, **(engine_kwargs or {})).execute(
+        prog, resolver=resolver, initial_buffers=values, pool_prewarm=dry.pool_demand,
+    )
+    # readback masks the layouts' alignment-padding gaps: the bwd tasks write
+    # FIELDS, adamw updates the whole flat buffer (padding included, from
+    # undefined dW padding — NaN under poison-on-free), and no field ever
+    # reads padding. The gaps are allocator residue outside the math
+    # contract; the gate compares the model. (llama3/qwen3 never had gaps —
+    # every field size there is an alignment multiple; the qwen35 lin layout
+    # has 8-byte A_log/dt_bias fields at tiny scale.)
+    from dataflow.tasks.layouts import (
+        head_weight_layout,
+        qwen35_attn_weight_layout,
+        qwen35_lin_weight_layout,
+    )
+
+    dims = fam.dims_of(cfg)
+
+    def masked(flat, layout):
+        keep = torch.zeros_like(flat, dtype=torch.bool)
+        for f in layout.fields:
+            n = 1
+            for s in f.shape:
+                n *= int(s)
+            start = f.offset_bytes // 2
+            keep[start : start + n] = True
+        return torch.where(keep, flat, torch.zeros_like(flat))
+
+    layouts = {"W_embed": head_weight_layout(dims)}
+    for i in range(cfg.n_layers):
+        layouts[f"W_{i}"] = (
+            qwen35_attn_weight_layout(dims) if dims.kind_of(i) == "full"
+            else qwen35_lin_weight_layout(dims)
+        )
+    out = {}
+    for obj_id, layout in layouts.items():
+        rec = result.objects.get(obj_id)
+        slot = rec.backing or rec.fast
+        flat = torch_view(slot.buffer, (rec.size_bytes // 2,), torch.bfloat16).clone()
+        out[obj_id] = masked(flat, layout)
+    loss_rec = result.objects.get("loss_0_0")
+    out["loss"] = float(torch_view((loss_rec.backing or loss_rec.fast).buffer, (1,), torch.float32)[0])
+    result.close()
+    dry.close()
+    for buf in values.values():
+        backend.free(buf)
+    return out
+
+
+def _assert_same35(a: dict, b: dict, tol: float = 1e-3):
+    assert abs(a["loss"] - b["loss"]) / max(abs(b["loss"]), 1e-9) < tol, (a["loss"], b["loss"])
+    for k in a:
+        if k == "loss":
+            continue
+        err = rel_l2(a[k], b[k])
+        assert err < tol, f"{k}: rel_l2={err}"
+
+
+def test_qwen35_poison_on_free_changes_nothing():
+    base = _run35()
+    poisoned = _run35(engine_kwargs={"poison_on_free": True})
+    _assert_same35(poisoned, base)
+    assert poisoned["loss"] == poisoned["loss"]  # not NaN
+
+
+def test_qwen35_interleaving_stress_changes_nothing():
+    from dataflow.runtime.device.cuda_spin import SpinKernel
+
+    def wrapper(resolver, backend):
+        kernel = SpinKernel()
+        rng = torch.Generator().manual_seed(123)
+
+        class Jitter:
+            def __init__(self, inner):
+                self.inner = inner
+
+            def launch(self, ctx):
+                delay = float(torch.randint(20, 400, (1,), generator=rng)[0])
+                kernel.launch_us(ctx.stream, delay)
+                self.inner.launch(ctx)
+
+        return lambda task: Jitter(resolver(task))
+
+    base = _run35()
+    jittered = _run35(resolver_wrapper=wrapper)
+    _assert_same35(jittered, base)
+
+
+def test_qwen35_measured_costs_replan_still_golden():
+    """Profiling must handle the heterogeneous task set (linattn_*/gattn_*
+    keys); re-planning on measured costs must not change the math."""
+    from dataflow.runtime.device.cuda import CudaBackend
+    from dataflow.training.families import resolve_family
+    from dataflow.training.planning import plan_program
+    from dataflow.training.profiling import apply_measured_costs, profile_program
+
+    cfg = _tiny_cfg()
+    fam = resolve_family(cfg)
+    program = fam.lower(cfg)
+    backend = CudaBackend()
+    profiles = profile_program(program, fam.build_resolver(fam.dims_of(cfg)), backend, soak_seconds=0)
+    measured = apply_measured_costs(program, profiles)
+    assert all("measured" in t.metadata for t in measured.tasks)
+
+    base = _run35()
+    replanned = plan_program(measured, fast_memory_capacity=8 * 1024 * 1024).program
+    again = _run35(program=replanned)
+    _assert_same35(again, base)
+
+
+def test_qwen35_multistep_matches_golden_and_loss_decreases():
+    from dataflow.models.qwen35_reference import GoldenQwen35
+    from dataflow.runtime.device.cuda import CudaBackend
+    from dataflow.tasks.interop import torch_view
+    from dataflow.training.families import resolve_family
+    from dataflow.training.planning import plan_program
+    from dataflow.training.train_loop import train
+
+    STEPS = 3
+    cfg = _tiny_cfg()
+    fam = resolve_family(cfg)
+    dims = fam.dims_of(cfg)
+    planned = plan_program(fam.lower(cfg), fast_memory_capacity=8 * 1024 * 1024)
+    backend = CudaBackend()
+
+    gen = torch.Generator().manual_seed(99)
+    one_batch = (
+        torch.randint(0, dims.vocab_size, (dims.tokens,), generator=gen, dtype=torch.int32),
+        torch.randint(0, dims.vocab_size, (dims.tokens,), generator=gen, dtype=torch.int32),
+    )
+    batches = [one_batch] * STEPS
+
+    snapshot = fam.initial_values(planned.program, cfg, backend, seed=5)
+
+    def pinned(name):
+        buf = snapshot[name]
+        return torch_view(buf, (buf.size_bytes,), torch.uint8).clone()
+
+    golden = GoldenQwen35.from_packed_bytes(
+        dims, cfg.n_layers,
+        pinned("W_embed"),
+        [pinned(f"W_{i}") for i in range(cfg.n_layers)],
+    )
+    golden_losses = [
+        golden.train_step(t.long().cuda(), g.long().cuda()) for t, g in batches
+    ]
+
+    report = train(
+        planned.program, cfg, backend,
+        steps=STEPS, seed=5, token_stream=lambda s: batches[s],
+    )
+    for ours, ref in zip(report.losses, golden_losses):
+        assert abs(ours - ref) / max(abs(ref), 1e-9) < 3e-2, (report.losses, golden_losses)
+    assert report.losses[-1] < report.losses[0]
+    assert all(n == 0 for n in report.step_slab_overflows[1:]), report.step_slab_overflows
