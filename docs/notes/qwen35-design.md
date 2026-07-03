@@ -39,16 +39,18 @@ was read from those sources, not recalled.
      head_v_dim=128); `xo = o_normed @ W_out + x` (out: value_dim→d).
 - Per-layer linear-attn params besides projections: conv (8192,4),
   A_log (32,), dt_bias (32,), norm (128,).
-- **Tied embeddings** (a per-model CONFIG choice, not a family
-  property): vocab 248,320; NO separate lm_head — the head IS the
-  embedding table. Final RMSNorm before the head carries a REAL learned
-  weight (model.norm.weight) — unlike our llama/qwen3 shaped families'
-  weightless approximation, this one is first-class.
+- **Embeddings: the 9B is UNTIED** (config.json `tie_word_embeddings:
+  false` — recon originally misread this; Shein's catch): vocab 248,320,
+  separate lm_head. Tied embeddings remain a per-model CONFIG choice —
+  the 2B ties (`tiny_tied()` keeps that path ladder-verified). Final
+  RMSNorm before the head carries a REAL learned weight
+  (model.norm.weight) — first-class in all our families since 8f9e4fe.
 - MTP head (`mtp_num_hidden_layers: 1`): ignored for LM training (as
   flextrain's training path does) — recorded decision, revisit never
   unless the objective changes.
-- Param count: embed 1.017B (once, tied) + 24 linear layers ×218.4M +
-  8 full layers ×209.8M ≈ 7.94B (+final norm) — "9B" counts differently.
+- Param count: embed 1.017B + head 1.017B (untied) + 24 linear layers
+  ×218.4M + 8 full layers ×209.8M ≈ 8.95B — matching the "9B" name
+  (tied would be 7.94B, another sign the 9B doesn't tie).
 
 ## 2. Backward contracts (from flextrain, mirrored to our style)
 
@@ -157,14 +159,16 @@ the SEQUENTIAL recurrence at tiny scale:
   `ops/gated_delta_rule/naive.py` — use ITS equations as the spec, our
   torch as the code).
 Conv: `F.conv1d` depthwise causal + silu. Gated attention: eager sdpa
-composition + sigmoid gate + partial rope reference. Tied head: single
-leaf.
+composition + sigmoid gate + partial rope reference. Head: bare-table
+embed leaf + packed [table | final_norm_w] head leaf (untied, the 9B);
+the tied variant folds both into one leaf.
 
 ## 4. Shapes/config
 - `ShapedQwen35Config`: 9B defaults above + `layer_kinds` derived from
   `full_attention_interval=4`; tiny() = 4 layers (LLLF), d=256,
   attn 4×64 heads (2 kv), linear 2 k-heads/4 v-heads ×32,
-  conv 4, ff 512, vocab 512, partial 0.25, tied.
+  conv 4, ff 512, vocab 512, partial 0.25, untied (tiny_tied() = the
+  2B-style tied variant).
 - Dims dataclass `Qwen35Dims` with both sub-block dim sets.
 
 ## 5. Test ladder (all before any throughput number)
@@ -179,7 +183,7 @@ leaf.
    builder invariants (kind table → sizes/keys; llama/qwen3 chains
    byte-identical to before the generalization — regression-test by
    comparing a lowered program JSON hash pre/post).
-5. Ladder 3: model-step vs golden (tiny, tied embeddings); plan-
+5. Ladder 3: model-step vs golden (tiny untied + tiny_tied); plan-
    invariance ×3; multistep golden; batch>1 cu_seqlens reset test.
 6. Gates: poison-on-free + interleaving stress on the tiny config.
 7. Throughput: profile + sweep qwen35-9b at 16/20 GiB.
@@ -238,4 +242,13 @@ leaf.
       composes the silu gate (ladder caught it). The causal-conv1d
       channel-major alternate stays deferred: standalone A/B tie and a
       12-arg undocumented raw binding.
-- [ ] Post-fusion sweep + results promotion.
+- [x] Untied correction (9fff09e): tie_word_embeddings false for the 9B
+      — untied default (8.95B params), tied demoted to config choice
+      (tiny_tied), tied-shaped sweep artifacts never promoted.
+- [ ] **OPEN: s1k perf gap vs flextrain** — ours 2,572/2,717 wall @16/20
+      vs flextrain ~3,160 (Shein's recording); real ≈ sim within 2–3% ⇒
+      measured per-task kernel costs are the limiter. Prime suspect:
+      varlen (1, B·T)+cu_seqlens fla/conv calls vs flextrain's dense
+      (B, T) — our batching is always uniform so dense is exact. Full
+      state + next steps: docs/notes/m52-perf-gap-handoff.md.
+- [ ] Post-fix re-sweep + results/m5/qwen35-v1 promotion.
