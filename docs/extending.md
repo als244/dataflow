@@ -148,7 +148,9 @@ Gates, in order:
 ## 6. New model family checklist
 
 (Exercised end-to-end by the qwen3 family — `training/families.py` is the
-registry an addition plugs into; results/m5/qwen3-v1/ records what it took.)
+registry an addition plugs into; results/m5/qwen3-v1/ records what it took.
+The qwen35 family exercises the harder variants below: heterogeneous
+layer kinds, tied embeddings, third-party fused kernels.)
 
 What adding a family (e.g. Qwen3) actually touches, in order:
 
@@ -164,6 +166,32 @@ What adding a family (e.g. Qwen3) actually touches, in order:
    levels.
 5. `tools/m4_train.py` `CONFIGS` — add named configs.
 6. Ladder 3 + gates (§5).
+
+Variants the qwen35 family (hybrid DeltaNet + gated attention, tied
+embeddings) added to the machinery — reuse, don't reinvent:
+
+- **Heterogeneous layer kinds**: build one `LayerKindSpec` per kind
+  (sizes from the packed layouts, roofline cost seeds, distinct
+  `key_prefix` for the compute-block keys) and pass `kinds=` +
+  `kind_of=` to `build_shaped_llama3`. Task IDs stay uniform
+  (`block_fwd_{s}_{r}_{i}`); only the compute keys differ per kind, so
+  the train loop/NVTX/window-oracle regexes need nothing. Lowering sizes
+  per-layer via `apply_exact_sizes(..., size_of=)`. The `Family` entry
+  omits the gradcheck bundle (its fields default to None) and the
+  per-kind ladder-2 tests live in the family's own test module.
+- **Tied embeddings**: a config flag (`tied_embeddings=True`). The chain
+  builder emits no `W_head`/`O_head`/`optimizer_head`; head tasks read
+  `W_embed` (packed `[table | final_norm_w]` via `head_weight_layout`);
+  round-0 `head_bwd` CREATES the shared `dW_embed` and `embed_bwd`
+  accumulates into it. The golden takes two leaves instead of three;
+  `check_model_step` branches on the config flag.
+- **Third-party fused kernels** (fla, flash-attn, ...): pin the exact
+  fwd/bwd contracts in the family's test module BEFORE the blocks call
+  them (see tests/tasks/test_qwen35_math.py part 1), then wrap them as
+  registry ops so the kernel-set stamp covers them. Every tensor handed
+  to a Triton kernel must be `.contiguous()` — a strided column slice
+  out of a packed context is read with the wrong stride and corrupts
+  results SILENTLY (the qwen35 gate-gradient hunt).
 
 Known llama-couplings to check when the family's TASK/OBJECT NAMES differ
 (all fail loudly, none silently):

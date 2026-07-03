@@ -222,6 +222,20 @@ leaf.
       slice fed to ``g_input`` was read with the wrong row stride and
       silently corrupted dA_log/ddt_bias/da (~4x rel error, scaling
       with init magnitude). Not an fla version bug; 0.5.1 stands.
-- [ ] Families entry + ladder 3-4 + gates (tied 2-leaf golden hook in
-      check_model_step; plan-invariance; multistep; batch>1 cu_seqlens).
-- [ ] First sweep.
+- [x] Families entry + ladder 3-4 + gates: model-step vs golden,
+      plan-invariance (3 plans), batch=2 packed sequences (cu_seqlens
+      resets pinned E2E), 3-step train vs golden, poison-on-free,
+      interleaving stress, measured-cost replan. Poison found the
+      layouts' alignment-padding gaps are updated by adamw from
+      undefined dW padding — benign (no field reads padding); the gate
+      readback masks padding and compares the model.
+- [x] First sweep (pre-fusion): 1,607 wall tok/s @ 16 GiB / 1,693 @ 20,
+      fidelity 0.82/1.11%, zero evictions (artifacts/m5/qwen35-first).
+- [x] Fused-kernel pass: gated_rmsnorm_fwd/bwd + causal_conv1d_silu_fwd/bwd
+      registry families (fla fused Triton defaults, eager reference
+      fallbacks, DATAFLOW_KERNELS=eager bisection verified). fla's
+      bwd recompute_output returns the PRE-GATE norm — the wrapper
+      composes the silu gate (ladder caught it). The causal-conv1d
+      channel-major alternate stays deferred: standalone A/B tie and a
+      12-arg undocumented raw binding.
+- [ ] Post-fusion sweep + results promotion.
