@@ -59,3 +59,16 @@ pre-placement turns the setup upload into planned overlapped prefetches
   fraction of a shorter step, and the sim's tighter overlap leaves less
   slack to absorb it. Replay-fidelity gap stays 0.9–1.3%. The tax's fix
   remains CUDA-graph-per-task (M5).
+
+## Window-oracle addendum (tools/window_plans.py)
+
+Jointly-planned k-step windows (k=1..4, pinned costs, locked AND free
+recompute) as the seam oracle — see docs/notes/step-boundary.md §4.
+Machine-checked: interior steps exactly periodic at k=4 (prologue /
+steady-state / epilogue structure proven); the oracle carries
+8.7-18.5 GiB resident across ~quiescent cuts (zero cross-seam
+prefetches) and its steady-state step still loses to the fixed 1-step
+replay (regret −2.3%/−0.5%/+0.3%/−2.3% at 12/16/20/23.75 GiB; +0.3% =
+plan-search noise). The B0 replay is optimal within the planner's model
+at every budget this card holds; resident-carryover B(R) is rejected by
+the planner's own numbers. Raw analysis: window-*-{locked,free}.json.

@@ -128,21 +128,53 @@ end-free for session-carried slots; escape valve forbidden for R;
 `session.flush_resident()` before any backing read (checkpoint, final
 values, goldens).
 
-## 4. Is a 2-step (k-step) planning window needed?
+## 4. k-step windows: not a mechanism, but the ORACLE (measured)
 
-No. A window does not create a repeatable plan — the boundary invariant
-does, and a 1-step plan under B0 is already a fixed point. What a k-step
-window buys is *cross-seam overlap of whatever the invariant still
-leaves exposed*: with the two fixes, that residual is the last
-optimizers' writebacks (O_embed + tail ~2.5–3 GiB ≈ 0.1–0.2 s) which
-have no later compute in-step to hide under, plus the ~1 GiB task-0
-pre-place. Against that, doubling the window doubles planning/packing
-cost, doubles plan artifacts, and needs either a seam invariant at the
-window edge anyway (same problem, amortized) or whole-run lowering
-(unbounded). The equivalent runtime-side win — starting the next step's
-head transfers before the previous `execute()` fully drains — is a
-bounded, later micro-optimization (~1%), superseded if CUDA-graph
-capture changes execute() structure anyway.
+A window does not create a repeatable plan — the boundary invariant
+does, and a 1-step plan under B0 is already a fixed point. But
+jointly-planned windows are the right *measurement instrument*: a
+planner that can SEE across boundaries shows what any seam mechanism
+could at best achieve, and what it chooses to carry across a cut is its
+own answer to the resident-set question. `tools/window_plans.py` runs
+this as a controlled experiment — pinned costs/bandwidths/budget,
+recompute either LOCKED to the k=1 choice (isolates the window
+variable) or free (honest ceiling) — and extracts machine-checked
+quantities: interior-step periodicity under canonical renaming
+(step-scoped ids stripped of their step index), seam-resident sets
+(structural directive walk), in-flight-at-cut transfers (sim
+intervals), cross-seam prefetch bytes, marginal step cost, and replay
+regret (k=1 sim makespan − best interior-step duration).
+
+Findings at bs8ga8, k = 1..4 (artifacts/window-plans/, both modes,
+promoted to results/m4/seq1k-boundary-v1/):
+
+1. **Interior steps are exactly periodic at k=4 at every budget** —
+   canonical plans of steps 1 and 2 are identical, with step 0 the
+   prologue (cold head) and the last step the epilogue (no future to
+   prefetch for). The steady state exists and k=4 is enough to verify
+   it (k=3 merely contains one interior step; only k≥4 has a pair).
+2. **The oracle's seams are ~quiescent, carried by residency**: it
+   keeps 8.70 / 12.76 / 14.96 / 18.54 GiB resident across interior cuts
+   at 12/16/20/23.75 GiB (all W from 20 GiB up, plus embed/head O at
+   23.75) with 0–0.81 GiB in flight and ZERO cross-seam prefetches —
+   eliding the W writeback+reload inside the window. Even with full
+   visibility it does not want transfers crossing the seam.
+3. **And it still loses (or ties)**: replay regret = **−2.3% / −0.5% /
+   +0.3% / −2.3%** at 12/16/20/23.75 GiB (free-recompute; locked is the
+   same or worse; +0.3% is within the ±0.3% plan-search noise between
+   two k=1 searches). Pinning weights across the seam starves the
+   interior's activation staging and costs more mid-step than the seam
+   saves — the same verdict §3 reached from the W-streaming traffic,
+   now proved by the planner's own steady state.
+
+Conclusion: after the two fixes, the B0-quiescent 1-step replay is
+optimal to within plan-search noise at every budget this hardware can
+hold — the remaining real-vs-sim gap is host dispatch tax, not seam.
+This also retires the "seam-crossing dispatch" micro-optimization (the
+oracle chooses quiescent cuts) and settles §3's B(R) deferral with
+data. Revisit with the same tool (minutes per config) if budgets grow
+past the working set (bigger cards, smaller models) — residency's
+economics flip when the interior stops being capacity-bound.
 
 ## 5. The ledger inversion the interleave exposed (and the eviction valve)
 
