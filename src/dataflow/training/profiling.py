@@ -4,7 +4,11 @@ The plan's measurement-over-estimation principle, mechanized:
 
 - **Runtime**: each unique task signature `(compute_block_key, sorted io
   sizes)` is executed in isolation on a scratch stream, timed with CUDA
-  events (warmup + median of repeats).
+  events (warmup + median of repeats), AFTER a sustained thermal soak —
+  a cold GPU measures tasks on transient boost clocks and under-prices
+  them ~5-10% vs a training run at steady-state clocks (observed on the
+  bs4/ga4 gap analysis before the soak existed). Mean/stdev/min/max ride
+  along in the profile metadata for distribution visibility.
 - **Workspace**: the torch caching-allocator peak delta around one launch —
   exactly the scratch-lane bytes the executable used beyond runtime-owned
   buffers (runtime buffers come from our pool, invisible to torch's
@@ -26,9 +30,13 @@ from dataflow.core import Program, TaskSpec
 
 @dataclass(frozen=True)
 class TaskProfile:
-    runtime_us: float
+    runtime_us: float          # median of repeats
     workspace_bytes: int
     repeats: int
+    mean_us: float = 0.0
+    stdev_us: float = 0.0
+    min_us: float = 0.0
+    max_us: float = 0.0
 
 
 def _signature(task: TaskSpec, sizes: dict[str, int]) -> tuple:
@@ -40,13 +48,74 @@ def _signature(task: TaskSpec, sizes: dict[str, int]) -> tuple:
     )
 
 
+def thermal_soak(seconds: float = 10.0) -> None:
+    """Pull the GPU to sustained-load clocks before any timing: back-to-back
+    large GEMMs with no host syncs in the loop. Without this, measurements
+    ride the transient boost window and under-price real training steps."""
+    import time
+
+    import torch
+
+    if seconds <= 0:
+        return
+    a = torch.randn(4096, 4096, device="cuda", dtype=torch.bfloat16)
+    b = torch.randn(4096, 4096, device="cuda", dtype=torch.bfloat16)
+    deadline = time.perf_counter() + seconds
+    while time.perf_counter() < deadline:
+        for _ in range(200):
+            a = a @ b
+            a = a / a.norm().clamp_min(1e-3)  # keep values finite
+        torch.cuda.synchronize()
+    del a, b
+
+
+class _PcieContender:
+    """Keeps bidirectional PCIe DMA grinding while tasks are timed.
+
+    Real training overlaps kernels with prefetch/offload traffic that
+    competes for DRAM bandwidth; timing on an idle bus under-prices
+    memory-bound kernels. Measured on bs4/ga4 @ 18 GiB (fused kernels):
+    idle-bus profiling -> tasks +5..7% slower in-run; SATURATED bidi
+    contention (this mode) -> tasks 3..6% FASTER in-run, i.e. the bound
+    from the other side (the real bus duty cycle was ~34%/21%, not 100%).
+    Default off: the unbiased fix is duty-cycle-matched contention (2-pass:
+    plan -> re-profile at the plan's duty cycle), not yet built. Scheduling
+    fidelity is unaffected either way (replay gap ~0.4%)."""
+
+    CHUNK = 256 * 1024 * 1024
+
+    def __init__(self, backend) -> None:
+        self.backend = backend
+        self.h2d = backend.create_stream("h2d")
+        self.d2h = backend.create_stream("d2h")
+        self.pinned = backend.alloc("backing", self.CHUNK)
+        self.dev_in = backend.alloc("fast", self.CHUNK)
+        self.dev_out = backend.alloc("fast", self.CHUNK)
+        self.chunk_us = self.CHUNK / (30e9 / 1e6)  # ~30 GB/s per direction
+
+    def cover(self, expected_us: float) -> None:
+        n = max(4, int(expected_us / self.chunk_us * 1.5) + 2)
+        for _ in range(n):
+            self.backend.memcpy_async(self.dev_in, self.pinned, self.CHUNK, self.h2d)
+            self.backend.memcpy_async(self.pinned, self.dev_out, self.CHUNK, self.d2h)
+
+    def close(self) -> None:
+        import torch
+
+        torch.cuda.synchronize()
+        for b in (self.pinned, self.dev_in, self.dev_out):
+            self.backend.free(b)
+
+
 def profile_program(
     program: Program,
     resolver: Callable[[TaskSpec], object],
     backend,
     *,
     warmup: int = 2,
-    repeats: int = 5,
+    repeats: int = 9,
+    soak_seconds: float = 10.0,
+    contend_pcie: bool = False,
     int32_fill: int = 0,
 ) -> dict[tuple, TaskProfile]:
     """Measure every unique task signature on the real device."""
@@ -64,7 +133,9 @@ def profile_program(
         for o in t.outputs:
             metas[o.id] = o.tensor
 
+    thermal_soak(soak_seconds)
     stream = backend.create_stream("compute")
+    contender = _PcieContender(backend) if contend_pcie else None
     profiles: dict[tuple, TaskProfile] = {}
 
     for task in program.tasks:
@@ -105,6 +176,8 @@ def profile_program(
             torch.cuda.synchronize()
             workspace = max(0, torch.cuda.max_memory_allocated() - base)
 
+            if contender is not None:
+                contender.cover(float(task.runtime_us) * (warmup + repeats))
             times = []
             for i in range(warmup + repeats):
                 a = backend.record_event(stream)
@@ -114,11 +187,19 @@ def profile_program(
                 if i >= warmup:
                     times.append(backend.event_time_us(b) - backend.event_time_us(a))
             profiles[sig] = TaskProfile(
-                runtime_us=statistics.median(times), workspace_bytes=workspace, repeats=repeats,
+                runtime_us=statistics.median(times),
+                workspace_bytes=workspace,
+                repeats=repeats,
+                mean_us=statistics.fmean(times),
+                stdev_us=statistics.stdev(times) if len(times) > 1 else 0.0,
+                min_us=min(times),
+                max_us=max(times),
             )
         finally:
             for b in local:
                 backend.free(b)
+    if contender is not None:
+        contender.close()
     return profiles
 
 
@@ -136,6 +217,10 @@ def apply_measured_costs(program: Program, profiles: dict[tuple, TaskProfile]) -
                     "runtime_us": p.runtime_us,
                     "workspace_bytes": p.workspace_bytes,
                     "repeats": p.repeats,
+                    "mean_us": p.mean_us,
+                    "stdev_us": p.stdev_us,
+                    "min_us": p.min_us,
+                    "max_us": p.max_us,
                     "estimate_runtime_us": task.runtime_us,
                 },
             },

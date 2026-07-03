@@ -46,6 +46,9 @@ def main() -> None:
     parser.add_argument("--steps", type=int, default=3)
     parser.add_argument("--recompute", action="store_true", default=True)
     parser.add_argument("--backing-gib", type=float, default=100.0)
+    parser.add_argument("--contend", action="store_true",
+                        help="profile under saturated bidirectional PCIe traffic "
+                             "(bounds the cost model from the pessimistic side)")
     parser.add_argument("--out", type=Path, default=Path("artifacts/m4/gap"))
     args = parser.parse_args()
 
@@ -64,9 +67,13 @@ def main() -> None:
         )
 
     program = build_raw()
-    profiles = profile_program(program, build_resolver(dims), backend)
+    profiles = profile_program(
+        program, build_resolver(dims), backend, contend_pcie=args.contend,
+    )
     rc_all = {rw.object_id: 1 for rw in program.recompute_rewrites}
-    profiles.update(profile_program(build_raw(rc_all), build_resolver(dims), backend))
+    profiles.update(profile_program(
+        build_raw(rc_all), build_resolver(dims), backend, contend_pcie=args.contend,
+    ))
     measured = apply_measured_costs(program, profiles)
 
     planned = plan_program(
