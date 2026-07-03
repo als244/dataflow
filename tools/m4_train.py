@@ -49,6 +49,9 @@ CONFIGS = {
     "8b-s1k-bs4ga16": ShapedLlamaConfig.llama3_8b(seq_len=1024, batch=4, grad_accum_rounds=16),
     "8b-s1k-bs8ga8": ShapedLlamaConfig.llama3_8b(seq_len=1024, batch=8, grad_accum_rounds=8),
     "8b-s1k-bs16ga4": ShapedLlamaConfig.llama3_8b(seq_len=1024, batch=16, grad_accum_rounds=4),
+    # 2-round shape, unlocked by the fused head_loss (the old lowering's
+    # monolithic logits at bs32 was 8 GiB/round of ledger)
+    "8b-s1k-bs32ga2": ShapedLlamaConfig.llama3_8b(seq_len=1024, batch=32, grad_accum_rounds=2),
     "baseline1b": ShapedLlamaConfig(
         n_layers=16, d_model=2048, n_heads=16, n_kv_heads=4, d_ff=8192,
         vocab_size=32768, seq_len=4096, batch=1,
