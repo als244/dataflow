@@ -121,6 +121,16 @@ def main() -> None:
                     help="device envelopes, e.g. 10,12,16,24")
     ap.add_argument("--max-bs", type=int, default=None,
                     help="optional cap on batch size candidates")
+    ap.add_argument("--skip-slow-bs", action=argparse.BooleanOptionalAction,
+                    default=True,
+                    help="prune small-bs columns that provably cannot win: a "
+                         "combo's compute-only ceiling (sum of measured task "
+                         "runtimes; no plan can beat it) is checked against the "
+                         "row leader, sweeping bs and envelopes DESCENDING. "
+                         "Near-misses (ceiling within 10%% of the leader) get a "
+                         "seeds-only reduced search, auto-promoted to a full "
+                         "search if they top the row. Full table: ~tens of "
+                         "seconds instead of tens of minutes")
     ap.add_argument("--calibrated", action=argparse.BooleanOptionalAction,
                     default=False,
                     help=f"scale raw sim by {CONTENDED_CALIB_DEFAULT} (measured "
@@ -152,6 +162,7 @@ def main() -> None:
     make_config, cfg_name = config_factory(args.family, args.preset, args.model_json)
     tokens_per_step = args.seq_len * args.seqs_per_step
     combos = divisor_combos(args.seqs_per_step, args.max_bs)
+    combos.sort(reverse=True)  # largest bs first: leaders compute cheapest
     print(f"{args.family} ({cfg_name}"
           + (f", preset {args.preset}" if args.preset else "")
           + (", +overrides" if args.model_json else "")
@@ -187,50 +198,103 @@ def main() -> None:
             print(f"  bs{bs}ga{rounds}: profiling failed ({type(e).__name__}: {e})")
             continue
         scratch = max(p.workspace_bytes for p in profiles.values()) + (256 << 20)
-        plans[(bs, rounds)] = (build, profiles, scratch)
+        measured = apply_measured_costs(base, profiles)
+        compute_us = sum(t.runtime_us for t in measured.tasks)
+        ceiling = tokens_per_step / (compute_us / 1e6)  # no plan can beat this
+        plans[(bs, rounds)] = (build, profiles, scratch, ceiling)
         dt = time.perf_counter() - t0
         note = "cached" if dt < 5 else f"profiled {dt:.0f}s"
-        print(f"  bs{bs}ga{rounds}: ready ({note}), scratch {scratch/GIB:.2f} GiB")
+        print(f"  bs{bs}ga{rounds}: ready ({note}), scratch {scratch/GIB:.2f} GiB, "
+              f"compute-only ceiling {ceiling:,.0f} tok/s")
 
-    envs = [float(x) for x in args.device_gib.split(",")]
+    envs = sorted((float(x) for x in args.device_gib.split(",")), reverse=True)
     calib = CONTENDED_CALIB_DEFAULT if args.calibrated else 1.0
     results = []
     print(f"\npredicted tok/s ({'calibrated x' + str(calib) if args.calibrated else 'raw sim, conservative'}):")
     header = "device | " + " | ".join(f"{f'bs{b}ga{g}':>9s}" for b, g in combos)
     print(header)
     print("-" * len(header))
+    dead_columns: dict = {}  # combo -> value at the largest envelope it ran
+
+    def plan_cell(build, profiles, avail, *, reduced=False):
+        eff = avail
+        planned = None
+        for _ in range(1 if reduced else 6):
+            planned = plan_program(
+                apply_measured_costs(build(), profiles),
+                recompute=True, fast_memory_capacity=eff,
+                # reduced: seeds-only search, two inbound schedules
+                # (packed-fifo = congestion winner, latest-safe = the
+                # pressure SURVIVOR — dropping it caused false
+                # infeasibility), no extent-shave: a fast LOWER estimate
+                # for columns that are not contending (auto-promoted to a
+                # full search if one tops the row)
+                max_iters=0 if reduced else 8,
+                pressurefit_schedules=(
+                    ("packed-fifo", "latest-safe") if reduced else None),
+                build_variant=lambda lv, b=build, p=profiles:
+                    apply_measured_costs(b(lv), p),
+            )
+            if reduced:
+                break
+            ext = extent_of(planned.program)
+            if ext <= avail:
+                break
+            eff = int(eff * avail / ext)
+        return planned, eff
+
     for env_gib in envs:
         cells = []
+        row_best = 0.0
         for bs, rounds in combos:
             entry = plans.get((bs, rounds))
             if entry is None:
                 cells.append(dict(bs=bs, ga=rounds, status="no-profiles"))
                 continue
-            build, profiles, scratch = entry
+            build, profiles, scratch, ceiling = entry
             avail = int(env_gib * GIB) - fixed - scratch
             if avail <= 0:
                 cells.append(dict(bs=bs, ga=rounds, status="no-fit"))
                 continue
-            eff = avail
+            if args.skip_slow_bs:
+                # tok/s is monotone in budget: a column that already lost at a
+                # LARGER envelope can never win a smaller one
+                prior = dead_columns.get((bs, rounds))
+                bound = min(ceiling, prior) if prior is not None else ceiling
+                if bound <= row_best:
+                    cells.append(dict(bs=bs, ga=rounds, status="skip:bounded",
+                                      bound=round(bound)))
+                    continue
+                reduced = ceiling <= row_best * 1.10
+            else:
+                reduced = False
             try:
-                planned = None
-                for _ in range(6):
-                    planned = plan_program(
-                        apply_measured_costs(build(), profiles),
-                        recompute=True, fast_memory_capacity=eff,
-                        build_variant=lambda lv, b=build, p=profiles:
-                            apply_measured_costs(b(lv), p),
-                    )
-                    ext = extent_of(planned.program)
-                    if ext <= avail:
-                        break
-                    eff = int(eff * avail / ext)
+                try:
+                    planned, eff = plan_cell(build, profiles, avail, reduced=reduced)
+                except Exception:
+                    if not reduced:
+                        raise
+                    # belt-and-braces: if the cheap search still fails,
+                    # confirm with the full one before declaring infeasible
+                    planned, eff = plan_cell(build, profiles, avail, reduced=False)
+                    reduced = False
                 tps = tokens_per_step / (planned.makespan_us / 1e6) * calib
+                if reduced and tps > row_best:
+                    # a seeds-only estimate is a LOWER bound; if it tops the
+                    # row, redo it with the full search before believing it
+                    planned, eff = plan_cell(build, profiles, avail)
+                    tps = tokens_per_step / (planned.makespan_us / 1e6) * calib
+                    reduced = False
+                row_best = max(row_best, tps)
+                if args.skip_slow_bs:
+                    prior = dead_columns.get((bs, rounds))
+                    dead_columns[(bs, rounds)] = max(prior or 0, tps)
                 cells.append(dict(
                     bs=bs, ga=rounds, tok_s=round(tps),
                     ledger_gib=round(eff / GIB, 2),
                     recompute=sum(1 for v in planned.recompute_levels.values() if v),
                     rewrites=len(planned.recompute_levels),
+                    **({"reduced_search": True} if reduced else {}),
                 ))
             except Exception as e:
                 cells.append(dict(bs=bs, ga=rounds,
@@ -240,9 +304,10 @@ def main() -> None:
         parts = []
         for c in cells:
             if "tok_s" not in c:
-                parts.append(f"{c['status'][:9]:>9s}")
+                label = "skip" if c["status"].startswith("skip") else c["status"][:9]
+                parts.append(f"{label:>9s}")
             else:
-                mark = "*" if best and c is best else " "
+                mark = "*" if best and c is best else ("~" if c.get("reduced_search") else " ")
                 parts.append(f"{c['tok_s']:8,}{mark}")
         line = f"dev-{env_gib:<3g}| " + " | ".join(parts)
         margin = None
