@@ -114,7 +114,18 @@ class VmmArena:
     peak_created_bytes: int = 0
 
     def __post_init__(self) -> None:
+        import os
+
         from cuda.bindings import driver as cu
+
+        # cache allowance vs bytes: the pool above the ledger budget is what
+        # lets freed handles STAY CACHED at peak pressure instead of being
+        # destroyed+recreated (a fresh handle pays ~1.9 ms/GiB of page
+        # sanitization that contends with bandwidth-bound compute). Tunable
+        # while the tradeoff is being characterized.
+        env = os.environ.get("DATAFLOW_VMM_HEADROOM_GIB")
+        if env is not None:
+            self.headroom_bytes = int(float(env) * 1024**3)
 
         # the driver API needs a CURRENT context; the runtime API (CudaBackend)
         # creates the primary context lazily, so it may not exist yet. Retain

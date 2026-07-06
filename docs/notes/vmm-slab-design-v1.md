@@ -144,7 +144,45 @@ Stays unchanged:
   bs8ga8@24's planning failure is sim-side, before placement) and torch
   scratch (already VMM'd via expandable_segments). Claims stay scoped.
 
-## 8. Gates & rollout
+## 8. RESULTS & VERDICT (2026-07-05)
+
+Benchmarks vs recorded static baselines (same profiles, `artifacts/m5/vmm-v1`):
+
+| config @ ledger | static: wall / device | vmm: wall / device | reflows/3steps |
+|---|---|---|---|
+| llama bs16ga4 @24 | 3,600 / 31.11 | 3,487 (−3.1%) / **28.08** (−3.0) | 625 |
+| llama bs32ga2 @16 | 3,602 / 25.29 | 3,558 (−1.2%) / **20.94** (−4.3) | 338 |
+| llama bs32ga2 @24 | 3,629 / 30.60 | 3,552 (−2.1%) / **29.00** (−1.6) | 299 |
+| qwen35 bs32 @16 | 2,973 / 24.19–25.51 | 2,928 (−1.5%) / **23.32** | 418 |
+
+Fidelity degraded to 3.3–5.8% (baseline 0.25–0.46%) — fully attributed:
+
+1. A FRESH handle costs **~1.9 ms/GiB** beyond the create call (hidden page
+   sanitization, measured 2.88 ms at 1.5 GiB fresh-vs-reused), and that
+   sanitization **contends with bandwidth-bound compute** (+11.5% on a copy
+   kernel; +0.1% on matmul) — so creates cannot be hidden by async prep.
+2. Creates never stop: the ledger touches the pool ceiling every round, so
+   every size-class's cached handles are destroyed at each peak crossing and
+   recreated after — ~100–150 churn cycles/step, PERIODIC, not warmup.
+   Cache allowance barely helps (reflows 418 → 303 at +3.5 GiB; the cycling
+   class zoo is ~10 GiB wide). ~120 × 2.9 ms ≈ the whole wall gap.
+
+**Verdict: a memory↔throughput TRADE, not a strict win.** Genuine −1.6 to
+−4.3 GiB device at −1.2 to −3.1% wall. Root cause is a driver limitation:
+physical handles are unsplittable (no sub-range map), so exact-size handles
+are forced, and exact-size + tight budget = periodic churn. Structural wins
+stand regardless: no placement-infeasible class, no packing/shave loop,
+feasibility guaranteed for any admitted ledger.
+
+**Disposition: `--placement vmm` stays as a documented opt-in** for
+memory-bound configs (it runs shapes static cannot place, and buys real
+device headroom when −2% wall is acceptable); **static remains the
+default**. What would flip it: driver support for sub-range or batched
+mapping (then physical bytes reflow without create/sanitize), or a no-zero
+create flag — worth re-testing on future CUDA releases.
+`DATAFLOW_VMM_HEADROOM_GIB` tunes the cache allowance.
+
+## 9. Gates & rollout
 
 1. Unit: arena carve/coalesce/fragmented-map/reclaim-order/stable-VA.
 2. GPU integration: mini + tiny E2E in vmm mode — goldens bit-identical to
