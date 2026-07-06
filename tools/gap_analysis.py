@@ -27,8 +27,7 @@ from pathlib import Path
 import torch
 
 from dataflow.runtime.device.cuda import CudaBackend
-from dataflow.tasks.llama3_blocks import build_resolver
-from dataflow.training.llama3 import dims_of, lower_llama3
+from dataflow.training.families import resolve_family
 from dataflow.training.planning import plan_program
 from dataflow.training.profiling import apply_measured_costs, cached_pcie, load_or_profile
 from dataflow.training.replay import replay_gap_pct
@@ -53,14 +52,16 @@ def main() -> None:
     args = parser.parse_args()
 
     cfg = CONFIGS[args.config]
-    dims = dims_of(cfg)
+    fam = resolve_family(cfg)  # family-generic since the MoE families (was llama-hardcoded)
+    dims = fam.dims_of(cfg)
+    build_resolver = fam.build_resolver
     tokens_per_step = float(cfg.tokens * cfg.grad_accum_rounds)
     backend = CudaBackend()
     pcie = cached_pcie(backend)
 
     def build_raw(levels=None):
         return replace(
-            lower_llama3(cfg, recompute_levels=levels),
+            fam.lower(cfg, recompute_levels=levels),
             bandwidth_from_slow=pcie.bidi_h2d,
             bandwidth_to_slow=pcie.bidi_d2h,
             backing_memory_capacity=int(args.backing_gib * GIB),
@@ -103,7 +104,14 @@ def main() -> None:
     from dataflow.core import save_program
     save_program(planned.program, args.out / "annotated.json")
 
-    replay_gap = replay_gap_pct(planned.program, trace, report.step_makespan_us[-1])
+    # non-fatal like m4_train (0336654): imposing real timings on the sim's
+    # reserve-at-start accounting can be infeasible for plans the real
+    # engine ran fine — the diagnostic must not cost the analysis
+    try:
+        replay_gap = replay_gap_pct(planned.program, trace, report.step_makespan_us[-1])
+    except Exception as exc:  # noqa: BLE001
+        print(f"replay-fidelity diagnostic infeasible (non-fatal): {exc}")
+        replay_gap = None
 
     # --- per-task-family cost error --------------------------------------------
     tasks_by_id = {t.id: t for t in planned.program.tasks}
@@ -159,8 +167,11 @@ def main() -> None:
     lines.append(f"- sim: {sim_ms:.1f} ms/step ({sim_tok:.0f} tok/s); "
                  f"real steady: {real_us / 1e3:.1f} ms/step ({real_tok:.0f} tok/s); "
                  f"real vs sim {(real_tok / sim_tok - 1) * 100:+.2f}%")
-    lines.append(f"- replay-fidelity gap (scheduling, cost error removed): "
-                 f"{replay_gap:+.2f}%")
+    lines.append(
+        "- replay-fidelity gap (scheduling, cost error removed): "
+        + (f"{replay_gap:+.2f}%" if replay_gap is not None
+           else "n/a (replay reserve-infeasible under real timings — itself a fragility signal)")
+    )
     lines.append(f"- compute lane: busy {busy / 1e3:.1f} ms, exposed idle "
                  f"{idle / 1e3:.1f} ms ({idle / (busy + idle) * 100:.1f}%), "
                  f"{len(gaps)} gaps")
