@@ -52,6 +52,9 @@ CONFIGS = {
     "8b-bs4ga4": ShapedLlamaConfig.llama3_8b(batch=4, grad_accum_rounds=4),
     "8b-ga16": ShapedLlamaConfig.llama3_8b(batch=1, grad_accum_rounds=16),
     # seq-1024 family: 64 sequences/step (65,536 tokens/step) chunked four ways
+    # frontier edge probes (Shein): single-sequence rounds / single-round batch
+    "8b-s1k-bs1ga64": ShapedLlamaConfig.llama3_8b(seq_len=1024, batch=1, grad_accum_rounds=64),
+    "8b-s1k-bs64ga1": ShapedLlamaConfig.llama3_8b(seq_len=1024, batch=64, grad_accum_rounds=1),
     "8b-s1k-bs2ga32": ShapedLlamaConfig.llama3_8b(seq_len=1024, batch=2, grad_accum_rounds=32),
     "8b-s1k-bs4ga16": ShapedLlamaConfig.llama3_8b(seq_len=1024, batch=4, grad_accum_rounds=16),
     "8b-s1k-bs8ga8": ShapedLlamaConfig.llama3_8b(seq_len=1024, batch=8, grad_accum_rounds=8),
