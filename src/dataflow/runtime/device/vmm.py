@@ -80,11 +80,15 @@ class VmmArena:
     capacity_bytes: int
     event_complete: object            # Callable[[Event], bool]
     headroom_bytes: int = 512 * 1024 * 1024
-    va_bytes: int = 256 * 1024**3
+    # per-RESERVATION block; the arena grows by whole blocks on exhaustion
+    # (VA is free — a 9B 2-round chain wants ~320 GiB of stable ranges)
+    va_bytes: int = 512 * 1024**3
 
     # -- state --
     _va_base: int = 0
     _va_cursor: int = 0
+    _va_blocks: list = field(default_factory=list)   # (base, size) reservations
+    _va_block_end: int = 0
     _va_of_tag: dict = field(default_factory=dict)       # tag -> (va, span)
     _free: dict = field(default_factory=dict)            # span -> [handle, ...]
     _free_bytes: int = 0                                 # bytes cached in _free
@@ -135,8 +139,8 @@ class VmmArena:
         self._access = access
 
         self.pool_bytes = _align(self.capacity_bytes + self.headroom_bytes)
-        self._va_base = int(_dcheck(cu.cuMemAddressReserve(self.va_bytes, 0, 0, 0)))
-        self._va_cursor = self._va_base
+        self._va_grow()
+        self._va_base = self._va_blocks[0][0]
 
         # warmup: the first map pays a one-off driver lazy-init (~4 ms
         # measured); absorb it here instead of on the first task
@@ -213,6 +217,14 @@ class VmmArena:
 
         _dcheck(cu.cuMemUnmap(va, span))
 
+    def _va_grow(self) -> None:
+        from cuda.bindings import driver as cu
+
+        base = int(_dcheck(cu.cuMemAddressReserve(self.va_bytes, 0, 0, 0)))
+        self._va_blocks.append((base, self.va_bytes))
+        self._va_cursor = base
+        self._va_block_end = base + self.va_bytes
+
     def _va_for(self, tag: object, span: int) -> int:
         got = self._va_of_tag.get(tag)
         if got is not None:
@@ -228,9 +240,9 @@ class VmmArena:
                 self.va_reassigned += 1
             else:
                 return va
+        if self._va_cursor + span > self._va_block_end:
+            self._va_grow()  # VA is free; assignments never move
         va = self._va_cursor
-        if va + span > self._va_base + self.va_bytes:
-            raise VmmError("vmm VA reservation exhausted (raise va_bytes)")
         self._va_cursor = va + span
         self._va_of_tag[tag] = (va, span)
         return va
@@ -308,7 +320,9 @@ class VmmArena:
             for h in lst:
                 _dcheck(cu.cuMemRelease(h))
         self._free = {}
-        _dcheck(cu.cuMemAddressFree(self._va_base, self.va_bytes))
+        for base, size in self._va_blocks:
+            _dcheck(cu.cuMemAddressFree(base, size))
+        self._va_blocks = []
         if self._primary_ctx is not None:
             _dcheck(cu.cuDevicePrimaryCtxRelease(self._retained_device))
             self._primary_ctx = None
