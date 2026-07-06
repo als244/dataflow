@@ -211,16 +211,17 @@ class VmmArena:
         return None
 
     def _evict_parked_any(self) -> tuple[int, object] | None:
-        """Reclaim the SMALLEST parked handle (unmap; return naked)."""
-        best_span = None
-        for sp, tags in self._parked_by_span.items():
-            if tags and (best_span is None or sp < best_span):
-                best_span = sp
-        if best_span is None:
-            return None
-        handle = self._unpark_steal(best_span)
-        assert handle is not None
-        return best_span, handle
+        """Reclaim the SMALLEST parked handle (unmap; return naked).
+
+        The by-span index accrues STALE tags (park-hits pop _parked but
+        leave the index entry); skip spans whose entries are all stale."""
+        for sp in sorted(self._parked_by_span):
+            if not self._parked_by_span[sp]:
+                continue
+            handle = self._unpark_steal(sp)
+            if handle is not None:
+                return sp, handle
+        return None
 
     def _destroy_handle(self, span: int, handle) -> None:
         """Release a NAKED (unmapped, uncounted-in-_free) handle."""
