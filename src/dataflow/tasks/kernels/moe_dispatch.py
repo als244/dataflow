@@ -49,7 +49,13 @@ from .registry import internal, none, register
 def _sort_aten(kctx, route_ids, order_out, offsets_out, *, n_experts):
     flat = route_ids.reshape(-1).long()
     order_out.copy_(torch.argsort(flat, stable=True).to(order_out.dtype))
-    counts = torch.bincount(flat, minlength=n_experts)
+    # NOT torch.bincount: its input-validation min() READS BACK TO HOST
+    # (device->pageable, an implicit full-stream sync — nsys showed it
+    # draining 22 ms of queued work inside recompute tasks and starving
+    # the pipe after). scatter_add_ counting is sync-free and
+    # value-deterministic (integer atomics are exact and commutative).
+    counts = torch.zeros(n_experts, dtype=torch.long, device=flat.device)
+    counts.scatter_add_(0, flat, torch.ones_like(flat))
     offsets_out[:1].zero_()
     offsets_out[1:].copy_(counts.cumsum(0).to(offsets_out.dtype))
 
