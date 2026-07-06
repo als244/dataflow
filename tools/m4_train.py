@@ -316,13 +316,19 @@ def main() -> None:
                       f"(vmm: avail {avail / GIB:.2f} - headroom)")
             else:
                 eff = avail
-                for _ in range(6):
-                    ext = extent_of(_plan(eff).program)
-                    print(f"  envelope {env_gib:g}: ledger {eff / GIB:.2f} -> "
-                          f"extent {ext / GIB:.2f} (avail {avail / GIB:.2f})")
-                    if ext <= avail:
-                        break
-                    eff = int(eff * avail / ext)
+                try:
+                    for _ in range(6):
+                        ext = extent_of(_plan(eff).program)
+                        print(f"  envelope {env_gib:g}: ledger {eff / GIB:.2f} -> "
+                              f"extent {ext / GIB:.2f} (avail {avail / GIB:.2f})")
+                        if ext <= avail:
+                            break
+                        eff = int(eff * avail / ext)
+                except Exception as exc:
+                    # infeasible at this envelope (e.g. PressureFit cannot
+                    # reduce): skip the envelope, keep the rest of the sweep
+                    print(f"  envelope {env_gib:g}: derivation infeasible — {exc}")
+                    continue
             device_rows.append((env_gib, eff / GIB, fixed, scratch))
         budget_list = [r[1] for r in device_rows]
         device_meta = {r[1]: r for r in device_rows}
