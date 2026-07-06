@@ -213,10 +213,28 @@ Key findings along the way:
   evictions destroy+recreate handles every step (creates≈reflows≈300–1,400
   per 3 steps). Fidelity stays 1.5–5.6% (sim doesn't price driver work).
 
-**Final verdict unchanged in direction, improved in degree**: static stays
-default; vmm is a real opt-in at −0.8..−3.0% wall for the feasibility +
-simplicity wins, best where rounds are few. Re-test on driver updates
-(sub-range map / no-zero create flips it).
+**Tight-envelope matrix (same verified --device-gib, h=0.5)** — the regime
+where the ledger is precious flips the sign:
+
+| cell | static ledger/rc/wall | vmm ledger/rc/wall | Δ |
+|---|---|---|---|
+| bs16ga4 @ dev-16 | 11.35 / 64 / 3,553 | 11.99 / 64 / 3,519 | −1.0% |
+| bs16ga4 @ dev-18 | 13.02 / 64 / 3,479 | 13.99 / 64 / 3,528 | **+1.4%** |
+| bs8ga8 @ dev-16 | 11.61 / **201** / 3,254 | 11.99 / **128** / 3,271 | **+0.5%** |
+
+bs8ga8@16 is the designed mechanism firing end-to-end: the reclaimed
+extent tax bought 73 fewer recompute tasks, overcoming the churn. Slack
+does NOT fix the residual churn (+1 GiB pool slack: reflows 469 → 405 —
+the cycling class working set is far wider than any affordable slack).
+
+**Final verdict (regime-split)**: at GENEROUS envelopes vmm loses 1–3%
+(the planner is on the recompute-contention plateau; extra ledger buys
+nothing) — static stays default there. At TIGHT envelopes (the regime
+offloading exists for) vmm ties or wins outright, and it categorically
+runs shapes static cannot place. Recommended: static default, vmm the
+documented choice for memory-tight configs; revisit the default if the
+driver gains sub-range mapping / no-zero creates (kills the residual
+churn entirely).
 
 ## 10. Gates & rollout
 

@@ -297,10 +297,18 @@ def main() -> None:
                 continue
             if args.placement == "vmm":
                 # no packing geometry: physical = ledger + arena headroom,
-                # so the ledger budget follows from the envelope DIRECTLY
+                # so the ledger budget follows from the envelope DIRECTLY.
+                # honor the same env override the arena reads, or the
+                # derivation and the pool disagree and the envelope leaks
+                import os
+
                 from dataflow.runtime.device.vmm import VmmArena
 
-                eff = avail - VmmArena.headroom_bytes
+                headroom = VmmArena.headroom_bytes
+                env = os.environ.get("DATAFLOW_VMM_HEADROOM_GIB")
+                if env is not None:
+                    headroom = int(float(env) * GIB)
+                eff = avail - headroom
                 print(f"  envelope {env_gib:g}: ledger {eff / GIB:.2f} "
                       f"(vmm: avail {avail / GIB:.2f} - headroom)")
             else:
