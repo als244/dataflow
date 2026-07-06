@@ -107,6 +107,30 @@ class _Base:
     def _out(self, ctx: TaskContext, i: int) -> object:
         return ctx.outputs[ctx.task.outputs[i].id]
 
+    # --- shared backward closures ---------------------------------------------
+    # Every family backward re-created these two closures verbatim; they are
+    # the create-vs-accumulate grad writer and the rmsnorm backward step.
+
+    def _acc_fn(self, dw, accum: bool):
+        def acc(name: str, value: torch.Tensor) -> None:
+            if accum:
+                dw[name].add_(value.to(dw[name].dtype))
+            else:
+                dw[name].copy_(value.to(dw[name].dtype))
+
+        return acc
+
+    def _norm_bwd_fn(self, kctx):
+        K = self.kernels
+
+        def norm_bwd(dyv, xv, rstd, wv):
+            dxv = torch.empty_like(xv)
+            dwv = torch.empty(wv.numel(), dtype=torch.float32, device=xv.device)
+            K.rmsnorm_bwd(kctx, dyv, xv, rstd, wv, dxv, dwv)
+            return dxv, dwv
+
+        return norm_bwd
+
 
 @dataclass(frozen=True)
 class EmbedFwd(_Base):
@@ -286,8 +310,51 @@ class BlockRecompute(BlockFwd):
         self._run_stages(kctx, x, w, a, count=self.recompute_stage_count())
 
 
+def dense_mlp_tail_bwd(kctx, K, dy, h_mid, rstd_ffn, x1, x3, w, acc, norm_bwd):
+    """Dense SwiGLU MLP-tail backward, shared by every dense family/kind
+    (previously duplicated verbatim in four `_backward` methods).
+
+    Consumes the saved tail context — the post-attention residual (llama's
+    ``h_mid`` / qwen3.5's ``xo``), ``rstd_ffn`` and the up-projections
+    ``x1``/``x3`` — plus the packed weight views; accumulates
+    w1/w3/w2/ffn_norm_w through ``acc`` and returns the residual-stream
+    gradient WITH the incoming ``dy`` added. Kernel-call order is
+    byte-identical to the per-family copies it replaced.
+
+    Scratch discipline (M5.2): del each (t, .) temporary at last use so the
+    caching allocator recycles it within the task; additive joins run in
+    place (addmm_/add_, the forward's epilogue convention).
+    """
+    h2 = torch.empty_like(h_mid)
+    K.rmsnorm_apply(kctx, h_mid, rstd_ffn, w["ffn_norm_w"], h2)
+    s = torch.empty_like(x1)
+    K.swiglu_fwd_out(kctx, x1, x3, s)
+    ds = dy @ w["w2"].T
+    acc("w2", s.T @ dy)
+    del s
+    dx1 = torch.empty_like(x1)
+    dx3 = torch.empty_like(x3)
+    K.swiglu_bwd(kctx, ds, x1, x3, dx1, dx3)
+    del ds
+    acc("w1", h2.T @ dx1)
+    acc("w3", h2.T @ dx3)
+    del h2
+    dh2 = dx1 @ w["w1"].T
+    dh2.addmm_(dx3, w["w3"].T)
+    del dx1, dx3
+    dh_mid, dffn_norm = norm_bwd(dh2, h_mid, rstd_ffn, w["ffn_norm_w"])
+    del dh2
+    acc("ffn_norm_w", dffn_norm)
+    dh_mid.add_(dy)
+    return dh_mid
+
+
 @dataclass(frozen=True)
 class BlockBwd(_Base):
+    # ctx field holding the post-attention residual the MLP tail reads
+    # (plain class attr, not a dataclass field)
+    MLP_RESID_FIELD = "h_mid"
+
     def launch(self, ctx: TaskContext) -> None:
         d = self.dims
         es, kctx = self._stream_ctx(ctx)
@@ -306,50 +373,23 @@ class BlockBwd(_Base):
             self._backward(kctx, dy, a, x, w, dx, dw, accum)
 
     def _backward(self, kctx, dy, a, x, w, dx_out, dw, accum: bool) -> None:
+        """Template: MLP tail (shared helper, swappable per family) then the
+        family's attention part. Kernel-call order unchanged from the
+        pre-split monolith."""
+        acc = self._acc_fn(dw, accum)
+        norm_bwd = self._norm_bwd_fn(kctx)
+        dh_mid = self._mlp_bwd(kctx, dy, a, w, acc, norm_bwd)
+        self._attn_bwd(kctx, dh_mid, a, x, w, acc, norm_bwd, dx_out)
+
+    def _mlp_bwd(self, kctx, dy, a, w, acc, norm_bwd):
+        return dense_mlp_tail_bwd(
+            kctx, self.kernels, dy, a[self.MLP_RESID_FIELD], a["rstd_ffn"],
+            a["x1"], a["x3"], w, acc, norm_bwd,
+        )
+
+    def _attn_bwd(self, kctx, dh_mid, a, x, w, acc, norm_bwd, dx_out) -> None:
         d = self.dims
         K = self.kernels
-
-        def acc(name: str, value: torch.Tensor) -> None:
-            if accum:
-                dw[name].add_(value.to(dw[name].dtype))
-            else:
-                dw[name].copy_(value.to(dw[name].dtype))
-
-        def norm_bwd(dyv, xv, rstd, wv):
-            dxv = torch.empty_like(xv)
-            dwv = torch.empty(d.d_model, dtype=torch.float32, device=xv.device)
-            K.rmsnorm_bwd(kctx, dyv, xv, rstd, wv, dxv, dwv)
-            return dxv, dwv
-
-        # Scratch discipline (M5.2): del each (t, .) temporary at last use
-        # so the caching allocator recycles it within the task; additive
-        # joins run in place (addmm_/add_, the forward's epilogue
-        # convention). Kernel-call order is unchanged.
-
-        # --- mlp ---
-        h2 = torch.empty_like(a["h_mid"])
-        K.rmsnorm_apply(kctx, a["h_mid"], a["rstd_ffn"], w["ffn_norm_w"], h2)
-        s = torch.empty_like(a["x1"])
-        K.swiglu_fwd_out(kctx, a["x1"], a["x3"], s)
-        ds = dy @ w["w2"].T
-        acc("w2", s.T @ dy)
-        del s
-        dx1 = torch.empty_like(a["x1"])
-        dx3 = torch.empty_like(a["x3"])
-        K.swiglu_bwd(kctx, ds, a["x1"], a["x3"], dx1, dx3)
-        del ds
-        acc("w1", h2.T @ dx1)
-        acc("w3", h2.T @ dx3)
-        del h2
-        dh2 = dx1 @ w["w1"].T
-        dh2.addmm_(dx3, w["w3"].T)
-        del dx1, dx3
-        dh_mid, dffn_norm = norm_bwd(dh2, a["h_mid"], a["rstd_ffn"], w["ffn_norm_w"])
-        del dh2
-        acc("ffn_norm_w", dffn_norm)
-        dh_mid.add_(dy)
-
-        # --- attention ---
         d_attn = dh_mid @ w["wo"].T
         acc("wo", a["attn_out"].T @ dh_mid)
         dq, dk, dv = ops.flash_bwd(

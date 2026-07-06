@@ -52,11 +52,11 @@ from .layouts import (
 from .llama3_blocks import (
     AdamWHyper,
     AdamWStep,
+    BlockBwd,
     BlockFwd,
     EmbedBwd,
     EmbedFwd,
     HeadLoss,
-    _Base,
 )
 
 
@@ -231,8 +231,10 @@ class Qwen35LinBlockRecompute(Qwen35LinBlockFwd):
 
 
 @dataclass(frozen=True)
-class Qwen35LinBlockBwd(_Base):
+class Qwen35LinBlockBwd(BlockBwd):
     dims: Qwen35Dims = None  # type: ignore[assignment]
+
+    MLP_RESID_FIELD = "xo"  # the post-attention residual field (plays h_mid)
 
     def _weight_layout(self, layer: int | None = None) -> PackedLayout:
         return qwen35_lin_weight_layout(self.dims, layer=layer)
@@ -241,72 +243,20 @@ class Qwen35LinBlockBwd(_Base):
     def cl(self) -> PackedLayout:
         return qwen35_lin_context_layout(self.dims)
 
-    def launch(self, ctx) -> None:
-        from .interop import torch_view
-
-        d = self.dims
-        es, kctx = self._stream_ctx(ctx)
-        with torch.cuda.stream(es):
-            dy = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
-            a = self.cl.views(self._in(ctx, 1))
-            x = torch_view(self._in(ctx, 2), (d.tokens, d.d_model), torch.bfloat16)
-            w = self.wl_for(ctx.task).views(self._in(ctx, 3))
-            accum = bool(ctx.task.mutates)
-            dx = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
-            if accum:
-                dw = self.gl_for(ctx.task).views(ctx.mutates[ctx.task.mutates[0]])
-            else:
-                dw = self.gl_for(ctx.task).views(self._out(ctx, 1))
-            self._backward(kctx, dy, a, x, w, dx, dw, accum)
-
-    def _backward(self, kctx, dy, a, x, w, dx_out, dw, accum: bool) -> None:
+    def _attn_bwd(self, kctx, dxo, a, x, w, acc, norm_bwd, dx_out) -> None:
+        # DeltaNet part; the shared dense MLP tail already ran via
+        # BlockBwd._backward's template (_mlp_bwd, xo plays h_mid).
+        # Scratch discipline (M5.2: bs32 measured 9.5 GiB of task-internal
+        # torch scratch): every (t, .) temporary is del'd at its LAST use so
+        # the caching allocator can recycle it within the task, and additive
+        # joins run in place (addmm_/add_ — same epilogue convention the
+        # forward already uses). Kernel-call order is unchanged.
         from fla.modules.l2norm import l2norm_bwd, l2norm_fwd
         from fla.ops.gated_delta_rule.chunk import chunk_gated_delta_rule_bwd
 
         d = self.dims
         K = self.kernels
         t = d.tokens
-
-        def acc(name, value):
-            if accum:
-                dw[name].add_(value.to(dw[name].dtype))
-            else:
-                dw[name].copy_(value.to(dw[name].dtype))
-
-        def norm_bwd(dyv, xv, rstd, wv):
-            dxv = torch.empty_like(xv)
-            dwv = torch.empty(wv.numel(), dtype=torch.float32, device=xv.device)
-            K.rmsnorm_bwd(kctx, dyv, xv, rstd, wv, dxv, dwv)
-            return dxv, dwv
-
-        # Scratch discipline (M5.2: bs32 measured 9.5 GiB of task-internal
-        # torch scratch): every (t, .) temporary is del'd at its LAST use so
-        # the caching allocator can recycle it within the task, and additive
-        # joins run in place (addmm_/add_ — same epilogue convention the
-        # forward already uses). Kernel-call order is unchanged.
-
-        # --- MLP tail (xo plays h_mid) ---
-        h2 = torch.empty_like(a["xo"])
-        K.rmsnorm_apply(kctx, a["xo"], a["rstd_ffn"], w["ffn_norm_w"], h2)
-        s = torch.empty_like(a["x1"])
-        K.swiglu_fwd_out(kctx, a["x1"], a["x3"], s)
-        ds = dy @ w["w2"].T
-        acc("w2", s.T @ dy)
-        del s
-        dx1 = torch.empty_like(a["x1"])
-        dx3 = torch.empty_like(a["x3"])
-        K.swiglu_bwd(kctx, ds, a["x1"], a["x3"], dx1, dx3)
-        del ds
-        acc("w1", h2.T @ dx1)
-        acc("w3", h2.T @ dx3)
-        del h2
-        dh2 = dx1 @ w["w1"].T
-        dh2.addmm_(dx3, w["w3"].T)
-        del dx1, dx3
-        dxo, dffn = norm_bwd(dh2, a["xo"], a["rstd_ffn"], w["ffn_norm_w"])
-        del dh2
-        acc("ffn_norm_w", dffn)
-        dxo.add_(dy)
 
         # --- gated norm + out projection (fused kernel; y recomputed for
         # free by the bwd and reused for the out-projection weight grad) ---
@@ -330,7 +280,7 @@ class Qwen35LinBlockBwd(_Base):
 
         # --- recompute conv/l2norm inputs from saved qkvz ---
         conv_in = a["qkvz"][:, : d.conv_dim].contiguous()
-        cu, ci = _cu_seqlens(d, dy.device)
+        cu, ci = _cu_seqlens(d, dxo.device)
         post = torch.empty_like(conv_in)
         K.causal_conv1d_silu_fwd(kctx, conv_in, w["w_conv"], post, cu)
         q2 = post[:, : d.key_dim].reshape(t * d.num_k_heads, d.head_k_dim).contiguous()
@@ -532,8 +482,10 @@ class Qwen35AttnBlockRecompute(Qwen35AttnBlockFwd, Qwen35LinBlockRecompute):
 
 
 @dataclass(frozen=True)
-class Qwen35AttnBlockBwd(_Base):
+class Qwen35AttnBlockBwd(BlockBwd):
     dims: Qwen35Dims = None  # type: ignore[assignment]
+
+    MLP_RESID_FIELD = "xo"  # the post-attention residual field (plays h_mid)
 
     def _weight_layout(self, layer: int | None = None) -> PackedLayout:
         return qwen35_attn_weight_layout(self.dims, layer=layer)
@@ -542,67 +494,15 @@ class Qwen35AttnBlockBwd(_Base):
     def cl(self) -> PackedLayout:
         return qwen35_attn_context_layout(self.dims)
 
-    def launch(self, ctx) -> None:
-        from .interop import torch_view
-
-        d = self.dims
-        es, kctx = self._stream_ctx(ctx)
-        with torch.cuda.stream(es):
-            dy = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
-            a = self.cl.views(self._in(ctx, 1))
-            x = torch_view(self._in(ctx, 2), (d.tokens, d.d_model), torch.bfloat16)
-            w = self.wl_for(ctx.task).views(self._in(ctx, 3))
-            accum = bool(ctx.task.mutates)
-            dx = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
-            if accum:
-                dw = self.gl_for(ctx.task).views(ctx.mutates[ctx.task.mutates[0]])
-            else:
-                dw = self.gl_for(ctx.task).views(self._out(ctx, 1))
-            self._backward(kctx, dy, a, x, w, dx, dw, accum)
-
-    def _backward(self, kctx, dy, a, x, w, dx_out, dw, accum: bool) -> None:
+    def _attn_bwd(self, kctx, dxo, a, x, w, acc, norm_bwd, dx_out) -> None:
+        # gated-attention part; the shared dense MLP tail already ran via
+        # BlockBwd._backward's template (_mlp_bwd, xo plays h_mid).
+        # Scratch discipline: del each (t, .) temporary at last use;
+        # additive joins in place (see the lin-block backward note).
         d = self.dims
         K = self.kernels
         t = d.tokens
         h, kvh, hd = d.n_heads, d.n_kv_heads, d.head_dim
-
-        def acc(name, value):
-            if accum:
-                dw[name].add_(value.to(dw[name].dtype))
-            else:
-                dw[name].copy_(value.to(dw[name].dtype))
-
-        def norm_bwd(dyv, xv, rstd, wv):
-            dxv = torch.empty_like(xv)
-            dwv = torch.empty(wv.numel(), dtype=torch.float32, device=xv.device)
-            K.rmsnorm_bwd(kctx, dyv, xv, rstd, wv, dxv, dwv)
-            return dxv, dwv
-
-        # Scratch discipline: del each (t, .) temporary at last use;
-        # additive joins in place (see the lin-block backward note).
-
-        # --- MLP tail ---
-        h2 = torch.empty_like(a["xo"])
-        K.rmsnorm_apply(kctx, a["xo"], a["rstd_ffn"], w["ffn_norm_w"], h2)
-        s = torch.empty_like(a["x1"])
-        K.swiglu_fwd_out(kctx, a["x1"], a["x3"], s)
-        ds = dy @ w["w2"].T
-        acc("w2", s.T @ dy)
-        del s
-        dx1 = torch.empty_like(a["x1"])
-        dx3 = torch.empty_like(a["x3"])
-        K.swiglu_bwd(kctx, ds, a["x1"], a["x3"], dx1, dx3)
-        del ds
-        acc("w1", h2.T @ dx1)
-        acc("w3", h2.T @ dx3)
-        del h2
-        dh2 = dx1 @ w["w1"].T
-        dh2.addmm_(dx3, w["w3"].T)
-        del dx1, dx3
-        dxo, dffn = norm_bwd(dh2, a["xo"], a["rstd_ffn"], w["ffn_norm_w"])
-        del dh2
-        acc("ffn_norm_w", dffn)
-        dxo.add_(dy)
 
         # --- output gate + o projection ---
         sig = torch.sigmoid(a["gate"].float())
