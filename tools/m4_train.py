@@ -124,10 +124,12 @@ def main() -> None:
              "underestimates what recompute buys on transfer-heavy plans)",
     )
     parser.add_argument(
-        "--placement", choices=["static", "dynamic"], default="static",
+        "--placement", choices=["static", "dynamic", "vmm"], default="static",
         help="static (default): offsets packed offline from dry-run lifetimes, "
              "fragmentation impossible; dynamic: online slab+arena — required "
-             "for shape-unstable programs (variable-length sequences)",
+             "for shape-unstable programs (variable-length sequences); "
+             "vmm: per-object stable VAs over pooled physical extents — no "
+             "packing, no extent tax, physical == ledger by construction",
     )
     parser.add_argument(
         "--probe-max", action="store_true",
@@ -293,14 +295,23 @@ def main() -> None:
                 print(f"device envelope {env_gib:g} GiB < fixed+scratch "
                       f"({(fixed + scratch) / GIB:.2f} GiB) — skipping")
                 continue
-            eff = avail
-            for _ in range(6):
-                ext = extent_of(_plan(eff).program)
-                print(f"  envelope {env_gib:g}: ledger {eff / GIB:.2f} -> "
-                      f"extent {ext / GIB:.2f} (avail {avail / GIB:.2f})")
-                if ext <= avail:
-                    break
-                eff = int(eff * avail / ext)
+            if args.placement == "vmm":
+                # no packing geometry: physical = ledger + arena headroom,
+                # so the ledger budget follows from the envelope DIRECTLY
+                from dataflow.runtime.device.vmm import VmmArena
+
+                eff = avail - VmmArena.headroom_bytes
+                print(f"  envelope {env_gib:g}: ledger {eff / GIB:.2f} "
+                      f"(vmm: avail {avail / GIB:.2f} - headroom)")
+            else:
+                eff = avail
+                for _ in range(6):
+                    ext = extent_of(_plan(eff).program)
+                    print(f"  envelope {env_gib:g}: ledger {eff / GIB:.2f} -> "
+                          f"extent {ext / GIB:.2f} (avail {avail / GIB:.2f})")
+                    if ext <= avail:
+                        break
+                    eff = int(eff * avail / ext)
             device_rows.append((env_gib, eff / GIB, fixed, scratch))
         budget_list = [r[1] for r in device_rows]
         device_meta = {r[1]: r for r in device_rows}
@@ -456,6 +467,7 @@ def main() -> None:
             "budget_gib": quoted_gib,
             "budget_semantics": semantics,
             "planned_budget_gib": eff / GIB,
+            **({"vmm": report.vmm_stats} if report.vmm_stats else {}),
             "actual_device_peak_gib": actual / GIB,
             "fixed_overhead_gib": fixed / GIB,
             "torch_scratch_peak_gib": torch_scratch_peak / GIB,

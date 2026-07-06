@@ -54,6 +54,10 @@ class BufferPool:
     # guard outlives the object here, keyed by address range, and re-attaches
     # to the next incarnation carved over the range.
     _placed_pending_guards: list = field(default_factory=list)  # (start, end, event)
+    # vmm mode: fast buffers are stable per-object VAs backed by pooled
+    # physical extents (device/vmm.py). Replaces slab/placement wholesale for
+    # 'fast'; admission stays with the ledger (pool == budget by construction).
+    vmm: object = None
 
     def add_slab(
         self, location: Location, capacity_bytes: int, *, overflow_bytes: int = 0
@@ -68,6 +72,11 @@ class BufferPool:
                 backend=self.backend, location=location,
                 capacity_bytes=overflow_bytes, headroom_factor=0.0,
             )
+
+    def enable_vmm(self, arena) -> None:
+        """VMM mode for 'fast': per-object stable VAs, pooled physical
+        extents, no packing and no extent tax. See device/vmm.py."""
+        self.vmm = arena
 
     # --- static placement ------------------------------------------------------
 
@@ -117,6 +126,8 @@ class BufferPool:
         return self._get_dynamic(location, size_bytes)
 
     def get(self, location: Location, size_bytes: int, tag: str | None = None) -> Buffer:
+        if self.vmm is not None and location == "fast":
+            return self.vmm.get(tag, size_bytes)
         if self.recorder is not None and location == "fast" and tag is not None:
             key = self._next_key(tag)
             self._incarnations[tag] = key[1] + 1
@@ -231,6 +242,9 @@ class BufferPool:
         return slab.make_buffer(offset, size_bytes, self._seq)
 
     def put(self, buffer: Buffer) -> None:
+        if isinstance(buffer.raw, tuple) and buffer.raw and buffer.raw[0] == "vmm":
+            self.vmm.put(buffer)
+            return
         if self.recorder is not None and buffer.tag is not None:
             self.recorder.on_put(buffer.tag)
         if isinstance(buffer.raw, tuple) and buffer.raw and buffer.raw[0] == "placed":
@@ -251,8 +265,8 @@ class BufferPool:
         for (location, size_bytes), count in sorted(demand.items()):
             if location in self.slabs:
                 continue
-            if location == "fast" and self.placement is not None:
-                continue  # placed instances live in the placement base
+            if location == "fast" and (self.placement is not None or self.vmm is not None):
+                continue  # placed/vmm fast buffers never come from free lists
             stack = self.free_lists.setdefault((location, size_bytes), [])
             while len(stack) < count:
                 self.allocated_count += 1
@@ -280,3 +294,6 @@ class BufferPool:
             self.backend.free(self._placement_base)
             self._placement_base = None
             self.placement = None
+        if self.vmm is not None:
+            self.vmm.close()
+            self.vmm = None

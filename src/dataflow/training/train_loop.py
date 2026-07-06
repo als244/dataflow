@@ -43,6 +43,7 @@ class TrainReport:
     last_trace: object = None  # RunTrace of the final step (replay-gap analysis)
     placement_extent_bytes: int = 0
     placement_overhead: float = 1.0  # extent / peak load (contiguity geometry tax)
+    vmm_stats: dict | None = None    # arena counters when placement_mode="vmm"
     peak_backing_bytes: int = 0      # ledger peak of plan-managed host bytes
     pinned_host_bytes: int = 0       # physically registered pinned memory
 
@@ -82,6 +83,7 @@ def train(
     if values is None:
         values = fam.initial_values(annotated, cfg, backend, seed=seed)
     resolver = fam.build_resolver(dims, hyper)
+    use_vmm = placement_mode == "vmm"
     if placement is None and placement_mode == "static":
         # static placement (default): packing proven against physical VRAM at
         # planning time. placement_mode="dynamic" keeps the online slab+arena
@@ -95,6 +97,10 @@ def train(
         )
         placement = compute_placement(recorder, physical_limit_bytes=physical_limit_bytes)
     else:
+        # placement_mode="vmm": no packing problem exists — per-object stable
+        # VAs are backed by pooled physical extents sized to the LEDGER, so
+        # physical tracks logical by construction (device/vmm.py).
+        # placement_mode="dynamic": online slab+arena (shape-unstable programs).
         dry = Engine(FakeBackend()).execute(annotated, initial_buffers=values)
     session = Session(backend=backend)
     gen = torch.Generator().manual_seed(seed + 1)
@@ -137,7 +143,7 @@ def train(
                 result = Engine(backend, session=session).execute(
                     stepped, resolver=resolver, initial_buffers=values,
                     pool_prewarm=dry.pool_demand, placement=placement,
-                    annotate_rename=_annotate_step(step),
+                    vmm=use_vmm, annotate_rename=_annotate_step(step),
                 )
             finally:
                 if annotator is not None and annotator.enabled:
@@ -158,6 +164,22 @@ def train(
             slot = loss_rec.backing or loss_rec.fast
             report.losses.append(float(torch_view(slot.buffer, (1,), torch.float32)[0]))
             report.last_trace = result.trace
+        if use_vmm and session.pool is not None and session.pool.vmm is not None:
+            arena = session.pool.vmm
+            # the physical reservation plays the extent role in device-peak
+            # accounting; overhead vs ledger peak is pure rounding+headroom
+            report.placement_extent_bytes = arena.pool_bytes
+            report.placement_overhead = arena.pool_bytes / max(report.peak_fast_bytes, 1)
+            report.vmm_stats = {
+                "maps": arena.maps,
+                "handle_creates": arena.handle_creates,
+                "handle_reflows": arena.handle_reflows,
+                "va_reassigned": arena.va_reassigned,
+                "reclaim_drains": arena.reclaim_drains,
+                "peak_mapped_bytes": arena.peak_used_bytes,
+                "peak_physical_bytes": arena.peak_created_bytes,
+                "pool_bytes": arena.pool_bytes,
+            }
     finally:
         if annotator is not None and annotator.enabled:
             annotator.range_pop()  # train_steps

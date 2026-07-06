@@ -113,10 +113,12 @@ class Session:
             )
         return self.streams
 
-    def pool_for(self, program: Program, *, placed: bool = False) -> "BufferPool":
+    def pool_for(
+        self, program: Program, *, placed: bool = False, vmm: bool = False
+    ) -> "BufferPool":
         caps = {}
-        if program.fast_memory_capacity is not None and not placed:
-            # static placement replaces the fast slab + overflow arena wholesale
+        if program.fast_memory_capacity is not None and not (placed or vmm):
+            # static placement / vmm replace the fast slab + overflow arena
             caps["fast"] = program.fast_memory_capacity
         if program.backing_memory_capacity is not None:
             caps["backing"] = program.backing_memory_capacity
@@ -128,6 +130,18 @@ class Session:
                         location, cap,
                         overflow_bytes=(3 * 1024**3 if location == "fast" else 0),
                     )
+                if vmm:
+                    if program.fast_memory_capacity is None:
+                        raise ValueError("vmm fast mode requires a fast capacity")
+                    from .device.vmm import VmmArena
+
+                    self.pool.enable_vmm(VmmArena(
+                        device_index=getattr(self.backend, "device", 0),
+                        capacity_bytes=program.fast_memory_capacity,
+                        event_complete=self.backend.event_complete,
+                    ))
+            elif vmm:
+                raise ValueError("vmm fast mode requires a physical backend")
             self.slab_caps = caps
         elif caps != self.slab_caps:
             raise ValueError(
@@ -164,6 +178,7 @@ class Engine:
         pool_prewarm: Mapping[tuple[str, int], int] | None = None,
         placement=None,           # runtime.placement.Placement: assigned mode
         record_placement=None,    # runtime.placement.PlacementRecorder: dry runs
+        vmm: bool = False,        # fast buffers from a VMM arena (device/vmm.py)
         annotate_rename=None,     # Callable[[str], str]: NVTX display names only
                                   # (a replayed 1-step plan bakes step 0 into every
                                   # id; the caller knows the GLOBAL step and rewrites
@@ -195,21 +210,39 @@ class Engine:
         if self.session is not None:
             if self.session.backend is not self.backend:
                 raise ValueError("session backend differs from engine backend")
-            pool = self.session.pool_for(program, placed=placement is not None)
+            pool = self.session.pool_for(
+                program, placed=placement is not None, vmm=vmm,
+            )
         else:
             pool = BufferPool(self.backend)
             if getattr(self.backend, "physical", False):
                 # one upfront device allocation sized to the budget (+headroom
                 # +overflow arena): physical usage then tracks the ledger
                 # instead of summing per-size-class maxima over time. Static
-                # placement replaces the fast slab/arena wholesale.
-                if program.fast_memory_capacity is not None and placement is None:
+                # placement / vmm replace the fast slab/arena wholesale.
+                if (
+                    program.fast_memory_capacity is not None
+                    and placement is None
+                    and not vmm
+                ):
                     pool.add_slab(
                         "fast", program.fast_memory_capacity,
                         overflow_bytes=3 * 1024**3,
                     )
+                if vmm:
+                    if program.fast_memory_capacity is None:
+                        raise ValueError("vmm fast mode requires a fast capacity")
+                    from .device.vmm import VmmArena
+
+                    pool.enable_vmm(VmmArena(
+                        device_index=getattr(self.backend, "device", 0),
+                        capacity_bytes=program.fast_memory_capacity,
+                        event_complete=self.backend.event_complete,
+                    ))
                 if program.backing_memory_capacity is not None:
                     pool.add_slab("backing", program.backing_memory_capacity)
+            elif vmm:
+                raise ValueError("vmm fast mode requires a physical backend")
         pool.recorder = record_placement
         if placement is not None and pool.placement is None:
             pool.enable_placement(placement)

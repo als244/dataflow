@@ -1,6 +1,7 @@
 # VMM slab v1 — non-contiguous backing for fast memory
 
-Status: DESIGN → implementing (2026-07-05). Microbench: `tools/bench_vmm.py`.
+Status: IMPLEMENTED (2026-07-05) — gates green (6 unit/E2E incl. bitwise
+loss equality vs static mode; suite 167). Benchmarks vs baselines below. Microbench: `tools/bench_vmm.py`.
 Baselines to beat/match: `artifacts/m5/llama3-s1k-v2/README.md` (llama grid),
 qwen35 bs32ga2 records (3,001 @14 ledger; 24.19 GiB device @16 w/ expandable).
 
@@ -36,15 +37,23 @@ virtual contiguity) from what the budget owns (physical pages).
   assigned first-touch, sized to the object (2 MiB-aligned). Stability makes
   replays deterministic and guard tracking per-object rather than
   per-address-overlap.
-- **Physical pool**: a few large `cuMemCreate` handles (≤ 2 GiB each)
-  totaling the ledger budget + rounding headroom, created at Session init
-  (~150 µs/GiB, once). A best-fit extent allocator (the existing
-  `SlabAllocator` hole logic, reused verbatim) carves **physical** offsets.
-- **get(object)** → carve physical extents → `cuMemMap` each extent into the
-  object's VA (+`cuMemSetAccess`) → return `Buffer(ptr=VA)`. Contiguity
-  failure is impossible by construction: the allocator may return K disjoint
-  extents; K maps instead of 1.
-- **put(object)** → unmap + return extents to the pool. See §4 for ordering.
+- **Physical pool** (REVISED during implementation): `cuMemMap` cannot map
+  a sub-range of a physical handle — offset must be 0 and size must equal
+  the allocation (`CUDA_ERROR_NOT_SUPPORTED` otherwise; the microbench
+  passed only because it mapped whole handles). Extent-carving over big
+  handles is therefore impossible. The design that survives is SIMPLER:
+  **exact-size handles, free-listed by size, mapped whole (one call)**.
+  Shape-stable programs make size demand periodic, so free lists stabilize
+  after round one and steady state does zero create/release work.
+- **Budget by reflow**: `created_bytes ≤ pool` is enforced by releasing
+  cached handles of other sizes (largest first) before creating a new one
+  (~150 µs per create — warmup-round only). This is the escape the
+  contiguous slab never had: physical bytes flow across size classes on
+  demand instead of summing per-class maxima.
+- **get(object)** → free-listed (or created-under-budget) handle →
+  one `cuMemMap` + `cuMemSetAccess` into the object's VA →
+  `Buffer(ptr=VA)`. **put(object)** → unmap, handle back to its size's
+  free list. See §4 for ordering.
 
 Physical occupancy ≡ ledger occupancy + per-object 2 MiB rounding. The
 extent tax is eliminated by construction, not by a better heuristic; the
@@ -60,6 +69,7 @@ packing solver, its dry run, and the shave loop have nothing left to decide.
 | fragmented map of 416 MiB | K=1: 40 µs, K=2: 59, K=4: 99, K=16: 353 — ~20 µs/piece |
 | churn vs bandwidth kernel | −1.8 % (noise) across 124 concurrent map/unmap cycles |
 | stable-VA physical swap | isolated + bytes persist per handle (verified) |
+| sub-range map of a handle | **NOT SUPPORTED** (offset must be 0, size == allocation) — forced the exact-size-handle design |
 
 Steady-state rate: ~2–5 object births per task, tasks 2–160 ms → mapping
 overhead ~0.1–0.5 % of wall, host-side and overlappable with device compute.
@@ -127,8 +137,9 @@ Stays unchanged:
   high-water). If a carve fails after reclaim draining, that's a loud
   invariant error (ledger admitted bytes the pool can't back) — never a
   silent fallback.
-- **Fragmentation**: cannot fail; K>4-piece maps are counted and reported
-  (expected ≈1 steady-state with repeating sizes + coalescing).
+- **Fragmentation**: does not exist — handles are exact-size and mapped
+  whole. The analogous metric is `handle_reflows` (budget-forced releases),
+  expected ≈0 after the first round.
 - **What VMM does NOT fix**: PressureFit *annotation* infeasibility (e.g.
   bs8ga8@24's planning failure is sim-side, before placement) and torch
   scratch (already VMM'd via expandable_segments). Claims stay scoped.

@@ -1,0 +1,315 @@
+"""VMM arena: non-contiguous physical backing behind per-object stable VAs.
+
+The contiguous-slab design pays an address-geometry tax (packed extent >
+ledger peak, measured x1.05-1.21) and admits placement-infeasible programs
+whose byte load fits at every instant. This module removes the contiguity
+constraint with the CUDA VMM API (design: docs/notes/vmm-slab-design-v1.md;
+microbench: tools/bench_vmm.py — map+setAccess+unmap is 39-52 us per RANGE,
+size-independent, and does not perturb concurrent compute):
+
+- one virtual-address reservation per arena; every object id gets a STABLE
+  virtual range for the arena's lifetime (first touch, 2 MiB aligned);
+- physical memory is EXACT-SIZE cuMemCreate handles (a handle must be
+  mapped whole: the driver rejects sub-range maps — discovered the hard
+  way, CUDA_ERROR_NOT_SUPPORTED), free-listed by size and mapped with ONE
+  call per get. Shape-stable programs make size demand periodic, so free
+  lists stabilize after the first round and steady state does zero
+  create/release work;
+- the LEDGER budget is enforced by REFLOW: when a size class misses and
+  created bytes would exceed the pool, cached (free) handles of other
+  sizes are released until the new handle fits (~150 us per create,
+  warmup-round only). Physical occupancy therefore tracks the ledger by
+  construction: no packing problem, no extent tax, no
+  placement-infeasible failure class.
+
+Unmap ordering: cuMemUnmap is HOST-ordered — in-stream address-reuse
+arguments do not apply. The engine's lifecycle makes put() safe (releases
+apply in the task-done handler, offload puts in transfer-completion
+handlers), with ONE exception: a guard event (debug poison memset queued at
+release time). Guarded buffers defer (extents, event) to a reclaim list
+drained lazily; if the same object is re-allocated while its old unmap is
+deferred, it simply gets a FRESH virtual range (VA is free) rather than
+blocking the engine.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+from .base import Buffer
+
+GRANULE = 2 * 1024 * 1024  # confirmed == minimum granularity on RTX 5090
+
+
+class VmmError(RuntimeError):
+    pass
+
+
+def _dcheck(ret):
+    from cuda.bindings import driver as cu
+
+    err = ret[0]
+    if err != cu.CUresult.CUDA_SUCCESS:
+        raise VmmError(f"CUDA driver error: {err}")
+    rest = ret[1:]
+    return rest[0] if len(rest) == 1 else rest
+
+
+def _align(n: int, a: int = GRANULE) -> int:
+    return (n + a - 1) // a * a
+
+
+@dataclass
+class _Deferred:
+    tag: object
+    va: int
+    span: int
+    handle: object
+    event: object
+
+
+@dataclass
+class VmmArena:
+    """Fast-memory allocator: stable VAs, pooled physical, mapped on demand.
+
+    ``event_complete`` is the backend's non-blocking event probe (guards).
+    All sizes in bytes. Deterministic: VA assignment and extent carving are
+    pure functions of the get/put sequence.
+    """
+
+    device_index: int
+    capacity_bytes: int
+    event_complete: object            # Callable[[Event], bool]
+    headroom_bytes: int = 512 * 1024 * 1024
+    va_bytes: int = 256 * 1024**3
+
+    # -- state --
+    _va_base: int = 0
+    _va_cursor: int = 0
+    _va_of_tag: dict = field(default_factory=dict)       # tag -> (va, span)
+    _free: dict = field(default_factory=dict)            # span -> [handle, ...]
+    _free_bytes: int = 0                                 # bytes cached in _free
+    created_bytes: int = 0                               # all live+cached handles
+    _live: dict = field(default_factory=dict)            # id(buffer) -> Buffer
+    _deferred: list = field(default_factory=list)        # [_Deferred]
+    _deferred_tags: set = field(default_factory=set)
+    _prop: object = None
+    _access: object = None
+    _primary_ctx: object = None
+    _retained_device: object = None
+    _seq: int = 0
+    closed: bool = False
+
+    # -- stats (reported by the engine) --
+    maps: int = 0
+    handle_creates: int = 0
+    handle_reflows: int = 0           # releases forced by the budget
+    va_reassigned: int = 0            # fresh-VA on deferred collision
+    reclaim_drains: int = 0
+    used_bytes: int = 0
+    peak_used_bytes: int = 0
+    peak_created_bytes: int = 0
+
+    def __post_init__(self) -> None:
+        from cuda.bindings import driver as cu
+
+        # the driver API needs a CURRENT context; the runtime API (CudaBackend)
+        # creates the primary context lazily, so it may not exist yet. Retain
+        # it explicitly — torch and cudart share the same primary context.
+        _dcheck(cu.cuInit(0))
+        ctx = _dcheck(cu.cuCtxGetCurrent())
+        if int(ctx) == 0:
+            dev = _dcheck(cu.cuDeviceGet(self.device_index))
+            self._primary_ctx = _dcheck(cu.cuDevicePrimaryCtxRetain(dev))
+            _dcheck(cu.cuCtxSetCurrent(self._primary_ctx))
+            self._retained_device = dev
+
+        prop = cu.CUmemAllocationProp()
+        prop.type = cu.CUmemAllocationType.CU_MEM_ALLOCATION_TYPE_PINNED
+        prop.location.type = cu.CUmemLocationType.CU_MEM_LOCATION_TYPE_DEVICE
+        prop.location.id = self.device_index
+        self._prop = prop
+        access = cu.CUmemAccessDesc()
+        access.location.type = cu.CUmemLocationType.CU_MEM_LOCATION_TYPE_DEVICE
+        access.location.id = self.device_index
+        access.flags = cu.CUmemAccess_flags.CU_MEM_ACCESS_FLAGS_PROT_READWRITE
+        self._access = access
+
+        self.pool_bytes = _align(self.capacity_bytes + self.headroom_bytes)
+        self._va_base = int(_dcheck(cu.cuMemAddressReserve(self.va_bytes, 0, 0, 0)))
+        self._va_cursor = self._va_base
+
+        # warmup: the first map pays a one-off driver lazy-init (~4 ms
+        # measured); absorb it here instead of on the first task
+        h = self._new_handle(GRANULE)
+        _dcheck(cu.cuMemMap(self._va_base, GRANULE, 0, h, 0))
+        _dcheck(cu.cuMemSetAccess(self._va_base, GRANULE, [self._access], 1))
+        _dcheck(cu.cuMemUnmap(self._va_base, GRANULE))
+        self._release_handle(h, GRANULE)
+
+    # ------------------------------------------------------- handle pool
+
+    def _new_handle(self, span: int):
+        from cuda.bindings import driver as cu
+
+        h = _dcheck(cu.cuMemCreate(span, self._prop, 0))
+        self.created_bytes += span
+        self.peak_created_bytes = max(self.peak_created_bytes, self.created_bytes)
+        self.handle_creates += 1
+        return h
+
+    def _release_handle(self, handle, span: int) -> None:
+        self._free.setdefault(span, []).append(handle)
+        self._free_bytes += span
+
+    def _destroy_cached(self, span: int, handle) -> None:
+        from cuda.bindings import driver as cu
+
+        _dcheck(cu.cuMemRelease(handle))
+        self.created_bytes -= span
+        self._free_bytes -= span
+
+    def _obtain_handle(self, span: int):
+        """Free-listed handle of exactly `span` bytes, creating under the
+        budget; REFLOW (release cached handles of other sizes, largest
+        first) when creation would exceed the pool."""
+        cached = self._free.get(span)
+        if cached:
+            self._free_bytes -= span
+            return cached.pop()
+        if self.created_bytes + span > self.pool_bytes:
+            self.drain_reclaim()
+            cached = self._free.get(span)
+            if cached:
+                self._free_bytes -= span
+                return cached.pop()
+        while self.created_bytes + span > self.pool_bytes:
+            victim_span = None
+            for sp, lst in self._free.items():
+                if lst and (victim_span is None or sp > victim_span):
+                    victim_span = sp
+            if victim_span is None:
+                pending = sum(d.span for d in self._deferred)
+                raise VmmError(
+                    f"vmm cannot back {span} bytes: pool {self.pool_bytes}, "
+                    f"live {self.used_bytes}, cached 0, guard-deferred {pending} — "
+                    f"the ledger admitted bytes the pool cannot back "
+                    f"(headroom too small?)"
+                )
+            self._destroy_cached(victim_span, self._free[victim_span].pop())
+            self.handle_reflows += 1
+        return self._new_handle(span)
+
+    # ------------------------------------------------------------- map paths
+
+    def _map(self, va: int, span: int, handle) -> None:
+        from cuda.bindings import driver as cu
+
+        _dcheck(cu.cuMemMap(va, span, 0, handle, 0))
+        _dcheck(cu.cuMemSetAccess(va, span, [self._access], 1))
+        self.maps += 1
+
+    def _unmap(self, va: int, span: int) -> None:
+        from cuda.bindings import driver as cu
+
+        _dcheck(cu.cuMemUnmap(va, span))
+
+    def _va_for(self, tag: object, span: int) -> int:
+        got = self._va_of_tag.get(tag)
+        if got is not None:
+            va, prev_span = got
+            if prev_span != span:
+                raise VmmError(
+                    f"vmm object {tag!r} was assigned {prev_span} bytes of VA but is "
+                    f"requested at {span}: the arena requires shape-stable objects"
+                )
+            if tag in self._deferred_tags:
+                # previous incarnation's unmap is guard-deferred and its VA is
+                # still mapped: hand out a FRESH range instead of blocking
+                self.va_reassigned += 1
+            else:
+                return va
+        va = self._va_cursor
+        if va + span > self._va_base + self.va_bytes:
+            raise VmmError("vmm VA reservation exhausted (raise va_bytes)")
+        self._va_cursor = va + span
+        self._va_of_tag[tag] = (va, span)
+        return va
+
+    # ---------------------------------------------------------------- public
+
+    def get(self, tag: object, size_bytes: int) -> Buffer:
+        if tag is None:
+            self._seq += 1
+            tag = ("anon", self._seq)
+        span = _align(size_bytes)
+        handle = self._obtain_handle(span)
+        va = self._va_for(tag, span)
+        self._map(va, span, handle)
+        self.used_bytes += span
+        self.peak_used_bytes = max(self.peak_used_bytes, self.used_bytes)
+        self._seq += 1
+        buf = Buffer(
+            id=f"vmm:{tag}:{self._seq}",
+            location="fast",
+            size_bytes=size_bytes,
+            ptr=va,
+            raw=("vmm", tag, span, handle),
+        )
+        self._live[id(buf)] = buf
+        return buf
+
+    def put(self, buffer: Buffer) -> None:
+        assert isinstance(buffer.raw, tuple) and buffer.raw[0] == "vmm"
+        _, tag, span, handle = buffer.raw
+        self._live.pop(id(buffer), None)
+        self.used_bytes -= span
+        guard = buffer.guard_event
+        if guard is not None and not self.event_complete(guard):
+            # a queued write (debug poison) may still touch this VA: keep the
+            # mapping alive until the guard completes, then unmap + reclaim
+            self._deferred.append(_Deferred(tag, buffer.ptr, span, handle, guard))
+            self._deferred_tags.add(tag)
+            return
+        self._unmap(buffer.ptr, span)
+        self._release_handle(handle, span)
+
+    def drain_reclaim(self) -> None:
+        """Unmap + free every deferred entry whose guard has completed."""
+        if not self._deferred:
+            return
+        self.reclaim_drains += 1
+        still: list[_Deferred] = []
+        for d in self._deferred:
+            if self.event_complete(d.event):
+                self._unmap(d.va, d.span)
+                self._release_handle(d.handle, d.span)
+                self._deferred_tags.discard(d.tag)
+            else:
+                still.append(d)
+        self._deferred = still
+
+    def close(self) -> None:
+        if self.closed:
+            return
+        from cuda.bindings import driver as cu
+
+        _dcheck(cu.cuCtxSynchronize())
+        for d in self._deferred:
+            self._unmap(d.va, d.span)
+            _dcheck(cu.cuMemRelease(d.handle))
+        self._deferred = []
+        self._deferred_tags = set()
+        for buf in list(self._live.values()):
+            _, _tag, span, handle = buf.raw
+            self._unmap(buf.ptr, span)
+            _dcheck(cu.cuMemRelease(handle))
+        self._live = {}
+        for lst in self._free.values():
+            for h in lst:
+                _dcheck(cu.cuMemRelease(h))
+        self._free = {}
+        _dcheck(cu.cuMemAddressFree(self._va_base, self.va_bytes))
+        if self._primary_ctx is not None:
+            _dcheck(cu.cuDevicePrimaryCtxRelease(self._retained_device))
+            self._primary_ctx = None
+        self.closed = True
