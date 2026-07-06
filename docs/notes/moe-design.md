@@ -118,7 +118,22 @@ scatter targets are unique (permutations); F.grouped_mm probed
 bitwise-repeatable. Save-mode and recompute-mode backwards are
 bit-identical because recompute re-runs the same kernels on the same bytes
 (ladder: full-ctx bitwise reproduction test) — the plan-invariance /
-poison / interleave gates inherit this.
+poison / interleave gates inherit this. End-to-end: fixed seed + same plan
+twice → identical loss bytes (family-ladder gate).
+
+### Comparison methodology: pin the discrete selection in block ladders
+Top-k selection is DISCONTINUOUS in the logits: two numerically-different-
+but-both-correct forwards (kernel vs reference attention paths, bf16) flip
+a few near-tie selections, and each flipped token's expert gradients then
+differ at FULL magnitude — observed ~8% rel on expert dW at tiny scale;
+that is model sensitivity, not gradient error. Since selection is
+non-differentiable, the correct gradient comparison conditions both sides
+on the SAME selection: `moe_mlp_reference(..., route_ids=)` pins the ids
+(the routing WEIGHTS stay differentiable functions of the model's own
+logits). Block-level ladders pass the runtime's saved `route_ids`;
+end-to-end gates (model-step/ga2/multistep vs golden) run selection-free —
+the one-AdamW-step damping (lr·Δgrad ≪ |W|) keeps residual flip noise
+under their 3e-2 tolerances.
 
 ## 3. Kernel sourcing + measured verdicts (RTX 5090, t=16384, K=8)
 

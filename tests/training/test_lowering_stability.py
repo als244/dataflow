@@ -9,12 +9,14 @@ from dataclasses import replace
 
 from dataflow.core.jsonio import program_to_dict
 from dataflow.training.llama3 import ShapedLlamaConfig, lower_llama3
+from dataflow.training.olmoe import ShapedOlmoeConfig, lower_olmoe
 from dataflow.training.qwen3 import ShapedQwen3Config, lower_qwen3
 from dataflow.training.qwen35 import ShapedQwen35Config, lower_qwen35
 
 # Constants last updated DELIBERATELY for the fused head_loss lowering
 # (head_fwd/loss_bwd/head_bwd -> ONE token-chunked task; logits/dlogits
-# objects removed from the grammar).
+# objects removed from the grammar). olmoe rows ADDED with the MoE family
+# (existing constants verified unchanged in the same commit).
 EXPECTED = {
     "llama3-tiny-ga2-s2": "77805909b52d6959",
     "llama3-tiny-tail": "6eb2fdd93c7fd576",
@@ -22,6 +24,9 @@ EXPECTED = {
     # qwen35: heterogeneous kinds + both embedding modes
     "qwen35-tiny-ga2": "860de9f8f7b91d4a",
     "qwen35-tiny-tied": "ecd500539ee2e49d",
+    # olmoe: first MoE family (moeattn kind, untied)
+    "olmoe-tiny": "27b16815cf642d0a",
+    "olmoe-tiny-ga2": "eef05ae0081b6dfc",
 }
 
 
@@ -46,5 +51,9 @@ def test_lowered_programs_bit_identical():
             lower_qwen35(replace(ShapedQwen35Config.tiny(), grad_accum_rounds=2))
         ),
         "qwen35-tiny-tied": _hash(lower_qwen35(ShapedQwen35Config.tiny_tied())),
+        "olmoe-tiny": _hash(lower_olmoe(ShapedOlmoeConfig.tiny())),
+        "olmoe-tiny-ga2": _hash(
+            lower_olmoe(replace(ShapedOlmoeConfig.tiny(), grad_accum_rounds=2))
+        ),
     }
     assert got == EXPECTED, {k: (got[k], EXPECTED[k]) for k in got if got[k] != EXPECTED[k]}

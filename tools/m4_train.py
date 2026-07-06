@@ -39,6 +39,7 @@ from dataflow.training.planning import plan_program
 from dataflow.training.profiling import apply_measured_costs, cached_pcie, load_or_profile
 from dataflow.training.replay import replay_gap_pct
 from dataflow.training.llama3 import ShapedLlamaConfig
+from dataflow.training.olmoe import ShapedOlmoeConfig
 from dataflow.training.qwen3 import ShapedQwen3Config
 from dataflow.training.qwen35 import ShapedQwen35Config
 from dataflow.training.train_loop import train
@@ -86,6 +87,20 @@ CONFIGS = {
         seq_len=1024, batch=16, grad_accum_rounds=4,
     ),
     "qwen35-9b-s1k-bs32ga2": ShapedQwen35Config.qwen35_9b(
+        seq_len=1024, batch=32, grad_accum_rounds=2,
+    ),
+    # OLMoE-7B-A1B (first MoE family): 16L, E=64 top-8, F=1024, ~6.92B
+    # params (~52 GiB pinned W+dW+O — full scale fits this box; bf16
+    # weights 13.4 GiB even fit VRAM at generous budgets). The regime under
+    # study: ~1.2B active params vs the full stack streamed per round.
+    "olmoe-7b": ShapedOlmoeConfig.olmoe_7b(),
+    "olmoe-7b-s1k-bs8ga8": ShapedOlmoeConfig.olmoe_7b(
+        seq_len=1024, batch=8, grad_accum_rounds=8,
+    ),
+    "olmoe-7b-s1k-bs16ga4": ShapedOlmoeConfig.olmoe_7b(
+        seq_len=1024, batch=16, grad_accum_rounds=4,
+    ),
+    "olmoe-7b-s1k-bs32ga2": ShapedOlmoeConfig.olmoe_7b(
         seq_len=1024, batch=32, grad_accum_rounds=2,
     ),
 }

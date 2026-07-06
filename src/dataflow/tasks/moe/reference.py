@@ -71,6 +71,8 @@ def moe_mlp_reference(
     w: dict,
     moe: MoESpec,
     resid: torch.Tensor,
+    *,
+    route_ids: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Full MoE tail: router -> experts -> combine (+ shared expert).
 
@@ -79,13 +81,29 @@ def moe_mlp_reference(
     included, per the pinned combine convention) and aux the fp32
     load-balance loss scalar (zeros(()) when aux_coef == 0).
 
+    ``route_ids`` pins the DISCRETE expert selection while the routing
+    weights stay differentiable functions of this model's own logits.
+    Block-level gradcheck ladders use it: near-tie top-k selections flip
+    between two numerically-different-but-correct forwards (kernel vs
+    reference attention paths), and since selection is non-differentiable,
+    the correct gradient comparison conditions both sides on the SAME
+    selection. End-to-end gates run selection-free.
+
     Masked E-loop (autograd-able, tiny-scale only). Honors partial
     ownership: only locally-held experts contribute — the EP accounting
     tests compare a sharded experts stage against this restricted form.
     """
     f = moe.d_ff_expert
     logits = h2 @ w["w_router"]                      # bf16 (t, E) — runtime path
-    route_w, ids = moe_topk_reference(logits, moe.top_k, moe.routing_mode)
+    if route_ids is None:
+        route_w, ids = moe_topk_reference(logits, moe.top_k, moe.routing_mode)
+    else:
+        ids = route_ids.long()
+        lf = logits.float()
+        if moe.routing_mode == "softmax_then_topk":
+            route_w = torch.softmax(lf, dim=-1).gather(1, ids)
+        else:
+            route_w = torch.softmax(lf.gather(1, ids), dim=-1)
     if moe.aux_coef > 0:
         aux = moe_aux_loss_reference(
             logits, ids, n_experts=moe.n_experts, aux_coef=moe.aux_coef

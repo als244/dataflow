@@ -121,10 +121,34 @@ def _qwen35() -> Family:
     )
 
 
+def _olmoe() -> Family:
+    from dataflow.tasks.olmoe_blocks import build_olmoe_resolver
+    from .olmoe import ShapedOlmoeConfig, dims_of_olmoe, initial_values_olmoe, lower_olmoe
+
+    def golden():
+        from dataflow.models.olmoe_reference import GoldenOlmoe
+
+        return GoldenOlmoe
+
+    # MoE family — the block ladder needs the aux-loss term in the golden
+    # objective, so it lives in tests/tasks/test_olmoe_math.py rather than
+    # the generic check_block_backward harness (no gradcheck bundle)
+    return Family(
+        name="olmoe",
+        config_type=ShapedOlmoeConfig,
+        dims_of=dims_of_olmoe,
+        lower=lower_olmoe,
+        initial_values=initial_values_olmoe,
+        build_resolver=build_olmoe_resolver,
+        golden=golden,
+    )
+
+
 _FAMILIES: dict[str, Callable[[], Family]] = {
     "llama3": _llama3,
     "qwen3": _qwen3,
     "qwen35": _qwen35,
+    "olmoe": _olmoe,
 }
 _cache: dict[str, Family] = {}
 

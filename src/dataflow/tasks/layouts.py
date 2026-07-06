@@ -15,9 +15,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
+from typing import TYPE_CHECKING
 
 from dataflow.core import DTYPE_BITS
 from dataflow.runtime.device.base import Buffer
+
+if TYPE_CHECKING:  # torch-free at runtime: moe.spec imports lazily below
+    from .moe.spec import MoESpec
 
 _ALIGN = 256
 
@@ -316,6 +320,54 @@ def qwen3_weight_layout(dims: Qwen3Dims, layer: int | None = None) -> PackedLayo
         ("w3", (d, ff)),
         ("w2", (ff, d)),
     ], layer=layer))
+
+
+@dataclass(frozen=True)
+class OlmoeDims(Qwen3Dims):
+    """OLMoE dimensions: qwen3-shaped attention with two differences —
+    FULL-ROW qk-norm (one RMSNorm over the whole (t, q_dim)/(t, kv_dim)
+    rows, weights (q_dim,)/(kv_dim,), one rstd per token — NOT per-head)
+    and no GQA at 7B (n_kv_heads == n_heads) — plus a MoE FFN described by
+    ``moe`` (d_ff aliases d_ff_expert, metadata only). rope theta 1e4."""
+
+    moe: MoESpec | None = None
+
+
+def olmoe_weight_layout(dims: OlmoeDims, layer: int | None = None) -> PackedLayout:
+    from .moe.spec import moe_weight_specs
+
+    d, q, kv = dims.d_model, dims.q_dim, dims.kv_dim
+    return PackedLayout.build(_param_specs(dims, [
+        ("attn_norm_w", (d,)),
+        ("wq", (d, q)),
+        ("wk", (d, kv)),
+        ("wv", (d, kv)),
+        ("q_norm_w", (q,)),
+        ("k_norm_w", (kv,)),
+        ("wo", (q, d)),
+        ("ffn_norm_w", (d,)),
+    ] + moe_weight_specs(dims, dims.moe), layer=layer))
+
+
+def olmoe_context_layout(dims: OlmoeDims) -> PackedLayout:
+    """Saved backward context for one OLMoE block: qwen3's save-pre-norm
+    convention with FULL-ROW rstds (one per token), plus the MoE tail's
+    routing decision + pre-activations (tasks/moe/spec.py)."""
+    from .moe.spec import moe_context_specs
+
+    t, d, q, kv, h = dims.tokens, dims.d_model, dims.q_dim, dims.kv_dim, dims.n_heads
+    return PackedLayout.build([
+        ("rstd_attn", (t,), "fp32"),
+        ("qm", (t, q), "bf16"),
+        ("km", (t, kv), "bf16"),
+        ("rstd_q", (t,), "fp32"),
+        ("rstd_k", (t,), "fp32"),
+        ("v", (t, kv), "bf16"),
+        _lse_spec(dims, h),
+        ("attn_out", (t, q), "bf16"),
+        ("h_mid", (t, d), "bf16"),
+        ("rstd_ffn", (t,), "fp32"),
+    ] + moe_context_specs(dims, dims.moe))
 
 
 def qwen3_context_layout(dims: Qwen3Dims) -> PackedLayout:
