@@ -213,19 +213,25 @@ Key findings along the way:
   evictions destroy+recreate handles every step (creates≈reflows≈300–1,400
   per 3 steps). Fidelity stays 1.5–5.6% (sim doesn't price driver work).
 
-**Tight-envelope matrix (same verified --device-gib, h=0.5)** — the regime
-where the ledger is precious flips the sign:
+**Complete device-normalized matrix (same verified --device-gib, h=0.5)**,
+Δ = vmm vs static wall:
 
-| cell | static ledger/rc/wall | vmm ledger/rc/wall | Δ |
+| config | dev-16 | dev-18 | dev-24 |
 |---|---|---|---|
-| bs16ga4 @ dev-16 | 11.35 / 64 / 3,553 | 11.99 / 64 / 3,519 | −1.0% |
-| bs16ga4 @ dev-18 | 13.02 / 64 / 3,479 | 13.99 / 64 / 3,528 | **+1.4%** |
-| bs8ga8 @ dev-16 | 11.61 / **201** / 3,254 | 11.99 / **128** / 3,271 | **+0.5%** |
+| llama bs8ga8 | **+0.5%** (rc 201→128) | — | −3.0% |
+| llama bs16ga4 | −0.9% | **+1.4%** | −0.8% |
+| llama bs32ga2 | −0.4% | −1.5% | −1.0% |
+| qwen35 bs32ga2 | — | −2.3% | −1.5% |
 
-bs8ga8@16 is the designed mechanism firing end-to-end: the reclaimed
-extent tax bought 73 fewer recompute tasks, overcoming the churn. Slack
+vmm wins exactly the cells where the extra ledger CHANGED the plan or its
+pressure (bs8ga8@16: static's shave-taxed ledger forced 201/256
+recomputes vs vmm's 128 — the designed mechanism end-to-end; bs16ga4@18).
+Everywhere else the planner's choices are ledger-insensitive (bs32's rc
+stays 32/64 from ledger 9.9 to 19.1!) and only the churn shows. Slack
 does NOT fix the residual churn (+1 GiB pool slack: reflows 469 → 405 —
 the cycling class working set is far wider than any affordable slack).
+Side-finding: static qwen35 @ dev-18 = 3,023 tok/s — a new qwen35 record
+at a SMALLER envelope (recompute-relieves-contention, again).
 
 **Final verdict (regime-split)**: at GENEROUS envelopes vmm loses 1–3%
 (the planner is on the recompute-contention plateau; extra ledger buys
