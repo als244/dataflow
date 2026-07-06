@@ -104,6 +104,14 @@ CONFIGS = {
     "olmoe-7b-s1k-bs32ga2": ShapedOlmoeConfig.olmoe_7b(
         seq_len=1024, batch=32, grad_accum_rounds=2,
     ),
+    # single-round edge: the expert stack streams ONCE per step — the
+    # restreaming-minimal shape for the MoE weights>>compute regime
+    "olmoe-7b-s1k-bs64ga1": ShapedOlmoeConfig.olmoe_7b(
+        seq_len=1024, batch=64, grad_accum_rounds=1,
+    ),
+    "olmoe-7b-s1k-bs4ga16": ShapedOlmoeConfig.olmoe_7b(
+        seq_len=1024, batch=4, grad_accum_rounds=16,
+    ),
     # Qwen3.5-MoE: the faithful 35B-A3B needs ~277 GB pinned W+dW+O —
     # PLANNING/LOWERING VALIDATION ONLY on this 188 GB box (train would
     # exhaust host RAM allocating initial values). Perf rows use the 20L
@@ -116,6 +124,9 @@ CONFIGS = {
     ),
     "qwen35moe-20l-s1k-bs32ga2": ShapedQwen35MoeConfig.qwen35moe_20l(
         seq_len=1024, batch=32, grad_accum_rounds=2,
+    ),
+    "qwen35moe-20l-s1k-bs64ga1": ShapedQwen35MoeConfig.qwen35moe_20l(
+        seq_len=1024, batch=64, grad_accum_rounds=1,
     ),
 }
 
