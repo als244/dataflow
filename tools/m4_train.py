@@ -549,7 +549,8 @@ def main() -> None:
 
     quoted_budgets = [device_meta[b][0] if b in device_meta else b for b in budget_list]
     tag = "_".join(f"{b:g}" for b in quoted_budgets) \
-        + ("dev" if device_meta else "") + ("-rc" if args.recompute else "")
+        + ("dev" if device_meta else "") + ("-rc" if args.recompute else "") \
+        + (f"-{args.placement}" if args.placement != "static" else "")
     (args.out / f"m4-{args.config}-{tag}.summary.json").write_text(json.dumps(result, indent=2) + "\n")
     print(f"\nwrote {args.out}/m4-{args.config}-{tag}.summary.json")
 
