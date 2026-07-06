@@ -282,7 +282,33 @@ multi-rank runtime exists.
   (the qwen35-design 0.06 convention). Same bf16-ULP-vs-AdamW caveat
   docs/notes/qwen35-design.md records.
 
-## 10. Gates
+## 10. First perf results (M-E; full tables artifacts/m5/moe-v1/README.md)
+
+OLMoE-7B, 65,536 tok/step, verified device envelopes: best shapes
+bs16ga4@12 = 7,757 / bs32ga2@16 = 10,892 / bs64ga1@24 = 12,269 /
+**bs64ga1@28 = 12,992 wall tok/s (record)**. best_config oracle ranking
+CONFIRMED against reality everywhere tested; absolutes run 2.7-9.5%
+OPTIMISTIC for MoE (opposite sign to llama's contended calibration —
+do not apply the +4% factor to MoE families); the fidelity thermometer
+localizes the gap to transfer-overlap optimism (1-round fid 0.25-0.34%
+vs 4-round 3.4-6.2%). vs flextrain matched-workload curve
+(APPLES-TO-APPLES: their leeway releveled to 1.5 per Shein — default 5
+strangles them at tight budgets — and both sides paired at MEASURED
+card peak): flextrain flat ~11.2-11.9k from 12 GiB up; crossover ~23
+GiB; ours +2.9/+6.8/**+8.9%** at 24/26/28, flextrain +7/+32/+44% at
+16/20/12 — structural: our grammar restreams the expert stack per
+grad-accum round while their chunked schedule streams weights once per
+step at any memory (and our stream-once shape bs64ga1 only fits >=24);
+fix directions = round-resident weights (re-run the M4.10 oracle under
+MoE dims — the llama-based rejection does not transfer) or intra-round
+token chunking. ENGINE FINDING: the ledger~14.1 bs32 plan deadlocks
+deterministically (valve churns 1080 evictions, then a 1.89 GB MoE y+A
+reserve is unservable) — more ledger produced a more fragile plan;
+follow-ups: eviction-churn detector -> shave+replan, valve widening.
+qwen35moe-20l perf rows pending (oracle run interrupted; profile cache
+partially warm).
+
+## 11. Gates
 
 Ladder-1 (`tests/tasks/test_moe_math.py`, 19 tests): topk both modes +
 crafted ties (ids bitwise, eager == reference bitwise), router/aux bwd vs
