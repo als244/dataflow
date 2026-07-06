@@ -4,10 +4,16 @@ One op family, three directions, all driven by DEVICE-side segment offsets
 (the strict-paced engine forbids host reads of expert counts — flextrain's
 default per-expert host loop is disqualified by its per-layer sync):
 
-- ``moe_grouped_mm_fwd(kctx, x (M,Kd), w (E,Kd,N), offsets (E+1,) i32, out (M,N))``
+- ``moe_grouped_mm_fwd(kctx, x (M,Kd), w (E,Kd,N), offsets (E+1,) i32, out (M,N)|None)``
       out[r] = x[r] @ w[e(r)]   for offsets[e] <= r < offsets[e+1]
-- ``moe_grouped_mm_dgrad(kctx, dy (M,N), w (E,Kd,N), offsets, dx_out (M,Kd))``
+- ``moe_grouped_mm_dgrad(kctx, dy (M,N), w (E,Kd,N), offsets, dx_out (M,Kd)|None)``
       dx[r] = dy[r] @ w[e(r)].T
+
+fwd/dgrad are DUAL-MODE: with out=None they RETURN the result tensor
+(aten's own allocation) instead of copying into a caller buffer — scratch
+destinations skip a full copy pass + a duplicate buffer (workspace
+discipline); pass out= only when the destination is a ctx VIEW
+(write-through).
 - ``moe_grouped_mm_wgrad(kctx, x (M,Kd), dy (M,N), offsets, dw (E,Kd,N), *, accumulate)``
       dw[e] (+)= x_e.T @ dy_e   (out-of-place result, bf16-rounded, then
       copy_/add_ — the same rounding convention as the dense ``acc()``)
@@ -59,19 +65,27 @@ def _aten_grouped_available(caps: dict) -> bool:
 @register("moe_grouped_mm_fwd", "aten-grouped", deterministic=True,
           workspace=internal(), requires=_aten_grouped_available,
           priority=10, allocates="torch")
-def _fwd_aten(kctx, x, w, offsets, out):
+def _fwd_aten(kctx, x, w, offsets, out=None):
     import torch.nn.functional as F
 
-    out.copy_(F.grouped_mm(x, w, offs=offsets[1:]))
+    res = F.grouped_mm(x, w, offs=offsets[1:])
+    if out is None:
+        return res  # dual mode: scratch destinations skip the copy pass
+    out.copy_(res)
+    return out
 
 
 @register("moe_grouped_mm_dgrad", "aten-grouped", deterministic=True,
           workspace=internal(), requires=_aten_grouped_available,
           priority=10, allocates="torch")
-def _dgrad_aten(kctx, dy, w, offsets, dx_out):
+def _dgrad_aten(kctx, dy, w, offsets, dx_out=None):
     import torch.nn.functional as F
 
-    dx_out.copy_(F.grouped_mm(dy, w.transpose(-2, -1), offs=offsets[1:]))
+    res = F.grouped_mm(dy, w.transpose(-2, -1), offs=offsets[1:])
+    if dx_out is None:
+        return res
+    dx_out.copy_(res)
+    return dx_out
 
 
 @register("moe_grouped_mm_wgrad", "aten-grouped", deterministic=True,
@@ -96,20 +110,28 @@ def _row_experts(offsets: torch.Tensor, m: int) -> torch.Tensor:
     return torch.searchsorted(offsets[1:].contiguous(), rows, right=True)
 
 
-def _eager_fwd(kctx, x, w, offsets, out):
+def _eager_fwd(kctx, x, w, offsets, out=None):
+    if out is None:
+        out = torch.zeros(x.shape[0], w.shape[2], dtype=x.dtype, device=x.device)
+    else:
+        out.zero_()
     eids = _row_experts(offsets, x.shape[0])
-    out.zero_()
     for e in range(w.shape[0]):
         sel = (eids == e).unsqueeze(1)
         out.copy_(torch.where(sel, x @ w[e], out))
+    return out
 
 
-def _eager_dgrad(kctx, dy, w, offsets, dx_out):
+def _eager_dgrad(kctx, dy, w, offsets, dx_out=None):
+    if dx_out is None:
+        dx_out = torch.zeros(dy.shape[0], w.shape[1], dtype=dy.dtype, device=dy.device)
+    else:
+        dx_out.zero_()
     eids = _row_experts(offsets, dy.shape[0])
-    dx_out.zero_()
     for e in range(w.shape[0]):
         sel = (eids == e).unsqueeze(1)
         dx_out.copy_(torch.where(sel, dy @ w[e].t(), dx_out))
+    return dx_out
 
 
 def _eager_wgrad(kctx, x, dy, offsets, dw, *, accumulate: bool):

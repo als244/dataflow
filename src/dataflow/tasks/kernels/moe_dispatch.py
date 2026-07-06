@@ -95,6 +95,45 @@ register("moe_combine_fwd", "eager", deterministic=True, allocates="torch",
          workspace=internal(_gather_hint), priority=0, fn=_eager_combine_fwd)
 
 
+# --- tail elementwise utilities (workspace discipline) --------------------------
+# The v1 tail wrote `(x.float() * srw).to(bf16)` and
+# `(a.float() * b.float()).sum(-1)` — correctness-first eager that
+# MATERIALIZES multi-GiB fp32 tensors (4.3 GiB at bs64). These ops do the
+# same math in registers: fp32 only inside the kernel, nothing but the
+# (small) outputs allocated.
+#
+# - ``moe_scale_rows(kctx, x (rows,n), srw (rows,) fp32)``: x *= srw[row],
+#   IN PLACE (fp32 product, bf16 store — bit-identical to the old
+#   round-trip on the same values).
+# - ``moe_rowdot(kctx, a (rows,n), b (rows,n), out (rows,) fp32)``:
+#   out[r] = sum_j a[r,j]*b[r,j] in fp32.
+
+_SCALE_CHUNK = 65536  # eager fallback: bounds the fp32 temp to chunk x n
+
+
+def _eager_scale_rows(kctx, x, srw):
+    for lo in range(0, x.shape[0], _SCALE_CHUNK):
+        hi = min(lo + _SCALE_CHUNK, x.shape[0])
+        x[lo:hi] = (x[lo:hi].float() * srw[lo:hi].unsqueeze(1)).to(x.dtype)
+
+
+def _eager_rowdot(kctx, a, b, out):
+    for lo in range(0, a.shape[0], _SCALE_CHUNK):
+        hi = min(lo + _SCALE_CHUNK, a.shape[0])
+        out[lo:hi] = (a[lo:hi].float() * b[lo:hi].float()).sum(-1)
+
+
+def _chunk_hint(*tensors) -> int:
+    n = tensors[0].shape[-1]
+    return 2 * _SCALE_CHUNK * n * 4
+
+
+register("moe_scale_rows", "eager", deterministic=True, allocates="torch",
+         workspace=internal(_chunk_hint), priority=0, fn=_eager_scale_rows)
+register("moe_rowdot", "eager", deterministic=True, allocates="torch",
+         workspace=internal(_chunk_hint), priority=0, fn=_eager_rowdot)
+
+
 # --- gather-sum pair: fused Triton (flextrain moe_gather_kernel port) ----------
 
 try:
@@ -176,3 +215,41 @@ if triton is not None:
             yp, slot_of, route_w, resid, out, t, d, rows,
             K=k, BLOCK_M=_BM, BLOCK_D=_BD, USE_W=True, HAS_RES=True,
         )
+
+    @triton.jit
+    def _scale_rows_kernel(x_ptr, s_ptr, total, n, BLOCK: tl.constexpr):
+        offs = (tl.program_id(0).to(tl.int64) * BLOCK + tl.arange(0, BLOCK).to(tl.int64))
+        mask = offs < total
+        row = offs // n
+        x = tl.load(x_ptr + offs, mask=mask, other=0).to(tl.float32)
+        s = tl.load(s_ptr + row, mask=mask, other=0.0)
+        tl.store(x_ptr + offs, (x * s).to(x_ptr.dtype.element_ty), mask=mask)
+
+    @triton.jit
+    def _rowdot_kernel(a_ptr, b_ptr, out_ptr, n, BLOCK_N: tl.constexpr):
+        row = tl.program_id(0).to(tl.int64)
+        acc = tl.zeros((BLOCK_N,), dtype=tl.float32)
+        for off in range(0, n, BLOCK_N):
+            cols = off + tl.arange(0, BLOCK_N)
+            m = cols < n
+            a = tl.load(a_ptr + row * n + cols, mask=m, other=0).to(tl.float32)
+            b = tl.load(b_ptr + row * n + cols, mask=m, other=0).to(tl.float32)
+            acc += a * b
+        tl.store(out_ptr + row, tl.sum(acc, axis=0))
+
+    @register("moe_scale_rows", "triton", deterministic=True,
+              workspace=none(), requires=lambda c: c.get("triton"), priority=10)
+    def _scale_rows(kctx, x, srw):
+        assert x.is_cuda and x.is_contiguous() and x.dim() == 2
+        assert srw.is_contiguous() and srw.numel() == x.shape[0]
+        total = x.numel()
+        _scale_rows_kernel[(triton.cdiv(total, 1024),)](
+            x, srw, total, x.shape[1], BLOCK=1024
+        )
+
+    @register("moe_rowdot", "triton", deterministic=True,
+              workspace=none(), requires=lambda c: c.get("triton"), priority=10)
+    def _rowdot(kctx, a, b, out):
+        assert a.shape == b.shape and a.is_contiguous() and b.is_contiguous()
+        assert out.numel() == a.shape[0] and out.dtype == torch.float32
+        _rowdot_kernel[(a.shape[0],)](a, b, out, a.shape[1], BLOCK_N=1024)

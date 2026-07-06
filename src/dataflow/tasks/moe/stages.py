@@ -98,15 +98,15 @@ def stage_moe_dispatch(kctx, K, d, st):
 
 
 def stage_moe_experts13(kctx, K, d, st):
-    moe, a = _spec(d), st["a"]
+    a = st["a"]
     xp = st.pop("xp")
     if a is not None:
+        # ctx write-through: the aten path pays one copy into the view
         h13 = a["h13"]
+        K.moe_grouped_mm_fwd(kctx, xp, st["w"]["w13_experts"], st["offsets"], h13)
     else:
-        h13 = torch.empty(
-            (xp.shape[0], 2 * moe.d_ff_expert), dtype=torch.bfloat16, device=xp.device
-        )
-    K.moe_grouped_mm_fwd(kctx, xp, st["w"]["w13_experts"], st["offsets"], h13)
+        # scratch destination: dual-mode return skips the copy + duplicate
+        h13 = K.moe_grouped_mm_fwd(kctx, xp, st["w"]["w13_experts"], st["offsets"])
     st["h13"] = h13
 
 
@@ -129,8 +129,7 @@ def stage_moe_experts2_combine(kctx, K, d, st):
     rows, f = h13.shape[0], moe.d_ff_expert
     sact = torch.empty((rows, f), dtype=torch.bfloat16, device=h13.device)
     K.swiglu_packed_fwd(kctx, h13, sact)
-    yp = torch.empty((rows, d.d_model), dtype=torch.bfloat16, device=h13.device)
-    K.moe_grouped_mm_fwd(kctx, sact, w["w2_experts"], st["offsets"], yp)
+    yp = K.moe_grouped_mm_fwd(kctx, sact, w["w2_experts"], st["offsets"])
     del sact
 
     base = st.pop("h_mid")
@@ -139,12 +138,15 @@ def stage_moe_experts2_combine(kctx, K, d, st):
         s13 = st.pop("s13")
         s_act = torch.empty((d.tokens, fs), dtype=torch.bfloat16, device=h13.device)
         K.swiglu_packed_fwd(kctx, s13, s_act)
-        sh_each = s_act @ w["w_s2"]
+        sh = s_act @ w["w_s2"]
         del s_act
-        sig = torch.sigmoid(st.pop("gate_pre").float())
+        sig = torch.sigmoid(st.pop("gate_pre").float()).reshape(-1).contiguous()
+        # sigma-gate as an in-place row scale (no (t,d) fp32 materialization)
+        K.moe_scale_rows(kctx, sh, sig)
+        del sig
         # base is (or aliases) a ctx view — never mutated in place
-        base = base + (sig * sh_each.float()).to(base.dtype)
-        del sh_each, sig
+        base = base + sh
+        del sh
 
     K.moe_combine_fwd(kctx, yp, st["slot_of"], st["route_w"], base, st["y"])
     for key in ("h2", "logits", "route_w", "route_ids", "order", "offsets", "slot_of"):
@@ -175,7 +177,13 @@ def moe_mlp_tail_bwd(kctx, K, d, dy, a, w, dw, accum, acc, norm_bwd, *, resid_fi
     fields directly (create-vs-accumulate handled inside the op, same
     bf16-round-then-add convention).
 
-    Scratch discipline: del each (rows, .) / (t, .) temporary at last use.
+    Workspace discipline (beyond del-at-last-use): NO multi-GiB fp32
+    materializations — the route-weight scalings run IN PLACE via
+    ``moe_scale_rows`` (dyp/dsact hold the RAW values until their raw
+    consumers ran, then become the scaled values in the same bytes), the
+    dprob dot is a fused rowdot, grouped dgrads use the dual-mode
+    return form (no duplicate buffer + copy pass), and dh2 accumulates in
+    bf16 via addmm_ — the dense tail's convention.
     """
     moe = _spec(d)
     t, topk, f = d.tokens, moe.top_k, moe.d_ff_expert
@@ -191,38 +199,38 @@ def moe_mlp_tail_bwd(kctx, K, d, dy, a, w, dw, accum, acc, norm_bwd, *, resid_fi
     # re-gather permuted inputs (never saved; deterministic pure gathers)
     xp = torch.empty((rows, d.d_model), dtype=torch.bfloat16, device=dy.device)
     K.moe_dispatch_fwd(kctx, h2, order, xp, top_k=topk)
-    dyp_raw = torch.empty_like(xp)
-    K.moe_dispatch_fwd(kctx, dy, order, dyp_raw, top_k=topk)
+    dyp = torch.empty_like(xp)                      # RAW until scaled below
+    K.moe_dispatch_fwd(kctx, dy, order, dyp, top_k=topk)
 
     sact = torch.empty((rows, f), dtype=torch.bfloat16, device=dy.device)
     K.swiglu_packed_fwd(kctx, a["h13"], sact)
-    dsact_raw = torch.empty_like(sact)
-    K.moe_grouped_mm_dgrad(kctx, dyp_raw, w["w2_experts"], offsets, dsact_raw)
+    dsact = K.moe_grouped_mm_dgrad(kctx, dyp, w["w2_experts"], offsets)  # RAW
 
     # dL/d route_w at slot j: <dy[token(j)], yp_j> == <dsact_raw_j, sact_j>
-    # (the F-dim dot — no yp recompute needed)
-    dprob_slot = (dsact_raw.float() * sact.float()).sum(-1)
+    # (the F-dim dot — no yp recompute, no (rows,F) product tensor)
+    dprob_slot = torch.empty(rows, dtype=torch.float32, device=dy.device)
+    K.moe_rowdot(kctx, dsact, sact, dprob_slot)
     dprob = dprob_slot[slot_of.view(-1).long()].view(t, topk).contiguous()
     del dprob_slot
 
-    srw = a["route_w"].reshape(-1)[order.long()].float().unsqueeze(1)  # (rows, 1)
-    dyp = (dyp_raw.float() * srw).to(torch.bfloat16)
-    del dyp_raw
+    srw = a["route_w"].reshape(-1)[order.long()].float().contiguous()  # (rows,)
+    K.moe_scale_rows(kctx, dyp, srw)                # raw -> scaled, in place
     K.moe_grouped_mm_wgrad(kctx, sact, dyp, offsets, dw["w2_experts"], accumulate=accum)
     del sact, dyp
-    dsact = (dsact_raw.float() * srw).to(torch.bfloat16)
-    del dsact_raw, srw
+    K.moe_scale_rows(kctx, dsact, srw)              # raw -> scaled, in place
+    del srw
 
     dh13 = torch.empty((rows, 2 * f), dtype=torch.bfloat16, device=dy.device)
     K.swiglu_packed_bwd(kctx, dsact, a["h13"], dh13)
     del dsact
     K.moe_grouped_mm_wgrad(kctx, xp, dh13, offsets, dw["w13_experts"], accumulate=accum)
     del xp
-    dxp = torch.empty((rows, d.d_model), dtype=torch.bfloat16, device=dy.device)
-    K.moe_grouped_mm_dgrad(kctx, dh13, w["w13_experts"], offsets, dxp)
+    dxp = K.moe_grouped_mm_dgrad(kctx, dh13, w["w13_experts"], offsets)
     del dh13
 
-    dh2 = torch.empty((t, d.d_model), dtype=torch.float32, device=dy.device)
+    # bf16 residual-stream accumulator + addmm_ joins: the dense tail's
+    # convention (dh2 = dx1@w1.T; dh2.addmm_(...)), no fp32 copy at the end
+    dh2 = torch.empty((t, d.d_model), dtype=torch.bfloat16, device=dy.device)
     K.moe_dispatch_bwd(kctx, dxp, slot_of, dh2)
     del dxp, slot_of
 
@@ -243,7 +251,7 @@ def moe_mlp_tail_bwd(kctx, K, d, dy, a, w, dw, accum, acc, norm_bwd, *, resid_fi
     dlogits_bf = dlogits.to(torch.bfloat16)
     del dlogits
     acc("w_router", h2.T @ dlogits_bf)
-    dh2.add_(dlogits_bf @ w["w_router"].T)
+    dh2.addmm_(dlogits_bf, w["w_router"].T)
     del dlogits_bf
 
     if moe.n_shared_experts:
@@ -251,14 +259,16 @@ def moe_mlp_tail_bwd(kctx, K, d, dy, a, w, dw, accum, acc, norm_bwd, *, resid_fi
         s_act = torch.empty((t, fs), dtype=torch.bfloat16, device=dy.device)
         K.swiglu_packed_fwd(kctx, a["s13"], s_act)
         sh_each = s_act @ w["w_s2"]
-        sig = torch.sigmoid(a["gate_pre"].float())
-        d_sh = (dy.float() * sig).to(torch.bfloat16)
+        sig = torch.sigmoid(a["gate_pre"].float()).reshape(-1).contiguous()  # (t,)
+        d_gate_row = torch.empty(t, dtype=torch.float32, device=dy.device)
+        K.moe_rowdot(kctx, dy, sh_each, d_gate_row)     # <dy, sh_each> per token
+        del sh_each
+        d_sh = dy.clone()
+        K.moe_scale_rows(kctx, d_sh, sig)               # dy * sigma, in place
         acc("w_s2", s_act.T @ d_sh)
         del s_act
-        d_gate = (
-            (dy.float() * sh_each.float()).sum(-1, keepdim=True) * sig * (1 - sig)
-        ).to(torch.bfloat16)
-        del sh_each, sig
+        d_gate = (d_gate_row * sig * (1.0 - sig)).to(torch.bfloat16).unsqueeze(1)
+        del d_gate_row, sig
         acc("w_shared_gate", h2.T @ d_gate)
         ds_act = d_sh @ w["w_s2"].T
         del d_sh
@@ -266,15 +276,13 @@ def moe_mlp_tail_bwd(kctx, K, d, dy, a, w, dw, accum, acc, norm_bwd, *, resid_fi
         K.swiglu_packed_bwd(kctx, ds_act, a["s13"], ds13)
         del ds_act
         acc("w_s13", h2.T @ ds13)
-        dh2.add_(ds13 @ w["w_s13"].T)
-        dh2.add_(d_gate @ w["w_shared_gate"].T)
+        dh2.addmm_(ds13, w["w_s13"].T)
+        dh2.addmm_(d_gate, w["w_shared_gate"].T)
         del ds13, d_gate
     del h2
 
-    dh2_bf = dh2.to(torch.bfloat16)
+    dh_mid, dffn = norm_bwd(dh2, resid, a["rstd_ffn"], w["ffn_norm_w"])
     del dh2
-    dh_mid, dffn = norm_bwd(dh2_bf, resid, a["rstd_ffn"], w["ffn_norm_w"])
-    del dh2_bf
     acc("ffn_norm_w", dffn)
     dh_mid.add_(dy)
     return dh_mid

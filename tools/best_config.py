@@ -204,6 +204,13 @@ def main() -> None:
         except Exception as e:
             print(f"  bs{bs}ga{rounds}: profiling failed ({type(e).__name__}: {e})")
             continue
+        finally:
+            # torch's caching allocator hoards segments ACROSS shapes in this
+            # one-process loop; the next shape's raw cudaMalloc profiling
+            # buffers then starve (bs16 OOM'd after bs64+bs32 profiled)
+            import torch
+
+            torch.cuda.empty_cache()
         scratch = max(p.workspace_bytes for p in profiles.values()) + (256 << 20)
         measured = apply_measured_costs(base, profiles)
         compute_us = sum(t.runtime_us for t in measured.tasks)
