@@ -147,6 +147,34 @@ def test_pool_exhaustion_is_loud(backend):
         arena.close()
 
 
+def test_parked_reuse_and_eviction_accounting(backend):
+    arena = make_arena(backend, cap=8 * MB, headroom=0)
+    try:
+        # park then re-get the SAME tag: zero driver calls, same VA
+        b = arena.get("A", 2 * MB)
+        va = b.ptr
+        arena.put(b)
+        maps_before = arena.maps
+        b2 = arena.get("A", 2 * MB)
+        assert b2.ptr == va and arena.maps == maps_before and arena.park_hits == 1
+        arena.put(b2)
+
+        # fill the pool with OTHER tags; the parked "A" must be reclaimed
+        # (steal or eviction) without breaking the byte accounting
+        held = []
+        for i in range(arena.pool_bytes // (2 * MB)):
+            held.append(arena.get(f"z{i}", 2 * MB))
+        assert arena.used_bytes == arena.pool_bytes
+        assert arena.created_bytes <= arena.pool_bytes
+        assert arena._free_bytes == 0 and not arena._parked
+        for b in held:
+            arena.put(b)
+        assert arena.used_bytes == 0
+        assert arena._free_bytes == arena.created_bytes  # all parked/cached
+    finally:
+        arena.close()
+
+
 def test_e2e_mini_vmm_matches_static():
     """Full train() on the mini config: vmm losses == static losses bitwise
     (same kernels, same order; only addresses differ)."""

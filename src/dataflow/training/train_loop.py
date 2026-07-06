@@ -175,6 +175,8 @@ def train(
                 "handle_creates": arena.handle_creates,
                 "handle_reflows": arena.handle_reflows,
                 "prewarmed": arena.prewarmed,
+                "park_hits": arena.park_hits,
+                "park_steals": arena.park_steals,
                 "t_create_s": round(arena.t_create_s, 4),
                 "t_destroy_s": round(arena.t_destroy_s, 4),
                 "t_map_s": round(arena.t_map_s, 4),
