@@ -502,7 +502,17 @@ def main() -> None:
         wall_tail = report.step_wall_s[1:] or report.step_wall_s  # steps=1: no steady tail
         steady_wall = sum(wall_tail) / len(wall_tail)
         wall_tok_s = tokens_per_step / steady_wall
-        gap = replay_gap_pct(planned.program, report.last_trace, report.step_makespan_us[-1])
+        # replay-fidelity is a DIAGNOSTIC: imposing real start times on the
+        # sim's own transfer model can transiently overflow its
+        # reserve-at-start ledger accounting even though the real engine's
+        # admission was clean (first hit: olmoe bs32ga2 heavy-recompute
+        # plans — MoE's huge-W/tiny-A shape tightens the timing coupling).
+        # A failed diagnostic must not kill a successful measurement.
+        try:
+            gap = replay_gap_pct(planned.program, report.last_trace, report.step_makespan_us[-1])
+        except Exception as exc:  # noqa: BLE001
+            print(f"replay-fidelity diagnostic infeasible (non-fatal): {exc}")
+            gap = None
         # measured device peak for EVERY row: fixed context + placed extent
         # (our cudaMalloc slab, outside torch) + torch allocator reserved
         # peak (task scratch; reset per budget). Slab overflows (0 in
