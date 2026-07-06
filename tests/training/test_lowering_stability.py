@@ -12,6 +12,7 @@ from dataflow.training.llama3 import ShapedLlamaConfig, lower_llama3
 from dataflow.training.olmoe import ShapedOlmoeConfig, lower_olmoe
 from dataflow.training.qwen3 import ShapedQwen3Config, lower_qwen3
 from dataflow.training.qwen35 import ShapedQwen35Config, lower_qwen35
+from dataflow.training.qwen35moe import ShapedQwen35MoeConfig, lower_qwen35moe
 
 # Constants last updated DELIBERATELY for the fused head_loss lowering
 # (head_fwd/loss_bwd/head_bwd -> ONE token-chunked task; logits/dlogits
@@ -27,6 +28,8 @@ EXPECTED = {
     # olmoe: first MoE family (moeattn kind, untied)
     "olmoe-tiny": "27b16815cf642d0a",
     "olmoe-tiny-ga2": "eef05ae0081b6dfc",
+    # qwen35moe: hybrid MoE (linmoe/gattnmoe kinds + shared expert, untied)
+    "qwen35moe-tiny-ga2": "a44e9cf9734a5da7",
 }
 
 
@@ -54,6 +57,9 @@ def test_lowered_programs_bit_identical():
         "olmoe-tiny": _hash(lower_olmoe(ShapedOlmoeConfig.tiny())),
         "olmoe-tiny-ga2": _hash(
             lower_olmoe(replace(ShapedOlmoeConfig.tiny(), grad_accum_rounds=2))
+        ),
+        "qwen35moe-tiny-ga2": _hash(
+            lower_qwen35moe(replace(ShapedQwen35MoeConfig.tiny(), grad_accum_rounds=2))
         ),
     }
     assert got == EXPECTED, {k: (got[k], EXPECTED[k]) for k in got if got[k] != EXPECTED[k]}

@@ -1,7 +1,8 @@
 # MoE module design (v1) — the implementation spec
 
-Status: M-B landed (module + kernels + ladder-1). Families: olmoe (M-C),
-qwen35moe (M-D). Plan of record: `~/.claude/plans/please-take-your-time-transient-gosling.md`
+Status: M-B (module + kernels + ladder-1), M-C (olmoe, full ladder), M-D
+(qwen35moe, full ladder) landed. Plan of record:
+`~/.claude/plans/please-take-your-time-transient-gosling.md`
 (Shein-approved 2026-07-06); reference semantics from `refs/flextrain`
 (reference-only).
 
@@ -267,7 +268,19 @@ multi-rank runtime exists.
   E=256.
 - bf16 `route_w` storage: if family ladders show precision strain, the ctx
   field promotes to fp32 (+~262 KB/layer/round) — F8 in the risk table.
+  (Family ladders passed at 4e-2 with bf16 storage — not promoted.)
 - Registering moe ops invalidated the profile disk cache once (see §4).
+- **dt_bias sign lottery at tiny scale (qwen35moe model-step gates)**: the
+  true dt_bias gradient at 0.02-init tiny scale sits BELOW the fla bf16
+  kernel noise floor (measured 1e-6..3e-6), and one AdamW step from zero
+  init is ±lr·sign(grad) regardless of magnitude — so runtime and golden
+  each land at ±1e-4 with independently-coin-flipped signs (observed: one
+  flipped element → rel_l2 ≈ 1.0 on the 4-element field; the dense qwen35
+  gate passes on seed luck). `check_model_step(field_atol={"dt_bias":
+  2.5e-4})` compares that field against the sign-lottery envelope instead;
+  the REAL dt gradient is pinned by ladder-2 at observability-scale init
+  (the qwen35-design 0.06 convention). Same bf16-ULP-vs-AdamW caveat
+  docs/notes/qwen35-design.md records.
 
 ## 10. Gates
 

@@ -220,6 +220,36 @@ embeddings) added to the machinery — reuse, don't reinvent:
   to a Triton kernel must be `.contiguous()` — a strided column slice
   out of a packed context is read with the wrong stride and corrupts
   results SILENTLY (the qwen35 gate-gradient hunt).
+- **MoE variants (olmoe / qwen35moe — the pluggable module)**: the MoE
+  SwiGLU tail is a self-contained module (`tasks/moe/`,
+  docs/notes/moe-design.md); a family opts in through FIVE points and
+  writes no MoE math of its own:
+  1. layout builders append `moe_weight_specs(dims, moe)` /
+     `moe_context_specs(dims, moe)` (stacked expert fields
+     `w13_experts (E,d,2F)` packed `[x1|x3]` / `w2_experts (E,F,d)` —
+     never per-expert fields; AdamW stays 3 chunked launches);
+  2. block STAGES splice `MOE_STAGES` / `MOE_SHARED_STAGES` after the
+     family's ffn-norm stage (state keys `st["h2"]`/`st["h_mid"]` are the
+     family-invariant seam; combine emits nothing so derived recompute
+     truncates it);
+  3. the block backward overrides ONLY `_mlp_bwd` ->
+     `moe_mlp_tail_bwd(...)` (the M-A template split) and mixes in
+     `MoEProfileFill` — REQUIRED: packed contexts carry int32 routing
+     fields the profiler would otherwise feed garbage (illegal memory
+     access) and routing costs must be balanced+reproducible;
+  4. the golden composes `moe_mlp_reference` and autograds CE + the
+     per-layer aux terms while REPORTING CE only (aux is
+     gradient-injected, never in the scalar loss); block-level gradcheck
+     ladders pin the discrete selection via `route_ids=` (near-tie top-k
+     flips between two correct forwards are model sensitivity, not
+     gradient error);
+  5. the family Dims carries `moe: MoESpec` (routing mode, aux coef,
+     shared expert, dispatch/combine dtype seams, `expert_ids` ownership
+     — `n_experts` is ROUTING-ONLY; everything that sizes or prices
+     expert state reads `n_local_experts`).
+  Roofline seeds for MoE kinds: FLOPs from ACTIVE params, weight bytes
+  from the FULL expert stack. Sub-noise sign-lottery params (dt_bias)
+  compare via `check_model_step(field_atol=...)`.
 
 Known llama-couplings to check when the family's TASK/OBJECT NAMES differ
 (all fail loudly, none silently):

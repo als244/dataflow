@@ -154,9 +154,19 @@ def check_model_step(
     recompute_levels: dict[str, int] | None = None,
     seed: int = 0,
     tol: float = 3e-2,
+    field_atol: dict[str, float] | None = None,
 ) -> CheckReport:
     """Ladder level 3: full annotated program through the REAL engine vs the
-    golden model — loss, final params, optimizer state."""
+    golden model — loss, final params, optimizer state.
+
+    ``field_atol`` maps a FIELD name to an absolute elementwise tolerance
+    that replaces the rel_l2 comparison for that field. For sub-noise
+    sign-lottery parameters only: a one-AdamW-step update of a field whose
+    true gradient sits below the bf16 kernel noise floor is +-lr *
+    sign(noise) on BOTH sides (qwen3.5's dt_bias — the bf16-ULP-vs-AdamW
+    caveat in docs/notes/qwen35-design.md), so rel_l2 there measures a coin
+    flip, not correctness; the envelope |a-b| <= atol (~2*lr) still catches
+    garbage. Real-magnitude fields keep the strict relative gate."""
     from dataflow.runtime import Engine
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.runtime.device.fake import FakeBackend
@@ -215,7 +225,14 @@ def check_model_step(
                 slot.buffer, f.shape, TORCH_DTYPE_BY_NAME[f.dtype],
                 offset_bytes=f.offset_bytes,
             )
-            worst = max(worst, rel_l2(rt, leaves[f.name]))
+            atol = (field_atol or {}).get(f.name)
+            if atol is not None:
+                gap = float(
+                    (rt.float().cpu() - leaves[f.name].float().cpu()).abs().max()
+                )
+                worst = max(worst, 0.0 if gap <= atol else gap / atol)
+            else:
+                worst = max(worst, rel_l2(rt, leaves[f.name]))
         return worst
 
     errors["W_embed"] = compare_fields("W_embed")

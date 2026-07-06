@@ -144,11 +144,39 @@ def _olmoe() -> Family:
     )
 
 
+def _qwen35moe() -> Family:
+    from dataflow.tasks.qwen35moe_blocks import build_qwen35moe_resolver
+    from .qwen35moe import (
+        ShapedQwen35MoeConfig,
+        dims_of_qwen35moe,
+        initial_values_qwen35moe,
+        lower_qwen35moe,
+    )
+
+    def golden():
+        from dataflow.models.qwen35moe_reference import GoldenQwen35Moe
+
+        return GoldenQwen35Moe
+
+    # heterogeneous MoE (linmoe/gattnmoe kinds) — per-kind ladders live in
+    # tests/tasks/test_qwen35moe_math.py
+    return Family(
+        name="qwen35moe",
+        config_type=ShapedQwen35MoeConfig,
+        dims_of=dims_of_qwen35moe,
+        lower=lower_qwen35moe,
+        initial_values=initial_values_qwen35moe,
+        build_resolver=build_qwen35moe_resolver,
+        golden=golden,
+    )
+
+
 _FAMILIES: dict[str, Callable[[], Family]] = {
     "llama3": _llama3,
     "qwen3": _qwen3,
     "qwen35": _qwen35,
     "olmoe": _olmoe,
+    "qwen35moe": _qwen35moe,
 }
 _cache: dict[str, Family] = {}
 

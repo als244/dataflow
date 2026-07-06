@@ -42,6 +42,7 @@ from dataflow.training.llama3 import ShapedLlamaConfig
 from dataflow.training.olmoe import ShapedOlmoeConfig
 from dataflow.training.qwen3 import ShapedQwen3Config
 from dataflow.training.qwen35 import ShapedQwen35Config
+from dataflow.training.qwen35moe import ShapedQwen35MoeConfig
 from dataflow.training.train_loop import train
 
 GIB = 1024**3
@@ -101,6 +102,19 @@ CONFIGS = {
         seq_len=1024, batch=16, grad_accum_rounds=4,
     ),
     "olmoe-7b-s1k-bs32ga2": ShapedOlmoeConfig.olmoe_7b(
+        seq_len=1024, batch=32, grad_accum_rounds=2,
+    ),
+    # Qwen3.5-MoE: the faithful 35B-A3B needs ~277 GB pinned W+dW+O —
+    # PLANNING/LOWERING VALIDATION ONLY on this 188 GB box (train would
+    # exhaust host RAM allocating initial values). Perf rows use the 20L
+    # variant (~17.8B, ~143 GB pinned — near the ceiling, watch OS
+    # pressure): 15 lin + 5 full, E=256, shared expert, 248k vocab.
+    "qwen35moe-35b": ShapedQwen35MoeConfig.qwen35moe_35b(),
+    "qwen35moe-20l": ShapedQwen35MoeConfig.qwen35moe_20l(),
+    "qwen35moe-20l-s1k-bs16ga4": ShapedQwen35MoeConfig.qwen35moe_20l(
+        seq_len=1024, batch=16, grad_accum_rounds=4,
+    ),
+    "qwen35moe-20l-s1k-bs32ga2": ShapedQwen35MoeConfig.qwen35moe_20l(
         seq_len=1024, batch=32, grad_accum_rounds=2,
     ),
 }

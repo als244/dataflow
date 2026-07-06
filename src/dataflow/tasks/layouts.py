@@ -476,13 +476,11 @@ class Qwen35Dims:
         return "full" if (layer + 1) % self.full_attention_interval == 0 else "lin"
 
 
-def qwen35_lin_weight_layout(dims: Qwen35Dims, layer: int | None = None) -> PackedLayout:
-    """DeltaNet layer weights. Default policy stores A_log/dt_bias bf16
-    (golden identical — fla receives fp32 casts at call time; bf16-ULP-vs-
-    AdamW caveat recorded in docs/notes/qwen35-design.md); a dtype policy
-    override ("A_log"/"dt_bias" -> fp32) lifts that."""
-    d, ff = dims.d_model, dims.d_ff
-    return PackedLayout.build(_param_specs(dims, [
+def _qwen35_lin_attn_specs(dims) -> list[tuple[str, tuple[int, ...]]]:
+    """DeltaNet attention-part weight fields (shared by the dense and MoE
+    qwen3.5 families — the MLP tail differs, the attention never does)."""
+    d = dims.d_model
+    return [
         ("attn_norm_w", (d,)),
         ("w_qkvz", (d, dims.qkvz_dim)),
         ("w_ba", (d, dims.ba_dim)),
@@ -492,18 +490,13 @@ def qwen35_lin_weight_layout(dims: Qwen35Dims, layer: int | None = None) -> Pack
         ("lin_norm_w", (dims.head_v_dim,)),
         ("w_out", (dims.value_dim, d)),
         ("ffn_norm_w", (d,)),
-        ("w1", (d, ff)),
-        ("w3", (d, ff)),
-        ("w2", (ff, d)),
-    ], layer=layer))
+    ]
 
 
-def qwen35_lin_context_layout(dims: Qwen35Dims) -> PackedLayout:
-    """DeltaNet saved context (design §3d): projections + fla's saved
-    outputs; post-conv and q/k l2norms are recomputed in backward."""
-    t, d, ff = dims.tokens, dims.d_model, dims.d_ff
+def _qwen35_lin_attn_ctx(dims) -> list[tuple[str, tuple[int, ...], str]]:
+    t, d = dims.tokens, dims.d_model
     hv = dims.num_v_heads
-    return PackedLayout.build([
+    return [
         ("rstd_attn", (t,), "fp32"),
         ("qkvz", (t, dims.qkvz_dim), "bf16"),
         ("ba", (t, dims.ba_dim), "bf16"),
@@ -513,15 +506,13 @@ def qwen35_lin_context_layout(dims: Qwen35Dims) -> PackedLayout:
         ("rstd_gate", (t * hv,), "fp32"),
         ("xo", (t, d), "bf16"),
         ("rstd_ffn", (t,), "fp32"),
-        ("x1", (t, ff), "bf16"),
-        ("x3", (t, ff), "bf16"),
-    ])
+    ]
 
 
-def qwen35_attn_weight_layout(dims: Qwen35Dims, layer: int | None = None) -> PackedLayout:
-    """Gated-attention layer weights: w_q projects [Q_all | gate_all]."""
-    d, ff = dims.d_model, dims.d_ff
-    return PackedLayout.build(_param_specs(dims, [
+def _qwen35_attn_attn_specs(dims) -> list[tuple[str, tuple[int, ...]]]:
+    """Gated-attention attention-part weight fields (wq = [Q_all | gate_all])."""
+    d = dims.d_model
+    return [
         ("attn_norm_w", (d,)),
         ("wq", (d, 2 * dims.attn_dim)),
         ("wk", (d, dims.kv_dim)),
@@ -530,19 +521,13 @@ def qwen35_attn_weight_layout(dims: Qwen35Dims, layer: int | None = None) -> Pac
         ("k_norm_w", (dims.head_dim,)),
         ("wo", (dims.attn_dim, d)),
         ("ffn_norm_w", (d,)),
-        ("w1", (d, ff)),
-        ("w3", (d, ff)),
-        ("w2", (ff, d)),
-    ], layer=layer))
+    ]
 
 
-def qwen35_attn_context_layout(dims: Qwen35Dims) -> PackedLayout:
-    """Gated-attention saved context: pre-norm q (qm) + per-head rstds
-    (qwen3 pattern — backward rebuilds post-norm/rope), k likewise, v,
-    pre-sigmoid gate, flash outputs, xo, MLP projections."""
-    t, d, ff = dims.tokens, dims.d_model, dims.d_ff
+def _qwen35_attn_attn_ctx(dims) -> list[tuple[str, tuple[int, ...], str]]:
+    t, d = dims.tokens, dims.d_model
     h, kvh = dims.n_heads, dims.n_kv_heads
-    return PackedLayout.build([
+    return [
         ("rstd_attn", (t,), "fp32"),
         ("qm", (t, dims.attn_dim), "bf16"),
         ("km", (t, dims.kv_dim), "bf16"),
@@ -554,9 +539,90 @@ def qwen35_attn_context_layout(dims: Qwen35Dims) -> PackedLayout:
         ("attn_out", (t, dims.attn_dim), "bf16"),
         ("xo", (t, d), "bf16"),
         ("rstd_ffn", (t,), "fp32"),
+    ]
+
+
+def _dense_mlp_specs(dims) -> list[tuple[str, tuple[int, ...]]]:
+    d, ff = dims.d_model, dims.d_ff
+    return [("w1", (d, ff)), ("w3", (d, ff)), ("w2", (ff, d))]
+
+
+def qwen35_lin_weight_layout(dims: Qwen35Dims, layer: int | None = None) -> PackedLayout:
+    """DeltaNet layer weights. Default policy stores A_log/dt_bias bf16
+    (golden identical — fla receives fp32 casts at call time; bf16-ULP-vs-
+    AdamW caveat recorded in docs/notes/qwen35-design.md); a dtype policy
+    override ("A_log"/"dt_bias" -> fp32) lifts that."""
+    return PackedLayout.build(_param_specs(
+        dims, _qwen35_lin_attn_specs(dims) + _dense_mlp_specs(dims), layer=layer,
+    ))
+
+
+def qwen35_lin_context_layout(dims: Qwen35Dims) -> PackedLayout:
+    """DeltaNet saved context (design §3d): projections + fla's saved
+    outputs; post-conv and q/k l2norms are recomputed in backward."""
+    t, ff = dims.tokens, dims.d_ff
+    return PackedLayout.build(_qwen35_lin_attn_ctx(dims) + [
         ("x1", (t, ff), "bf16"),
         ("x3", (t, ff), "bf16"),
     ])
+
+
+def qwen35_attn_weight_layout(dims: Qwen35Dims, layer: int | None = None) -> PackedLayout:
+    """Gated-attention layer weights: w_q projects [Q_all | gate_all]."""
+    return PackedLayout.build(_param_specs(
+        dims, _qwen35_attn_attn_specs(dims) + _dense_mlp_specs(dims), layer=layer,
+    ))
+
+
+def qwen35_attn_context_layout(dims: Qwen35Dims) -> PackedLayout:
+    """Gated-attention saved context: pre-norm q (qm) + per-head rstds
+    (qwen3 pattern — backward rebuilds post-norm/rope), k likewise, v,
+    pre-sigmoid gate, flash outputs, xo, MLP projections."""
+    t, ff = dims.tokens, dims.d_ff
+    return PackedLayout.build(_qwen35_attn_attn_ctx(dims) + [
+        ("x1", (t, ff), "bf16"),
+        ("x3", (t, ff), "bf16"),
+    ])
+
+
+@dataclass(frozen=True)
+class Qwen35MoeDims(Qwen35Dims):
+    """Qwen3.5-MoE dims: the dense hybrid's attention kinds verbatim, the
+    dense SwiGLU replaced by the routed MoE tail (E=256 top-8 F=512 at
+    35B-A3B) + ONE sigmoid-gated shared expert. d_ff aliases d_ff_expert
+    (metadata only); untied embeddings per the 35B config."""
+
+    moe: MoESpec | None = None
+
+
+def qwen35moe_lin_weight_layout(dims: Qwen35MoeDims, layer: int | None = None) -> PackedLayout:
+    from .moe.spec import moe_weight_specs
+
+    return PackedLayout.build(_param_specs(
+        dims, _qwen35_lin_attn_specs(dims) + moe_weight_specs(dims, dims.moe),
+        layer=layer,
+    ))
+
+
+def qwen35moe_lin_context_layout(dims: Qwen35MoeDims) -> PackedLayout:
+    from .moe.spec import moe_context_specs
+
+    return PackedLayout.build(_qwen35_lin_attn_ctx(dims) + moe_context_specs(dims, dims.moe))
+
+
+def qwen35moe_attn_weight_layout(dims: Qwen35MoeDims, layer: int | None = None) -> PackedLayout:
+    from .moe.spec import moe_weight_specs
+
+    return PackedLayout.build(_param_specs(
+        dims, _qwen35_attn_attn_specs(dims) + moe_weight_specs(dims, dims.moe),
+        layer=layer,
+    ))
+
+
+def qwen35moe_attn_context_layout(dims: Qwen35MoeDims) -> PackedLayout:
+    from .moe.spec import moe_context_specs
+
+    return PackedLayout.build(_qwen35_attn_attn_ctx(dims) + moe_context_specs(dims, dims.moe))
 
 
 def embed_weight_layout(dims) -> PackedLayout:
