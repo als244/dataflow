@@ -37,8 +37,13 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import time
+
+# stream results as they compute: sweeps run backgrounded/redirected, and
+# block-buffered stdout hides the table until exit
+print = functools.partial(print, flush=True)
 from dataclasses import replace
 
 GIB = 1024**3
