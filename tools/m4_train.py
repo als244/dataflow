@@ -366,6 +366,14 @@ def main() -> None:
         print(f"largest feasible budget: {cand:g} GiB")
 
     rows = []
+    # initial pinned state (weights + zeroed opt/grad, tens of GB at 8B
+    # scale) is budget-INDEPENDENT: create once for the whole sweep instead
+    # of alloc+fill+free per row (~1-2 min/row of pure pinned churn).
+    # NOTE training mutates it, so later rows start from the previous row's
+    # trained state — wall/device/fidelity are unaffected (same shapes and
+    # kernels); per-row LOSSES are no longer fresh-seed comparable.
+    shared_values = fam.initial_values(build_raw(), cfg, backend, seed=11)
+
     for gib in budget_list:
         # QUOTING CONVENTION (Shein, 2026-07-03): sweeps are quoted in DEVICE
         # budget — "28 GiB" means verified device usage <= 28 GiB. In
@@ -436,6 +444,7 @@ def main() -> None:
             report = train(
                 planned.program, cfg, backend, steps=args.steps, seed=11,
                 placement_mode=args.placement, placement=placement,
+                values=shared_values,
             )
         except PlacementError as exc:
             # not packable on this device: keep the SIM side of the row so the
