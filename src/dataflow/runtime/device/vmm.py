@@ -7,8 +7,11 @@ constraint with the CUDA VMM API (design: docs/notes/vmm-slab-design-v1.md;
 microbench: tools/bench_vmm.py — map+setAccess+unmap is 39-52 us per RANGE,
 size-independent, and does not perturb concurrent compute):
 
-- one virtual-address reservation per arena; every object id gets a STABLE
-  virtual range for the arena's lifetime (first touch, 2 MiB aligned);
+- virtual addresses come from growable reservations and are recycled as
+  (VA, handle) SLOTS: a released slot stays mapped ("parked") and any
+  same-size birth ADOPTS it wholesale with zero driver calls — the
+  steady-state path of a shape-stable program. Tags do not own VAs;
+  determinism comes from the deterministic get/put sequence;
 - physical memory is EXACT-SIZE cuMemCreate handles (a handle must be
   mapped whole: the driver rejects sub-range maps — discovered the hard
   way, CUDA_ERROR_NOT_SUPPORTED), free-listed by size and mapped with ONE
@@ -29,7 +32,10 @@ handlers), with ONE exception: a guard event (debug poison memset queued at
 release time). Guarded buffers defer (extents, event) to a reclaim list
 drained lazily; if the same object is re-allocated while its old unmap is
 deferred, it simply gets a FRESH virtual range (VA is free) rather than
-blocking the engine.
+blocking the engine. Slot adoption supersedes per-tag stable VAs: same-
+size siblings dominate rebirth order in practice, so binding VAs to tags
+made almost every reuse pay an unmap+remap (measured: 4,271 steals vs 48
+hits on bs8ga8). Binding VAs to HANDLES makes the same reuse free.
 """
 from __future__ import annotations
 
@@ -89,15 +95,13 @@ class VmmArena:
     _va_cursor: int = 0
     _va_blocks: list = field(default_factory=list)   # (base, size) reservations
     _va_block_end: int = 0
-    _va_of_tag: dict = field(default_factory=dict)       # tag -> (va, span)
-    _free: dict = field(default_factory=dict)            # span -> [handle] (unmapped)
-    _parked: dict = field(default_factory=dict)          # tag -> (va, span, handle) still MAPPED
-    _parked_by_span: dict = field(default_factory=dict)  # span -> [tag] (reclaim order)
+    _free: dict = field(default_factory=dict)            # span -> [handle] (unmapped, no VA)
+    _parked_slots: dict = field(default_factory=dict)    # span -> [(va, handle)] still MAPPED
+    _free_vas: dict = field(default_factory=dict)        # span -> [va] (unmapped ranges)
     _free_bytes: int = 0                                 # bytes cached in _free
     created_bytes: int = 0                               # all live+cached handles
     _live: dict = field(default_factory=dict)            # id(buffer) -> Buffer
     _deferred: list = field(default_factory=list)        # [_Deferred]
-    _deferred_tags: set = field(default_factory=set)
     _prop: object = None
     _access: object = None
     _primary_ctx: object = None
@@ -110,14 +114,12 @@ class VmmArena:
     handle_creates: int = 0
     handle_reflows: int = 0           # releases forced by the budget
     prewarmed: int = 0                # handles pre-created off the hot path
-    park_hits: int = 0                # re-gets served with ZERO driver calls
-    park_steals: int = 0              # parked handle re-mapped under a new tag
+    slot_adoptions: int = 0           # births served with ZERO driver calls
     # host seconds ON THE DISPATCH PATH, by driver-call class
     t_create_s: float = 0.0
     t_destroy_s: float = 0.0
     t_map_s: float = 0.0
     t_unmap_s: float = 0.0
-    va_reassigned: int = 0            # fresh-VA on deferred collision
     reclaim_drains: int = 0
     used_bytes: int = 0
     peak_used_bytes: int = 0
@@ -190,37 +192,26 @@ class VmmArena:
         self._free.setdefault(span, []).append(handle)
         self._free_bytes += span
 
-    def _park(self, tag: object, va: int, span: int, handle) -> None:
-        self._parked[tag] = (va, span, handle)
-        self._parked_by_span.setdefault(span, []).append(tag)
+    def _park_slot(self, va: int, span: int, handle) -> None:
+        self._parked_slots.setdefault(span, []).append((va, handle))
         self._free_bytes += span
 
-    def _unpark_steal(self, span: int):
-        """Unmap the oldest parked handle of this span and hand it over."""
-        tags = self._parked_by_span.get(span)
-        while tags:
-            tag = tags.pop(0)
-            entry = self._parked.pop(tag, None)
-            if entry is None:
-                continue  # stale index entry
-            va, sp, handle = entry
-            self._unmap(va, sp)
-            self._free_bytes -= sp
-            self.park_steals += 1
-            return handle
-        return None
+    def _reclaim_slot(self, span: int):
+        """Unmap the oldest parked slot of this span: naked handle + free VA."""
+        slots = self._parked_slots.get(span)
+        if not slots:
+            return None
+        va, handle = slots.pop(0)
+        self._unmap(va, span)
+        self._free_bytes -= span
+        self._free_vas.setdefault(span, []).append(va)
+        return handle
 
     def _evict_parked_any(self) -> tuple[int, object] | None:
-        """Reclaim the SMALLEST parked handle (unmap; return naked).
-
-        The by-span index accrues STALE tags (park-hits pop _parked but
-        leave the index entry); skip spans whose entries are all stale."""
-        for sp in sorted(self._parked_by_span):
-            if not self._parked_by_span[sp]:
-                continue
-            handle = self._unpark_steal(sp)
-            if handle is not None:
-                return sp, handle
+        """Reclaim the SMALLEST parked slot (unmap; return naked handle)."""
+        for sp in sorted(self._parked_slots):
+            if self._parked_slots[sp]:
+                return sp, self._reclaim_slot(sp)
         return None
 
     def _destroy_handle(self, span: int, handle) -> None:
@@ -246,9 +237,6 @@ class VmmArena:
         if cached:
             self._free_bytes -= span
             return cached.pop()
-        stolen = self._unpark_steal(span)   # same-size parked handle: remap
-        if stolen is not None:
-            return stolen
         if self.created_bytes + span > self.pool_bytes:
             self.drain_reclaim()
             cached = self._free.get(span)
@@ -308,26 +296,14 @@ class VmmArena:
         self._va_cursor = base
         self._va_block_end = base + self.va_bytes
 
-    def _va_for(self, tag: object, span: int) -> int:
-        got = self._va_of_tag.get(tag)
-        if got is not None:
-            va, prev_span = got
-            if prev_span != span:
-                raise VmmError(
-                    f"vmm object {tag!r} was assigned {prev_span} bytes of VA but is "
-                    f"requested at {span}: the arena requires shape-stable objects"
-                )
-            if tag in self._deferred_tags:
-                # previous incarnation's unmap is guard-deferred and its VA is
-                # still mapped: hand out a FRESH range instead of blocking
-                self.va_reassigned += 1
-            else:
-                return va
+    def _va_for(self, span: int) -> int:
+        recycled = self._free_vas.get(span)
+        if recycled:
+            return recycled.pop()
         if self._va_cursor + span > self._va_block_end:
-            self._va_grow()  # VA is free; assignments never move
+            self._va_grow()  # VA is free
         va = self._va_cursor
         self._va_cursor = va + span
-        self._va_of_tag[tag] = (va, span)
         return va
 
     # ---------------------------------------------------------------- public
@@ -337,29 +313,24 @@ class VmmArena:
             self._seq += 1
             tag = ("anon", self._seq)
         span = _align(size_bytes)
-        parked = self._parked.pop(tag, None)
-        if parked is not None:
-            va, psp, handle = parked
-            if psp == span:
-                # same object re-born: its handle is STILL MAPPED at its
-                # stable VA — the steady-state path costs zero driver calls
-                self._free_bytes -= span
-                self.park_hits += 1
-                self.used_bytes += span
-                self.peak_used_bytes = max(self.peak_used_bytes, self.used_bytes)
-                self._seq += 1
-                buf = Buffer(
-                    id=f"vmm:{tag}:{self._seq}", location="fast",
-                    size_bytes=size_bytes, ptr=va, raw=("vmm", tag, span, handle),
-                )
-                self._live[id(buf)] = buf
-                return buf
-            # shape changed (shouldn't happen: _va_for enforces) — unmap
-            self._unmap(va, psp)
-            self._free_bytes -= psp
-            self._release_handle(handle, psp)
+        slots = self._parked_slots.get(span)
+        if slots:
+            # adopt a still-mapped same-size slot: ZERO driver calls — the
+            # steady-state path once round one has populated the slot pool
+            va, handle = slots.pop()
+            self._free_bytes -= span
+            self.slot_adoptions += 1
+            self.used_bytes += span
+            self.peak_used_bytes = max(self.peak_used_bytes, self.used_bytes)
+            self._seq += 1
+            buf = Buffer(
+                id=f"vmm:{tag}:{self._seq}", location="fast",
+                size_bytes=size_bytes, ptr=va, raw=("vmm", tag, span, handle),
+            )
+            self._live[id(buf)] = buf
+            return buf
         handle = self._obtain_handle(span)
-        va = self._va_for(tag, span)
+        va = self._va_for(span)
         self._map(va, span, handle)
         self.used_bytes += span
         self.peak_used_bytes = max(self.peak_used_bytes, self.used_bytes)
@@ -384,12 +355,11 @@ class VmmArena:
             # a queued write (debug poison) may still touch this VA: keep the
             # mapping alive until the guard completes, then unmap + reclaim
             self._deferred.append(_Deferred(tag, buffer.ptr, span, handle, guard))
-            self._deferred_tags.add(tag)
             return
-        # PARK: stay mapped at the stable VA — the next incarnation of this
-        # object reuses it with zero driver calls; the budget reclaims parked
-        # handles lazily (same-span steal, or smallest-first eviction)
-        self._park(tag, buffer.ptr, span, handle)
+        # PARK the slot: it stays mapped, and the next same-size birth
+        # adopts it with zero driver calls; the budget reclaims parked
+        # slots lazily, smallest first
+        self._park_slot(buffer.ptr, span, handle)
 
     def prewarm(self, demand: dict) -> None:
         """Pre-create handles off the hot path from the dry run's exact
@@ -427,8 +397,8 @@ class VmmArena:
         for d in self._deferred:
             if self.event_complete(d.event):
                 self._unmap(d.va, d.span)
+                self._free_vas.setdefault(d.span, []).append(d.va)
                 self._release_handle(d.handle, d.span)
-                self._deferred_tags.discard(d.tag)
             else:
                 still.append(d)
         self._deferred = still
@@ -443,17 +413,16 @@ class VmmArena:
             self._unmap(d.va, d.span)
             _dcheck(cu.cuMemRelease(d.handle))
         self._deferred = []
-        self._deferred_tags = set()
         for buf in list(self._live.values()):
             _, _tag, span, handle = buf.raw
             self._unmap(buf.ptr, span)
             _dcheck(cu.cuMemRelease(handle))
         self._live = {}
-        for _tag, (va, span, handle) in list(self._parked.items()):
-            self._unmap(va, span)
-            _dcheck(cu.cuMemRelease(handle))
-        self._parked = {}
-        self._parked_by_span = {}
+        for span, slots in self._parked_slots.items():
+            for va, handle in slots:
+                self._unmap(va, span)
+                _dcheck(cu.cuMemRelease(handle))
+        self._parked_slots = {}
         for lst in self._free.values():
             for h in lst:
                 _dcheck(cu.cuMemRelease(h))

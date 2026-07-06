@@ -45,31 +45,35 @@ def test_stable_va_and_value_integrity(backend):
         va_first = b1.ptr
         arena.put(b1)
 
-        # same object returns at the SAME va; fresh physical (no stale reuse
-        # guarantee is claimed — only that writes land and read back)
+        # a same-size re-birth ADOPTS the parked slot (zero driver calls):
+        # same va here because W_0's own slot is the only 3 MiB slot parked
         b2 = arena.get("W_0", 3 * MB)
-        assert b2.ptr == va_first
+        assert b2.ptr == va_first and arena.slot_adoptions == 1
         v2 = torch_view(b2, (3 * MB // 4,), torch.float32)
         v2.fill_(-2.0)
         torch.cuda.synchronize()
         assert float(v2[0]) == -2.0
         arena.put(b2)
 
-        # different object, different va
+        # a different tag of the same size adopts the SAME slot — VAs
+        # belong to slots, not tags
         b3 = arena.get("A_0_0_0", 3 * MB)
-        assert b3.ptr != va_first
+        assert b3.ptr == va_first
         arena.put(b3)
     finally:
         arena.close()
 
 
-def test_shape_stability_enforced(backend):
+def test_size_change_takes_new_slot(backend):
+    # tags no longer own VAs: a size change simply uses a different slot
     arena = make_arena(backend)
     try:
         b = arena.get("W_0", 2 * MB)
+        va0 = b.ptr
         arena.put(b)
-        with pytest.raises(VmmError, match="shape-stable"):
-            arena.get("W_0", 4 * MB)
+        b2 = arena.get("W_0", 4 * MB)
+        assert b2.ptr != va0
+        arena.put(b2)
     finally:
         arena.close()
 
@@ -121,10 +125,11 @@ def test_guard_deferred_reclaim_and_fresh_va(backend):
         b.guard_event = backend.record_event(compute)
         arena.put(b)  # guard may be pending -> deferred (either way is legal)
 
-        # immediate re-get of the same tag: never blocks; fresh VA if deferred
+        # immediate re-get of the same tag: never blocks; the deferred slot
+        # is untouchable so a fresh/other slot serves the birth
         b2 = arena.get("A", 2 * MB)
         if arena._deferred:
-            assert b2.ptr != va0 and arena.va_reassigned == 1
+            assert b2.ptr != va0
         torch.cuda.synchronize()
         arena.drain_reclaim()
         assert not arena._deferred
@@ -150,23 +155,24 @@ def test_pool_exhaustion_is_loud(backend):
 def test_parked_reuse_and_eviction_accounting(backend):
     arena = make_arena(backend, cap=8 * MB, headroom=0)
     try:
-        # park then re-get the SAME tag: zero driver calls, same VA
+        # park then re-get: zero driver calls, slot adopted
         b = arena.get("A", 2 * MB)
         va = b.ptr
         arena.put(b)
         maps_before = arena.maps
         b2 = arena.get("A", 2 * MB)
-        assert b2.ptr == va and arena.maps == maps_before and arena.park_hits == 1
+        assert b2.ptr == va and arena.maps == maps_before and arena.slot_adoptions == 1
         arena.put(b2)
 
-        # fill the pool with OTHER tags; the parked "A" must be reclaimed
-        # (steal or eviction) without breaking the byte accounting
+        # fill the pool with OTHER tags: every birth adopts the freed slot
+        # or maps a fresh one; accounting must hold at full occupancy
         held = []
         for i in range(arena.pool_bytes // (2 * MB)):
             held.append(arena.get(f"z{i}", 2 * MB))
         assert arena.used_bytes == arena.pool_bytes
         assert arena.created_bytes <= arena.pool_bytes
-        assert arena._free_bytes == 0 and not arena._parked
+        assert arena._free_bytes == 0
+        assert not any(arena._parked_slots.values())
         for b in held:
             arena.put(b)
         assert arena.used_bytes == 0
