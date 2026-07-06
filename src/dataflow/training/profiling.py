@@ -48,7 +48,11 @@ def _signature(task: TaskSpec, sizes: dict[str, int]) -> tuple:
     )
 
 
-def thermal_soak(seconds: float = 10.0) -> None:
+def thermal_soak(seconds: float = 1.0) -> None:
+    # 1s default (was 10): with the PCIe contender on, profiling itself
+    # keeps the die busy, so the soak only needs to lift clocks off idle
+    # before the FIRST signature; validated by comparing per-signature
+    # medians at soak=1 vs soak=10 (see commit).
     """Pull the GPU to sustained-load clocks before any timing: back-to-back
     large GEMMs with no host syncs in the loop. Without this, measurements
     ride the transient boost window and under-price real training steps."""
@@ -78,9 +82,15 @@ class _PcieContender:
     idle-bus profiling -> tasks +5..7% slower in-run; SATURATED bidi
     contention (this mode) -> tasks 3..6% FASTER in-run, i.e. the bound
     from the other side (the real bus duty cycle was ~34%/21%, not 100%).
-    Default off: the unbiased fix is duty-cycle-matched contention (2-pass:
-    plan -> re-profile at the plan's duty cycle), not yet built. Scheduling
-    fidelity is unaffected either way (replay gap ~0.4%)."""
+    DEFAULT ON (Shein, 2026-07-06): between the two available biases,
+    saturated contention is the better default — the error is smaller
+    (+3..6% vs -5..-7% per task) and CONSERVATIVE (sim under-promises,
+    real over-delivers), and the planner internalizes contention, which
+    the M5.2 findings showed is the direction reality rewards (recompute
+    keeps winning at generous budgets BECAUSE it avoids unpriced
+    contention). The unbiased fix remains duty-cycle-matched contention
+    (2-pass: plan -> re-profile at the plan's duty cycle), not yet built.
+    Scheduling fidelity is unaffected either way (replay gap ~0.4%)."""
 
     CHUNK = 256 * 1024 * 1024
 
@@ -114,8 +124,8 @@ def profile_program(
     *,
     warmup: int = 2,
     repeats: int = 9,
-    soak_seconds: float = 10.0,
-    contend_pcie: bool = False,
+    soak_seconds: float = 1.0,
+    contend_pcie: bool = True,
     int32_fill: int = 0,
 ) -> dict[tuple, TaskProfile]:
     """Measure every unique task signature on the real device."""
@@ -266,8 +276,8 @@ def load_or_profile(
         "signatures": signatures,
         "kernel_set": kernel_set or {},
         "device": torch.cuda.get_device_name() if torch.cuda.is_available() else "cpu",
-        "soak_seconds": kwargs.get("soak_seconds", 10.0),
-        "contend_pcie": kwargs.get("contend_pcie", False),
+        "soak_seconds": kwargs.get("soak_seconds", 1.0),
+        "contend_pcie": kwargs.get("contend_pcie", True),
         "repeats": kwargs.get("repeats", 9),
         "torch": torch.__version__,
         "code_rev": PROFILE_CACHE_REV,
