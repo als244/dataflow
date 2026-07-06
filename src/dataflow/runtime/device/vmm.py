@@ -107,6 +107,12 @@ class VmmArena:
     maps: int = 0
     handle_creates: int = 0
     handle_reflows: int = 0           # releases forced by the budget
+    prewarmed: int = 0                # handles pre-created off the hot path
+    # host seconds ON THE DISPATCH PATH, by driver-call class
+    t_create_s: float = 0.0
+    t_destroy_s: float = 0.0
+    t_map_s: float = 0.0
+    t_unmap_s: float = 0.0
     va_reassigned: int = 0            # fresh-VA on deferred collision
     reclaim_drains: int = 0
     used_bytes: int = 0
@@ -164,9 +170,13 @@ class VmmArena:
     # ------------------------------------------------------- handle pool
 
     def _new_handle(self, span: int):
+        import time
+
         from cuda.bindings import driver as cu
 
+        t0 = time.perf_counter()
         h = _dcheck(cu.cuMemCreate(span, self._prop, 0))
+        self.t_create_s += time.perf_counter() - t0
         self.created_bytes += span
         self.peak_created_bytes = max(self.peak_created_bytes, self.created_bytes)
         self.handle_creates += 1
@@ -177,9 +187,13 @@ class VmmArena:
         self._free_bytes += span
 
     def _destroy_cached(self, span: int, handle) -> None:
+        import time
+
         from cuda.bindings import driver as cu
 
+        t0 = time.perf_counter()
         _dcheck(cu.cuMemRelease(handle))
+        self.t_destroy_s += time.perf_counter() - t0
         self.created_bytes -= span
         self._free_bytes -= span
 
@@ -200,7 +214,7 @@ class VmmArena:
         while self.created_bytes + span > self.pool_bytes:
             victim_span = None
             for sp, lst in self._free.items():
-                if lst and (victim_span is None or sp > victim_span):
+                if lst and (victim_span is None or sp < victim_span):
                     victim_span = sp
             if victim_span is None:
                 pending = sum(d.span for d in self._deferred)
@@ -217,16 +231,24 @@ class VmmArena:
     # ------------------------------------------------------------- map paths
 
     def _map(self, va: int, span: int, handle) -> None:
+        import time
+
         from cuda.bindings import driver as cu
 
+        t0 = time.perf_counter()
         _dcheck(cu.cuMemMap(va, span, 0, handle, 0))
         _dcheck(cu.cuMemSetAccess(va, span, [self._access], 1))
+        self.t_map_s += time.perf_counter() - t0
         self.maps += 1
 
     def _unmap(self, va: int, span: int) -> None:
+        import time
+
         from cuda.bindings import driver as cu
 
+        t0 = time.perf_counter()
         _dcheck(cu.cuMemUnmap(va, span))
+        self.t_unmap_s += time.perf_counter() - t0
 
     def _va_grow(self) -> None:
         from cuda.bindings import driver as cu
@@ -295,6 +317,33 @@ class VmmArena:
             return
         self._unmap(buffer.ptr, span)
         self._release_handle(handle, span)
+
+    def prewarm(self, demand: dict) -> None:
+        """Pre-create handles off the hot path from the dry run's exact
+        per-size demand {(location, size): count}. Largest classes first —
+        they cost the most to create later (page sanitization ~1.9 ms/GiB).
+        Stops at the pool budget; steady-state gets then hit free lists."""
+        want: list[list[int]] = []
+        for (location, size), count in demand.items():
+            if location != "fast":
+                continue
+            want.append([_align(size), count])
+        # round-robin across classes, largest first WITHIN a pass: every
+        # class gets seeded before any class gets its second handle —
+        # largest-till-full starves the small classes and guarantees early
+        # evictions of the expensive big handles
+        want.sort(reverse=True)
+        progressed = True
+        while progressed:
+            progressed = False
+            for entry in want:
+                span, count = entry
+                if count <= 0 or self.created_bytes + span > self.pool_bytes:
+                    continue
+                self._release_handle(self._new_handle(span), span)
+                self.prewarmed += 1
+                entry[1] -= 1
+                progressed = True
 
     def drain_reclaim(self) -> None:
         """Unmap + free every deferred entry whose guard has completed."""

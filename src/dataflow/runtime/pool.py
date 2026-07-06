@@ -262,6 +262,9 @@ class BufferPool:
         """Pre-create direct-regime buffers (e.g. pinned backing) so steady
         state never calls the vendor allocator. Slab-backed locations skip
         this — their single upfront allocation already happened."""
+        if self.vmm is not None and not getattr(self.vmm, "_prewarmed_once", False):
+            self.vmm.prewarm(demand)   # pre-create handles off the hot path
+            self.vmm._prewarmed_once = True
         for (location, size_bytes), count in sorted(demand.items()):
             if location in self.slabs:
                 continue
