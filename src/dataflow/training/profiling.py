@@ -178,6 +178,18 @@ def profile_program(
             )
             executable = resolver(task)
 
+            # Executables may declare a deterministic buffer-seeding hook
+            # (MoE blocks do): valid routing indices in packed contexts —
+            # garbage int32 ctx fields are an illegal memory access in the
+            # gathers — plus seeded float fills so data-dependent routing
+            # costs are near-balanced and REPRODUCIBLE across cache
+            # refreshes (uninitialized logits route everything to K experts,
+            # an anti-conservative distribution-dependent bias).
+            fill = getattr(executable, "profile_fill", None)
+            if fill is not None:
+                fill(ctx)
+                torch.cuda.synchronize()
+
             # workspace: allocator peak delta around one launch
             torch.cuda.synchronize()
             torch.cuda.reset_peak_memory_stats()

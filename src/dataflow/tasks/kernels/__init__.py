@@ -29,11 +29,19 @@ from .registry import (  # noqa: F401
 )
 
 # registration side effects: one module per op family
+# NOTE: adding an op family grows KernelSet.describe() for EVERY resolver,
+# which keys the profile disk cache — registering the moe families was a
+# one-time cache invalidation for all configs (documented, deliberate;
+# import-order-dependent lazy registration would be worse: nondeterministic
+# resolution).
 from . import (  # noqa: F401,E402
     adamw,
     causal_conv,
     cross_entropy,
     gated_rmsnorm,
+    moe_dispatch,
+    moe_grouped_gemm,
+    moe_router,
     rmsnorm,
     rope,
     swiglu,

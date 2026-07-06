@@ -375,13 +375,15 @@ class BlockBwd(_Base):
     def _backward(self, kctx, dy, a, x, w, dx_out, dw, accum: bool) -> None:
         """Template: MLP tail (shared helper, swappable per family) then the
         family's attention part. Kernel-call order unchanged from the
-        pre-split monolith."""
+        pre-split monolith. ``dw``/``accum`` reach ``_mlp_bwd`` beyond the
+        ``acc`` closure because MoE tails hand their stacked expert fields
+        to grouped wgrads directly (create-vs-accumulate inside the op)."""
         acc = self._acc_fn(dw, accum)
         norm_bwd = self._norm_bwd_fn(kctx)
-        dh_mid = self._mlp_bwd(kctx, dy, a, w, acc, norm_bwd)
+        dh_mid = self._mlp_bwd(kctx, dy, a, w, dw, accum, acc, norm_bwd)
         self._attn_bwd(kctx, dh_mid, a, x, w, acc, norm_bwd, dx_out)
 
-    def _mlp_bwd(self, kctx, dy, a, w, acc, norm_bwd):
+    def _mlp_bwd(self, kctx, dy, a, w, dw, accum, acc, norm_bwd):
         return dense_mlp_tail_bwd(
             kctx, self.kernels, dy, a[self.MLP_RESID_FIELD], a["rstd_ffn"],
             a["x1"], a["x3"], w, acc, norm_bwd,
