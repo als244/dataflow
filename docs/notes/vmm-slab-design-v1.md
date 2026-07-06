@@ -182,7 +182,43 @@ mapping (then physical bytes reflow without create/sanitize), or a no-zero
 create flag — worth re-testing on future CUDA releases.
 `DATAFLOW_VMM_HEADROOM_GIB` tunes the cache allowance.
 
-## 9. Gates & rollout
+## 9. Improvement iterations (2026-07-05, after the v1 verdict)
+
+Shein asked for attribution + improvement + the device-normalized fight.
+Three iterations, each measured (dev-24 envelope, static vs vmm):
+
+| iteration | mechanism | bs8ga8 | bs16ga4 | bs32ga2 | qwen35 bs32 |
+|---|---|---|---|---|---|
+| v1 exact-size | map per birth | — | −2.3%* | −2.8% | −1.7% |
+| + smallest-first victims, demand prewarm | cheap creates | −5.6% | −2.3% | −2.8% | **parity @16 ledger** |
+| + tag-bound parking | zero-call re-gets | −7.9% ✗ | −4.2% ✗ | −2.7% | −2.5% |
+| + **slot adoption** (VAs belong to slots) | zero-call same-size births | **−3.0%** | **−0.8%** | **−1.0%** | **−1.5%** |
+
+(*ledger-matched rows for the pre-matrix iterations.)
+
+Key findings along the way:
+- **No implicit device sync**: the cost is host dispatch-path driver calls +
+  device-side page sanitization of FRESH handles contending with
+  bandwidth-bound work. Attributed with per-call-class timers.
+- **Tag-bound parking backfired** (48 hits vs 4,271 steals): same-SIZE
+  siblings dominate rebirth order. Slot adoption (bind VA to the handle,
+  not the object) is the correct inversion — the slab free-list reborn at
+  VA level, zero driver calls per steady-state birth.
+- **--device-gib works in vmm** (ledger = envelope − fixed − scratch −
+  headroom, no extent iteration) and grants +0.4–1.9 GiB ledger over
+  static's derivation. The planner converted it into less recompute ONLY
+  at bs8ga8 (165→128 of 256) — elsewhere recompute sits on the M5.2
+  contention plateau where more memory buys nothing.
+- **Residual floor**: ceiling reflows — at pool==ledger-peak, cross-class
+  evictions destroy+recreate handles every step (creates≈reflows≈300–1,400
+  per 3 steps). Fidelity stays 1.5–5.6% (sim doesn't price driver work).
+
+**Final verdict unchanged in direction, improved in degree**: static stays
+default; vmm is a real opt-in at −0.8..−3.0% wall for the feasibility +
+simplicity wins, best where rounds are few. Re-test on driver updates
+(sub-range map / no-zero create flips it).
+
+## 10. Gates & rollout
 
 1. Unit: arena carve/coalesce/fragmented-map/reclaim-order/stable-VA.
 2. GPU integration: mini + tiny E2E in vmm mode — goldens bit-identical to
