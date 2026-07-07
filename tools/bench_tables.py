@@ -1,9 +1,8 @@
-"""Consolidate *.summary.json (bench- or legacy m4- prefixed) into comparison tables (markdown).
+"""Consolidate *.summary.json files into comparison tables (markdown).
 
 Usage:
-    python tools/bench_tables.py --dir results/m4/fused-v1 > .../README.md
-    python tools/bench_tables.py --compare results/m4/eager-v1 results/m4/fused-v1
-        > results/m4/README.md   # kernel-set A/B (real + sim per cell)
+    python tools/bench_tables.py --dir results/bench/<campaign>/raw --out .../TABLES.md
+    python tools/bench_tables.py --compare <dir_a> <dir_b>   # kernel-set A/B (real + sim per cell)
 """
 from __future__ import annotations
 
@@ -64,7 +63,7 @@ def compare(dir_a: Path, dir_b: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dir", type=Path, default=Path("results/m4"))
+    parser.add_argument("--dir", type=Path, default=Path("artifacts/bench"))
     parser.add_argument("--out", type=Path, default=None,
                         help="write the markdown here instead of stdout")
     parser.add_argument("--compare", nargs=2, type=Path, metavar=("DIR_A", "DIR_B"))
@@ -101,7 +100,7 @@ def _run(args) -> None:
         if "baseline_plain_torch_ms_per_step" in data:
             baselines[data["config"]] = data
 
-    print("# M4 results: llama3-8B full-bf16 training, budget vs throughput\n")
+    print("# Results: llama3-8B full-bf16 training, budget vs throughput\n")
     if kernel_sets and all(k == kernel_sets[0] for k in kernel_sets):
         impls = sorted(set(kernel_sets[0].values()))
         label = "fused-v1" if impls == ["triton"] else "+".join(impls)
@@ -118,7 +117,7 @@ def _run(args) -> None:
     print("static buffer placement (offsets packed offline from plan lifetimes,")
     print("validated against physical VRAM at planning time; 'geom. tax' = packed")
     print("extent / peak concurrent load, the price of contiguous placement) ·")
-    print("steady-state excludes the warm-up step · full methodology in docs/m4-report.md\n")
+    print("steady-state excludes the warm-up step · methodology in docs/benchmarking.md\n")
 
     pretty = {
         "8b": "bs=1, ga=1 (4,096 tokens/step)",
@@ -199,7 +198,7 @@ def _run(args) -> None:
                     cells.append(f"{match[0]['real_tokens_per_s']:.0f}")
             print(f"| {b:g} | " + " | ".join(cells) + " |")
 
-    # correctness at very tight budgets (tools/m4_correctness.py output)
+    # correctness at very tight budgets (tools/pressure_correctness.py output)
     corr_path = args.dir / "correctness.json"
     if corr_path.exists():
         corr = json.loads(corr_path.read_text())

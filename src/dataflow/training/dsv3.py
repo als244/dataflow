@@ -351,7 +351,7 @@ def lower_dsv3(
     shaped = build_shaped_dsv3(
         cfg, hw=hw, recompute_levels=recompute_levels, fast_memory_capacity=fast_memory_capacity,
     )
-    return apply_exact_sizes(shaped, "dsv3-exact-v1", size_of=size_of_factory(dims, fl))
+    return apply_exact_sizes(shaped, "dsv3-exact", size_of=size_of_factory(dims, fl))
 
 
 def initial_values_dsv3(program: Program, cfg: ShapedDsv3Config, backend, *, seed: int = 0):

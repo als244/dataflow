@@ -45,7 +45,7 @@ import time
 # match m4_train's allocator convention: the big-round MoE shapes (bs64ga1:
 # many ~2 GiB tail temporaries) fragment the default allocator and OOM the
 # profiling launch well under capacity — expandable segments fixed exactly
-# this class in the alloc A/B (artifacts/m5/alloc-ab-*)
+# this class in the alloc A/B study
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 # stream results as they compute: sweeps run backgrounded/redirected, and

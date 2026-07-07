@@ -86,7 +86,7 @@ class _PcieContender:
     saturated contention is the better default — the error is smaller
     (+3..6% vs -5..-7% per task) and CONSERVATIVE (sim under-promises,
     real over-delivers), and the planner internalizes contention, which
-    the M5.2 findings showed is the direction reality rewards (recompute
+    profiling showed is the direction reality rewards (recompute
     keeps winning at generous budgets BECAUSE it avoids unpriced
     contention). The unbiased fix remains duty-cycle-matched contention
     (2-pass: plan -> re-profile at the plan's duty cycle), not yet built.

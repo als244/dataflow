@@ -18,7 +18,7 @@ the exact panels used for simulations, and can diff the two without any
 server round-trip.
 
 Usage:
-    python tools/export_measured_run.py --gap-dir artifacts/m4/gap-bs4ga4-18 \
+    python tools/export_measured_run.py --gap-dir artifacts/gap-bs4ga4-18 \
         --meta config=8b-bs4ga4 budget_gib=18 --out bs4ga4-18.measured.json
 """
 from __future__ import annotations

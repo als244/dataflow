@@ -11,7 +11,7 @@ takes an output directory and leaves everything it produces there.
 | `bench_train.py` | Run ONE preset config at one or more envelopes. The workhorse every other tool shells out to. Use directly when iterating on a single cell. |
 | `best_config.py` | The shape oracle: given (family preset, seq_len, seqs/step, envelopes), profile every (bs, ga) divisor shape and sim-rank them per envelope. Use when you don't know the right batch/accum shape. |
 | `bench_campaign.py` | The full matrix: presets x envelopes x placement modes. Orchestrates the oracle + bench_train subprocesses, renders the tables, emits per-cell provenance. Use for any result that will be quoted or committed. |
-| `bench_tables.py` | Legacy per-config table renderer and kernel-set A/B comparisons over old summary pools. Prefer bench_campaign for new work. |
+| `bench_tables.py` | Per-config table renderer and kernel-set A/B comparisons over raw summary directories. Prefer bench_campaign for full matrices. |
 | `bench_moe_kernels.py` | Per-op kernel head-to-heads vs the flextrain reference at target shapes. Kernel work only. |
 | `engine_gate.py` / `pressure_correctness.py` | Engine regression gates, not benchmarks. |
 
@@ -109,6 +109,6 @@ shape gets slower; nothing else changes).
   paces subprocess launches (`--pace-seconds`, default 40).
 - `pytest | tail` reads tail's exit status — use `set -o pipefail` or
   trust the unpiped exit code.
-- Legacy summary pools (`artifacts/m4`, `artifacts/bench`) are scanned
-  by default for resume convenience; any campaign whose numbers will
-  be quoted should use `--no-legacy`.
+- The shared `artifacts/bench` pool is scanned by default for resume
+  convenience; any campaign whose numbers will be quoted should use
+  `--no-legacy` to scope strictly to its own `raw/`.

@@ -244,7 +244,7 @@ def lower_qwen3moe(
     shaped = build_shaped_qwen3moe(
         cfg, hw=hw, recompute_levels=recompute_levels, fast_memory_capacity=fast_memory_capacity,
     )
-    return apply_exact_sizes(shaped, "qwen3moe-exact-v1", size_of=size_of_factory(dims, fl))
+    return apply_exact_sizes(shaped, "qwen3moe-exact", size_of=size_of_factory(dims, fl))
 
 
 def initial_values_qwen3moe(program: Program, cfg: ShapedQwen3MoeConfig, backend, *, seed: int = 0):

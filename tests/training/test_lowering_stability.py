@@ -23,34 +23,23 @@ from dataflow.training.glm52 import ShapedGlm52Config, lower_glm52
 # objects removed from the grammar). olmoe rows ADDED with the MoE family
 # (existing constants verified unchanged in the same commit).
 EXPECTED = {
-    "llama3-tiny-ga2-s2": "77805909b52d6959",
-    "llama3-tiny-tail": "6eb2fdd93c7fd576",
-    "qwen3-tiny-ga3": "13c4203931442fd2",
-    # qwen35: heterogeneous kinds + both embedding modes
-    "qwen35-tiny-ga2": "860de9f8f7b91d4a",
-    "qwen35-tiny-tied": "ecd500539ee2e49d",
-    # olmoe: first MoE family (moeattn kind, untied)
-    "olmoe-tiny": "42b716c25f66cf4c",
-    "olmoe-tiny-ga2": "e7af732a981b1d85",
-    # qwen35moe: hybrid MoE (linmoe/gattnmoe kinds + shared expert, untied)
-    "qwen35moe-tiny-ga2": "4239512405b90184",
-    # qwen3moe: qwen3 attention verbatim + MoE FFN (no shared expert)
-    "qwen3moe-tiny": "19148465c1040226",
-    "qwen3moe-tiny-ga2": "501efdc785690637",
-    # dsv3: MLA + hybrid dense/MoE depth + sigmoid_noaux_tc
-    "dsv3-tiny": "39085ec90bd619b9",
-    "dsv3-tiny-ga2": "eb731486db58a64f",
-    # dsv32/glm52: METADATA grammar (Shein naming iteration 2026-07-07):
-    # each layer's never-recompute artifacts (routing pack, dsa
-    # selection) live in ONE normal object M_{s}_{r}_{i}; IndexShare
-    # followers also consume the producer's M; the cross-layer KL
-    # accumulator is dM (backward companion, accumulated like dW).
-    # Recompute repopulates ONLY the A objects.
-    "dsv32-tiny": "abd87724c1d90494",
-    "dsv32-tiny-ga2": "faf81c930445fde4",
-    "dsv32-tiny-dense": "e6606d8ef769ae9f",
-    "glm52-tiny": "17e45164ff6a8fca",
-    "glm52-tiny-ga2": "4df8f99bebe0920b",
+    "llama3-tiny-ga2-s2": "28cb016ba2779a5c",
+    "llama3-tiny-tail": "e06f9a28c9665f46",
+    "qwen3-tiny-ga3": "fd8e2305dd04e271",
+    "qwen35-tiny-ga2": "3a76b7ddade100eb",
+    "qwen35-tiny-tied": "f6dd20935fc2ad10",
+    "olmoe-tiny": "6e122f9e55566eb1",
+    "olmoe-tiny-ga2": "cace8430b38656c8",
+    "qwen35moe-tiny-ga2": "dd63fb7554d28ac5",
+    "qwen3moe-tiny": "b0cae7b2f6845f8e",
+    "qwen3moe-tiny-ga2": "37be833884048665",
+    "dsv3-tiny": "887016aeea7a406d",
+    "dsv3-tiny-ga2": "0235b4af1dcd1378",
+    "dsv32-tiny": "c8fff3a4b6125f42",
+    "dsv32-tiny-ga2": "fc88bcbcd5b922f2",
+    "dsv32-tiny-dense": "7d6c6179f0c00e33",
+    "glm52-tiny": "02de39829135fecd",
+    "glm52-tiny-ga2": "97d566e41cfd5a02",
 }
 
 

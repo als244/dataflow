@@ -377,7 +377,7 @@ def lower_dsv32(
     shaped = build_shaped_dsv32(
         cfg, hw=hw, recompute_levels=recompute_levels, fast_memory_capacity=fast_memory_capacity,
     )
-    return apply_exact_sizes(shaped, "dsv32-exact-v2",
+    return apply_exact_sizes(shaped, "dsv32-exact",
                              size_of=size_of_factory(dims, fl))
 
 

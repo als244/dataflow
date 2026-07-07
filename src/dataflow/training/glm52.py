@@ -443,7 +443,7 @@ def lower_glm52(
             return 4 * t_tokens * k_sel
         return base_size(oid)
 
-    return apply_exact_sizes(shaped, "glm52-exact-v1", size_of=size_of)
+    return apply_exact_sizes(shaped, "glm52-exact", size_of=size_of)
 
 
 def initial_values_glm52(program: Program, cfg: ShapedGlm52Config, backend, *, seed: int = 0):

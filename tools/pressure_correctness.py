@@ -7,7 +7,7 @@ against the golden eager-torch trajectory. The point: memory pressure
 (offload/prefetch/recompute churn) must not perturb the math at all —
 errors stay at bf16 noise regardless of budget.
 
-Usage: python tools/m4_correctness.py [--out artifacts/m4/correctness.json]
+Usage: python tools/pressure_correctness.py [--out artifacts/correctness.json]
 """
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ POINTS = [
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--out", type=Path, default=Path("artifacts/m4/correctness.json"))
+    parser.add_argument("--out", type=Path, default=Path("artifacts/correctness.json"))
     args = parser.parse_args()
 
     from dataflow.training.llama3 import lower_llama3

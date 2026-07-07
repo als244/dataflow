@@ -222,7 +222,7 @@ def lower_olmoe(
     shaped = build_shaped_olmoe(
         cfg, hw=hw, recompute_levels=recompute_levels, fast_memory_capacity=fast_memory_capacity,
     )
-    return apply_exact_sizes(shaped, "olmoe-exact-v1", size_of=size_of_factory(dims, fl))
+    return apply_exact_sizes(shaped, "olmoe-exact", size_of=size_of_factory(dims, fl))
 
 
 def initial_values_olmoe(program: Program, cfg: ShapedOlmoeConfig, backend, *, seed: int = 0):

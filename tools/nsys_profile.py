@@ -1,6 +1,6 @@
 """Run a training point under Nsight Systems with device metrics + NVTX.
 
-Wraps the exact sweep pipeline (tools/m4_train.py) in `nsys profile` with:
+Wraps the exact sweep pipeline (tools/bench_train.py) in `nsys profile` with:
 
 - ``--trace=cuda,nvtx,osrt`` and ``--cuda-memory-usage=true``
 - ``--gpu-metrics-devices=all`` (SM occupancy/throughput/PCIe counters on
@@ -20,7 +20,7 @@ Wraps the exact sweep pipeline (tools/m4_train.py) in `nsys profile` with:
 Profiles and PCIe measurements come from the disk caches, so the traced
 process spends its time in the part you care about.
 
-Usage (the M4.4 headline point):
+Usage:
     python tools/nsys_profile.py                       # bs8/ga8 @ 24 GiB
     python tools/nsys_profile.py --config 8b-s1k-bs2ga32 --budget 16
     python tools/nsys_profile.py --capture full --stats
@@ -60,7 +60,7 @@ def build_nsys_cmd(args, report: Path) -> list[str]:
             "--env-var=NSYS_NVTX_PROFILER_REGISTER_ONLY=0",
         ]
     cmd += [
-        sys.executable, "tools/m4_train.py",
+        sys.executable, "tools/bench_train.py",
         "--config", args.config,
         "--budgets", f"{args.budget:g}",
         "--steps", str(args.steps),
@@ -97,7 +97,7 @@ def main() -> None:
 
     if shutil.which("nsys") is None:
         sys.exit("nsys not found on PATH (install NVIDIA Nsight Systems)")
-    if not Path("tools/m4_train.py").exists():
+    if not Path("tools/bench_train.py").exists():
         sys.exit("run from the repository root")
 
     args.out.mkdir(parents=True, exist_ok=True)

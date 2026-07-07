@@ -60,8 +60,7 @@ from collections import defaultdict
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-LEGACY_SUMMARY_DIRS = [REPO / "artifacts/bench", REPO / "artifacts/m4"]
-SUMMARY_DIRS = list(LEGACY_SUMMARY_DIRS)  # extended with {out_dir}/raw at runtime
+SUMMARY_DIRS = [REPO / "artifacts/bench"]  # extended with {out_dir}/raw at runtime
 
 
 def load_cells(presets: list[str], allow_illegal: bool) -> dict:
@@ -283,7 +282,7 @@ def main() -> None:
                     help="sleep between invocations (oomd pressure decay)")
     ap.add_argument("--no-legacy", action="store_true",
                     help="scan ONLY {out-dir}/raw for rows (fresh-campaign "
-                         "mode: never fall back to repo-wide artifact pools)")
+                         "mode: never reuse the shared artifacts/bench pool)")
     ap.add_argument("--allow-illegal", action="store_true",
                     help="render envelope-busting rows (flagged) instead of dropping")
     ap.add_argument("--out-dir", default=None,

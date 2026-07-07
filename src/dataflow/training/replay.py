@@ -3,7 +3,7 @@
 Re-simulate a program with every MEASURED duration (tasks and transfers)
 installed as overrides; the gap between the real makespan and that replay's
 makespan isolates pure scheduling/dispatch overhead from all cost-model
-error. This is the number the M2/M4 gates quote.
+error. This is the number the engine gates quote.
 """
 from __future__ import annotations
 

@@ -1,6 +1,6 @@
 """A/B microbench: fla chunk_gated_delta_rule + causal_conv1d at qwen3.5-9B shapes.
 
-Motivated by the M5.2 perf gap (docs/notes/m52-perf-gap-handoff.md). Two
+Motivated by the qwen35 linear-attention perf gap. Two
 candidate explanations for our lin-attn tasks costing more than flextrain's:
 
 1. varlen invocation overhead — we call the kernels as (1, B*T) +
@@ -17,7 +17,7 @@ launch shapes, mirroring src/dataflow/tasks/qwen35_blocks.py invocations
 exactly (contiguity contract included). Run in the `dataflow` env with the
 GPU otherwise idle:
 
-    python tools/bench_qwen35_kernels.py --out artifacts/m5/qwen35-kernel-ab/bench.json
+    python tools/bench_qwen35_kernels.py --out artifacts/qwen35-kernel-ab/bench.json
 """
 from __future__ import annotations
 

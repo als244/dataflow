@@ -176,7 +176,7 @@ Gates, in order:
 ## 6. New model family checklist
 
 (Exercised end-to-end by the qwen3 family — `training/families.py` is the
-registry an addition plugs into; results/m5/qwen3-v1/ records what it took.
+registry an addition plugs into.
 The qwen35 family exercises the harder variants below: heterogeneous
 layer kinds, tied embeddings, third-party fused kernels.)
 

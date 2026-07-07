@@ -14,7 +14,7 @@ for the webapp exporter.
 
 Usage:
     python tools/gap_analysis.py --config 8b-bs4ga4 --budget 18 --steps 3 \
-        --out artifacts/m4/gap-bs4ga4-18
+        --out artifacts/gap-bs4ga4-18
 """
 from __future__ import annotations
 
@@ -48,7 +48,7 @@ def main() -> None:
     parser.add_argument("--contend", action="store_true",
                         help="profile under saturated bidirectional PCIe traffic "
                              "(bounds the cost model from the pessimistic side)")
-    parser.add_argument("--out", type=Path, default=Path("artifacts/m4/gap"))
+    parser.add_argument("--out", type=Path, default=Path("artifacts/gap"))
     args = parser.parse_args()
 
     cfg = CONFIGS[args.config]

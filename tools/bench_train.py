@@ -1,4 +1,4 @@
-"""M4 gate: memory-constrained multi-step llama3 training, swept vs the sim.
+"""Memory-constrained multi-step training bench, swept vs the sim.
 
 Per budget: plan on MEASURED costs (profiled unique tasks + measured PCIe
 bidi bandwidth), run N optimizer steps on the 5090, report steady-state
@@ -24,7 +24,7 @@ from dataclasses import replace
 from pathlib import Path
 
 # Expandable segments measured strictly better on both families (A/B,
-# artifacts/m5/alloc-ab-*): torch reserved collapses to the single-task
+# (alloc A/B study): torch reserved collapses to the single-task
 # allocated floor (qwen35 bs32: 6.95 -> 5.55 GiB vs 5.39 floor), device
 # peak -1.3..-2.0 GiB, wall +1.2%. Env wins if the caller sets it.
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
@@ -87,7 +87,7 @@ CONFIGS = {
         seq_len=1024, batch=8, grad_accum_rounds=8,
     ),
     # fewer/larger rounds: same 65,536 tok/step, 2-4x less per-step weight
-    # re-streaming — the M5.2 findings put the s1k config h2d-bound
+    # re-streaming — profiling puts the s1k config h2d-bound
     "qwen35-9b-s1k-bs16ga4": ShapedQwen35Config.qwen35_9b(
         seq_len=1024, batch=16, grad_accum_rounds=4,
     ),
@@ -286,14 +286,14 @@ def main() -> None:
         help="optimizer task placement in the lowered chain: interleaved "
              "(default; each optimizer fires at its gradient's final mutation, "
              "state streaming overlaps the last backward round) or tail "
-             "(legacy; all optimizers after all rounds — drains transfers "
+             "(all optimizers after all rounds — drains transfers "
              "into a GPU-idle PCIe phase)",
     )
     parser.add_argument(
         "--preplace", choices=["task0", "greedy"], default="task0",
         help="PressureFit t=0 placement: task0 (default; only task 0's "
              "inputs pre-placed, the rest arrive as planned prefetches) or "
-             "greedy (legacy; fills spare capacity — the runtime then pays "
+             "greedy (fills spare capacity — the runtime then pays "
              "the whole set as a synchronous upload before each step)",
     )
     args = parser.parse_args()

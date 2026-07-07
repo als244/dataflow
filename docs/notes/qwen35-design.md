@@ -234,7 +234,7 @@ the tied variant folds both into one leaf.
       undefined dW padding — benign (no field reads padding); the gate
       readback masks padding and compares the model.
 - [x] First sweep (pre-fusion): 1,607 wall tok/s @ 16 GiB / 1,693 @ 20,
-      fidelity 0.82/1.11%, zero evictions (artifacts/m5/qwen35-first).
+      fidelity 0.82/1.11%, zero evictions (artifacts/qwen35-first).
 - [x] Fused-kernel pass: gated_rmsnorm_fwd/bwd + causal_conv1d_silu_fwd/bwd
       registry families (fla fused Triton defaults, eager reference
       fallbacks, DATAFLOW_KERNELS=eager bisection verified). fla's
@@ -251,4 +251,4 @@ the tied variant folds both into one leaf.
       varlen (1, B·T)+cu_seqlens fla/conv calls vs flextrain's dense
       (B, T) — our batching is always uniform so dense is exact. Full
       state + next steps: docs/notes/m52-perf-gap-handoff.md.
-- [ ] Post-fix re-sweep + results/m5/qwen35-v1 promotion.
+- [ ] Post-fix re-sweep + results/bench/qwen35-v1 promotion.

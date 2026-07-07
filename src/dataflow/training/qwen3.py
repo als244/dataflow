@@ -152,7 +152,7 @@ def lower_qwen3(
         cfg, hw=hw, recompute_levels=recompute_levels, fast_memory_capacity=fast_memory_capacity,
     )
     dims, fl = family_layouts(cfg)
-    return apply_exact_sizes(shaped, "qwen3-exact-v1", size_of=size_of_factory(dims, fl))
+    return apply_exact_sizes(shaped, "qwen3-exact", size_of=size_of_factory(dims, fl))
 
 
 def initial_values_qwen3(program: Program, cfg: ShapedQwen3Config, backend, *, seed: int = 0):
