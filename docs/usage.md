@@ -108,3 +108,5 @@ The annotation layer is vendor-portable (`runtime/device/annotate.py`):
 the engine calls a 3-method protocol (`range_push/range_pop/mark`),
 enabled by `DATAFLOW_NVTX=1`. An AMD backend implements the same protocol
 with roctx and the same script structure wraps `rocprofv3`.
+
+For benchmarking (which tool, standard recipes, row semantics, placement modes, profile cache): see [benchmarking.md](benchmarking.md).
