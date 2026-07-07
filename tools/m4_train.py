@@ -43,6 +43,7 @@ from dataflow.training.olmoe import ShapedOlmoeConfig
 from dataflow.training.qwen3 import ShapedQwen3Config
 from dataflow.training.qwen35 import ShapedQwen35Config
 from dataflow.training.qwen35moe import ShapedQwen35MoeConfig
+from dataflow.training.qwen3moe import ShapedQwen3MoeConfig
 from dataflow.training.train_loop import train
 
 GIB = 1024**3
@@ -131,6 +132,20 @@ CONFIGS = {
     # oracle's dev-12 pick (bs32/bs16 infeasible there; the curve's low end)
     "qwen35moe-20l-s1k-bs4ga16": ShapedQwen35MoeConfig.qwen35moe_20l(
         seq_len=1024, batch=4, grad_accum_rounds=16,
+    ),
+    # qwen3moe (Qwen3-30B-A3B family): full 48L is ~183 GiB pinned — over
+    # this host; planning/validation only. 24L (~15.6B, ~94 GiB) is the
+    # perf config (qwen35moe-20l precedent).
+    "qwen3moe-30b": ShapedQwen3MoeConfig.qwen3moe_30b(),
+    "qwen3moe-30b-24l": ShapedQwen3MoeConfig.qwen3moe_30b_24l(),
+    "qwen3moe-30b-24l-s1k-bs16ga4": ShapedQwen3MoeConfig.qwen3moe_30b_24l(
+        seq_len=1024, batch=16, grad_accum_rounds=4,
+    ),
+    "qwen3moe-30b-24l-s1k-bs32ga2": ShapedQwen3MoeConfig.qwen3moe_30b_24l(
+        seq_len=1024, batch=32, grad_accum_rounds=2,
+    ),
+    "qwen3moe-30b-24l-s1k-bs64ga1": ShapedQwen3MoeConfig.qwen3moe_30b_24l(
+        seq_len=1024, batch=64, grad_accum_rounds=1,
     ),
 }
 

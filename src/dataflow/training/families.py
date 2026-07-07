@@ -171,12 +171,40 @@ def _qwen35moe() -> Family:
     )
 
 
+def _qwen3moe() -> Family:
+    from dataflow.tasks.qwen3moe_blocks import build_qwen3moe_resolver
+    from .qwen3moe import (
+        ShapedQwen3MoeConfig,
+        dims_of_qwen3moe,
+        initial_values_qwen3moe,
+        lower_qwen3moe,
+    )
+
+    def golden():
+        from dataflow.models.qwen3moe_reference import GoldenQwen3Moe
+
+        return GoldenQwen3Moe
+
+    # MoE family (aux objective) — block ladder lives in
+    # tests/tasks/test_qwen3moe_math.py (no gradcheck bundle)
+    return Family(
+        name="qwen3moe",
+        config_type=ShapedQwen3MoeConfig,
+        dims_of=dims_of_qwen3moe,
+        lower=lower_qwen3moe,
+        initial_values=initial_values_qwen3moe,
+        build_resolver=build_qwen3moe_resolver,
+        golden=golden,
+    )
+
+
 _FAMILIES: dict[str, Callable[[], Family]] = {
     "llama3": _llama3,
     "qwen3": _qwen3,
     "qwen35": _qwen35,
     "olmoe": _olmoe,
     "qwen35moe": _qwen35moe,
+    "qwen3moe": _qwen3moe,
 }
 _cache: dict[str, Family] = {}
 

@@ -13,6 +13,7 @@ from dataflow.training.olmoe import ShapedOlmoeConfig, lower_olmoe
 from dataflow.training.qwen3 import ShapedQwen3Config, lower_qwen3
 from dataflow.training.qwen35 import ShapedQwen35Config, lower_qwen35
 from dataflow.training.qwen35moe import ShapedQwen35MoeConfig, lower_qwen35moe
+from dataflow.training.qwen3moe import ShapedQwen3MoeConfig, lower_qwen3moe
 
 # Constants last updated DELIBERATELY for the fused head_loss lowering
 # (head_fwd/loss_bwd/head_bwd -> ONE token-chunked task; logits/dlogits
@@ -30,6 +31,9 @@ EXPECTED = {
     "olmoe-tiny-ga2": "eef05ae0081b6dfc",
     # qwen35moe: hybrid MoE (linmoe/gattnmoe kinds + shared expert, untied)
     "qwen35moe-tiny-ga2": "a44e9cf9734a5da7",
+    # qwen3moe: qwen3 attention verbatim + MoE FFN (no shared expert)
+    "qwen3moe-tiny": "886848980dd78436",
+    "qwen3moe-tiny-ga2": "be8b0be9821dc76c",
 }
 
 
@@ -60,6 +64,10 @@ def test_lowered_programs_bit_identical():
         ),
         "qwen35moe-tiny-ga2": _hash(
             lower_qwen35moe(replace(ShapedQwen35MoeConfig.tiny(), grad_accum_rounds=2))
+        ),
+        "qwen3moe-tiny": _hash(lower_qwen3moe(ShapedQwen3MoeConfig.tiny())),
+        "qwen3moe-tiny-ga2": _hash(
+            lower_qwen3moe(replace(ShapedQwen3MoeConfig.tiny(), grad_accum_rounds=2))
         ),
     }
     assert got == EXPECTED, {k: (got[k], EXPECTED[k]) for k in got if got[k] != EXPECTED[k]}

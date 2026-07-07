@@ -398,6 +398,54 @@ def qwen3_context_layout(dims: Qwen3Dims) -> PackedLayout:
 
 
 @dataclass(frozen=True)
+class Qwen3MoeDims(Qwen3Dims):
+    """Qwen3-MoE dimensions (Qwen3-30B-A3B / 235B-A22B): qwen3's attention
+    VERBATIM (per-head qk-norm with (head_dim,) weights, GQA, rope 1e6) —
+    only the FFN changes, to a routed SwiGLU MoE described by ``moe``
+    (E=128, top-8, norm_topk_prob=true -> topk_then_softmax, aux 0.001,
+    NO shared expert, all layers sparse). d_ff aliases d_ff_expert."""
+
+    moe: MoESpec | None = None
+
+
+def qwen3moe_weight_layout(dims: Qwen3MoeDims, layer: int | None = None) -> PackedLayout:
+    from .moe.spec import moe_weight_specs
+
+    d, q, kv, hd = dims.d_model, dims.q_dim, dims.kv_dim, dims.head_dim
+    return PackedLayout.build(_param_specs(dims, [
+        ("attn_norm_w", (d,)),
+        ("wq", (d, q)),
+        ("wk", (d, kv)),
+        ("wv", (d, kv)),
+        ("q_norm_w", (hd,)),
+        ("k_norm_w", (hd,)),
+        ("wo", (q, d)),
+        ("ffn_norm_w", (d,)),
+    ] + moe_weight_specs(dims, dims.moe), layer=layer))
+
+
+def qwen3moe_context_layout(dims: Qwen3MoeDims) -> PackedLayout:
+    """qwen3's save-pre-norm convention with PER-HEAD rstds, plus the MoE
+    tail's routing decision + pre-activations (tasks/moe/spec.py)."""
+    from .moe.spec import moe_context_specs
+
+    t, d, q, kv = dims.tokens, dims.d_model, dims.q_dim, dims.kv_dim
+    h, kvh = dims.n_heads, dims.n_kv_heads
+    return PackedLayout.build([
+        ("rstd_attn", (t,), "fp32"),
+        ("qm", (t, q), "bf16"),
+        ("km", (t, kv), "bf16"),
+        ("rstd_q", (t * h,), "fp32"),
+        ("rstd_k", (t * kvh,), "fp32"),
+        ("v", (t, kv), "bf16"),
+        _lse_spec(dims, h),
+        ("attn_out", (t, q), "bf16"),
+        ("h_mid", (t, d), "bf16"),
+        ("rstd_ffn", (t,), "fp32"),
+    ] + moe_context_specs(dims, dims.moe))
+
+
+@dataclass(frozen=True)
 class Qwen35Dims:
     """Qwen3.5-dense dims: hybrid Gated-DeltaNet + gated-attention layers.
 

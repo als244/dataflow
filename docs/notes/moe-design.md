@@ -1,7 +1,11 @@
 # MoE module design (v1) — the implementation spec
 
 Status: M-B (module + kernels + ladder-1), M-C (olmoe, full ladder), M-D
-(qwen35moe, full ladder) landed. Plan of record:
+(qwen35moe, full ladder), M-F (qwen3moe: Qwen3-30B-A3B / 235B-A22B —
+qwen3 attention verbatim + MOE_STAGES, no shared expert,
+topk_then_softmax, aux 0.001; the lightest plug-in yet: zero new
+attention code, zero dense-family edits, 14-test ladder green first
+run) landed. Plan of record:
 `~/.claude/plans/please-take-your-time-transient-gosling.md`
 (Shein-approved 2026-07-06); reference semantics from `refs/flextrain`
 (reference-only).
