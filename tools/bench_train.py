@@ -613,6 +613,12 @@ def main() -> None:
               f"fixed {fixed / GIB:.2f} + extent "
               f"{report.placement_extent_bytes / GIB:.2f} + torch scratch "
               f"{torch_scratch_peak / GIB:.2f}")
+        env_gib = device_meta[gib][0] if gib in device_meta else None
+        if env_gib is not None and actual / GIB > env_gib + 0.02:
+            print(f"!!! ENVELOPE BUSTED: measured peak {actual / GIB:.2f} GiB "
+                  f"> {env_gib:.0f} GiB — NOT a valid <= {env_gib:.0f} GiB row "
+                  f"(summary carries envelope_ok=False); re-run with "
+                  f"--extent-budget or --placement vmm")
         if gib in device_meta:
             env_b = int(device_meta[gib][0] * GIB)
             print(f"device envelope check: actual peak {actual / GIB:.2f} GiB "
@@ -624,6 +630,11 @@ def main() -> None:
             "planned_budget_gib": eff / GIB,
             **({"vmm": report.vmm_stats} if report.vmm_stats else {}),
             "actual_device_peak_gib": actual / GIB,
+            # post-hoc envelope enforcement: a row whose measured peak
+            # exceeds its envelope is NOT a valid <=N GiB result (found
+            # the hard way: a fragmented glm52 plan ran 17.2 on a "16")
+            "envelope_ok": bool(env_gib is None
+                                or actual / GIB <= env_gib + 0.02),
             "fixed_overhead_gib": fixed / GIB,
             "torch_scratch_peak_gib": torch_scratch_peak / GIB,
             **({"device_envelope_gib": device_meta[gib][0],

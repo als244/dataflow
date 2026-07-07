@@ -399,7 +399,7 @@ class Dsv32DenseBlockBwd(Dsv32MetaState, Dsv32ProfileFill, Dsv3DenseBlockBwd):
                 dq_idx[lo:hi], dk_idx[lo:hi], dwts[lo:hi],
                 n_heads=hi_, head_dim=di, seq_bounds=((0, length),),
             )
-            del iscores, p, sig, d_scores
+            del p, d_scores
         # chain to the four indexer weights (inputs detached)
         dq_pre = torch.empty_like(dq_idx)
         dq3i = dq_idx.view(t, hi_, di)

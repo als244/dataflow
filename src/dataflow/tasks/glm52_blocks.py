@@ -242,14 +242,16 @@ class _Glm52LeaderKL:
             total = p
             total.scatter_add_(-1, local, dm[lo:hi])
             total = total / n
-            sig = torch.softmax(iscores + m, dim=-1)
-            d_scores = (sig - total).masked_fill(~live, 0.0)
+            # in-place trio (workspace audit) — see dsv32 counterpart
+            iscores.add_(m)
+            iscores.sub_(torch.logsumexp(iscores, -1, keepdim=True)).exp_()
+            d_scores = iscores.sub_(total).masked_fill_(~live, 0.0)
             K.dsa_index_bwd(
                 kctx, d_scores, q_idx[lo:hi], k_idx[lo:hi], wts[lo:hi],
                 dq_idx[lo:hi], dk_idx[lo:hi], dwts[lo:hi],
                 n_heads=hi_, head_dim=di, seq_bounds=((0, length),),
             )
-            del iscores, m, p, sig, d_scores, total
+            del m, p, d_scores, total
         # indexer weight chains — identical to dsv32's tail
         self._indexer_chains(kctx, d, w, acc, h1, q_lora_n,
                              dq_idx, dk_idx, dwts, pos, x)
