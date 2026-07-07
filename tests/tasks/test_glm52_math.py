@@ -587,3 +587,20 @@ def test_glm52_interleaving_stress_changes_nothing():
     base = _run()
     jittered = _run(resolver_wrapper=wrapper)
     _assert_same(jittered, base)
+
+
+def test_glm52_frozen_indexer_ablation():
+    """train_indexer=False: model-step matches the frozen golden, the
+    leader indexer fields are BIT-FROZEN across the step, and lowering
+    emits NO dM chain (no KL => no metadata gradient)."""
+    from dataflow.training.families import resolve_family
+
+    cfg = _tiny_cfg(train_indexer=False)
+    fam = resolve_family(cfg)
+    prog = fam.lower(cfg)
+    assert not [o for o in prog.initial_objects if o.id.startswith("dM_")]
+    assert not [oid for task in prog.task_by_id().values()
+                for oid in (task.outputs and [o.id for o in task.outputs] or [])
+                if str(oid).startswith("dM_")]
+    check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
+                     field_atol=_BIAS_ATOL).assert_ok()

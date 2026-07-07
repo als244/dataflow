@@ -467,7 +467,8 @@ class Dsv32DenseBlockBwd(Dsv32MetaState, Dsv32ProfileFill, Dsv3DenseBlockBwd):
             # entirely via update_specials, so not even weight decay runs)
             for name in ("w_idx_q", "w_idx_k", "idx_k_ln_w", "idx_k_ln_b",
                          "w_idx_w"):
-                acc(name, torch.zeros_like(w[name]))
+                if name in w:  # glm52 followers carry no indexer fields
+                    acc(name, torch.zeros_like(w[name]))
         if d.train_indexer:
             self._indexer_kl_bwd(kctx, d, a, x, w, acc, h1, q_lora_n,
                                  q_full, k_full, idx, lse, bounds, pos,
@@ -567,7 +568,8 @@ class _WarmupKLMixin:
         if not d.train_indexer:
             for name in ("w_idx_q", "w_idx_k", "idx_k_ln_w", "idx_k_ln_b",
                          "w_idx_w"):
-                acc(name, torch.zeros_like(w[name]))
+                if name in w:  # glm52 followers carry no indexer fields
+                    acc(name, torch.zeros_like(w[name]))
             return
         t = d.tokens
         bounds = _seq_bounds(d)

@@ -256,10 +256,6 @@ def dims_of_glm52(cfg: ShapedGlm52Config) -> Glm52Dims:
             "glm52 dense warm-up (L^I_multi with full-prefix targets) is "
             "the M-I2b deliverable — sparse correctness lands first"
         )
-    if not cfg.train_indexer:
-        raise NotImplementedError(
-            "glm52 frozen-indexer ablation arrives with M-I2 blocks"
-        )
     return Glm52Dims(
         d_model=cfg.d_model, n_heads=cfg.n_heads,
         q_lora_rank=cfg.q_lora_rank, kv_lora_rank=cfg.kv_lora_rank,
@@ -389,7 +385,9 @@ def build_shaped_glm52(
     dims = dims_of_glm52(cfg)
     shares = [
         MetaShare(producer=ld, consumers=dims.group_members(ld)[1:],
-                  grad_bytes=4 * dims.tokens * dims.index_topk)
+                  # frozen indexer => no KL anywhere => no dM chain
+                  grad_bytes=(4 * dims.tokens * dims.index_topk
+                              if dims.train_indexer else 0))
         for ld in dims.leaders()
         if len(dims.group_members(ld)) > 1
     ]

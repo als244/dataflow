@@ -42,9 +42,21 @@ from dataflow.tasks.mla_reference import mla_qkv_reference
 from dataflow.tasks.moe.reference import moe_mlp_reference, moe_topk_reference
 
 
+_IDX_FIELDS = ("w_idx_q", "w_idx_k", "idx_k_ln_w", "idx_k_ln_b", "w_idx_w")
+
+
 @dataclass
 class GoldenGlm52(GoldenDsv3):
     dims: Glm52Dims  # re-typed
+
+    def _adamw_obj(self, obj, leaves):
+        # frozen indexer: idx fields sit out of AdamW entirely (their
+        # autograd grads are None — scores were detached); followers'
+        # packs simply lack the fields
+        if not getattr(self.dims, "train_indexer", True) and any(
+                n in leaves for n in _IDX_FIELDS):
+            leaves = {k: v for k, v in leaves.items() if k not in _IDX_FIELDS}
+        super()._adamw_obj(obj, leaves)
 
     def block_layout(self, layer: int | None = None) -> PackedLayout:
         if layer is None:
@@ -74,8 +86,11 @@ class GoldenGlm52(GoldenDsv3):
         h1 = ops.rmsnorm_reference(x, w["attn_norm_w"])
         q_lora, q_full, k_full, v_pad = mla_qkv_reference(h1, w, d)
 
+        train_idx = getattr(d, "train_indexer", True)
         if d.role_of(i) == "full":
             scores = dsa_index_scores_reference(h1.detach(), q_lora.detach(), w, d)
+            if not train_idx:
+                scores = scores.detach()
             sel = dsa_topk_reference(scores.detach(), d.index_topk)
             mask = dsa_mask_from_idx(sel, d, t)
             self._group_scores, self._group_mask = scores, mask
@@ -103,7 +118,10 @@ class GoldenGlm52(GoldenDsv3):
                         lg + mask[lo:hi, lo:hi], dim=-1)
                 lo = hi
         n = len(d.group_members(d.leader_of(i)))
-        kl = dsa_indexer_kl_reference(scores, mask, p) / n
+        if train_idx:
+            kl = dsa_indexer_kl_reference(scores, mask, p) / n
+        else:
+            kl = torch.zeros((), device=x.device)
 
         h2 = ops.rmsnorm_reference(h_mid, w["ffn_norm_w"])
         if "w13_experts" not in w:

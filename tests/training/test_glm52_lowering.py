@@ -68,13 +68,15 @@ def test_full_scale_presets_lower():
         assert n_fwd == layers
 
 
-def test_dense_warmup_and_frozen_indexer_rejected_loudly():
+def test_dense_warmup_rejected_frozen_indexer_supported():
     from dataclasses import replace as rep
 
     with pytest.raises(NotImplementedError):
         lower_glm52(rep(ShapedGlm52Config.tiny(), sparse_mode=False))
-    with pytest.raises(NotImplementedError):
-        lower_glm52(rep(ShapedGlm52Config.tiny(), train_indexer=False))
+    # frozen indexer is a SUPPORTED mode (RL post-training consumes
+    # saved selections verbatim): lowers cleanly, emits no dM chain
+    prog = lower_glm52(rep(ShapedGlm52Config.tiny(), train_indexer=False))
+    assert not [o for o in prog.initial_objects if o.id.startswith("dM_")]
 
 
 def test_bad_patterns_rejected():
