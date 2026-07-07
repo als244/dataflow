@@ -87,7 +87,7 @@ class Dsv32ProfileFill(MoEProfileFill):
     are out-of-range scatter targets in the mask rebuild)."""
 
     def profile_fill(self, ctx) -> None:
-        from ..interop import torch_view
+        from .interop import torch_view
 
         cl = self.cl
         names = {f.name for f in cl.fields}
@@ -284,10 +284,7 @@ class Dsv32DenseBlockBwd(Dsv32ProfileFill, Dsv3DenseBlockBwd):
         dq_idx = torch.empty_like(q_idx)
         dk_idx = torch.empty_like(k_idx)
         dwts = torch.empty_like(wts)
-        scale_qk = qk ** -0.5
         hi_, di = d.index_n_heads, d.index_head_dim
-        q3 = q_full.view(t, h, qk)
-        k3 = k_full.view(t, h, qk)
         for lo, hi in bounds:
             length = hi - lo
             # rebuild indexer scores for this sequence
@@ -304,12 +301,13 @@ class Dsv32DenseBlockBwd(Dsv32ProfileFill, Dsv3DenseBlockBwd):
             cols = torch.arange(length, device=x.device).unsqueeze(0)
             m.masked_fill_(cols > rows, float("-inf"))
             live = m == 0
-            # target p: head-summed attention probs from the saved lse
-            p = torch.zeros(length, length, device=x.device)
-            for hh in range(h):
-                lg = (q3[lo:hi, hh].float() @ k3[lo:hi, hh].float().T) * scale_qk
-                p += torch.exp(lg + m - lse[hh, lo:hi].unsqueeze(1))
-            p = p.masked_fill(~live, 0.0)
+            # target p: head-summed masked attention probs from the saved
+            # lse — fused kernel (flash tiling, all heads inside a tile)
+            p = torch.empty(length, length, device=x.device)
+            K.dsa_probs_sum(
+                kctx, q_full, k_full, idx, lse, p,
+                n_heads=h, head_dim=qk, seq_bounds=((lo, hi),),
+            )
             p = p / p.sum(-1, keepdim=True).clamp_min(1e-20)
             sig = torch.softmax(iscores + m, dim=-1)
             d_scores = (sig - p).masked_fill(~live, 0.0)

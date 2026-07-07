@@ -183,3 +183,525 @@ for _op, _fn in (
 ):
     register(_op, "eager", deterministic=True, workspace=internal(_score_hint),
              priority=0, allocates="torch", fn=_fn)
+
+
+# --- triton (sm120 default): masked-flash sparse core + indexer ---------------
+#
+# Selection rides a BITMASK: 64-bit words, one word per (row, 64-col tile)
+# — built from dsa_idx by the caller (dsa_pack_bits). The sparse core is a
+# standard flash tiling (tensor cores, online softmax) that applies the
+# bits as an additive -inf mask per tile: at s4k/k=1024 the sparsity
+# ratio is only 4x, so flash-grade compute on the dense grid beats
+# per-query gather structures (which forfeit tl.dot); index-gather
+# kernels become the win at long context (FlashMLA on sm90+, seam
+# below). Backward is the two-pass flash pattern: row-major dq, column-
+# major dk/dv with exclusive tile ownership — deterministic, no atomics.
+
+try:
+    import triton
+    import triton.language as tl
+except Exception:  # pragma: no cover
+    triton = None
+
+
+def _pack_bits_or(kctx, idx, bits_out, *, seq_bounds):
+    """OR-correct bit packer: one-hot bool (R, L) then 64-bit pack via
+    matmul-free reduction. (R, L) bool at s4k = 16 MB/seq transient."""
+    bits_out.zero_()
+    t = idx.shape[0]
+    device = idx.device
+    for lo, hi in seq_bounds:
+        length = hi - lo
+        r = hi - lo
+        local = (idx[lo:hi].long() - lo).clamp_(0, length - 1)
+        rows = torch.arange(r, device=device).unsqueeze(1)
+        onehot = torch.zeros(r, length, dtype=torch.bool, device=device)
+        onehot.scatter_(1, local, True)
+        # causal re-suppression (pad indices point at future rows)
+        cols = torch.arange(length, device=device).unsqueeze(0)
+        onehot &= cols <= rows
+        words = length // 64 if length % 64 == 0 else length // 64 + 1
+        pad = words * 64 - length
+        if pad:
+            onehot = torch.nn.functional.pad(onehot, (0, pad))
+        shifts = (torch.ones(64, dtype=torch.int64, device=device)
+                  << torch.arange(64, dtype=torch.int64, device=device))
+        packed = (onehot.view(r, words, 64).long() * shifts).sum(-1)
+        bits_out[lo:hi, :words] = packed
+
+
+register("dsa_pack_bits", "eager", deterministic=True,
+         workspace=internal(_score_hint), priority=0, allocates="torch",
+         fn=_pack_bits_or)
+
+
+if triton is not None:
+
+    @triton.jit
+    def _mf_fwd_kernel(q_ptr, k_ptr, v_ptr, bits_ptr, o_ptr, lse_ptr,
+                       L, n_words, scale,
+                       sqt, sqh, skt, skh, svt, svh, sot, soh, slh, slt,
+                       H: tl.constexpr, D: tl.constexpr,
+                       DP: tl.constexpr,
+                       BM: tl.constexpr, BN: tl.constexpr):
+        pid_m = tl.program_id(0)
+        pid_h = tl.program_id(1)
+        rm = pid_m * BM + tl.arange(0, BM)
+        mmask = rm < L
+        rd = tl.arange(0, DP)
+        dmask = rd < D
+        q = tl.load(q_ptr + rm[:, None] * sqt + pid_h * sqh + rd[None, :],
+                    mask=mmask[:, None] & dmask[None, :], other=0.0)
+        m_i = tl.full((BM,), float("-inf"), tl.float32)
+        l_i = tl.zeros((BM,), tl.float32)
+        acc = tl.zeros((BM, DP), tl.float32)
+        hi_n = (pid_m + 1) * BM
+        hi_n = tl.minimum(hi_n, L)
+        for n0 in range(0, hi_n, BN):
+            rn = n0 + tl.arange(0, BN)
+            nmask = rn < L
+            kt = tl.load(k_ptr + rn[:, None] * skt + pid_h * skh + rd[None, :],
+                         mask=nmask[:, None] & dmask[None, :], other=0.0)
+            s = tl.dot(q, tl.trans(kt)) * scale
+            word = tl.load(bits_ptr + rm * n_words + (n0 >> 6),
+                           mask=mmask, other=0)
+            bit = (word[:, None] >> (rn[None, :] - n0)) & 1
+            s = tl.where((bit == 1) & nmask[None, :], s, float("-inf"))
+            m_new = tl.maximum(m_i, tl.max(s, 1))
+            alpha = tl.exp(m_i - m_new)
+            p = tl.exp(s - m_new[:, None])
+            l_i = l_i * alpha + tl.sum(p, 1)
+            vt = tl.load(v_ptr + rn[:, None] * svt + pid_h * svh + rd[None, :],
+                         mask=nmask[:, None] & dmask[None, :], other=0.0)
+            acc = acc * alpha[:, None] + tl.dot(p.to(vt.dtype), vt)
+            m_i = m_new
+        l_safe = tl.where(l_i > 0, l_i, 1.0)
+        o = acc / l_safe[:, None]
+        tl.store(o_ptr + rm[:, None] * sot + pid_h * soh + rd[None, :],
+                 o.to(o_ptr.dtype.element_ty),
+                 mask=mmask[:, None] & dmask[None, :])
+        lse = m_i + tl.log(l_safe)
+        tl.store(lse_ptr + pid_h * slh + rm * slt, lse, mask=mmask)
+
+    @triton.jit
+    def _mf_bwd_dq_kernel(do_ptr, q_ptr, k_ptr, v_ptr, o_ptr, bits_ptr,
+                          lse_ptr, dq_ptr,
+                          L, n_words, scale,
+                          sqt, sqh, skt, skh, svt, svh, sot, soh, slh, slt,
+                          H: tl.constexpr, D: tl.constexpr,
+                          DP: tl.constexpr,
+                          BM: tl.constexpr, BN: tl.constexpr):
+        pid_m = tl.program_id(0)
+        pid_h = tl.program_id(1)
+        rm = pid_m * BM + tl.arange(0, BM)
+        mmask = rm < L
+        rd = tl.arange(0, DP)
+        dmask = rd < D
+        q = tl.load(q_ptr + rm[:, None] * sqt + pid_h * sqh + rd[None, :],
+                    mask=mmask[:, None] & dmask[None, :], other=0.0)
+        do = tl.load(do_ptr + rm[:, None] * sot + pid_h * soh + rd[None, :],
+                     mask=mmask[:, None] & dmask[None, :], other=0.0
+                     ).to(tl.float32)
+        o = tl.load(o_ptr + rm[:, None] * sot + pid_h * soh + rd[None, :],
+                    mask=mmask[:, None] & dmask[None, :], other=0.0
+                    ).to(tl.float32)
+        delta = tl.sum(do * o, 1)
+        lse = tl.load(lse_ptr + pid_h * slh + rm * slt, mask=mmask, other=0.0)
+        dq_acc = tl.zeros((BM, DP), tl.float32)
+        hi_n = tl.minimum((pid_m + 1) * BM, L)
+        for n0 in range(0, hi_n, BN):
+            rn = n0 + tl.arange(0, BN)
+            nmask = rn < L
+            kt = tl.load(k_ptr + rn[:, None] * skt + pid_h * skh + rd[None, :],
+                         mask=nmask[:, None] & dmask[None, :], other=0.0)
+            s = tl.dot(q, tl.trans(kt)) * scale
+            word = tl.load(bits_ptr + rm * n_words + (n0 >> 6),
+                           mask=mmask, other=0)
+            bit = (word[:, None] >> (rn[None, :] - n0)) & 1
+            live = (bit == 1) & nmask[None, :]
+            p = tl.where(live, tl.exp(s - lse[:, None]), 0.0)
+            vt = tl.load(v_ptr + rn[:, None] * svt + pid_h * svh + rd[None, :],
+                         mask=nmask[:, None] & dmask[None, :], other=0.0)
+            dp = tl.dot(do.to(vt.dtype), tl.trans(vt))
+            ds = p * (dp - delta[:, None]) * scale
+            dq_acc += tl.dot(ds.to(kt.dtype), kt)
+        tl.store(dq_ptr + rm[:, None] * sqt + pid_h * sqh + rd[None, :],
+                 dq_acc.to(dq_ptr.dtype.element_ty),
+                 mask=mmask[:, None] & dmask[None, :])
+
+    @triton.jit
+    def _mf_bwd_dkv_kernel(do_ptr, q_ptr, k_ptr, v_ptr, o_ptr, bits_ptr,
+                           lse_ptr, dk_ptr, dv_ptr,
+                           L, n_words, scale,
+                           sqt, sqh, skt, skh, svt, svh, sot, soh, slh, slt,
+                           H: tl.constexpr, D: tl.constexpr,
+                           DP: tl.constexpr,
+                           BM: tl.constexpr, BN: tl.constexpr):
+        pid_n = tl.program_id(0)
+        pid_h = tl.program_id(1)
+        rn = pid_n * BN + tl.arange(0, BN)
+        nmask = rn < L
+        rd = tl.arange(0, DP)
+        dmask = rd < D
+        kt = tl.load(k_ptr + rn[:, None] * skt + pid_h * skh + rd[None, :],
+                     mask=nmask[:, None] & dmask[None, :], other=0.0)
+        vt = tl.load(v_ptr + rn[:, None] * svt + pid_h * svh + rd[None, :],
+                     mask=nmask[:, None] & dmask[None, :], other=0.0)
+        dk_acc = tl.zeros((BN, DP), tl.float32)
+        dv_acc = tl.zeros((BN, DP), tl.float32)
+        for m0 in range(pid_n * BN, L, BM):
+            rm = m0 + tl.arange(0, BM)
+            mmask = rm < L
+            q = tl.load(q_ptr + rm[:, None] * sqt + pid_h * sqh + rd[None, :],
+                        mask=mmask[:, None] & dmask[None, :], other=0.0)
+            do = tl.load(do_ptr + rm[:, None] * sot + pid_h * soh + rd[None, :],
+                         mask=mmask[:, None] & dmask[None, :], other=0.0
+                         ).to(tl.float32)
+            o = tl.load(o_ptr + rm[:, None] * sot + pid_h * soh + rd[None, :],
+                        mask=mmask[:, None] & dmask[None, :], other=0.0
+                        ).to(tl.float32)
+            delta = tl.sum(do * o, 1)
+            lse = tl.load(lse_ptr + pid_h * slh + rm * slt, mask=mmask,
+                          other=0.0)
+            s = tl.dot(q, tl.trans(kt)) * scale
+            word = tl.load(bits_ptr + rm * n_words + ((pid_n * BN) >> 6),
+                           mask=mmask, other=0)
+            bit = (word[:, None] >> (rn[None, :] - pid_n * BN)) & 1
+            live = (bit == 1) & nmask[None, :] & mmask[:, None]
+            p = tl.where(live, tl.exp(s - lse[:, None]), 0.0)
+            dv_acc += tl.dot(tl.trans(p.to(vt.dtype)), do.to(vt.dtype))
+            dp = tl.dot(do.to(vt.dtype), tl.trans(vt))
+            ds = p * (dp - delta[:, None]) * scale
+            dk_acc += tl.dot(tl.trans(ds.to(q.dtype)), q)
+        tl.store(dk_ptr + rn[:, None] * skt + pid_h * skh + rd[None, :],
+                 dk_acc.to(dk_ptr.dtype.element_ty),
+                 mask=nmask[:, None] & dmask[None, :])
+        tl.store(dv_ptr + rn[:, None] * svt + pid_h * svh + rd[None, :],
+                 dv_acc.to(dv_ptr.dtype.element_ty),
+                 mask=nmask[:, None] & dmask[None, :])
+
+    @register("dsa_sparse_attn_fwd", "triton", deterministic=True,
+              workspace=internal(_score_hint),
+              requires=lambda c: c.get("triton"), priority=10,
+              allocates="torch")
+    def _triton_sparse_fwd(kctx, q, kf, vp, idx, out, lse_out, *,
+                           n_heads, head_dim, seq_bounds):
+        t = q.shape[0]
+        BM, BN = 64, 64
+        for lo, hi in seq_bounds:
+            length = hi - lo
+            words = (length + 63) // 64
+            bits = torch.empty(length, words, dtype=torch.int64, device=q.device)
+            _pack_local_bits(idx[lo:hi], lo, length, bits)
+            grid = ((length + BM - 1) // BM, n_heads)
+            _mf_fwd_kernel[grid](
+                q[lo:hi], kf[lo:hi], vp[lo:hi], bits, out[lo:hi],
+                lse_out[:, lo:hi],
+                length, words, head_dim ** -0.5,
+                q.stride(0), head_dim, kf.stride(0), head_dim,
+                vp.stride(0), head_dim, out.stride(0), head_dim,
+                lse_out.stride(0), 1,
+                H=n_heads, D=head_dim, DP=triton.next_power_of_2(head_dim),
+                BM=BM, BN=BN,
+                num_warps=4, num_stages=2,
+            )
+        return out
+
+    def _pack_local_bits(idx_slice, lo, length, bits_out):
+        device = idx_slice.device
+        r = idx_slice.shape[0]
+        local = (idx_slice.long() - lo).clamp_(0, length - 1)
+        rows = torch.arange(r, device=device).unsqueeze(1)
+        onehot = torch.zeros(r, length, dtype=torch.bool, device=device)
+        onehot.scatter_(1, local, True)
+        cols = torch.arange(length, device=device).unsqueeze(0)
+        onehot &= cols <= rows
+        words = bits_out.shape[1]
+        pad = words * 64 - length
+        if pad:
+            onehot = torch.nn.functional.pad(onehot, (0, pad))
+        shifts = (torch.ones(64, dtype=torch.int64, device=device)
+                  << torch.arange(64, dtype=torch.int64, device=device))
+        bits_out.copy_((onehot.view(r, words, 64).long() * shifts).sum(-1))
+
+    @register("dsa_sparse_attn_bwd", "triton", deterministic=True,
+              workspace=internal(_score_hint),
+              requires=lambda c: c.get("triton"), priority=10,
+              allocates="torch")
+    def _triton_sparse_bwd(kctx, d_attn, q, kf, vp, idx, lse,
+                           dq_out, dk_out, dv_out, *,
+                           n_heads, head_dim, seq_bounds):
+        BM, BN = 64, 64
+        # forward outputs are re-derived per sequence for delta = <dO, O>
+        out = torch.empty_like(q)
+        lse_chk = torch.empty_like(lse)
+        _triton_sparse_fwd(kctx, q, kf, vp, idx, out, lse_chk,
+                           n_heads=n_heads, head_dim=head_dim,
+                           seq_bounds=seq_bounds)
+        for lo, hi in seq_bounds:
+            length = hi - lo
+            words = (length + 63) // 64
+            bits = torch.zeros(length, words, dtype=torch.int64, device=q.device)
+            _pack_local_bits(idx[lo:hi], lo, length, bits)
+            grid_m = ((length + BM - 1) // BM, n_heads)
+            _mf_bwd_dq_kernel[grid_m](
+                d_attn[lo:hi], q[lo:hi], kf[lo:hi], vp[lo:hi], out[lo:hi],
+                bits, lse[:, lo:hi], dq_out[lo:hi],
+                length, words, head_dim ** -0.5,
+                q.stride(0), head_dim, kf.stride(0), head_dim,
+                vp.stride(0), head_dim, d_attn.stride(0), head_dim,
+                lse.stride(0), 1,
+                H=n_heads, D=head_dim, DP=triton.next_power_of_2(head_dim),
+                BM=BM, BN=BN,
+                num_warps=4, num_stages=2,
+            )
+            grid_n = ((length + BN - 1) // BN, n_heads)
+            _mf_bwd_dkv_kernel[grid_n](
+                d_attn[lo:hi], q[lo:hi], kf[lo:hi], vp[lo:hi], out[lo:hi],
+                bits, lse[:, lo:hi], dk_out[lo:hi], dv_out[lo:hi],
+                length, words, head_dim ** -0.5,
+                q.stride(0), head_dim, kf.stride(0), head_dim,
+                vp.stride(0), head_dim, d_attn.stride(0), head_dim,
+                lse.stride(0), 1,
+                H=n_heads, D=head_dim, DP=triton.next_power_of_2(head_dim),
+                BM=BM, BN=BN,
+                num_warps=4, num_stages=2,
+            )
+
+    @triton.jit
+    def _idx_scores_kernel(q_ptr, k_ptr, w_ptr, s_ptr,
+                           L, s_stride,
+                           HI: tl.constexpr, DI: tl.constexpr,
+                           DIP: tl.constexpr,
+                           BM: tl.constexpr, BN: tl.constexpr):
+        pid_m = tl.program_id(0)
+        pid_n = tl.program_id(1)
+        rm = pid_m * BM + tl.arange(0, BM)
+        rn = pid_n * BN + tl.arange(0, BN)
+        if pid_n * BN > (pid_m + 1) * BM:  # fully above causal diag
+            return
+        mmask = rm < L
+        nmask = rn < L
+        rd = tl.arange(0, DIP)
+        dmask = rd < DI
+        acc = tl.zeros((BM, BN), tl.float32)
+        for h in range(HI):
+            q = tl.load(q_ptr + rm[:, None] * (HI * DI) + h * DI + rd[None, :],
+                        mask=mmask[:, None] & dmask[None, :], other=0.0)
+            k = tl.load(k_ptr + rn[:, None] * DI + rd[None, :],
+                        mask=nmask[:, None] & dmask[None, :], other=0.0)
+            r = tl.dot(q, tl.trans(k))
+            r = tl.maximum(r, 0.0)
+            w = tl.load(w_ptr + rm * HI + h, mask=mmask, other=0.0)
+            acc += w[:, None] * r
+        causal = rn[None, :] <= rm[:, None]
+        acc = tl.where(causal & nmask[None, :], acc, float("-inf"))
+        tl.store(s_ptr + rm[:, None] * s_stride + rn[None, :], acc,
+                 mask=mmask[:, None])
+
+    @register("dsa_index_scores", "triton", deterministic=True,
+              workspace=internal(_score_hint),
+              requires=lambda c: c.get("triton"), priority=10,
+              allocates="torch")
+    def _triton_index_scores(kctx, q_idx, k_idx, wts, scores_out, *,
+                             n_heads, head_dim, seq_bounds):
+        BM, BN = 64, 64
+        if scores_out.shape[0] != (seq_bounds[-1][1] - seq_bounds[0][0]) \
+                or len(seq_bounds) > 1:
+            scores_out.fill_(float("-inf"))  # cross-sequence blocks
+        for lo, hi in seq_bounds:
+            length = hi - lo
+            s_slice = scores_out[lo:hi, lo:hi] if scores_out.shape[0] != length \
+                else scores_out
+            grid = ((length + BM - 1) // BM, (length + BN - 1) // BN)
+            _idx_scores_kernel[grid](
+                q_idx[lo:hi], k_idx[lo:hi], wts[lo:hi], s_slice,
+                length, s_slice.stride(0),
+                HI=n_heads, DI=head_dim,
+                DIP=triton.next_power_of_2(head_dim), BM=BM, BN=BN,
+                num_warps=4, num_stages=2,
+            )
+
+
+if triton is not None:
+
+    @triton.jit
+    def _idx_bwd_dq_kernel(ds_ptr, q_ptr, k_ptr, w_ptr, dq_ptr, dw_ptr,
+                           L, s_stride,
+                           HI: tl.constexpr, DI: tl.constexpr,
+                           DIP: tl.constexpr,
+                           BM: tl.constexpr, BN: tl.constexpr):
+        # row-major: dq[m,h,:] and dw[m,h] owned by this program — exclusive
+        pid_m = tl.program_id(0)
+        rm = pid_m * BM + tl.arange(0, BM)
+        mmask = rm < L
+        rd = tl.arange(0, DIP)
+        dmask = rd < DI
+        hi_n = tl.minimum((pid_m + 1) * BM, L)
+        for h in range(HI):
+            q = tl.load(q_ptr + rm[:, None] * (HI * DI) + h * DI + rd[None, :],
+                        mask=mmask[:, None] & dmask[None, :], other=0.0)
+            w = tl.load(w_ptr + rm * HI + h, mask=mmask, other=0.0)
+            dq_acc = tl.zeros((BM, DIP), tl.float32)
+            dw_acc = tl.zeros((BM,), tl.float32)
+            for n0 in range(0, hi_n, BN):
+                rn = n0 + tl.arange(0, BN)
+                nmask = rn < L
+                k = tl.load(k_ptr + rn[:, None] * DI + rd[None, :],
+                            mask=nmask[:, None] & dmask[None, :], other=0.0)
+                r = tl.dot(q, tl.trans(k))
+                dI = tl.load(ds_ptr + rm[:, None] * s_stride + rn[None, :],
+                             mask=mmask[:, None] & nmask[None, :], other=0.0)
+                relu_r = tl.maximum(r, 0.0)
+                dw_acc += tl.sum(dI * relu_r, 1)
+                g = tl.where(r > 0, dI * w[:, None], 0.0)
+                dq_acc += tl.dot(g.to(k.dtype), k)
+            tl.store(dq_ptr + rm[:, None] * (HI * DI) + h * DI + rd[None, :],
+                     dq_acc.to(dq_ptr.dtype.element_ty),
+                     mask=mmask[:, None] & dmask[None, :])
+            tl.store(dw_ptr + rm * HI + h, dw_acc, mask=mmask)
+
+    @triton.jit
+    def _idx_bwd_dk_kernel(ds_ptr, q_ptr, k_ptr, w_ptr, dk_ptr,
+                           L, s_stride,
+                           HI: tl.constexpr, DI: tl.constexpr,
+                           DIP: tl.constexpr,
+                           BM: tl.constexpr, BN: tl.constexpr):
+        # column-major: dk[n,:] owned exclusively; heads accumulated inside
+        pid_n = tl.program_id(0)
+        rn = pid_n * BN + tl.arange(0, BN)
+        nmask = rn < L
+        rd = tl.arange(0, DIP)
+        dmask = rd < DI
+        dk_acc = tl.zeros((BN, DIP), tl.float32)
+        for h in range(HI):
+            k = tl.load(k_ptr + rn[:, None] * DI + rd[None, :],
+                        mask=nmask[:, None] & dmask[None, :], other=0.0)
+            for m0 in range(pid_n * BN, L, BM):
+                rm = m0 + tl.arange(0, BM)
+                mmask = rm < L
+                q = tl.load(q_ptr + rm[:, None] * (HI * DI) + h * DI + rd[None, :],
+                            mask=mmask[:, None] & dmask[None, :], other=0.0)
+                w = tl.load(w_ptr + rm * HI + h, mask=mmask, other=0.0)
+                r = tl.dot(q, tl.trans(k))
+                dI = tl.load(ds_ptr + rm[:, None] * s_stride + rn[None, :],
+                             mask=mmask[:, None] & nmask[None, :], other=0.0)
+                g = tl.where(r > 0, dI * w[:, None], 0.0)
+                dk_acc += tl.dot(tl.trans(g.to(q.dtype)), q)
+        tl.store(dk_ptr + rn[:, None] * DI + rd[None, :],
+                 dk_acc.to(dk_ptr.dtype.element_ty),
+                 mask=nmask[:, None] & dmask[None, :])
+
+    @register("dsa_index_bwd", "triton", deterministic=True,
+              workspace=internal(_score_hint),
+              requires=lambda c: c.get("triton"), priority=10,
+              allocates="torch")
+    def _triton_index_bwd(kctx, d_scores, q_idx, k_idx, wts,
+                          dq_out, dk_out, dwts_out, *,
+                          n_heads, head_dim, seq_bounds):
+        BM, BN = 64, 64
+        for lo, hi in seq_bounds:
+            length = hi - lo
+            ds = d_scores[lo:hi, lo:hi] if d_scores.shape[0] != length \
+                else d_scores
+            grid_m = ((length + BM - 1) // BM,)
+            _idx_bwd_dq_kernel[grid_m](
+                ds, q_idx[lo:hi], k_idx[lo:hi], wts[lo:hi],
+                dq_out[lo:hi], dwts_out[lo:hi],
+                length, ds.stride(0),
+                HI=n_heads, DI=head_dim,
+                DIP=triton.next_power_of_2(head_dim), BM=BM, BN=BN,
+                num_warps=4, num_stages=2,
+            )
+            grid_n = ((length + BN - 1) // BN,)
+            _idx_bwd_dk_kernel[grid_n](
+                ds, q_idx[lo:hi], k_idx[lo:hi], wts[lo:hi], dk_out[lo:hi],
+                length, ds.stride(0),
+                HI=n_heads, DI=head_dim,
+                DIP=triton.next_power_of_2(head_dim), BM=BM, BN=BN,
+                num_warps=4, num_stages=2,
+            )
+
+    @triton.jit
+    def _probs_sum_kernel(q_ptr, k_ptr, bits_ptr, lse_ptr, p_ptr,
+                          L, n_words, p_stride, scale,
+                          sqt, sqh, skt, skh, slh, slt,
+                          H: tl.constexpr, D: tl.constexpr,
+                          DP: tl.constexpr,
+                          BM: tl.constexpr, BN: tl.constexpr):
+        # head-summed masked attention probabilities: one (BM,BN) tile per
+        # program, ALL heads accumulated inside — exclusive tile ownership
+        pid_m = tl.program_id(0)
+        pid_n = tl.program_id(1)
+        if pid_n * BN > (pid_m + 1) * BM:
+            return
+        rm = pid_m * BM + tl.arange(0, BM)
+        rn = pid_n * BN + tl.arange(0, BN)
+        mmask = rm < L
+        nmask = rn < L
+        rd = tl.arange(0, DP)
+        dmask = rd < D
+        word = tl.load(bits_ptr + rm * n_words + ((pid_n * BN) >> 6),
+                       mask=mmask, other=0)
+        bit = (word[:, None] >> (rn[None, :] - pid_n * BN)) & 1
+        live = (bit == 1) & mmask[:, None] & nmask[None, :]
+        acc = tl.zeros((BM, BN), tl.float32)
+        for h in range(H):
+            q = tl.load(q_ptr + rm[:, None] * sqt + h * sqh + rd[None, :],
+                        mask=mmask[:, None] & dmask[None, :], other=0.0)
+            k = tl.load(k_ptr + rn[:, None] * skt + h * skh + rd[None, :],
+                        mask=nmask[:, None] & dmask[None, :], other=0.0)
+            s = tl.dot(q, tl.trans(k)) * scale
+            lse = tl.load(lse_ptr + h * slh + rm * slt, mask=mmask, other=0.0)
+            acc += tl.where(live, tl.exp(s - lse[:, None]), 0.0)
+        tl.store(p_ptr + rm[:, None] * p_stride + rn[None, :], acc,
+                 mask=mmask[:, None] & nmask[None, :])
+
+    def _dsa_probs_sum(kctx, q, kf, idx, lse, p_out, *,
+                       n_heads, head_dim, seq_bounds):
+        """Head-summed masked attention probs (t-local (L,L) fp32 per seq)
+        — the indexer KL target's expensive half, at flash-tile speeds."""
+        BM, BN = 64, 64
+        for lo, hi in seq_bounds:
+            length = hi - lo
+            words = (length + 63) // 64
+            bits = torch.empty(length, words, dtype=torch.int64, device=q.device)
+            _pack_local_bits(idx[lo:hi], lo, length, bits)
+            p_slice = p_out[lo:hi, lo:hi] if p_out.shape[0] != length else p_out
+            p_slice.zero_()
+            grid = ((length + BM - 1) // BM, (length + BN - 1) // BN)
+            _probs_sum_kernel[grid](
+                q[lo:hi], kf[lo:hi], bits, lse[:, lo:hi], p_slice,
+                length, words, p_slice.stride(0), head_dim ** -0.5,
+                q.stride(0), head_dim, kf.stride(0), head_dim,
+                lse.stride(0), 1,
+                H=n_heads, D=head_dim, DP=triton.next_power_of_2(head_dim),
+                BM=BM, BN=BN, num_warps=4, num_stages=2,
+            )
+
+    register("dsa_probs_sum", "triton", deterministic=True,
+             workspace=internal(_score_hint),
+             requires=lambda c: c.get("triton"), priority=10,
+             allocates="torch", fn=_dsa_probs_sum)
+
+
+def _eager_probs_sum(kctx, q, kf, idx, lse, p_out, *,
+                     n_heads, head_dim, seq_bounds):
+    t = q.shape[0]
+    scale = head_dim ** -0.5
+    q3 = q.view(t, n_heads, head_dim)
+    k3 = kf.view(t, n_heads, head_dim)
+    for lo, hi in seq_bounds:
+        length = hi - lo
+        p_slice = p_out[lo:hi, lo:hi] if p_out.shape[0] != length else p_out
+        m = _mask_for(idx, lo, hi, lo, hi)
+        acc = torch.zeros(length, length, device=q.device)
+        for hh in range(n_heads):
+            lg = (q3[lo:hi, hh].float() @ k3[lo:hi, hh].float().T) * scale
+            acc += torch.exp(lg + m - lse[hh, lo:hi].unsqueeze(1))
+        p_slice.copy_(acc.masked_fill(m != 0, 0.0))
+
+
+register("dsa_probs_sum", "eager", deterministic=True,
+         workspace=internal(_score_hint), priority=0, allocates="torch",
+         fn=_eager_probs_sum)
