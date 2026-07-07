@@ -201,7 +201,7 @@ class ShapedDsv3Config:
         )
 
     # K2.5 / K2.6 / K2.7-Code: shape-identical to K2 (see kimi_k2
-    # docstring) — named aliases so CONFIGS and campaign notes can say
+    # docstring) — named aliases so CONFIGS and sweep notes can say
     # which model a run models without implying a shape difference.
     kimi_k25 = kimi_k2
     kimi_k26 = kimi_k2

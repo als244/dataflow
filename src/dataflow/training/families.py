@@ -342,7 +342,7 @@ def register_family(name: str, thunk: Callable[[], Family]) -> None:
     ``thunk`` is a zero-arg callable returning a ``Family`` (lazy, so
     registration is import-cheap). External families become visible to
     ``family()`` / ``resolve_family()`` and thereby to every tool
-    (bench_train, best_config, bench_campaign, verify_family). See
+    (bench_train, best_config, bench_frontier, verify_family). See
     docs/extending_external.md.
     """
     if name in _FAMILIES:

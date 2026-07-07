@@ -180,6 +180,6 @@ to hand-write.
   (`final_locations` == initial locations for persistent objects), each
   step needs its own annotated program.
 - The recompute PLANNER — you place recompute tasks yourself (above).
-- Bench tools keyed on presets (`bench_train`/`bench_campaign`) — time
+- Bench tools keyed on presets (`bench_train`/`bench_frontier`) — time
   your own loop; PressureFit's sim makespan still gives you the
   prediction side, and the webapp renders your annotated program.

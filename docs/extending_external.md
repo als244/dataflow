@@ -102,11 +102,11 @@ PY
 python tools/verify_family.py --plugin mypkg.dataflow_plugin \
     --family mymodel --module mypkg/tests/test_mymodel_math.py
 
-# 2. throughput: single cells or a full campaign
+# 2. throughput: single cells or a full sweep
 python tools/bench_train.py --plugin mypkg.dataflow_plugin \
     --config mymodel-mini-s4k-bs8ga2 --device-gib 16 --steps 3 \
     --out artifacts/bench
-python tools/bench_campaign.py --plugin mypkg.dataflow_plugin \
+python tools/bench_frontier.py --plugin mypkg.dataflow_plugin \
     --presets mymodel-mini --seq-tag s4k --device-gib 12,16,20 \
     --shapes oracle --run --no-legacy --out-dir results/bench/mymodel
 
@@ -155,7 +155,7 @@ dataclasses remain the cleaner default.
   builtin-only).
 - Perf: once `register_bench_config` names exist, every bench tool works
   unchanged — including the oracle (`best_config` resolves presets via
-  the registered family's config classmethods) and full campaigns.
+  the registered family's config classmethods) and full sweeps.
 - Profile cache: keyed by task signatures + kernel set, family-agnostic
   — your family profiles into the same cache. If you ship custom
   kernels, their registration names become part of the kernel-set stamp

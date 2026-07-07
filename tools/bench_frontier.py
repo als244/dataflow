@@ -1,7 +1,7 @@
-"""Campaign driver: families x envelopes x placement modes -> mode-pure tables.
+"""Frontier sweep driver: families x envelopes x placement modes -> mode-pure tables.
 
-Reproduces the DSA-round-5 results protocol end to end. One command runs
-(or re-renders) a full benchmark matrix and emits the two mode-pure
+One command runs (or re-renders) a full benchmark matrix — the
+throughput-vs-memory FRONTIER for a set of model presets and emits the two mode-pure
 markdown tables (static / vmm) with per-cell detail:
 
     wall tok/s (sim tok/s) . measured peak GiB . bsXgaY . rc%
@@ -27,8 +27,8 @@ Shape sources (--shapes):
   winner (expensive: runs its own sweep).
 - explicit map: "12:bs4ga4,16:bs8ga2,20:bs8ga2,24:bs16ga1,28:bs16ga1".
 
-Usage (reproduce the dsa-round5 campaign):
-    python tools/bench_campaign.py \
+Usage:
+    python tools/bench_frontier.py \
         --presets dsv3-mini,dsv32-mini,glm52-mini \
         --seq-tag s4k --device-gib 12,16,20,24,28 \
         --placements static,vmm --steps 3 \
@@ -37,7 +37,7 @@ Usage (reproduce the dsa-round5 campaign):
         --out-dir results/bench/dsa-round5
 
 Render-only (rebuild tables from existing artifacts, no GPU):
-    python tools/bench_campaign.py --presets ... --device-gib ... \
+    python tools/bench_frontier.py --presets ... --device-gib ... \
         --placements static,vmm --render-only          # tables to stdout
     (add --out-dir DIR to also write TABLES.md + cells/ there)
 
@@ -197,7 +197,7 @@ def emit_cells(cells, presets, devs, modes, out_dir: Path) -> None:
         measured.update(family=fam, device_envelope_gib=dev,
                         placement_mode=mode, config=c["config"],
                         source_summary=c["summary"],
-                        generated_by="tools/bench_campaign.py")
+                        generated_by="tools/bench_frontier.py")
         (d / "measured.json").write_text(json.dumps(measured, indent=2) + "\n")
         plan = c["row"].get("plan_path")
         if not plan:  # legacy rows: match by planned ledger value
@@ -283,12 +283,12 @@ def main() -> None:
     ap.add_argument("--pace-seconds", type=int, default=40,
                     help="sleep between invocations (oomd pressure decay)")
     ap.add_argument("--no-legacy", action="store_true",
-                    help="scan ONLY {out-dir}/raw for rows (fresh-campaign "
+                    help="scan ONLY {out-dir}/raw for rows (fresh-sweep "
                          "mode: never reuse the shared artifacts/bench pool)")
     ap.add_argument("--allow-illegal", action="store_true",
                     help="render envelope-busting rows (flagged) instead of dropping")
     ap.add_argument("--out-dir", default=None,
-                    help="campaign output directory: TABLES.md, cells/ "
+                    help="sweep output directory: TABLES.md, cells/ "
                          "(measured/plan/program json per cell), raw/ (all "
                          "bench_train output: summaries, plans, webapp "
                          "programs, logs). Omit for stdout tables only.")

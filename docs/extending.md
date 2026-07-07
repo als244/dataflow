@@ -220,10 +220,10 @@ Gates, in order:
 2. `tests/tasks/test_m3_gate.py` style poison-on-free + interleaving-stress
    runs;
 3. throughput: add named configs to `tools/bench_train.py` `CONFIGS`, then
-   run a campaign (`tools/bench_campaign.py --presets <yours> --shapes
+   run a sweep (`tools/bench_frontier.py --presets <yours> --shapes
    oracle --run --no-legacy --out-dir results/bench/<name>`) — shape
    selection, envelope legality (auto-headroom), tables, and per-cell
-   provenance are the campaign's job, not yours. Full protocol:
+   provenance are the sweep's job, not yours. Full protocol:
    `docs/benchmarking.md`. `tools/gap_analysis.py` decomposes any
    real-vs-sim gap; `tools/window_plans.py` checks the step seam if the
    family's shape differs materially from llama.
@@ -388,7 +388,7 @@ What adding a family (e.g. Qwen3) actually touches, in order:
    scale), a `mini` (single-GPU bench scale), and the real-scale preset
    with dims verified against the published HF config (param-count match
    is the acceptance test).
-7. Ladder 3 + gates (§5); campaign for quoted numbers.
+7. Ladder 3 + gates (§5); sweep for quoted numbers.
 
 Variants the qwen35 family (hybrid DeltaNet + gated attention, tied
 embeddings) added to the machinery — reuse, don't reinvent:

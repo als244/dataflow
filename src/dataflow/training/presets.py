@@ -9,7 +9,7 @@ docs/extending_external.md) calls::
 
 bench_train merges these over its builtin CONFIGS at startup, so the
 name works everywhere a builtin config name does (bench_train,
-bench_campaign cells, best_config comparisons).
+bench_frontier cells, best_config comparisons).
 """
 from __future__ import annotations
 

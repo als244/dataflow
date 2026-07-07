@@ -1,7 +1,7 @@
 """Consolidate *.summary.json files into comparison tables (markdown).
 
 Usage:
-    python tools/bench_tables.py --dir results/bench/<campaign>/raw --out .../TABLES.md
+    python tools/bench_tables.py --dir results/bench/<sweep>/raw --out .../TABLES.md
     python tools/bench_tables.py --compare <dir_a> <dir_b>   # kernel-set A/B (real + sim per cell)
 """
 from __future__ import annotations

@@ -9,30 +9,27 @@ memory.
 
 ## Installation
 
-Uses [uv](https://docs.astral.sh/uv/). With a sibling `dataflow_sim`
-checkout next to this repo:
+From your Python environment of choice (3.12+), with a sibling
+`dataflow_sim` checkout next to this repo:
 
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh   # if uv is missing
-uv sync --extra sim --extra cuda                   # creates .venv, installs torch + deps
-uv run pytest -q                                   # verify (GPU tests need a CUDA device)
+uv pip install -e ".[sim,cuda]"
 ```
 
-`--extra sim` pulls the planner/verifier integration (the sibling
-checkout, editable, via `[tool.uv.sources]`); `--extra cuda` pulls the
-real device backend. Plain pip works too: `pip install -e .[sim,cuda]`.
-Every command below runs as `uv run python ...` (or activate `.venv`).
+(`pip install -e ".[sim,cuda]"` works identically. The `sim` extra
+resolves the sibling simulator; `cuda` pulls the real device backend.)
 
 ### Quickstart: benchmark training throughput under tight GPU memory budgets
 
-One command runs a full campaign — models × device-memory budgets at a
-given sequence length and batch size (in sequences per optimizer step) —
-picking each model's best batch/accumulation shape with a fresh
-profiling oracle, enforcing that every measured device peak stays under
-its budget, and rendering the results table with per-cell provenance:
+One command sweeps the throughput-vs-memory frontier — models ×
+device-memory budgets at a given sequence length and batch size (in
+sequences per optimizer step) — picking each model's best
+batch/accumulation shape with a fresh profiling oracle, enforcing that
+every measured device peak stays under its budget, and rendering the
+results table with per-cell provenance:
 
 ```bash
-uv run python tools/bench_campaign.py \
+python tools/bench_frontier.py \
     --presets dsv32-mini,glm52-mini --seq-tag s4k --seqs-per-step 16 \
     --device-gib 12,16,20,24,28 \
     --shapes oracle --run --no-legacy \
@@ -69,30 +66,31 @@ separate CUDA streams, so movement overlaps execution; the engine is
 deterministic and name-agnostic — everything model-specific lives in
 the program and the resolver, not in the engine.
 
-## Memory Planning
+## Memory Planning: PressureFit
 
-Planning turns a bare task chain into an annotated one, in two separable
-stages (each consumes and produces a plain `Program` — see
-[docs/extending_programs.md](docs/extending_programs.md) for the full
-pipeline contract):
-
-1. **Recompute planner** (optional; standard training chains): decides,
-   per layer, whether to keep saved activations or re-derive them in the
-   backward pass, using the program's declared recompute rewrites. The
-   selection is a simulator-verified greedy search — each candidate
-   assignment is re-lowered and priced in `dataflow_sim` on measured task
-   costs before it is accepted.
-2. **PressureFit**: given the (possibly re-lowered) chain and a fast-
-   memory budget, annotates every task's release / offload / prefetch
-   directives so the program executes within budget while keeping
-   transfers overlapped. PressureFit reads only task order, object
-   sizes/lifetimes, and measured costs — it has no model knowledge and
-   works on any Program.
+PressureFit is the GENERAL planning policy: given any bare task chain
+and a fast-memory budget, it annotates every task's release / offload /
+prefetch directives so the program executes within budget while keeping
+transfers overlapped with compute. It reads only task order, object
+sizes/lifetimes, and per-task costs — no model knowledge — so it
+applies unchanged to hand-built programs
+([docs/extending_programs.md](docs/extending_programs.md)).
 
 Task costs come from a profiling pass (each unique task signature is
 measured once and cached), and the simulator's makespan prediction for
 the chosen plan is reported next to every real measurement — the
 sim-vs-real gap is tracked as a first-class fidelity metric.
+
+## Recompute Planning (training workloads)
+
+For DNN training chains specifically, a second planner runs BEFORE
+PressureFit: it decides, per layer, whether to keep saved activations
+or re-derive them in the backward pass, using the recompute rewrites
+the training lowering declares. The selection is a simulator-verified
+greedy search — each candidate assignment is re-lowered and priced in
+`dataflow_sim` on measured task costs before it is accepted. Custom
+(non-training) programs skip this stage and place recompute tasks
+explicitly.
 
 ## Building a Dataflow Program for ML Training
 
@@ -111,27 +109,41 @@ task vocabulary is: forward, recompute, backward, plus embed, head/loss,
 and optimizer tasks. Heterogeneous models get distinct task kinds per
 distinct layer type.
 
-- **Forward** tasks take the layer's input hidden state and parameters,
-  and output the next hidden state plus the saved context `A_i` (and
-  `M_i` where the layer makes discrete choices — MoE routing,
-  sparse-attention index selection).
-- **Recompute** tasks re-derive `A_i` from the same layer input and
-  parameters when the plan chose not to keep it. `M_i` is NEVER
-  recomputed — discrete selections are cheap to store and must be
-  bit-identical in the backward, so recompute repopulates only the
-  float context and consumes the saved decisions.
-- **Backward** tasks take the upstream hidden-state gradient, `A_i`
-  (and `M_i`), parameters, and the layer input, and produce the
-  downstream gradient — creating `dW_i` on the first grad-accumulation
-  round and mutating it on later rounds.
-- **Optimizer** tasks take `dW_i` and mutate `W_i` and `O_i` — one task
-  per layer composes every parameter field's update, with per-field
-  optimizer choice, hyperparameters, and state sizing set by the
-  config's optimizer policy.
+- **Forward** (`block_fwd_{step}_{round}_{layer}`)
+  - inputs: layer input hidden state `x_i`, parameters `W_i`
+    (+ a leader's `M` for glm52's shared selections)
+  - outputs: next hidden state `x_{i+1}`, saved context `A_i`
+    (+ `M_i` where the layer makes discrete choices — MoE routing,
+    sparse-attention index selection)
+  - mutates: —
+- **Recompute** (replaces a dropped `A_i` when the plan chose not to
+  keep it)
+  - inputs: the SAME `x_i` and `W_i` (+ `M_i` — consumed, never
+    re-derived: discrete selections are cheap to store and the
+    backward must see the forward's exact choices bit-identically)
+  - outputs: repopulated `A_i` (float context ONLY)
+  - mutates: —
+- **Backward**
+  - inputs: upstream hidden-state gradient `dy_{i+1}`, `A_i`
+    (+ `M_i`), `W_i`, `x_i`
+  - outputs: downstream gradient `dy_i`; `dW_i` on the FIRST
+    grad-accumulation round
+  - mutates: `dW_i` on later rounds (accumulation)
+- **Optimizer** (one task per layer; composes every parameter field's
+  update, with per-field optimizer choice, hyperparameters, and state
+  sizing set by the config's optimizer policy)
+  - inputs: `W_i`, `dW_i`, `O_i`
+  - outputs: —
+  - mutates: `W_i`, `O_i` in place (a fully stateless assignment drops
+    `O_i` entirely)
+- **Embed / Head+Loss** bracket the chain: embed consumes `tokens` and
+  `W_embed` to produce the first hidden state; the fused head task
+  consumes the last hidden state, `targets`, and `W_head` to produce
+  the loss, the first upstream gradient, and `dW_head`.
 
 Correctness of every family is pinned against isolated plain-autograd
 reference models at three levels (per op, per task, per model step);
-`uv run python tools/verify_family.py --family <name>` runs the whole
+`python tools/verify_family.py --family <name>` runs the whole
 ladder. To add a family — builtin or from your own package — see
 [docs/extending.md](docs/extending.md) and
 [docs/extending_external.md](docs/extending_external.md); for programs

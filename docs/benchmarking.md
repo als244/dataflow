@@ -10,8 +10,8 @@ takes an output directory and leaves everything it produces there.
 |---|---|
 | `bench_train.py` | Run ONE preset config at one or more envelopes. The workhorse every other tool shells out to. Use directly when iterating on a single cell. |
 | `best_config.py` | The shape oracle: given (family preset, seq_len, seqs/step, envelopes), profile every (bs, ga) divisor shape and sim-rank them per envelope. Use when you don't know the right batch/accum shape. |
-| `bench_campaign.py` | The full matrix: presets x envelopes x placement modes. Orchestrates the oracle + bench_train subprocesses, renders the tables, emits per-cell provenance. Use for any result that will be quoted or committed. |
-| `bench_tables.py` | Per-config table renderer and kernel-set A/B comparisons over raw summary directories. Prefer bench_campaign for full matrices. |
+| `bench_frontier.py` | The full matrix: presets x envelopes x placement modes. Orchestrates the oracle + bench_train subprocesses, renders the tables, emits per-cell provenance. Use for any result that will be quoted or committed. |
+| `bench_tables.py` | Per-config table renderer and kernel-set A/B comparisons over raw summary directories. Prefer bench_frontier for full matrices. |
 | `bench_moe_kernels.py` | Per-op kernel head-to-heads vs the flextrain reference at target shapes. Kernel work only. |
 | `engine_gate.py` / `pressure_correctness.py` | Engine regression gates, not benchmarks. |
 
@@ -20,11 +20,11 @@ takes an output directory and leaves everything it produces there.
 One command, reproducible, self-contained:
 
 ```bash
-python tools/bench_campaign.py \
+python tools/bench_frontier.py \
     --presets olmoe-7b --seq-tag s1k --seqs-per-step 64 \
     --device-gib 12,16,20,24,28 \
     --shapes oracle --run --rerun --no-legacy \
-    --steps 3 --out-dir results/bench/<campaign-name>
+    --steps 3 --out-dir results/bench/<sweep-name>
 ```
 
 - `--shapes oracle` runs `best_config` first (fresh profiling of every
@@ -32,7 +32,7 @@ python tools/bench_campaign.py \
   (best legal shape already on disk) or an explicit map
   (`12:bs4ga4,16:bs8ga2,...`).
 - `--rerun --no-legacy` is FRESH-CAMPAIGN mode: re-execute every cell
-  and never render rows from outside this campaign's `raw/`. Without
+  and never render rows from outside this sweep's `raw/`. Without
   them, existing rows are reused (resume mode).
 - Placement defaults to `static`; pass `--placements static,vmm` for a
   mode comparison (shapes are held fixed across modes so the pair
@@ -65,7 +65,7 @@ the ~±0.2 GiB run-to-run torch-scratch variance) and the row re-runs,
 up to twice. There are no hand-tuned leeway constants anywhere; the
 derivation's reserve values are only initial guesses that position the
 first attempt. Rows that still bust carry `envelope_ok=false` and are
-REFUSED by the campaign renderer unless `--allow-illegal` (rendered
+REFUSED by the sweep renderer unless `--allow-illegal` (rendered
 with a warning flag).
 
 Cell format in tables:
@@ -105,10 +105,10 @@ shape gets slower; nothing else changes).
 ## Operational notes
 
 - Back-to-back invocations pin ~50-90 GB of host weights each;
-  systemd-oomd can pressure-kill dense invocation chains. The campaign
+  systemd-oomd can pressure-kill dense invocation chains. The sweep
   paces subprocess launches (`--pace-seconds`, default 40).
 - `pytest | tail` reads tail's exit status — use `set -o pipefail` or
   trust the unpiped exit code.
 - The shared `artifacts/bench` pool is scanned by default for resume
-  convenience; any campaign whose numbers will be quoted should use
+  convenience; any sweep whose numbers will be quoted should use
   `--no-legacy` to scope strictly to its own `raw/`.
