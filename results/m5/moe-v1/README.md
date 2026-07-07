@@ -449,3 +449,44 @@ L_I'; its ~3 ms/seq bwd cost is DSA's legitimate training price).
   long-context regime (128K, k<<L) flips the economics decisively
   toward DSA; on this box at s4k the parity-at-low-memory result is
   the headline.
+
+
+## M-H2 final: dsv32-mini after three kernel rounds (2026-07-07)
+
+Kernel rounds: (1) triton masked-flash + indexer; (2) dead-tile skip,
+ctx-O plumb, tile sweeps, fast pack; (3) NATIVE v_head_dim (no flash
+equal-dims pad anywhere on the dsv32 path), pack-once-per-seq shared
+across bwd kernels, delta computed in dq / reused in dkv; (3.5) topk =
+torch.topk semantics (DeepSeek's model.py rule — the smallest-index pin
+was a MoE convention imported by mistake) + idx-bwd stages=4. Sparse
+fwd 0.40 ms/seq = dense flash parity; DSA total 10.75 -> 5.6 ms/seq/L.
+
+| dev GiB | dsv32 real (shape) | sim | r/s% | fid% | vs dsv3-s4k | eager era |
+|---|---|---|---|---|---|---|
+| 12 | 5,205 (bs4ga4 rc-66) | 4,439 | +17.4 | 0.82 | 0.98x | 2,310 |
+| 16 | 7,369 (bs8ga2 rc-16) | 6,520 | +13.2 | 0.43 | 1.04x | 2,688 |
+| 20 | 8,015 (bs8ga2 rc-14) | 7,025 | +14.3 | 0.56 | 1.05x | 2,772 |
+| 24 | 9,179 (bs16ga1 rc-14) | 7,819 | +17.9 | 3.10 | 1.18x | 2,872 |
+| 28 | 9,766 (bs16ga1 rc-9) | 8,820 | +11.0 | 4.31 | 1.25x | 2,890 |
+
+- 3.4x over the eager round at dev-28; DSA tax vs dense dsv3 collapsed
+  4.2x -> 1.25x top / ~1.0x at 12-20. Raw model FLOPs are EQUAL at s4k
+  (sparse-core savings == indexer + KL additions), so the remaining
+  1.18-1.25x is DSA's extra OPS at high memory where dsv3 streams
+  once: indexer bwd (~1.1 ms/seq, still ~3x off roofline — the ONLY
+  clearly poorly-constructed kernel left; rebuild filed), selection
+  (topk ~0.35 + pack 0.44), KL target (0.27, at roofline).
+- Roofline verdicts: index-scores fwd AT roofline (172 TF/s + write-
+  bound); sparse fwd AT flash parity; probs_sum near; sparse bwd ~1.3x
+  off; index_bwd ~3x off (two deterministic ownership passes both
+  re-derive ReLU scores; fp32 dI reloaded per head; 64^3 dots).
+- Stock-flash/FA answer (Shein's FA4 PR pointer): sm120 GeForce box —
+  flash_attn absent, FA4 targets sm100, SDPA flash caps head_dim 256 /
+  cudnn 128 (probed: MQA 288/576 refuse) -> absorbed-MQA dims can't run
+  on any stock kernel here; and at s4k gather-MQA reads 2.4 GB/seq
+  (head-amortized) vs masked 0.8 GB (query-tile-amortized) — gather
+  wins only at k << L. Long-context + FlashMLA sm90 = the big-machine
+  seam (M-H2b), where the FA4-class path is exactly right.
+- Sim rows stale-conservative (+11..+18%): profile cache did not
+  re-key on the round-3 kernel changes; refreshed on next natural
+  re-profile. fid 3.1/4.3 on the bs16 rows tracks the same staleness.

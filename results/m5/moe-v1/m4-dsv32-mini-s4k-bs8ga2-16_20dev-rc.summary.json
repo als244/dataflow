@@ -21,6 +21,7 @@
     "dsa_sparse_attn_bwd": "triton",
     "dsa_sparse_attn_fwd": "triton",
     "dsa_topk": "eager",
+    "embed_bwd_accum": "triton",
     "gated_rmsnorm_bwd": "fla-fused",
     "gated_rmsnorm_fwd": "fla-fused",
     "moe_aux_lb_grad": "triton",
@@ -53,96 +54,96 @@
     {
       "budget_gib": 16.0,
       "budget_semantics": "device",
-      "planned_budget_gib": 7.741674565710127,
-      "actual_device_peak_gib": 12.917723178863525,
-      "fixed_overhead_gib": 1.46734619140625,
-      "torch_scratch_peak_gib": 3.484375,
+      "planned_budget_gib": 9.974446616135538,
+      "actual_device_peak_gib": 15.905499458312988,
+      "fixed_overhead_gib": 1.47113037109375,
+      "torch_scratch_peak_gib": 3.34765625,
       "device_envelope_gib": 16.0,
       "scratch_reserve_gib": 3.3798828125,
       "placement_mode": "static",
       "extent_budget": false,
-      "sim_ms_per_step": 13864.58,
-      "real_ms_per_step_steady": 11351.67333984375,
-      "sim_tokens_per_s": 4726.865148457436,
-      "real_tokens_per_s": 5773.245761924125,
-      "wall_tokens_per_s": 5764.882303542584,
-      "real_vs_sim_pct": 22.13688312661437,
-      "replay_fidelity_gap_pct": 1.0638270778103294,
+      "sim_ms_per_step": 10050.940875,
+      "real_ms_per_step_steady": 8875.4970703125,
+      "sim_tokens_per_s": 6520.384590363039,
+      "real_tokens_per_s": 7383.924469899298,
+      "wall_tokens_per_s": 7368.9360861844825,
+      "real_vs_sim_pct": 13.243695484044737,
+      "replay_fidelity_gap_pct": 0.4277283245751824,
       "losses": [
         NaN,
         NaN,
         NaN
       ],
-      "peak_fast_gib": 7.737049579620361,
-      "peak_backing_gib": 104.33642578497529,
-      "pinned_host_gib": 104.33679199963808,
+      "peak_fast_gib": 9.861073732376099,
+      "peak_backing_gib": 113.68408561125398,
+      "pinned_host_gib": 119.80542636662722,
       "step_makespans_ms": [
-        11988.2880859375,
-        11361.224609375,
-        11342.1220703125
+        9778.548828125,
+        8882.541015625,
+        8868.453125
       ],
       "step_wall_s": [
-        17.03336185310036,
-        11.377930535934865,
-        11.358353242045268
+        17.874172975076362,
+        8.899301648838446,
+        8.88779793609865
       ],
       "step_slab_overflows": [
         0,
         0,
         0
       ],
-      "placement_extent_gib": 7.966001987457275,
+      "placement_extent_gib": 11.086712837219238,
       "placement_escapes": 0,
       "pressure_evictions": 0,
-      "placement_overhead": 1.0295916945446468,
-      "recompute_chosen": 36
+      "placement_overhead": 1.124290633870741,
+      "recompute_chosen": 16
     },
     {
       "budget_gib": 20.0,
       "budget_semantics": "device",
-      "planned_budget_gib": 14.338905208744109,
-      "actual_device_peak_gib": 19.254099369049072,
-      "fixed_overhead_gib": 1.46734619140625,
-      "torch_scratch_peak_gib": 3.505859375,
+      "planned_budget_gib": 14.675423878245056,
+      "actual_device_peak_gib": 19.883863925933838,
+      "fixed_overhead_gib": 1.47113037109375,
+      "torch_scratch_peak_gib": 3.388671875,
       "device_envelope_gib": 20.0,
       "scratch_reserve_gib": 3.3798828125,
       "placement_mode": "static",
       "extent_budget": false,
-      "sim_ms_per_step": 9827.6881875,
-      "real_ms_per_step_steady": 8706.4404296875,
-      "sim_tokens_per_s": 6668.506239682729,
-      "real_tokens_per_s": 7527.3012581046605,
-      "wall_tokens_per_s": 7513.5086488788465,
-      "real_vs_sim_pct": 12.878371670576572,
-      "replay_fidelity_gap_pct": 0.5279561645256142,
+      "sim_ms_per_step": 9328.9261875,
+      "real_ms_per_step_steady": 8160.490234375,
+      "sim_tokens_per_s": 7025.031464801693,
+      "real_tokens_per_s": 8030.890071277599,
+      "wall_tokens_per_s": 8014.839880240683,
+      "real_vs_sim_pct": 14.318207847405006,
+      "replay_fidelity_gap_pct": 0.5560638866431076,
       "losses": [
         NaN,
         NaN,
         NaN
       ],
-      "peak_fast_gib": 14.280893564224243,
+      "peak_fast_gib": 14.566215753555298,
       "peak_backing_gib": 104.42241120710969,
-      "pinned_host_gib": 117.91387272626162,
+      "pinned_host_gib": 119.80542636662722,
       "step_makespans_ms": [
-        8799.9228515625,
-        8703.7841796875,
-        8709.0966796875
+        8328.603515625,
+        8154.00048828125,
+        8166.97998046875
       ],
       "step_wall_s": [
-        16.449537958949804,
-        8.719792638905346,
-        8.7250531881582
+        16.083510210970417,
+        8.170519498875365,
+        8.18314469885081
       ],
       "step_slab_overflows": [
         0,
         0,
         0
       ],
-      "placement_extent_gib": 14.280893802642822,
+      "placement_extent_gib": 15.024061679840088,
       "placement_escapes": 0,
       "pressure_evictions": 0,
-      "placement_overhead": 1.0000000166949343,
-      "recompute_chosen": 15
+      "placement_overhead": 1.0314320434374342,
+      "recompute_chosen": 14
     }
   ]
 }
