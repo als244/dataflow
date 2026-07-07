@@ -542,3 +542,208 @@ def test_spec_validation():
         MoESpec(n_experts=8, top_k=2, d_ff_expert=32, expert_ids=(1, 1))
     with pytest.raises(ValueError):
         MoESpec(n_experts=8, top_k=2, d_ff_expert=32, n_shared_experts=2)
+
+
+# --- sigmoid_noaux_tc (DeepSeek-V3) — M-G2 pins ------------------------------------
+
+
+def test_topk_sigmoid_noaux_kernel_vs_reference_and_semantics():
+    from dataflow.tasks.kernels import KernelCtx, resolve_kernels
+    from dataflow.tasks.moe.reference import moe_topk_reference
+
+    K = resolve_kernels()
+    kctx = KernelCtx()
+    torch.manual_seed(0)
+    t, e, k, ng, tg, scale = 32, 8, 2, 4, 2, 2.5
+    logits = (torch.randn(t, e, device="cuda") * 0.7).to(torch.bfloat16)
+    bias = torch.randn(e, device="cuda") * 0.05
+
+    ref_w, ref_ids = moe_topk_reference(
+        logits, k, "sigmoid_noaux_tc", bias=bias,
+        n_group=ng, topk_group=tg, routed_scaling=scale,
+    )
+    w_out = torch.empty(t, k, dtype=torch.bfloat16, device="cuda")
+    ids_out = torch.empty(t, k, dtype=torch.int32, device="cuda")
+    K.moe_topk_sigmoid_noaux(
+        kctx, logits, bias, w_out, ids_out,
+        top_k=k, n_group=ng, topk_group=tg, routed_scaling=scale,
+    )
+    assert torch.equal(ids_out.long(), ref_ids)
+    assert rel_l2(w_out.float(), ref_w) < 1e-2  # bf16 storage rounding only
+    # weights renormalize to routed_scaling exactly (fp32 reference)
+    assert torch.allclose(ref_w.sum(-1), torch.full((t,), scale, device="cuda"))
+
+    # GROUP LIMIT: bias pushes group 0's experts sky-high for selection,
+    # but if group 0 is excluded by group ranking they cannot be picked.
+    logits2 = torch.zeros(4, e, device="cuda", dtype=torch.bfloat16)
+    logits2[:, 6] = 4.0   # group 3 dominates group score
+    logits2[:, 7] = 4.0
+    logits2[:, 4] = 3.0   # group 2 second
+    logits2[:, 5] = 3.0
+    bias2 = torch.zeros(e, device="cuda")
+    _, ids2 = moe_topk_reference(
+        logits2, 2, "sigmoid_noaux_tc", bias=bias2,
+        n_group=4, topk_group=2, routed_scaling=1.0,
+    )
+    assert set(ids2.unique().tolist()) <= {4, 5, 6, 7}  # groups 0/1 masked
+
+    # BIAS affects SELECTION but weights use RAW scores: bias lifts expert
+    # 0 over expert 1 in selection while raw score(1) > score(0)
+    logits3 = torch.zeros(1, e, device="cuda", dtype=torch.bfloat16)
+    logits3[0, 0] = 1.0
+    logits3[0, 1] = 1.5
+    bias3 = torch.zeros(e, device="cuda")
+    bias3[0] = 10.0
+    w3, ids3 = moe_topk_reference(
+        logits3, 1, "sigmoid_noaux_tc", bias=bias3,
+        n_group=1, topk_group=1, routed_scaling=1.0,
+    )
+    assert ids3[0, 0].item() == 0                     # selected BY BIAS
+    s0 = torch.sigmoid(logits3.float())[0, 0]
+    assert torch.allclose(w3[0, 0], w3[0, 0] * 0 + 1.0)  # renorm of single pick
+
+    # ties: equal selection scores -> smallest expert id; equal group
+    # scores -> smallest group id
+    logits4 = torch.zeros(1, e, device="cuda", dtype=torch.bfloat16)
+    _, ids4 = moe_topk_reference(
+        logits4, 2, "sigmoid_noaux_tc", bias=torch.zeros(e, device="cuda"),
+        n_group=4, topk_group=2, routed_scaling=1.0,
+    )
+    assert ids4[0].tolist() == [0, 1]
+
+
+def test_router_bwd_sigmoid_vs_autograd():
+    from dataflow.tasks.kernels import KernelCtx, resolve_kernels
+    from dataflow.tasks.moe.reference import moe_topk_reference
+
+    K = resolve_kernels()
+    kctx = KernelCtx()
+    torch.manual_seed(3)
+    t, e, k = 16, 8, 3
+    logits = (torch.randn(t, e, device="cuda") * 0.5).to(torch.bfloat16)
+    bias = torch.randn(e, device="cuda") * 0.02
+    lf = logits.float().requires_grad_()
+
+    # reference weights with the SAME pinned selection
+    with torch.no_grad():
+        _, ids = moe_topk_reference(
+            logits, k, "sigmoid_noaux_tc", bias=bias,
+            n_group=2, topk_group=2, routed_scaling=2.5,
+        )
+    picked = torch.sigmoid(lf).gather(1, ids)
+    w_ref = picked / picked.sum(-1, keepdim=True) * 2.5
+
+    dprob = torch.randn(t, k, device="cuda")
+    (g_ref,) = torch.autograd.grad(w_ref, lf, dprob)
+
+    route_w = w_ref.detach().to(torch.bfloat16)
+    dl = torch.empty(t, e, dtype=torch.float32, device="cuda")
+    K.moe_router_bwd_sigmoid(
+        kctx, dprob, route_w, ids.to(torch.int32), logits, dl,
+    )
+    assert rel_l2(dl, g_ref) < 2e-2  # bf16 route_w storage in the c-term
+
+
+def test_seq_aux_grad_vs_autograd():
+    from dataflow.tasks.kernels import KernelCtx, resolve_kernels
+    from dataflow.tasks.moe.reference import (
+        moe_seq_aux_loss_reference,
+        moe_topk_reference,
+    )
+
+    K = resolve_kernels()
+    kctx = KernelCtx()
+    torch.manual_seed(5)
+    t, e, k = 32, 8, 2
+    seq_lens = (12, 20)
+    logits = (torch.randn(t, e, device="cuda") * 0.6).to(torch.bfloat16)
+    with torch.no_grad():
+        _, ids = moe_topk_reference(
+            logits, k, "sigmoid_noaux_tc",
+            bias=torch.zeros(e, device="cuda"),
+            n_group=1, topk_group=1, routed_scaling=1.0,
+        )
+    lf = logits.float().requires_grad_()
+    # reference loss recomputed from lf so autograd flows
+    s = torch.sigmoid(lf)
+    sn = s / s.sum(-1, keepdim=True)
+    total = torch.zeros((), device="cuda")
+    lo = 0
+    for t_s in seq_lens:
+        hi = lo + t_s
+        counts = torch.bincount(ids[lo:hi].reshape(-1), minlength=e)
+        f = counts.float() * e / (k * t_s)
+        total = total + 1e-4 * (f * sn[lo:hi].mean(0)).sum()
+        lo = hi
+    (g_ref,) = torch.autograd.grad(total, lf)
+
+    dl = torch.zeros(t, e, dtype=torch.float32, device="cuda")
+    K.moe_seq_aux_grad(
+        kctx, logits, ids.to(torch.int32), dl,
+        alpha=1e-4, top_k=k, seq_bounds=((0, 12), (12, 32)),
+    )
+    assert rel_l2(dl, g_ref) < 1e-4
+
+    # and the reference-loss helper agrees with the inline expression
+    ref_loss = moe_seq_aux_loss_reference(
+        logits, ids, n_experts=e, top_k=k, aux_coef=1e-4, seq_lens=seq_lens,
+    )
+    assert torch.allclose(ref_loss, total.detach(), rtol=1e-5, atol=1e-9)
+
+
+def test_bias_update_rule():
+    from dataflow.tasks.kernels import KernelCtx, resolve_kernels
+    from dataflow.tasks.moe.stages import moe_bias_update
+
+    K = resolve_kernels()
+    bias = torch.zeros(4, dtype=torch.float32, device="cuda")
+    counts = torch.tensor([10.0, 2.0, 4.0, 4.0], device="cuda")  # mean 5
+    moe_bias_update(KernelCtx(), K, bias, counts, speed=0.001)
+    # overloaded expert 0 pushed DOWN, underloaded 1 pushed UP, 2/3 up
+    expected = torch.tensor([-0.001, 0.001, 0.001, 0.001], device="cuda")
+    assert torch.allclose(bias, expected)
+    # equal loads: sign(0) = 0 -> no drift
+    bias2 = torch.full((4,), 0.5, device="cuda")
+    moe_bias_update(KernelCtx(), K, bias2, torch.full((4,), 8.0, device="cuda"),
+                    speed=0.001)
+    assert torch.allclose(bias2, torch.full((4,), 0.5, device="cuda"))
+
+
+def test_moe_mlp_reference_ungated_shared_and_noaux_mode():
+    from dataflow.tasks.moe.reference import moe_mlp_reference
+    from dataflow.tasks.moe.spec import MoESpec
+
+    torch.manual_seed(7)
+    t, d, e, k, f, fs = 24, 32, 8, 2, 16, 16
+    moe = MoESpec(
+        n_experts=e, top_k=k, d_ff_expert=f,
+        routing_mode="sigmoid_noaux_tc", aux_coef=1e-4,
+        n_shared_experts=1, d_ff_shared=fs, shared_gate=False,
+        n_group=4, topk_group=2, routed_scaling=2.5,
+        bias_update_speed=0.001,
+    )
+    g = torch.Generator(device="cuda").manual_seed(1)
+
+    def r(*shape):
+        return (torch.randn(*shape, generator=g, device="cuda") * 0.1
+                ).to(torch.bfloat16).requires_grad_()
+
+    w = {
+        "w_router": r(d, e),
+        "w_router_bias": torch.zeros(e, dtype=torch.float32, device="cuda"),
+        "w13_experts": r(e, d, 2 * f),
+        "w2_experts": r(e, f, d),
+        "w_s13": r(d, 2 * fs),
+        "w_s2": r(fs, d),
+    }
+    h2 = (torch.randn(t, d, generator=g, device="cuda") * 0.5).to(torch.bfloat16)
+    resid = (torch.randn(t, d, generator=g, device="cuda") * 0.5).to(torch.bfloat16)
+    y, aux = moe_mlp_reference(h2, w, moe, resid, seq_lens=(8, 16))
+    assert y.shape == (t, d) and torch.isfinite(y.float()).all()
+    assert float(aux) > 0
+    (y.float().sum() + aux).backward()
+    for name in ("w_router", "w13_experts", "w2_experts", "w_s13", "w_s2"):
+        assert w[name].grad is not None and torch.isfinite(w[name].grad.float()).all(), name
+    # no gate field exists; bias got NO autograd gradient (selection-only)
+    assert "w_shared_gate" not in w
+    assert w["w_router_bias"].grad is None

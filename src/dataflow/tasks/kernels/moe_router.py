@@ -90,6 +90,83 @@ register("moe_aux_lb_grad", "eager", deterministic=True, allocates="torch",
          workspace=internal(_row_hint), priority=0, fn=_eager_aux_lb_grad)
 
 
+# --- sigmoid_noaux_tc (DeepSeek-V3) — SEPARATE op names ------------------------
+# The triton moe_topk_softmax/moe_router_bwd kernels dispatch on a runtime
+# ``mode`` argument they do not implement for this family; distinct op
+# names keep resolution honest (eager-only v1 — the sort-based eager
+# router measured 0.29 ms at E=256/t=16k, off the critical path; triton
+# ports are a filed follow-up if profiles ever disagree).
+
+
+def _eager_topk_sigmoid_noaux(kctx, logits, bias, route_w_out, route_ids_out, *,
+                              top_k, n_group, topk_group, routed_scaling):
+    from ..moe.reference import moe_topk_reference
+
+    w, ids = moe_topk_reference(
+        logits, top_k, "sigmoid_noaux_tc", bias=bias.float(),
+        n_group=n_group, topk_group=topk_group, routed_scaling=routed_scaling,
+    )
+    route_w_out.copy_(w.to(route_w_out.dtype))
+    route_ids_out.copy_(ids.to(route_ids_out.dtype))
+
+
+def _eager_router_bwd_sigmoid(kctx, dprob, route_w, route_ids, logits,
+                              dlogits_out):
+    """w_j = c*s_j/S (c = routed_scaling = sum_j w_j, S = sum_j s_j over
+    the K selected): dL/ds_i = (c*dp_i - D)/S with D = <dp, w>, then the
+    sigmoid chain dz = dL/ds * s*(1-s). Selection and bias are detached
+    (they fed sort indices only). Writes full rows (zeros off-selection)."""
+    ids = route_ids.long()
+    dp = dprob.float()
+    w = route_w.float()
+    s_sel = torch.sigmoid(logits.float()).gather(1, ids)         # (t, K)
+    s_sum = s_sel.sum(-1, keepdim=True)
+    c = w.sum(-1, keepdim=True)
+    d_dot = (dp * w).sum(-1, keepdim=True)
+    dz = ((c * dp - d_dot) / s_sum) * s_sel * (1.0 - s_sel)
+    dlogits_out.zero_()
+    dlogits_out.scatter_(1, ids, dz)  # ids unique per row -> deterministic
+
+
+def _eager_seq_aux_grad(kctx, logits, route_ids, dlogits, *, alpha, top_k,
+                        seq_bounds):
+    """DeepSeek-V3 sequence-wise complementary aux, injected analytically:
+    dL/ds'_te = alpha*f_e/T_s; through the per-token normalization
+    s' = s/sum(s): dL/ds_i = (alpha/(T_s*sum_t)) * (f_i - <f, s'_t>);
+    then the sigmoid chain. ``seq_bounds`` = ((lo, hi), ...) host ints
+    (plan-time constants — never read from device). f from per-sequence
+    counts of the DISCRETE assignments (detached int path)."""
+    lf = logits.float()
+    s = torch.sigmoid(lf)
+    row_sum = s.sum(-1, keepdim=True)
+    sn = s / row_sum
+    e = logits.shape[1]
+    ids_flat = route_ids.long()
+    for lo, hi in seq_bounds:
+        t_s = hi - lo
+        counts = torch.zeros(e, dtype=torch.float32, device=logits.device)
+        counts.scatter_add_(
+            0, ids_flat[lo:hi].reshape(-1),
+            torch.ones((hi - lo) * route_ids.shape[1], dtype=torch.float32,
+                       device=logits.device),
+        )
+        f = counts * (e / (top_k * t_s))
+        seg_sn = sn[lo:hi]
+        coef = alpha / (t_s * row_sum[lo:hi])
+        dl_ds = coef * (f.unsqueeze(0) - (seg_sn @ f).unsqueeze(1))
+        dlogits[lo:hi].add_(dl_ds * s[lo:hi] * (1.0 - s[lo:hi]))
+
+
+register("moe_topk_sigmoid_noaux", "eager", deterministic=True,
+         allocates="torch", workspace=internal(_row_hint), priority=0,
+         fn=_eager_topk_sigmoid_noaux)
+register("moe_router_bwd_sigmoid", "eager", deterministic=True,
+         allocates="torch", workspace=internal(_row_hint), priority=0,
+         fn=_eager_router_bwd_sigmoid)
+register("moe_seq_aux_grad", "eager", deterministic=True, allocates="torch",
+         workspace=internal(_row_hint), priority=0, fn=_eager_seq_aux_grad)
+
+
 # --- fused Triton --------------------------------------------------------------
 
 try:

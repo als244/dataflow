@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-_ROUTING_MODES = ("topk_then_softmax", "softmax_then_topk")
+_ROUTING_MODES = ("topk_then_softmax", "softmax_then_topk", "sigmoid_noaux_tc")
 
 # v1 dtype pins: the knobs exist (they are the quantization seam — fp8
 # dispatch later), but only the flextrain-parity combination is plumbed.
@@ -40,14 +40,35 @@ class MoESpec:
         "softmax_then_topk"  — full-E softmax, take top-K probs
                                UNnormalized (weights sum <= 1;
                                norm_topk_prob=False; OLMoE).
-        Tie-break is ALWAYS smallest expert index (both modes, pinned by
-        ladder tests; torch.topk's CUDA tie-break violates this).
+        "sigmoid_noaux_tc"   — DeepSeek-V3: scores = sigmoid(logits);
+                               SELECTION on (score + bias_e) with the
+                               GROUP LIMIT (n_group score groups ranked by
+                               the sum of each group's top-2 selection
+                               scores; only the best topk_group groups
+                               stay eligible), then greedy top-K;
+                               WEIGHTS = the selected RAW sigmoid scores
+                               renormalized to sum 1 x routed_scaling.
+                               bias is the (E,) NON-GRADIENT field
+                               "w_router_bias", updated per STEP by the
+                               balance rule b_e += speed*sign(mean - c_e)
+                               on the step's aggregate counts (the bwd
+                               tail routes per-round counts through the
+                               bias's dW slot so grad-accum aggregation
+                               rides the existing machinery; the family's
+                               optimizer applies the rule via an AdamW
+                               per-field special, never AdamW math).
+        Tie-break is ALWAYS smallest index (expert AND group level,
+        pinned by ladder tests; torch.topk's CUDA tie-break violates
+        this).
     aux_coef:
-        Load-balance loss coefficient (alpha). The loss is GRADIENT-
-        INJECTED per layer per round (never added to the scalar loss):
-        dz[t,e] += (alpha*E/T_r) * p[t,e] * (f_e - <f, p_t>), with p the
-        full-E fp32 softmax of the saved logits and f detached per-round
-        counts. 0 disables the injection.
+        Load-balance coefficient (alpha), GRADIENT-INJECTED per layer per
+        round (never added to the scalar loss). Softmax modes:
+        dz[t,e] += (alpha*E/T_r) * p[t,e] * (f_e - <f, p_t>) with
+        per-round counts (f detached). sigmoid_noaux_tc: the V3
+        COMPLEMENTARY SEQUENCE-WISE loss — per sequence s:
+        alpha * E/(K*T_s) * sum_e c_e^s * pbar_e^s with pbar the mean
+        NORMALIZED sigmoid score over the sequence's tokens (gradient
+        flows through pbar only). 0 disables either injection.
     dispatch_dtype / combine_dtype:
         Dtype of the permuted token buffers (xp/h13/yp) and of the
         combine accumulator. v1 pins ("bf16", "fp32") and raises loudly
@@ -68,6 +89,14 @@ class MoESpec:
     dispatch_dtype: str = "bf16"
     combine_dtype: str = "fp32"
     expert_ids: tuple[int, ...] | None = None
+    # sigmoid_noaux_tc knobs (DeepSeek-V3); inert in the softmax modes
+    n_group: int = 1
+    topk_group: int = 1
+    routed_scaling: float = 1.0
+    bias_update_speed: float = 0.0
+    # shared-expert combine style: True = sigma(gate)*shared (qwen35moe),
+    # False = plain additive shared (DeepSeek-V3, no gate field at all)
+    shared_gate: bool = True
 
     def __post_init__(self) -> None:
         if self.routing_mode not in _ROUTING_MODES:
@@ -77,6 +106,25 @@ class MoESpec:
         if not (0 < self.top_k <= self.n_experts):
             raise ValueError(
                 f"top_k {self.top_k} must be in (0, n_experts={self.n_experts}]"
+            )
+        if self.routing_mode == "sigmoid_noaux_tc":
+            if self.n_experts % self.n_group != 0:
+                raise ValueError(
+                    f"n_group {self.n_group} must divide n_experts {self.n_experts}"
+                )
+            if not (0 < self.topk_group <= self.n_group):
+                raise ValueError(
+                    f"topk_group {self.topk_group} must be in (0, n_group={self.n_group}]"
+                )
+            if self.top_k > self.topk_group * (self.n_experts // self.n_group):
+                raise ValueError(
+                    "top_k exceeds the experts available in topk_group groups"
+                )
+        elif (self.n_group, self.topk_group) != (1, 1) or self.routed_scaling != 1.0 \
+                or self.bias_update_speed != 0.0:
+            raise ValueError(
+                "n_group/topk_group/routed_scaling/bias_update_speed are "
+                "sigmoid_noaux_tc knobs"
             )
         if self.n_shared_experts not in (0, 1):
             raise ValueError("v1 supports n_shared_experts in {0, 1}")
@@ -145,13 +193,24 @@ def moe_weight_specs(dims, moe: MoESpec) -> list[tuple[str, tuple[int, ...]]]:
     e_loc, f = moe.n_local_experts, moe.d_ff_expert
     specs: list[tuple[str, tuple[int, ...]]] = [
         ("w_router", (d, moe.n_experts)),
+    ]
+    if moe.routing_mode == "sigmoid_noaux_tc":
+        # NON-GRADIENT balance bias (global width, like the router). Must
+        # be fp32 end-to-end (param AND grad AND opt) — the family's
+        # DTypePolicy carries a "w_router_bias" override; bf16 ulp at
+        # bias ~0.1 is half the 1e-3 update step. Its dW slot carries the
+        # step's aggregate expert COUNTS (bwd tail accumulates per round);
+        # the optimizer applies the sign rule, never AdamW math.
+        specs.append(("w_router_bias", (moe.n_experts,)))
+    specs += [
         ("w13_experts", (e_loc, d, 2 * f)),
         ("w2_experts", (e_loc, f, d)),
     ]
     if moe.n_shared_experts:
         fs = moe.d_ff_shared
+        if moe.shared_gate:
+            specs.append(("w_shared_gate", (d, moe.n_shared_experts)))
         specs += [
-            ("w_shared_gate", (d, moe.n_shared_experts)),
             ("w_s13", (d, 2 * fs)),
             ("w_s2", (fs, d)),
         ]
@@ -177,8 +236,7 @@ def moe_context_specs(dims, moe: MoESpec) -> list[tuple[str, tuple[int, ...], st
         ("h13", (rows, 2 * moe.d_ff_expert), moe.dispatch_dtype),
     ]
     if moe.n_shared_experts:
-        specs += [
-            ("gate_pre", (t, moe.n_shared_experts), "bf16"),
-            ("s13", (t, 2 * moe.d_ff_shared), "bf16"),
-        ]
+        if moe.shared_gate:
+            specs.append(("gate_pre", (t, moe.n_shared_experts), "bf16"))
+        specs.append(("s13", (t, 2 * moe.d_ff_shared), "bf16"))
     return specs

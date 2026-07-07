@@ -543,6 +543,12 @@ class AdamWStep(_Base):
     hyper: AdamWHyper = AdamWHyper()
     kind: str = "block"
     layout_for: object = None
+    # per-field update overrides: {field_name: fn(kctx, kernels, w_view,
+    # g_view)} — the field SKIPS AdamW math entirely (no m/v read, no
+    # decay). First customer: DeepSeek-V3's non-gradient router bias,
+    # whose dW slot carries expert counts and whose update is the
+    # balance sign rule (tasks/moe/stages.moe_bias_update).
+    update_specials: object = None
 
     def _layouts(self, task, w_size: int):
         d = self.dims
@@ -574,6 +580,13 @@ class AdamWStep(_Base):
             step = int(ctx.task.block_params.get("step", 0)) + 1
             hp = self.hyper
             for f in wl_.fields:
+                if self.update_specials is not None and f.name in self.update_specials:
+                    self.update_specials[f.name](
+                        kctx, self.kernels,
+                        wl_.view(w_buf, f.name).view(-1),
+                        gl_.view(g_buf, f.name).view(-1),
+                    )
+                    continue
                 self.kernels.adamw_step(
                     kctx,
                     wl_.view(w_buf, f.name).view(-1),

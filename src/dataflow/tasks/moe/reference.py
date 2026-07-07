@@ -32,14 +32,43 @@ from .spec import MoESpec
 
 
 def moe_topk_reference(
-    logits: torch.Tensor, top_k: int, mode: str
+    logits: torch.Tensor, top_k: int, mode: str, *,
+    bias: torch.Tensor | None = None,
+    n_group: int = 1, topk_group: int = 1, routed_scaling: float = 1.0,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Routing weights + expert ids. Returns (weights fp32 (t,K), ids int64).
 
     Differentiable through ``weights`` (via the selected scores); ``ids``
-    are discrete. Both modes share the smallest-index tie-break.
+    are discrete. ALL modes share the smallest-index tie-break (expert and
+    group level).
+
+    sigmoid_noaux_tc (DeepSeek-V3): scores = sigmoid(logits); SELECTION on
+    (scores + bias) under the group limit — groups ranked by the sum of
+    their top-2 selection scores, only the best topk_group groups stay
+    eligible — then greedy top-K; WEIGHTS = the selected RAW sigmoid
+    scores renormalized to sum 1, x routed_scaling. bias enters selection
+    ONLY (detached by construction: it feeds sort indices, never values).
     """
     lf = logits.float()
+    if mode == "sigmoid_noaux_tc":
+        scores = torch.sigmoid(lf)                               # (t, E) fp32
+        t, e = scores.shape
+        with torch.no_grad():
+            sel = scores + (bias if bias is not None else 0.0)   # selection scores
+            g = sel.view(t, n_group, e // n_group)
+            g_sorted, _ = torch.sort(g, dim=-1, descending=True, stable=True)
+            group_score = g_sorted[..., : min(2, g.shape[-1])].sum(-1)  # (t, n_group)
+            _, g_idx = torch.sort(group_score, dim=-1, descending=True, stable=True)
+            keep_groups = g_idx[:, :topk_group]                  # (t, topk_group)
+            group_mask = torch.zeros(t, n_group, dtype=torch.bool, device=lf.device)
+            group_mask.scatter_(1, keep_groups, True)
+            expert_mask = group_mask.repeat_interleave(e // n_group, dim=1)
+            masked = sel.masked_fill(~expert_mask, float("-inf"))
+            _, idx = torch.sort(masked, dim=-1, descending=True, stable=True)
+            ids = idx[:, :top_k]
+        picked = scores.gather(1, ids)                           # raw sigmoid scores
+        w = picked / picked.sum(-1, keepdim=True) * routed_scaling
+        return w, ids
     scores = torch.softmax(lf, dim=-1) if mode == "softmax_then_topk" else lf
     vals, idx = torch.sort(scores, dim=-1, descending=True, stable=True)
     ids = idx[:, :top_k]
@@ -66,6 +95,34 @@ def moe_aux_loss_reference(
     return aux_coef * n_experts * (f * p.mean(0)).sum()
 
 
+def moe_seq_aux_loss_reference(
+    logits: torch.Tensor, ids: torch.Tensor, *,
+    n_experts: int, top_k: int, aux_coef: float,
+    seq_lens: tuple[int, ...],
+) -> torch.Tensor:
+    """DeepSeek-V3 complementary SEQUENCE-WISE balance loss (fp32 scalar).
+
+    Per sequence s (T_s tokens): L_s = alpha * sum_e f_e * P_e with
+    f_e = (E/(K*T_s)) * count_e^s from the DISCRETE assignments (detached
+    int path) and P_e = mean over the sequence's tokens of the per-token
+    NORMALIZED sigmoid scores s'_te = sigmoid(z)_te / sum_e sigmoid(z)_te.
+    Gradient flows through P only — autograd of this expression IS the
+    runtime's injected form. Total = sum over sequences.
+    """
+    lf = logits.float()
+    s = torch.sigmoid(lf)
+    sn = s / s.sum(-1, keepdim=True)
+    total = torch.zeros((), dtype=torch.float32, device=logits.device)
+    lo = 0
+    for t_s in seq_lens:
+        hi = lo + t_s
+        counts = torch.bincount(ids[lo:hi].reshape(-1).long(), minlength=n_experts)
+        f = counts.float() * n_experts / (top_k * t_s)
+        total = total + aux_coef * (f * sn[lo:hi].mean(0)).sum()
+        lo = hi
+    return total
+
+
 def moe_mlp_reference(
     h2: torch.Tensor,
     w: dict,
@@ -73,6 +130,7 @@ def moe_mlp_reference(
     resid: torch.Tensor,
     *,
     route_ids: torch.Tensor | None = None,
+    seq_lens: tuple[int, ...] | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Full MoE tail: router -> experts -> combine (+ shared expert).
 
@@ -95,16 +153,31 @@ def moe_mlp_reference(
     """
     f = moe.d_ff_expert
     logits = h2 @ w["w_router"]                      # bf16 (t, E) — runtime path
+    noaux = moe.routing_mode == "sigmoid_noaux_tc"
     if route_ids is None:
-        route_w, ids = moe_topk_reference(logits, moe.top_k, moe.routing_mode)
+        route_w, ids = moe_topk_reference(
+            logits, moe.top_k, moe.routing_mode,
+            bias=(w["w_router_bias"].float() if noaux else None),
+            n_group=moe.n_group, topk_group=moe.topk_group,
+            routed_scaling=moe.routed_scaling,
+        )
     else:
         ids = route_ids.long()
         lf = logits.float()
-        if moe.routing_mode == "softmax_then_topk":
+        if noaux:
+            picked = torch.sigmoid(lf).gather(1, ids)
+            route_w = picked / picked.sum(-1, keepdim=True) * moe.routed_scaling
+        elif moe.routing_mode == "softmax_then_topk":
             route_w = torch.softmax(lf, dim=-1).gather(1, ids)
         else:
             route_w = torch.softmax(lf.gather(1, ids), dim=-1)
-    if moe.aux_coef > 0:
+    if moe.aux_coef > 0 and noaux:
+        aux = moe_seq_aux_loss_reference(
+            logits, ids, n_experts=moe.n_experts, top_k=moe.top_k,
+            aux_coef=moe.aux_coef,
+            seq_lens=seq_lens if seq_lens is not None else (h2.shape[0],),
+        )
+    elif moe.aux_coef > 0:
         aux = moe_aux_loss_reference(
             logits, ids, n_experts=moe.n_experts, aux_coef=moe.aux_coef
         )
@@ -125,7 +198,10 @@ def moe_mlp_reference(
         s13 = h2 @ w["w_s13"]
         s_act = ops.swiglu_fwd(s13[:, :fs], s13[:, fs:])
         sh_each = s_act @ w["w_s2"]                  # (t, d) bf16
-        gate = torch.sigmoid((h2 @ w["w_shared_gate"]).float())  # (t, S=1) fp32
-        base = resid + (gate * sh_each.float()).to(resid.dtype)
+        if moe.shared_gate:
+            gate = torch.sigmoid((h2 @ w["w_shared_gate"]).float())  # (t, S=1) fp32
+            base = resid + (gate * sh_each.float()).to(resid.dtype)
+        else:
+            base = resid + sh_each                   # V3: plain additive shared
 
     return (base.float() + routed).to(h2.dtype), aux

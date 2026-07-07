@@ -71,9 +71,16 @@ def stage_moe_route(kctx, K, d, st):
         route_ids = torch.empty(
             (d.tokens, moe.top_k), dtype=torch.int32, device=h2.device
         )
-    K.moe_topk_softmax(
-        kctx, logits, route_w, route_ids, top_k=moe.top_k, mode=moe.routing_mode
-    )
+    if moe.routing_mode == "sigmoid_noaux_tc":
+        K.moe_topk_sigmoid_noaux(
+            kctx, logits, w["w_router_bias"], route_w, route_ids,
+            top_k=moe.top_k, n_group=moe.n_group, topk_group=moe.topk_group,
+            routed_scaling=moe.routed_scaling,
+        )
+    else:
+        K.moe_topk_softmax(
+            kctx, logits, route_w, route_ids, top_k=moe.top_k, mode=moe.routing_mode
+        )
     st.update(logits=logits, route_w=route_w, route_ids=route_ids)
 
 
@@ -123,6 +130,20 @@ def stage_moe_shared(kctx, K, d, st):
     st.update(s13=s13, gate_pre=gate_pre)
 
 
+def stage_moe_shared_nogate(kctx, K, d, st):
+    """DeepSeek-V3 flavor: plain additive shared expert — no gate
+    projection, no gate_pre ctx field (separate stage fn because the
+    emitted-fields tuples are STATIC declarations)."""
+    a, w = st["a"], st["w"]
+    h2 = st["h2"]
+    if a is not None:
+        s13 = a["s13"]
+        torch.matmul(h2, w["w_s13"], out=s13)
+    else:
+        s13 = h2 @ w["w_s13"]
+    st["s13"] = s13
+
+
 def stage_moe_experts2_combine(kctx, K, d, st):
     moe, w = _spec(d), st["w"]
     h13 = st.pop("h13")
@@ -140,10 +161,11 @@ def stage_moe_experts2_combine(kctx, K, d, st):
         K.swiglu_packed_fwd(kctx, s13, s_act)
         sh = s_act @ w["w_s2"]
         del s_act
-        sig = torch.sigmoid(st.pop("gate_pre").float()).reshape(-1).contiguous()
-        # sigma-gate as an in-place row scale (no (t,d) fp32 materialization)
-        K.moe_scale_rows(kctx, sh, sig)
-        del sig
+        if moe.shared_gate:
+            sig = torch.sigmoid(st.pop("gate_pre").float()).reshape(-1).contiguous()
+            # sigma-gate as an in-place row scale (no (t,d) fp32 materialization)
+            K.moe_scale_rows(kctx, sh, sig)
+            del sig
         # base is (or aliases) a ctx view — never mutated in place
         base = base + sh
         del sh
@@ -163,6 +185,13 @@ MOE_STAGES = (
 MOE_SHARED_STAGES = (
     MOE_STAGES[:3]
     + (("moe_shared", stage_moe_shared, ("s13", "gate_pre")),)
+    + MOE_STAGES[3:]
+)
+
+# DeepSeek-V3 flavor: ungated additive shared expert (spec.shared_gate=False)
+MOE_SHARED_NOGATE_STAGES = (
+    MOE_STAGES[:3]
+    + (("moe_shared", stage_moe_shared_nogate, ("s13",)),)
     + MOE_STAGES[3:]
 )
 
@@ -235,26 +264,51 @@ def moe_mlp_tail_bwd(kctx, K, d, dy, a, w, dw, accum, acc, norm_bwd, *, resid_fi
     del dxp, slot_of
 
     # router backward + per-round aux load-balance injection
+    noaux = moe.routing_mode == "sigmoid_noaux_tc"
     dlogits = torch.empty((t, moe.n_experts), dtype=torch.float32, device=dy.device)
-    K.moe_router_bwd(
-        kctx, dprob, a["route_w"], a["route_ids"], a["router_logits"], dlogits,
-        mode=moe.routing_mode,
-    )
-    del dprob
-    if moe.aux_coef > 0:
-        counts = (offsets[1:] - offsets[:-1]).contiguous()
-        K.moe_aux_lb_grad(
-            kctx, a["router_logits"], counts, dlogits,
-            alpha=moe.aux_coef, top_k=topk,
+    if noaux:
+        K.moe_router_bwd_sigmoid(
+            kctx, dprob, a["route_w"], a["route_ids"], a["router_logits"], dlogits,
         )
-        del counts
+        # per-round expert counts ride the bias's dW slot (fp32 via the
+        # family's dtype-policy override): grad-accum aggregation for
+        # free; the optimizer's per-field special applies the V3 sign
+        # rule to the STEP total — AdamW math never touches the bias
+        cnt = (offsets[1:] - offsets[:-1]).to(torch.float32)
+        if accum:
+            dw["w_router_bias"].add_(cnt)
+        else:
+            dw["w_router_bias"].copy_(cnt)
+        if moe.aux_coef > 0:
+            from .. import ops as _ops
+
+            lens = _ops.seq_lens_of(d.seq_spec, t)
+            K.moe_seq_aux_grad(
+                kctx, a["router_logits"], a["route_ids"], dlogits,
+                alpha=moe.aux_coef, top_k=topk,
+                seq_bounds=tuple(_ops.seq_bounds_of(lens, t)),
+            )
+        del cnt
+    else:
+        K.moe_router_bwd(
+            kctx, dprob, a["route_w"], a["route_ids"], a["router_logits"], dlogits,
+            mode=moe.routing_mode,
+        )
+        if moe.aux_coef > 0:
+            counts = (offsets[1:] - offsets[:-1]).contiguous()
+            K.moe_aux_lb_grad(
+                kctx, a["router_logits"], counts, dlogits,
+                alpha=moe.aux_coef, top_k=topk,
+            )
+            del counts
+    del dprob
     dlogits_bf = dlogits.to(torch.bfloat16)
     del dlogits
     acc("w_router", h2.T @ dlogits_bf)
     dh2.addmm_(dlogits_bf, w["w_router"].T)
     del dlogits_bf
 
-    if moe.n_shared_experts:
+    if moe.n_shared_experts and moe.shared_gate:
         fs = moe.d_ff_shared
         s_act = torch.empty((t, fs), dtype=torch.bfloat16, device=dy.device)
         K.swiglu_packed_fwd(kctx, a["s13"], s_act)
@@ -279,6 +333,21 @@ def moe_mlp_tail_bwd(kctx, K, d, dy, a, w, dw, accum, acc, norm_bwd, *, resid_fi
         dh2.addmm_(ds13, w["w_s13"].T)
         dh2.addmm_(d_gate, w["w_shared_gate"].T)
         del ds13, d_gate
+    elif moe.n_shared_experts:
+        # ungated (DeepSeek-V3): shared output feeds the residual directly,
+        # so d_shared = dy verbatim — no gate, no rowdot, no scaling
+        fs = moe.d_ff_shared
+        s_act = torch.empty((t, fs), dtype=torch.bfloat16, device=dy.device)
+        K.swiglu_packed_fwd(kctx, a["s13"], s_act)
+        acc("w_s2", s_act.T @ dy)
+        del s_act
+        ds_act = dy @ w["w_s2"].T
+        ds13 = torch.empty((t, 2 * fs), dtype=torch.bfloat16, device=dy.device)
+        K.swiglu_packed_bwd(kctx, ds_act, a["s13"], ds13)
+        del ds_act
+        acc("w_s13", h2.T @ ds13)
+        dh2.addmm_(ds13, w["w_s13"].T)
+        del ds13
     del h2
 
     dh_mid, dffn = norm_bwd(dh2, resid, a["rstd_ffn"], w["ffn_norm_w"])
@@ -286,6 +355,18 @@ def moe_mlp_tail_bwd(kctx, K, d, dy, a, w, dw, accum, acc, norm_bwd, *, resid_fi
     acc("ffn_norm_w", dffn)
     dh_mid.add_(dy)
     return dh_mid
+
+
+def moe_bias_update(kctx, kernels, w_view, g_view, *, speed: float) -> None:
+    """DeepSeek-V3 balance-bias rule, applied by the family's AdamW
+    per-field special (update_specials={"w_router_bias": ...}) in place of
+    AdamW math: b_e += speed * sign(mean_load - load_e), on the STEP's
+    aggregate counts (the bwd tail accumulated per-round counts into the
+    bias's dW slot). fp32 in and out (dtype-policy override); plain torch
+    (2 elementwise ops on (E,)) — async, deterministic, not worth a
+    registry op."""
+    counts = g_view.float()
+    w_view.add_(torch.sign(counts.mean() - counts).to(w_view.dtype), alpha=speed)
 
 
 # --- profiling support ------------------------------------------------------------
