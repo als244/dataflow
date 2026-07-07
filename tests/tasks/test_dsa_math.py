@@ -501,28 +501,25 @@ def test_dsv32_block_ladder2(kind):
     x = (torch.randn(dims.tokens, dims.d_model, generator=gen, device="cuda") * 0.5).to(torch.bfloat16)
     dy = (torch.randn(dims.tokens, dims.d_model, generator=gen, device="cuda") * 0.5).to(torch.bfloat16)
 
-    from dataflow.tasks.layouts import dsv32_sel_layout
+    from dataflow.tasks.layouts import dsv32_meta_layout
 
     a = {f.name: torch.empty(f.shape, dtype=TORCH_DTYPE_BY_NAME[f.dtype], device="cuda")
          for f in cl.fields}
     y = torch.empty_like(x)
-    # selection objects: per-group S (dsa) + per-layer SEL (routing)
-    s_buf = torch.empty(dims.tokens, dims.index_topk, dtype=torch.int32,
-                        device="cuda")
-    extras = {"idx_view": s_buf}
-    if kind == "moe":
-        sel_l = dsv32_sel_layout(dims)
-        sel_views = {f.name: torch.empty(f.shape, dtype=TORCH_DTYPE_BY_NAME[f.dtype],
-                                         device="cuda") for f in sel_l.fields}
-        extras["sel"] = sel_views
+    # the layer's M object: ALL never-recompute metadata in one layout
+    m_l = dsv32_meta_layout(dims, kind)
+    meta_views = {f.name: torch.empty(f.shape, dtype=TORCH_DTYPE_BY_NAME[f.dtype],
+                                      device="cuda") for f in m_l.fields}
+    s_buf = meta_views["dsa_idx"]
+    extras = {"meta": meta_views}
     fwd._forward(kctx, x, w, y, a, extras=dict(extras))
 
     a2 = {f.name: torch.empty(f.shape, dtype=TORCH_DTYPE_BY_NAME[f.dtype], device="cuda")
           for f in cl.fields}
-    # recompute consumes the selections verbatim (sel_ready) — the runner
-    # SKIPS the sel-marked select stage and moe stages skip topk/sort
+    # recompute consumes the metadata verbatim (meta_ready) — the runner
+    # SKIPS the meta-marked select stage and moe stages skip topk/sort
     rc._run_stages(kctx, x, w, a2, count=rc.recompute_stage_count(),
-                   extras={**extras, "sel_ready": True})
+                   extras={**extras, "meta_ready": True})
     torch.cuda.synchronize()
     errors = {}
     for name in a:
@@ -532,10 +529,8 @@ def test_dsv32_block_ladder2(kind):
     dwv = {f.name: torch.zeros(f.shape, device="cuda", dtype=TORCH_DTYPE_BY_NAME[f.dtype])
            for f in gl.fields}
     dx = torch.empty_like(x)
-    bwd_sel = {"idx_view": s_buf}
-    if kind == "moe":
-        bwd_sel["sel"] = sel_views
-    bwd._backward(kctx, dy, a, x, w, dx, dwv, accum=False, sel=bwd_sel)
+    bwd._backward(kctx, dy, a, x, w, dx, dwv, accum=False,
+                  meta={"meta": meta_views})
 
     leaves = {n: (t_.detach().clone().requires_grad_()
                   if n != "w_router_bias" else t_)
@@ -544,7 +539,7 @@ def test_dsv32_block_ladder2(kind):
     y_ref, aux_ref = _golden_dsv32_block(
         x_ref, leaves, dims, kind,
         sel_idx=s_buf,
-        route_ids=sel_views["route_ids"] if kind == "moe" else None,
+        route_ids=meta_views.get("route_ids"),
     )
     y_ref.backward(dy, retain_graph=True)
     aux_ref.backward()
@@ -553,7 +548,7 @@ def test_dsv32_block_ladder2(kind):
     errors["bwd:dx"] = rel_l2(dx, x_ref.grad)
     for name in dwv:
         if name == "w_router_bias":
-            cnt = torch.bincount(sel_views["route_ids"].reshape(-1).long(),
+            cnt = torch.bincount(meta_views["route_ids"].reshape(-1).long(),
                                  minlength=dims.moe.n_experts).float()
             assert torch.equal(dwv[name].float(), cnt)
             continue

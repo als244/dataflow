@@ -40,7 +40,7 @@ from .layouts import (
     dsv32_dense_weight_layout,
     dsv32_moe_context_layout,
     dsv32_moe_weight_layout,
-    dsv32_sel_layout,
+    dsv32_meta_layout,
 )
 from .llama3_blocks import AdamWHyper, AdamWStep, BlockRecompute, EmbedBwd, EmbedFwd, HeadLoss
 from .dsv3_blocks import (
@@ -113,42 +113,40 @@ def _indexer_inputs(kctx, K, d, h1, q_lora_n, w, pos):
     return q_idx, k_idx, wts.contiguous()
 
 
-class Dsv32SelState:
-    """Selection-object plumbing (one implementation for fwd/rc/bwd):
-    locates the per-group S (dsa selection, (t, k) int32) and per-layer
-    SEL (routing pack) among the task's aux inputs/outputs and exposes
-    them as st entries. Recompute marks sel_ready so the runner skips
-    sel-marked stages and the moe stages consume the selection verbatim
-    — SELECTION IS NEVER RECOMPUTED."""
+class Dsv32MetaState:
+    """Metadata-object plumbing (one implementation for fwd/rc/bwd): the
+    layer's M object packs ALL its never-recompute artifacts — the dsa
+    selection ("dsa_idx") and the routing pack (moe kinds) — in one
+    layout. Exposed to stages as st["meta"] (views dict); recompute sets
+    meta_ready so the runner skips meta-marked stages and the moe stages
+    consume the decision verbatim — METADATA IS NEVER RECOMPUTED."""
 
-    def _sel_state(self, ctx):
+    META_KIND = "dense"  # overridden by moe classes
+
+    def _meta_state(self, ctx):
         d = self.dims
+        layout = dsv32_meta_layout(d, self.META_KIND)
+        if not layout.fields:
+            return None
         key = ctx.task.compute_block_key
-        consuming = key.endswith(("_recompute", "_bwd"))
-        st = {}
-        if consuming:
+        if key.endswith(("_recompute", "_bwd")):
             for j, oid in enumerate(ctx.task.inputs):
-                if oid.startswith("S_"):
-                    st["idx_view"] = torch_view(
-                        self._in(ctx, j), (d.tokens, d.index_topk), torch.int32)
-                elif oid.startswith("SEL_"):
-                    st["sel"] = dsv32_sel_layout(d).views(self._in(ctx, j))
-            if key.endswith("_recompute"):
-                st["sel_ready"] = True
-        else:
-            for j, o in enumerate(ctx.task.outputs):
-                if o.id.startswith("S_"):
-                    st["idx_view"] = torch_view(
-                        self._out(ctx, j), (d.tokens, d.index_topk), torch.int32)
-                elif o.id.startswith("SEL_"):
-                    st["sel"] = dsv32_sel_layout(d).views(self._out(ctx, j))
-        return st or None
+                if oid.startswith("M_"):
+                    st = {"meta": layout.views(self._in(ctx, j))}
+                    if key.endswith("_recompute"):
+                        st["meta_ready"] = True
+                    return st
+            raise RuntimeError(f"no M_ input on {ctx.task.id}")
+        for j, o in enumerate(ctx.task.outputs):
+            if o.id.startswith("M_"):
+                return {"meta": layout.views(self._out(ctx, j))}
+        raise RuntimeError(f"no M_ output on {ctx.task.id}")
 
 
 class Dsv32ProfileFill(MoEProfileFill):
     """Profiling fill: float inputs seeded deterministically (skipping the
-    int-typed S_/SEL_ selection inputs), then valid seeds for every
-    selection INPUT — S_ gets a sliding window, SEL_ gets balanced
+    int-heavy M_ metadata inputs), then every M_ INPUT seeded validly per
+    field — dsa_idx gets a sliding window, the routing pack balanced
     identity routing (garbage would be illegal gather/scatter targets)."""
 
     def profile_fill(self, ctx) -> None:
@@ -160,7 +158,7 @@ class Dsv32ProfileFill(MoEProfileFill):
         gen = torch.Generator(device="cuda")
         gen.manual_seed(seed)
         for oid in ctx.task.inputs:
-            if oid.startswith(("S_", "SEL_")):
+            if oid.startswith("M_"):
                 continue
             b = ctx.inputs[oid]
             n = b.size_bytes // 2
@@ -169,10 +167,13 @@ class Dsv32ProfileFill(MoEProfileFill):
                 torch.rand(n, generator=gen, dtype=torch.bfloat16,
                            device="cuda").sub_(0.5).mul_(0.05)
             )
+        layout = dsv32_meta_layout(d, self.META_KIND)
         for oid in ctx.task.inputs:
-            if oid.startswith("S_"):
-                idx = torch_view(ctx.inputs[oid],
-                                 (d.tokens, d.index_topk), torch.int32)
+            if not oid.startswith("M_"):
+                continue
+            m = layout.views(ctx.inputs[oid])
+            if "dsa_idx" in m:
+                idx = m["dsa_idx"]
                 rows = torch.arange(d.tokens, device="cuda").unsqueeze(1)
                 offs = torch.arange(d.index_topk, device="cuda").unsqueeze(0)
                 lo_of = torch.empty(d.tokens, dtype=torch.long, device="cuda")
@@ -182,26 +183,23 @@ class Dsv32ProfileFill(MoEProfileFill):
                     lo += L
                 idx.copy_(torch.maximum(rows - offs,
                                         lo_of.unsqueeze(1)).to(idx.dtype))
-            elif oid.startswith("SEL_"):
+            if "route_ids" in m:
                 moe = d.moe
-                sl = dsv32_sel_layout(d)
-                buf = ctx.inputs[oid]
-                ids = sl.view(buf, "route_ids")
-                order = sl.view(buf, "route_order")
-                offsets = sl.view(buf, "route_offsets")
-                rows_n = order.shape[0]
+                rows_n = m["route_order"].shape[0]
                 flat = (torch.arange(rows_n, dtype=torch.int64, device="cuda")
                         % moe.n_experts)
-                ids.copy_(flat.view(d.tokens, moe.top_k).to(torch.int32))
-                order.copy_(torch.argsort(flat, stable=True).to(torch.int32))
+                m["route_ids"].copy_(
+                    flat.view(d.tokens, moe.top_k).to(torch.int32))
+                m["route_order"].copy_(
+                    torch.argsort(flat, stable=True).to(torch.int32))
                 counts = torch.bincount(flat, minlength=moe.n_experts)
-                offsets[:1].zero_()
-                offsets[1:].copy_(counts.cumsum(0).to(torch.int32))
-                sl.view(buf, "route_w").fill_(1.0 / moe.top_k)
+                m["route_offsets"][:1].zero_()
+                m["route_offsets"][1:].copy_(counts.cumsum(0).to(torch.int32))
+                m["route_w"].fill_(1.0 / moe.top_k)
 
 
 @dataclass(frozen=True)
-class Dsv32DenseBlockFwd(Dsv32SelState, Dsv32ProfileFill, Dsv3DenseBlockFwd):
+class Dsv32DenseBlockFwd(Dsv32MetaState, Dsv32ProfileFill, Dsv3DenseBlockFwd):
     # Dsv32ProfileFill is mixed in via the concrete class list below
     # (kept off this base to keep the stage-definition class minimal)
     dims: Dsv32Dims = None  # type: ignore[assignment]
@@ -216,7 +214,7 @@ class Dsv32DenseBlockFwd(Dsv32SelState, Dsv32ProfileFill, Dsv3DenseBlockFwd):
     @staticmethod
     def _stage_mla_q(kctx, K, d, st):
         Dsv3DenseBlockFwd._stage_mla_q(kctx, K, d, st)
-        if st.get("sel_ready"):
+        if st.get("meta_ready"):
             return  # selection supplied — the indexer tap is dead weight
         # the indexer taps the post-norm q_lora: recompute it here from
         # the ctx/local q_a (cheap (t, q_lora) norm) and stash for select
@@ -243,7 +241,7 @@ class Dsv32DenseBlockFwd(Dsv32SelState, Dsv32ProfileFill, Dsv3DenseBlockFwd):
 
     @staticmethod
     def _stage_mla_kv(kctx, K, d, st):
-        if st.get("sel_ready"):
+        if st.get("meta_ready"):
             Dsv3DenseBlockFwd._stage_mla_kv(kctx, K, d, st)
             return
         # indexer inputs need h1 — compute BEFORE the base stage pops it
@@ -256,10 +254,10 @@ class Dsv32DenseBlockFwd(Dsv32SelState, Dsv32ProfileFill, Dsv3DenseBlockFwd):
 
     @staticmethod
     def _stage_dsa_select(kctx, K, d, st):
-        # writes the per-group S OBJECT view (st["idx_view"]); marked
-        # "sel" in STAGES so the runner SKIPS it whenever the selection
-        # is supplied (recompute) — selection is never recomputed
-        idx = st["idx_view"]
+        # writes the M object's dsa_idx field; marked "meta" in STAGES so
+        # the runner SKIPS it whenever the metadata is supplied
+        # (recompute) — metadata is never recomputed
+        idx = st["meta"]["dsa_idx"]
         q_idx, k_idx, wts = st.pop("q_idx"), st.pop("k_idx"), st.pop("idx_wts")
         for lo, hi in _seq_bounds(d):
             length = hi - lo
@@ -287,7 +285,7 @@ class Dsv32DenseBlockFwd(Dsv32SelState, Dsv32ProfileFill, Dsv3DenseBlockFwd):
         lse = torch.empty(h, t, dtype=torch.float32, device=attn_out.device)
         K.dsa_sparse_attn_fwd(
             kctx, st.pop("q_full"), st.pop("k_full"), vals,
-            st["idx_view"], attn_out, lse,
+            st["meta"]["dsa_idx"], attn_out, lse,
             n_heads=h, head_dim=qk, seq_bounds=_seq_bounds(d), v_head_dim=v,
         )
         del vals
@@ -300,7 +298,7 @@ class Dsv32DenseBlockFwd(Dsv32SelState, Dsv32ProfileFill, Dsv3DenseBlockFwd):
         Dsv3DenseBlockFwd.MLA_STAGES[0],                    # attn_norm
         ("mla_q", _stage_mla_q.__func__, ("q_a", "rstd_qa")),
         ("mla_kv", _stage_mla_kv.__func__, ("kv_a", "rstd_kva")),
-        ("dsa_select", _stage_dsa_select.__func__, (), "sel"),
+        ("dsa_select", _stage_dsa_select.__func__, (), "meta"),
         ("dsa_attn", _stage_dsa_attn.__func__, ("lse", "attn_out")),
         Dsv3DenseBlockFwd.MLA_STAGES[4],                    # resid1_norm2
     ) + Dsv3DenseBlockFwd.STAGES[5:]                        # dense FFN tail
@@ -314,7 +312,7 @@ class Dsv32DenseBlockRecompute(Dsv32DenseBlockFwd, BlockRecompute):
 
 
 @dataclass(frozen=True)
-class Dsv32DenseBlockBwd(Dsv32SelState, Dsv32ProfileFill, Dsv3DenseBlockBwd):
+class Dsv32DenseBlockBwd(Dsv32MetaState, Dsv32ProfileFill, Dsv3DenseBlockBwd):
     dims: Dsv32Dims = None  # type: ignore[assignment]
 
     def _weight_layout(self, layer: int | None = None) -> PackedLayout:
@@ -324,16 +322,12 @@ class Dsv32DenseBlockBwd(Dsv32SelState, Dsv32ProfileFill, Dsv3DenseBlockBwd):
     def cl(self) -> PackedLayout:
         return dsv32_dense_context_layout(self.dims)
 
-    def _backward(self, kctx, dy, a, x, w, dx_out, dw, accum, sel=None):
-        # merge selection-object views into the saved-state dict:
-        # downstream reads (a["dsa_idx"], a["route_*"]) work unchanged —
-        # `a` is "the saved state", now composed from ctx + sel objects
-        if sel:
-            a = dict(a)
-            if "idx_view" in sel:
-                a["dsa_idx"] = sel["idx_view"]
-            if "sel" in sel:
-                a.update(sel["sel"])
+    def _backward(self, kctx, dy, a, x, w, dx_out, dw, accum, meta=None):
+        # merge the M views into the saved-state dict: downstream reads
+        # (a["dsa_idx"], a["route_*"]) work unchanged — `a` is "the saved
+        # state", now composed from the ctx + metadata objects
+        if meta:
+            a = {**a, **meta["meta"]}
         super()._backward(kctx, dy, a, x, w, dx_out, dw, accum)
 
     def _indexer_kl_bwd(self, kctx, d, a, x, w, acc, h1, q_lora_n,
@@ -531,6 +525,7 @@ class Dsv32DenseBlockBwd(Dsv32SelState, Dsv32ProfileFill, Dsv3DenseBlockBwd):
 
 @dataclass(frozen=True)
 class Dsv32MoeBlockFwd(Dsv32DenseBlockFwd):
+    META_KIND = "moe"
     def _weight_layout(self, layer: int | None = None) -> PackedLayout:
         return dsv32_moe_weight_layout(self.dims, layer=layer)
 
@@ -548,6 +543,7 @@ class Dsv32MoeBlockRecompute(Dsv32MoeBlockFwd, BlockRecompute):
 
 @dataclass(frozen=True)
 class Dsv32MoeBlockBwd(Dsv32DenseBlockBwd):
+    META_KIND = "moe"
     def _weight_layout(self, layer: int | None = None) -> PackedLayout:
         return dsv32_moe_weight_layout(self.dims, layer=layer)
 
@@ -596,7 +592,7 @@ class _WarmupKLMixin:
 
 
 @dataclass(frozen=True)
-class Dsv32WarmupDenseBlockFwd(Dsv32SelState, Dsv3DenseBlockFwd):
+class Dsv32WarmupDenseBlockFwd(Dsv32MetaState, Dsv3DenseBlockFwd):
     """Dense warm-up forward = dsv3's flash path verbatim (no selection,
     no dsa_idx ctx); only the layouts widen for the indexer weights."""
 
@@ -616,7 +612,7 @@ class Dsv32WarmupDenseBlockRecompute(Dsv32WarmupDenseBlockFwd, BlockRecompute):
 
 
 @dataclass(frozen=True)
-class Dsv32WarmupDenseBlockBwd(Dsv32SelState, _WarmupKLMixin, Dsv3DenseBlockBwd):
+class Dsv32WarmupDenseBlockBwd(Dsv32MetaState, _WarmupKLMixin, Dsv3DenseBlockBwd):
     dims: Dsv32Dims = None  # type: ignore[assignment]
     _indexer_kl_bwd = Dsv32DenseBlockBwd._indexer_kl_bwd
 
@@ -629,7 +625,8 @@ class Dsv32WarmupDenseBlockBwd(Dsv32SelState, _WarmupKLMixin, Dsv3DenseBlockBwd)
 
 
 @dataclass(frozen=True)
-class Dsv32WarmupMoeBlockFwd(Dsv32SelState, Dsv32ProfileFill, Dsv3MoeBlockFwd):
+class Dsv32WarmupMoeBlockFwd(Dsv32MetaState, Dsv32ProfileFill, Dsv3MoeBlockFwd):
+    META_KIND = "moe"
     dims: Dsv32Dims = None  # type: ignore[assignment]
 
     def _weight_layout(self, layer: int | None = None) -> PackedLayout:
@@ -646,13 +643,14 @@ class Dsv32WarmupMoeBlockRecompute(Dsv32WarmupMoeBlockFwd, BlockRecompute):
 
 
 @dataclass(frozen=True)
-class Dsv32WarmupMoeBlockBwd(Dsv32SelState, Dsv32ProfileFill, _WarmupKLMixin, Dsv3MoeBlockBwd):
+class Dsv32WarmupMoeBlockBwd(Dsv32MetaState, Dsv32ProfileFill, _WarmupKLMixin, Dsv3MoeBlockBwd):
+    META_KIND = "moe"
     dims: Dsv32Dims = None  # type: ignore[assignment]
     _indexer_kl_bwd = Dsv32DenseBlockBwd._indexer_kl_bwd
 
-    def _backward(self, kctx, dy, a, x, w, dx_out, dw, accum, sel=None):
-        if sel and "sel" in sel:
-            a = {**a, **sel["sel"]}
+    def _backward(self, kctx, dy, a, x, w, dx_out, dw, accum, meta=None):
+        if meta:
+            a = {**a, **meta["meta"]}
         super()._backward(kctx, dy, a, x, w, dx_out, dw, accum)
 
     def _weight_layout(self, layer: int | None = None) -> PackedLayout:

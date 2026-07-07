@@ -653,9 +653,9 @@ def _dsv32_attn_weight_specs(dims: Dsv32Dims) -> list[tuple[str, tuple[int, ...]
 
 
 def _dsv32_attn_ctx_specs(dims: Dsv32Dims) -> list[tuple[str, tuple[int, ...], str]]:
-    # SELECTION-OBJECT GRAMMAR: the dsa selection lives in the per-group
-    # S object (never recomputed), the routing pack in the per-layer SEL
-    # object — the ctx is exactly dsv3-shaped in both modes
+    # METADATA GRAMMAR: the dsa selection and the routing pack live in
+    # the layer's M object (never recomputed) — the ctx is exactly
+    # dsv3-shaped in both modes
     return _dsv3_attn_ctx_specs(dims)
 
 
@@ -690,15 +690,36 @@ def dsv32_moe_context_layout(dims: Dsv32Dims) -> PackedLayout:
 
     return PackedLayout.build(
         _dsv32_attn_ctx_specs(dims)
-        + moe_context_specs(dims, dims.moe, sel=True)
+        + moe_context_specs(dims, dims.moe, meta=True)
     )
 
 
-def dsv32_sel_layout(dims: Dsv32Dims) -> PackedLayout:
-    """Per-layer SEL object (moe kinds): the discrete routing pack."""
-    from .moe.spec import moe_sel_specs
+def glm52_meta_layout(dims: "Glm52Dims", kind: str) -> PackedLayout:
+    """glm52 M objects: leaders (gdl/gml) carry the dsa selection their
+    group shares; moe kinds (gml/gmf) carry their own routing pack.
+    Followers never carry a selection — they consume the producer's M."""
+    from .moe.spec import moe_meta_specs
 
-    return PackedLayout.build(moe_sel_specs(dims, dims.moe))
+    specs: list[tuple[str, tuple[int, ...], str]] = []
+    if kind in ("gdl", "gml"):
+        specs.append(("dsa_idx", (dims.tokens, dims.index_topk), "int32"))
+    if kind in ("gml", "gmf"):
+        specs += moe_meta_specs(dims, dims.moe)
+    return PackedLayout.build(specs)
+
+
+def dsv32_meta_layout(dims: Dsv32Dims, kind: str) -> PackedLayout:
+    """The layer's M object: ALL its never-recompute metadata in one
+    packed layout — the dsa selection (sparse mode) and the discrete
+    routing pack (moe kinds)."""
+    from .moe.spec import moe_meta_specs
+
+    specs: list[tuple[str, tuple[int, ...], str]] = []
+    if dims.sparse_mode:
+        specs.append(("dsa_idx", (dims.tokens, dims.index_topk), "int32"))
+    if kind == "moe":
+        specs += moe_meta_specs(dims, dims.moe)
+    return PackedLayout.build(specs)
 
 
 @dataclass(frozen=True)

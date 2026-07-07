@@ -40,16 +40,17 @@ EXPECTED = {
     # dsv3: MLA + hybrid dense/MoE depth + sigmoid_noaux_tc
     "dsv3-tiny": "dbf9d95a46cc53a7",
     "dsv3-tiny-ga2": "95af056e117d237a",
-    # dsv32: dsv3 + DSA. Re-blessed 2026-07-07 for the SELECTION-OBJECT
-    # grammar (Shein): dsa selection = per-group S object, routing pack =
-    # per-layer SEL object, both emitted by fwd and consumed by recompute
-    # AND bwd — never recomputed; ctx is dsv3-shaped everywhere.
-    "dsv32-tiny": "626a461269d641d0",
-    "dsv32-tiny-ga2": "8e2d6357b6a9b406",
-    "dsv32-tiny-dense": "d29fb135d9ca349b",
-    # glm52: IndexShare (leaders emit shared S; P accumulator for groups)
-    "glm52-tiny": "74f731de5a8653c6",
-    "glm52-tiny-ga2": "b163147921f916f9",
+    # dsv32/glm52: METADATA grammar (Shein naming iteration 2026-07-07):
+    # each layer's never-recompute artifacts (routing pack, dsa
+    # selection) live in ONE normal object M_{s}_{r}_{i}; IndexShare
+    # followers also consume the producer's M; the cross-layer KL
+    # accumulator is dM (backward companion, accumulated like dW).
+    # Recompute repopulates ONLY the A objects.
+    "dsv32-tiny": "abd87724c1d90494",
+    "dsv32-tiny-ga2": "faf81c930445fde4",
+    "dsv32-tiny-dense": "e6606d8ef769ae9f",
+    "glm52-tiny": "17e45164ff6a8fca",
+    "glm52-tiny-ga2": "4df8f99bebe0920b",
 }
 
 

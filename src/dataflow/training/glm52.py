@@ -47,6 +47,7 @@ from dataflow.core import Program
 from dataflow.tasks.layouts import (
     DTypePolicy,
     Glm52Dims,
+    glm52_meta_layout,
     ParamDTypes,
     dsv3_dense_context_layout,
     dsv3_moe_context_layout,
@@ -59,7 +60,13 @@ from dataflow.tasks.layouts import (
 from dataflow.tasks.moe.spec import MoESpec
 
 from .lowering import FamilyLayouts, apply_exact_sizes, initial_values_from_layouts, size_of_factory
-from .shaped_program import BF16, LayerKindSpec, ShapedHardware, build_shaped_program
+from .shaped_program import (
+    BF16,
+    LayerKindSpec,
+    MetaShare,
+    ShapedHardware,
+    build_shaped_program,
+)
 
 _GLM52_DTYPES = DTypePolicy(overrides=(
     ("w_router_bias", ParamDTypes("fp32", "fp32", "fp32")),
@@ -289,7 +296,7 @@ def _ctx_layout_for(dims: Glm52Dims, kind: str):
     if kind == "gdl":
         return dsv3_dense_context_layout(dims)
     return PackedLayout.build(
-        _dsv3_attn_ctx_specs(dims) + moe_context_specs(dims, dims.moe, sel=True)
+        _dsv3_attn_ctx_specs(dims) + moe_context_specs(dims, dims.moe, meta=True)
     )
 
 
@@ -314,7 +321,7 @@ def _kind_specs(cfg: ShapedGlm52Config, hw: ShapedHardware) -> dict[str, LayerKi
     s_bytes = 4.0 * t * cfg.index_topk
 
     def spec(prefix, leader, wl, cl, ffn_active, extra_traffic,
-             sel_bytes=0):
+             meta_bytes=0):
         total_params = sum(int(math.prod(fl.shape)) for fl in wl.fields)
         attn_flops = core_flops + (idx_flops if leader else 0.0)
         attn_bytes = BF16 * t * 4 * h * qk + s_bytes
@@ -343,7 +350,7 @@ def _kind_specs(cfg: ShapedGlm52Config, hw: ShapedHardware) -> dict[str, LayerKi
             key_prefix=prefix,
             w_bytes=wl.total_bytes,
             a_bytes=cl.total_bytes,
-            sel_bytes=sel_bytes,
+            meta_bytes=meta_bytes,
             fwd_us=fwd, bwd_us=bwd, recompute_us=fwd,
             optimizer_us=hw.mem_us(BF16 * 7.0 * total_params),
             fwd_subops=sub_fwd, bwd_subops=sub_bwd, recompute_subops=list(sub_fwd),
@@ -357,18 +364,16 @@ def _kind_specs(cfg: ShapedGlm52Config, hw: ShapedHardware) -> dict[str, LayerKi
         d * cfg.n_experts + k * 3 * f * d + cfg.n_shared_experts * 3 * fs * d
     )
     moe_traffic = BF16 * t * k * (3 * f + 2 * d)
-    from dataflow.tasks.layouts import dsv32_sel_layout
-
-    route_sel = dsv32_sel_layout(dims).total_bytes
     return {
         "gdl": spec("gdl", True, _weight_layout_for(dims, "gdl"),
-                    _ctx_layout_for(dims, "gdl"), 3 * cfg.d_ff_dense * d, 0.0),
+                    _ctx_layout_for(dims, "gdl"), 3 * cfg.d_ff_dense * d, 0.0,
+                    meta_bytes=glm52_meta_layout(dims, "gdl").total_bytes),
         "gml": spec("gml", True, _weight_layout_for(dims, "gml"),
                     _ctx_layout_for(dims, "gml"), moe_active, moe_traffic,
-                    sel_bytes=route_sel),
+                    meta_bytes=glm52_meta_layout(dims, "gml").total_bytes),
         "gmf": spec("gmf", False, _weight_layout_for(dims, "gmf"),
                     _ctx_layout_for(dims, "gmf"), moe_active, moe_traffic,
-                    sel_bytes=route_sel),
+                    meta_bytes=glm52_meta_layout(dims, "gmf").total_bytes),
     }
 
 
@@ -382,14 +387,18 @@ def build_shaped_glm52(
 ):
     hw = hw or ShapedHardware()
     dims = dims_of_glm52(cfg)
+    shares = [
+        MetaShare(producer=ld, consumers=dims.group_members(ld)[1:],
+                  grad_bytes=4 * dims.tokens * dims.index_topk)
+        for ld in dims.leaders()
+        if len(dims.group_members(ld)) > 1
+    ]
     return build_shaped_program(
         cfg, hw=hw, family="glm52-shaped",
         kinds=_kind_specs(cfg, hw), kind_of=dims.kind_of,
         fast_memory_capacity=fast_memory_capacity,
         recompute_levels=recompute_levels, name=name,
-        index_groups=[(ld, dims.group_members(ld)) for ld in dims.leaders()],
-        index_sel_bytes=4 * dims.tokens * dims.index_topk,
-        index_grad_bytes=4 * dims.tokens * dims.index_topk,
+        meta_shared=shares,
     )
 
 
@@ -425,17 +434,17 @@ def lower_glm52(
         cfg, hw=hw, recompute_levels=recompute_levels,
         fast_memory_capacity=fast_memory_capacity,
     )
-    from dataflow.tasks.layouts import dsv32_sel_layout
-
     base_size = size_of_factory(dims, fl)
     t_tokens, k_sel = dims.tokens, dims.index_topk
-    route_sel = dsv32_sel_layout(dims).total_bytes
+    meta_total = {k: glm52_meta_layout(dims, k).total_bytes
+                  for k in ("gdl", "gml", "gmf")}
 
     def size_of(oid: str):
-        if oid.startswith("SEL_"):
-            return route_sel
-        if oid.startswith(("S_", "P_")):
+        if oid.startswith("dM_"):
             return 4 * t_tokens * k_sel
+        if oid.startswith("M_"):
+            layer = int(oid.split("_")[-1])
+            return meta_total[dims.kind_of(layer)]
         return base_size(oid)
 
     return apply_exact_sizes(shaped, "glm52-exact-v1", size_of=size_of)

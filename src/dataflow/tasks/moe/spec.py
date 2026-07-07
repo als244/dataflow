@@ -217,14 +217,14 @@ def moe_weight_specs(dims, moe: MoESpec) -> list[tuple[str, tuple[int, ...]]]:
     return specs
 
 
-def moe_sel_specs(dims, moe: MoESpec) -> list[tuple[str, tuple[int, ...], str]]:
-    """The ROUTING SELECTION pack: the discrete top-k decision (weights +
-    ids + sort order + local segment offsets). Families on the selection-
-    object grammar store these in a per-layer SEL object — emitted by
-    fwd, consumed by recompute AND bwd, NEVER recomputed (recompute only
-    repopulates the A objects). router_logits stays in the ctx: it is a
-    plain recomputable GEMM output the backward consumes for aux/router
-    grads, not part of the discrete decision."""
+def moe_meta_specs(dims, moe: MoESpec) -> list[tuple[str, tuple[int, ...], str]]:
+    """The routing METADATA pack: the discrete top-k decision (weights +
+    ids + sort order + local segment offsets). Metadata families store
+    these in the layer's M object — emitted by fwd, consumed by
+    recompute AND bwd, NEVER recomputed (recompute only repopulates the
+    A objects). router_logits stays in the ctx: it is a plain
+    recomputable GEMM output the backward consumes for aux/router grads,
+    not part of the discrete decision."""
     t = dims.tokens
     rows = moe_local_rows(moe, t)
     return [
@@ -235,7 +235,7 @@ def moe_sel_specs(dims, moe: MoESpec) -> list[tuple[str, tuple[int, ...], str]]:
     ]
 
 
-def moe_context_specs(dims, moe: MoESpec, *, sel: bool = False,
+def moe_context_specs(dims, moe: MoESpec, *, meta: bool = False,
                       ) -> list[tuple[str, tuple[int, ...], str]]:
     """(name, shape, dtype) triples for the MoE tail's saved-context fields.
 
@@ -244,17 +244,17 @@ def moe_context_specs(dims, moe: MoESpec, *, sel: bool = False,
     NOT saved (re-derived in bwd from the saved order): xp, yp, sact,
     slot_of (the inverse permutation), dprob.
 
-    ``sel=True`` (selection-object families): the discrete routing pack
-    moves OUT of the ctx into the per-layer SEL object (moe_sel_specs);
-    only router_logits + pre-activations remain here.
+    ``meta=True`` (metadata families): the discrete routing pack moves
+    OUT of the ctx into the layer's M object (moe_meta_specs); only
+    router_logits + pre-activations remain here.
     """
     t = dims.tokens
     rows = moe_local_rows(moe, t)
     specs: list[tuple[str, tuple[int, ...], str]] = [
         ("router_logits", (t, moe.n_experts), "bf16"),
     ]
-    if not sel:
-        specs += moe_sel_specs(dims, moe)
+    if not meta:
+        specs += moe_meta_specs(dims, moe)
     specs.append(("h13", (rows, 2 * moe.d_ff_expert), moe.dispatch_dtype))
     if moe.n_shared_experts:
         if moe.shared_gate:

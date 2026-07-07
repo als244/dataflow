@@ -29,7 +29,7 @@ import torch
 from dataflow.core import Program
 from dataflow.tasks.layouts import (
     Dsv32Dims,
-    dsv32_sel_layout,
+    dsv32_meta_layout,
     DTypePolicy,
     ParamDTypes,
     dsv32_dense_context_layout,
@@ -262,7 +262,7 @@ def _kind_specs(cfg: ShapedDsv32Config, hw: ShapedHardware) -> dict[str, LayerKi
     attn_bytes = BF16 * t * 4 * h * qk + (
         4.0 * t * cfg.index_topk if cfg.sparse_mode else 0.0)
 
-    def spec(prefix, wl, cl, ffn_active, extra_traffic, sel_bytes=0):
+    def spec(prefix, wl, cl, ffn_active, extra_traffic, meta_bytes=0):
         total_params = sum(int(math.prod(fl.shape)) for fl in wl.fields)
         mm_flops = 2.0 * t * (mla_active + ffn_active)
         mm_bytes = BF16 * (total_params + 4 * t * d) + extra_traffic
@@ -286,7 +286,7 @@ def _kind_specs(cfg: ShapedDsv32Config, hw: ShapedHardware) -> dict[str, LayerKi
             key_prefix=prefix,
             w_bytes=wl.total_bytes,
             a_bytes=cl.total_bytes,
-            sel_bytes=sel_bytes,
+            meta_bytes=meta_bytes,
             fwd_us=fwd, bwd_us=bwd, recompute_us=fwd,
             optimizer_us=hw.mem_us(BF16 * 7.0 * total_params),
             fwd_subops=sub_fwd, bwd_subops=sub_bwd, recompute_subops=list(sub_fwd),
@@ -298,6 +298,7 @@ def _kind_specs(cfg: ShapedDsv32Config, hw: ShapedHardware) -> dict[str, LayerKi
     dense = spec(
         "dsadense", dsv32_dense_weight_layout(dims), dsv32_dense_context_layout(dims),
         3 * cfg.d_ff_dense * d, 0.0,
+        meta_bytes=dsv32_meta_layout(dims, "dense").total_bytes,
     )
     f, fs, k = cfg.d_ff_expert, cfg.d_ff_shared, cfg.top_k
     moe_active = (
@@ -308,7 +309,7 @@ def _kind_specs(cfg: ShapedDsv32Config, hw: ShapedHardware) -> dict[str, LayerKi
     moe = spec(
         "dsamoe", dsv32_moe_weight_layout(dims), dsv32_moe_context_layout(dims),
         moe_active, moe_traffic,
-        sel_bytes=dsv32_sel_layout(dims).total_bytes,
+        meta_bytes=dsv32_meta_layout(dims, "moe").total_bytes,
     )
     return {"dense": dense, "moe": moe}
 
@@ -323,19 +324,13 @@ def build_shaped_dsv32(
 ):
     hw = hw or ShapedHardware()
     dims = dims_of_dsv32(cfg)
-    index_groups = None
-    if cfg.sparse_mode:
-        # trivial groups: every layer selects for itself (glm52
-        # generalizes this to IndexShare); dense warm-up has no selection
-        index_groups = [(i, (i,)) for i in range(cfg.n_layers)]
+    # each layer's metadata is self-contained (its own M object); no
+    # cross-layer sharing — glm52 is the family that passes meta_shared
     return build_shaped_program(
         cfg, hw=hw, family="dsv32-shaped",
         kinds=_kind_specs(cfg, hw), kind_of=dims.kind_of,
         fast_memory_capacity=fast_memory_capacity,
         recompute_levels=recompute_levels, name=name,
-        index_groups=index_groups,
-        index_sel_bytes=4 * dims.tokens * dims.index_topk,
-        index_grad_bytes=4 * dims.tokens * dims.index_topk,
     )
 
 
@@ -382,13 +377,15 @@ def lower_dsv32(
         cfg, hw=hw, recompute_levels=recompute_levels, fast_memory_capacity=fast_memory_capacity,
     )
     base_size = size_of_factory(dims, fl)
-    sel_total = dsv32_sel_layout(dims).total_bytes
+    meta_total = {
+        "dense": dsv32_meta_layout(dims, "dense").total_bytes,
+        "moe": dsv32_meta_layout(dims, "moe").total_bytes,
+    }
 
     def size_of(oid: str):
-        if oid.startswith("SEL_"):
-            return sel_total
-        if oid.startswith(("S_", "P_")):
-            return 4 * dims.tokens * dims.index_topk
+        if oid.startswith("M_"):
+            layer = int(oid.split("_")[-1])
+            return meta_total[dims.kind_of(layer)]
         return base_size(oid)
 
     return apply_exact_sizes(shaped, "dsv32-exact-v2", size_of=size_of)

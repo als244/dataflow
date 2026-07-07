@@ -120,11 +120,11 @@ class _Base:
 
         return acc
 
-    def _sel_state(self, ctx) -> dict | None:
-        """Family hook: st entries for SELECTION objects (per-layer SEL
-        routing pack, per-group S index selection). None = family is not
-        on the selection-object grammar. Implementations inspect
-        ctx.task.compute_block_key to set sel_ready for recompute."""
+    def _meta_state(self, ctx) -> dict | None:
+        """Family hook: st entries for METADATA objects (M_{s}_{r}_{i} —
+        never-recompute forward artifacts: routing packs, selections).
+        None = family has no metadata. Implementations inspect
+        ctx.task.compute_block_key to set meta_ready for recompute."""
         return None
 
     def _norm_bwd_fn(self, kctx):
@@ -163,14 +163,14 @@ class BlockFwd(_Base):
             y = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
             a = None
             if self.emit_context:
-                # A located by id, not position: selection-object families
-                # append SEL_/S_ outputs after it (or drop A entirely
-                # under recompute planning while keeping the selections)
+                # A located by id, not position: metadata families append
+                # M_ outputs after it (or drop A entirely under recompute
+                # planning while keeping the metadata)
                 for j, o in enumerate(ctx.task.outputs[1:], start=1):
                     if o.id.startswith("A_"):
                         a = self.cl.views(self._out(ctx, j))
                         break
-            self._forward(kctx, x, w, y, a, extras=self._sel_state(ctx))
+            self._forward(kctx, x, w, y, a, extras=self._meta_state(ctx))
 
     # --- staged forward -------------------------------------------------------
     #
@@ -282,8 +282,8 @@ class BlockFwd(_Base):
     def recompute_stage_count(cls) -> int:
         """Derived recompute boundary: stages up to the LAST one that emits
         a context field. Everything after it exists only to produce y.
-        Stage entries may carry an optional 4th element "sel" marking a
-        SELECTION stage — skipped entirely when the selection object is
+        Stage entries may carry an optional 4th element "meta" marking a
+        METADATA-producing stage — skipped entirely when the M object is
         supplied (recompute repopulates ONLY the A objects)."""
         last = 0
         for i, entry in enumerate(cls.STAGES):
@@ -300,10 +300,10 @@ class BlockFwd(_Base):
         st = {"x": x, "w": w, "a": a, "y": y}
         if extras:
             st.update(extras)
-        skip_sel = bool(st.get("sel_ready"))
+        skip_meta = bool(st.get("meta_ready"))
         for entry in self.STAGES[:count]:
-            if skip_sel and len(entry) > 3 and entry[3] == "sel":
-                continue  # selection is supplied, never recomputed
+            if skip_meta and len(entry) > 3 and entry[3] == "meta":
+                continue  # metadata is supplied, never recomputed
             entry[1](kctx, self.kernels, self.dims, st)
 
     def _forward(self, kctx, x, w, y, a, extras=None) -> None:
@@ -320,7 +320,7 @@ class BlockRecompute(BlockFwd):
             x = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
             w = self.wl_for(ctx.task).views(self._in(ctx, 1))
             a = self.cl.views(self._out(ctx, 0))
-            self._forward_context(kctx, x, w, a, extras=self._sel_state(ctx))
+            self._forward_context(kctx, x, w, a, extras=self._meta_state(ctx))
 
     def _forward_context(self, kctx, x, w, a, extras=None) -> None:
         """DERIVED from the stage list: run through the last context-emitting
@@ -395,11 +395,11 @@ class BlockBwd(_Base):
                         dw = self.gl_for(ctx.task).views(self._out(ctx, j))
                         break
                 dx = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
-            sel = self._sel_state(ctx)
-            if sel is None:
+            meta = self._meta_state(ctx)
+            if meta is None:
                 self._backward(kctx, dy, a, x, w, dx, dw, accum)
             else:
-                self._backward(kctx, dy, a, x, w, dx, dw, accum, sel=sel)
+                self._backward(kctx, dy, a, x, w, dx, dw, accum, meta=meta)
 
     def _backward(self, kctx, dy, a, x, w, dx_out, dw, accum: bool) -> None:
         """Template: MLP tail (shared helper, swappable per family) then the
