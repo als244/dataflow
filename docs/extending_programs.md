@@ -77,6 +77,12 @@ Semantics to get right (the validator catches most violations):
 - Sizes NEVER come from ad-hoc math — if you reuse builtin blocks, ask
   the family layouts (`PackedLayout.total_bytes`), exactly as builtin
   lowering does.
+- Optimizer tasks (`optimizer_block`/... compute keys) bind the shared
+  `OptimizerStep` executable: per-FIELD optimizer choice and state
+  slots come from the dims' `opt_policy` (extending.md §6) — O-object
+  sizes in your hand-built program must match that policy's slots
+  (size them with `opt_state_layout(..., opt_policy=...)`, never by
+  hand).
 - `compute_block_key` + `block_params` are the resolver-binding seam
   (buffer order is positional per key — documented next to each block
   class). Free-form executables can key however they like; the resolver

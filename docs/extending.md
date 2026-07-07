@@ -148,8 +148,10 @@ each field's dtype from `dims.dtypes` (a `DTypePolicy` riding the Shaped
 config: per-field `param`/`grad`/`opt` roles, fnmatch overrides, first
 match wins — `docs/notes/dtype-policy-design.md`). dW layouts come from
 `grad_layout(wl, policy)`, optimizer state from `opt_state_layout(...)`
-(per-field `[m_f | v_f]` pairs — never a flat view), and `AdamWStep`
-updates per field through typed views. Embed/head tables are
+(per-field slot sets decided by the OPTIMIZER policy — `[m_f | v_f]`
+under the adamw default, fewer or none for sgdm/sgd/muon; never a flat
+view; see §6), and `OptimizerStep` updates per field through typed
+views, dispatching each field's step rule per that same policy. Embed/head tables are
 policy-addressed `"embed.w"` / `"head.w"`; a heterogeneous family's
 optimizer resolves its layout per task (`layout_for`, size-verified).
 Policies can be DEPTH-DEPENDENT (`layer_overrides`: first matching
@@ -273,7 +275,7 @@ exact signature documented in its docstring:
 
 | field | contract (see the Protocol docstring for the full text) |
 |---|---|
-| `config_type` | frozen dataclass with preset classmethods (`tiny()` at minimum; `mini`/real-scale for benching) |
+| `config_type` | frozen dataclass with preset classmethods (`tiny()` at minimum; `mini`/real-scale for benching); carries the standard knobs (`dtypes`, `opt_policy`, `optimizer_placement`) which `dims_of` forwards into the Dims |
 | `dims_of: DimsOfFn` | cfg -> Dims; incompatible knob combinations raise HERE, at build time |
 | `lower: LowerFn` | cfg -> Program; MUST keep the task/object naming shape `<prefix>_{step}_{round}_{layer}` / `A_ dW_ W_ O_ M_ dM_`; accepts `recompute_levels=` for planner re-lowering |
 | `initial_values: InitialValuesFn` | (program, cfg, backend, seed) -> pinned host tensors; generation ORDER is part of golden comparability |
@@ -312,6 +314,10 @@ What adding a family (e.g. Qwen3) actually touches, in order:
    the `LayerKindSpec`(s) into `build_shaped_program`, the config->dims
    mapping, and the `FamilyLayouts` into the generic lowering (§4). The
    recompute `build_variant` is just the builder re-invoked with levels.
+   The config carries the standard knobs and `dims_of` FORWARDS them
+   into the Dims: `dtypes` (§3) and `opt_policy` (§6) — a family that
+   forgets the `opt_policy=cfg.opt_policy` forward silently pins its
+   users to adamw (the Dims default).
 5. `training/families.py` — register the `Family` entry
    (`resolve_family` dispatches on config type; configs must NOT subclass
    another family's config).

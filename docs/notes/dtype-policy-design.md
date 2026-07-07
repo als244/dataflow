@@ -1,3 +1,11 @@
+> NOTE (kept current): optimizer state is no longer inherently AdamW's
+> [m_f | v_f]. `opt_state_layout` sizes per-field SLOT SETS from the
+> optimizer policy (`tasks/optim.py`; docs/extending.md §6) — adamw
+> remains the default and its layout is byte-identical to what this
+> note describes. Where this note says "AdamWStep", read
+> "OptimizerStep" (the generalized executable; the old name is an
+> alias). Everything about DTYPE flow below is unchanged.
+
 # Design: first-class user-supplied dtypes (per param / grad / opt state)
 
 Requested by Shein 2026-07-03: stop assuming bf16 — users specify the

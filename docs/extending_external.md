@@ -25,6 +25,10 @@ The API surface a family implements is TYPED and VALIDATED:
 - Block executables subclass `BlockFwd` / `BlockRecompute` / `BlockBwd`
   (the stage grammar, MetaState, ProfileFill machinery is inherited).
 - Fused kernels register through `dataflow.tasks.kernels.registry.register`.
+- Custom OPTIMIZERS register through
+  `dataflow.tasks.optim.register_optimizer` (state slots + step rule;
+  per-field assignment via the config's `opt_policy` — extending.md §6);
+  your family's `dims_of` must forward `opt_policy=cfg.opt_policy`.
 - `validate_family("mymodel")` structurally checks the whole surface in
   seconds — config presets, lowering + task-naming shape, resolver
   coverage of every emitted task, golden class members — before any
