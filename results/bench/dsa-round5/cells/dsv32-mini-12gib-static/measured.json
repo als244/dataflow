@@ -1,0 +1,52 @@
+{
+  "budget_gib": 12.0,
+  "budget_semantics": "device",
+  "planned_budget_gib": 7.7763609969988465,
+  "actual_device_peak_gib": 11.916738033294678,
+  "envelope_ok": true,
+  "fixed_overhead_gib": 1.50439453125,
+  "torch_scratch_peak_gib": 1.86328125,
+  "device_envelope_gib": 12,
+  "scratch_reserve_gib": 1.81494140625,
+  "placement_mode": "static",
+  "extent_budget": false,
+  "sim_ms_per_step": 15973.136078125,
+  "real_ms_per_step_steady": 12772.94580078125,
+  "sim_tokens_per_s": 4102.8887301442755,
+  "real_tokens_per_s": 5130.844600937047,
+  "wall_tokens_per_s": 5124.078201232097,
+  "real_vs_sim_pct": 25.054441843384435,
+  "replay_fidelity_gap_pct": 1.0196925783335247,
+  "losses": [
+    NaN,
+    NaN,
+    NaN
+  ],
+  "peak_fast_gib": 7.757864713668823,
+  "peak_backing_gib": 104.35474706441164,
+  "pinned_host_gib": 104.35499121248722,
+  "step_makespans_ms": [
+    12894.119140625,
+    12809.3798828125,
+    12736.51171875
+  ],
+  "step_wall_s": [
+    18.095025271875784,
+    12.826753503875807,
+    12.752871718956158
+  ],
+  "step_slab_overflows": [
+    0,
+    0,
+    0
+  ],
+  "placement_extent_gib": 8.549062252044678,
+  "placement_escapes": 0,
+  "pressure_evictions": 0,
+  "placement_overhead": 1.1019865088626537,
+  "recompute_chosen": 72,
+  "family": "dsv32-mini",
+  "config": "dsv32-mini-s4k-bs4ga4",
+  "source_summary": "/home/shein/Documents/grad_school/research/dataflow/artifacts/bench/bench-dsv32-mini-s4k-bs4ga4-12dev-rc.summary.json",
+  "generated_by": "tools/bench_campaign.py"
+}

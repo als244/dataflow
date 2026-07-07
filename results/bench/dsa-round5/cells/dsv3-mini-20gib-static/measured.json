@@ -1,0 +1,52 @@
+{
+  "budget_gib": 20.0,
+  "budget_semantics": "device",
+  "planned_budget_gib": 13.630345776677132,
+  "actual_device_peak_gib": 20.004899978637695,
+  "envelope_ok": true,
+  "fixed_overhead_gib": 1.47113037109375,
+  "torch_scratch_peak_gib": 3.484375,
+  "device_envelope_gib": 20,
+  "scratch_reserve_gib": 3.3798828125,
+  "placement_mode": "static",
+  "extent_budget": false,
+  "sim_ms_per_step": 8455.79146142578,
+  "real_ms_per_step_steady": 7619.423583984375,
+  "sim_tokens_per_s": 7750.427656472691,
+  "real_tokens_per_s": 8601.17557156859,
+  "wall_tokens_per_s": 8582.334246719647,
+  "real_vs_sim_pct": 10.976786737508682,
+  "replay_fidelity_gap_pct": 0.5411012642720748,
+  "losses": [
+    12.166515350341797,
+    12.184014320373535,
+    12.173824310302734
+  ],
+  "peak_fast_gib": 13.527778148651123,
+  "peak_backing_gib": 103.42233753576875,
+  "pinned_host_gib": 106.16574574261904,
+  "step_makespans_ms": [
+    8234.6943359375,
+    7629.548828125,
+    7609.29833984375
+  ],
+  "step_wall_s": [
+    13.773060008883476,
+    7.646349632879719,
+    7.625952311092988
+  ],
+  "step_slab_overflows": [
+    0,
+    0,
+    0
+  ],
+  "placement_extent_gib": 15.049394607543945,
+  "placement_escapes": 0,
+  "pressure_evictions": 0,
+  "placement_overhead": 1.1124808850479666,
+  "recompute_chosen": 27,
+  "family": "dsv3-mini",
+  "config": "dsv3-mini-s4k-bs8ga2",
+  "source_summary": "/home/shein/Documents/grad_school/research/dataflow/artifacts/bench/bench-dsv3-mini-s4k-bs8ga2-20dev-rc.summary.json",
+  "generated_by": "tools/bench_campaign.py"
+}

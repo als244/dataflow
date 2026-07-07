@@ -28,3 +28,5 @@
 | 20 | 8,582 | 8,175 | 8,220 (vmm) |
 | 24 | 11,988 (vmm) | 9,931 (vmm) | 9,856 (vmm) |
 | 28 | 12,177 | 10,427 | 11,270 |
+
+Per-cell artifacts (measured.json + plan.json): `results/bench/dsa-round5/cells/{family}-{dev}gib-{mode}/`

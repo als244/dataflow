@@ -96,6 +96,7 @@ def load_cells(families: list[str], allow_illegal: bool) -> dict:
                     peak=r["actual_device_peak_gib"], shape=shape,
                     rc=r["recompute_chosen"], ok=ok, mt=mt,
                     layers=r.get("n_layers"),
+                    row=r, config=data.get("config"), summary=str(f),
                 )
                 key = (fam, dev, mode)
                 prev = best.get(key)
@@ -163,6 +164,37 @@ def run_cells(families, devs, modes, shapes, seq_tag, steps, pace,
                 time.sleep(pace)
 
 
+def emit_cells(cells, families, devs, modes, out_dir: Path) -> None:
+    """Per cell: measured.json (the full summary row + provenance) and
+    plan.json (the annotated program actually executed — from the row's
+    plan_path when present, else matched by planned ledger)."""
+    import shutil
+    for (fam, dev, mode), c in sorted(cells.items()):
+        if fam not in families or dev not in devs or mode not in modes:
+            continue
+        d = out_dir / f"{fam}-{dev}gib-{mode}"
+        d.mkdir(parents=True, exist_ok=True)
+        measured = dict(c["row"])
+        measured.update(family=fam, device_envelope_gib=dev,
+                        placement_mode=mode, config=c["config"],
+                        source_summary=c["summary"],
+                        generated_by="tools/bench_campaign.py")
+        (d / "measured.json").write_text(json.dumps(measured, indent=2) + "\n")
+        plan = c["row"].get("plan_path")
+        if not plan:  # legacy rows: match by planned ledger value
+            led = c["row"].get("planned_budget_gib")
+            if led is not None:
+                hits = [q for sd in SUMMARY_DIRS for q in
+                        sd.glob(f"*-{led:g}gib.annotated.json")]
+                plan = str(hits[0]) if len(hits) == 1 else None
+        if plan and Path(plan).exists():
+            shutil.copy(plan, d / "plan.json")
+        else:
+            (d / "plan.MISSING").write_text(
+                "no unambiguous annotated plan for this row (legacy "
+                "summary without plan_path)\n")
+
+
 def render(cells, families, devs, modes, labels) -> str:
     def cell(fam, dev, mode):
         c = cells.get((fam, dev, mode))
@@ -224,6 +256,8 @@ def main() -> None:
     ap.add_argument("--allow-illegal", action="store_true",
                     help="render envelope-busting rows (flagged) instead of dropping")
     ap.add_argument("--out", default="-", help="output markdown path, - = stdout")
+    ap.add_argument("--cells-dir", default=None,
+                    help="emit per-cell measured.json + plan.json under this dir")
     args = ap.parse_args()
 
     families = args.families.split(",")
@@ -248,6 +282,10 @@ def main() -> None:
             cells = load_cells(families, args.allow_illegal)
 
     md = render(cells, families, devs, modes, labels)
+    if args.cells_dir:
+        emit_cells(cells, families, devs, modes, Path(args.cells_dir))
+        md += (f"\nPer-cell artifacts (measured.json + plan.json): "
+               f"`{args.cells_dir}/{{family}}-{{dev}}gib-{{mode}}/`\n")
     if args.out == "-":
         print(md)
     else:

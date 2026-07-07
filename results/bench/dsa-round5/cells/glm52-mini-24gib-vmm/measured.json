@@ -1,0 +1,67 @@
+{
+  "budget_gib": 24.0,
+  "budget_semantics": "device",
+  "planned_budget_gib": 14.802697754465044,
+  "vmm": {
+    "maps": 255,
+    "handle_creates": 267,
+    "handle_reflows": 255,
+    "prewarmed": 15,
+    "slot_adoptions": 279,
+    "t_create_s": 0.0496,
+    "t_destroy_s": 0.042,
+    "t_map_s": 0.349,
+    "t_unmap_s": 0.1864,
+    "reclaim_drains": 0,
+    "peak_mapped_bytes": 15724445696,
+    "peak_physical_bytes": 16422797312,
+    "pool_bytes": 16431185920
+  },
+  "actual_device_peak_gib": 23.55511474609375,
+  "envelope_ok": true,
+  "fixed_overhead_gib": 1.41253662109375,
+  "torch_scratch_peak_gib": 6.83984375,
+  "device_envelope_gib": 24,
+  "scratch_reserve_gib": 6.884765625,
+  "placement_mode": "vmm",
+  "extent_budget": false,
+  "sim_ms_per_step": 7826.228159179687,
+  "real_ms_per_step_steady": 6632.834716796875,
+  "sim_tokens_per_s": 8373.893357955616,
+  "real_tokens_per_s": 9880.5416987156,
+  "wall_tokens_per_s": 9856.414846519858,
+  "real_vs_sim_pct": 17.99220835943167,
+  "replay_fidelity_gap_pct": 2.7927258948937004,
+  "losses": [
+    NaN,
+    NaN,
+    NaN
+  ],
+  "peak_fast_gib": 14.635252952575684,
+  "peak_backing_gib": 88.12517380714417,
+  "pinned_host_gib": 88.12541795149446,
+  "step_makespans_ms": [
+    7534.876953125,
+    6644.7763671875,
+    6620.89306640625
+  ],
+  "step_wall_s": [
+    9.695107964100316,
+    6.660937865963206,
+    6.6372037038672715
+  ],
+  "step_slab_overflows": [
+    0,
+    0,
+    0
+  ],
+  "placement_extent_gib": 15.302734375,
+  "placement_escapes": 0,
+  "pressure_evictions": 0,
+  "placement_overhead": 1.0456077817436593,
+  "recompute_chosen": 13,
+  "family": "glm52-mini",
+  "config": "glm52-mini-s4k-bs16ga1",
+  "source_summary": "/home/shein/Documents/grad_school/research/dataflow/artifacts/bench/bench-glm52-mini-s4k-bs16ga1-24_28dev-rc-vmm.summary.json",
+  "generated_by": "tools/bench_campaign.py"
+}

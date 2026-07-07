@@ -1,0 +1,52 @@
+{
+  "budget_gib": 16.0,
+  "budget_semantics": "device",
+  "planned_budget_gib": 8.785088718868792,
+  "actual_device_peak_gib": 15.697751522064209,
+  "envelope_ok": true,
+  "fixed_overhead_gib": 1.5045166015625,
+  "torch_scratch_peak_gib": 3.564453125,
+  "device_envelope_gib": 16,
+  "scratch_reserve_gib": 3.3798828125,
+  "placement_mode": "static",
+  "extent_budget": false,
+  "sim_ms_per_step": 10011.74478125,
+  "real_ms_per_step_steady": 8772.9267578125,
+  "sim_tokens_per_s": 6545.911969583549,
+  "real_tokens_per_s": 7470.255002600886,
+  "wall_tokens_per_s": 7456.69315996717,
+  "real_vs_sim_pct": 14.120920619043154,
+  "replay_fidelity_gap_pct": 1.179252151718009,
+  "losses": [
+    NaN,
+    NaN,
+    NaN
+  ],
+  "peak_fast_gib": 8.74120020866394,
+  "peak_backing_gib": 104.33006453886628,
+  "pinned_host_gib": 104.33030868321657,
+  "step_makespans_ms": [
+    9116.623046875,
+    8808.921875,
+    8736.931640625
+  ],
+  "step_wall_s": [
+    14.336352318059653,
+    8.825092734070495,
+    8.75267226016149
+  ],
+  "step_slab_overflows": [
+    0,
+    0,
+    0
+  ],
+  "placement_extent_gib": 10.628781795501709,
+  "placement_escapes": 0,
+  "pressure_evictions": 0,
+  "placement_overhead": 1.2159491703324425,
+  "recompute_chosen": 36,
+  "family": "glm52-mini",
+  "config": "glm52-mini-s4k-bs8ga2",
+  "source_summary": "/home/shein/Documents/grad_school/research/dataflow/artifacts/bench/bench-glm52-mini-s4k-bs8ga2-16_20dev-rc.summary.json",
+  "generated_by": "tools/bench_campaign.py"
+}
