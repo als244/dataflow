@@ -46,7 +46,6 @@ from .dsv3_blocks import (
     Dsv3DenseBlockFwd,
     _mla_expand_kv,
     _mla_expand_q,
-    _pad_v,
 )
 from .moe.stages import MOE_SHARED_NOGATE_STAGES, MoEProfileFill, moe_bias_update, moe_mlp_tail_bwd
 
@@ -56,6 +55,23 @@ _LN_EPS = 1e-5
 def _seq_bounds(d):
     lens = ops.seq_lens_of(d.seq_spec, d.tokens)
     return tuple(ops.seq_bounds_of(lens, d.tokens))
+
+
+def _bits_for_bounds(idx, bounds, device):
+    # per-sequence selection bitmasks (int64 words), packed once and
+    # shared across sparse-bwd + KL kernels (eager impls ignore them)
+    try:
+        from .kernels.dsa import _pack_local_bits
+    except ImportError:
+        return None
+    out = []
+    for lo, hi in bounds:
+        length = hi - lo
+        words = (length + 63) // 64
+        bits = torch.empty(length, words, dtype=torch.int64, device=device)
+        _pack_local_bits(idx[lo:hi], lo, length, bits)
+        out.append(bits)
+    return out
 
 
 def _indexer_inputs(kctx, K, d, h1, q_lora_n, w, pos):
@@ -202,16 +218,19 @@ class Dsv32DenseBlockFwd(Dsv32ProfileFill, Dsv3DenseBlockFwd):
     def _stage_dsa_attn(kctx, K, d, st):
         a = st["a"]
         t, h, qk, v = d.tokens, d.n_heads, d.qk_head_dim, d.v_head_dim
-        out_pad = torch.empty(t, h * qk, dtype=torch.bfloat16,
-                              device=st["q_full"].device)
-        lse = torch.empty(h, t, dtype=torch.float32, device=out_pad.device)
+        # native-DV core: our kernels don't need flash's equal-dims pad —
+        # strip the base stage's zero pad (columns provably zero)
+        vals = st.pop("v_pad").view(t, h, qk)[..., :v].reshape(t, h * v)
+        vals = vals.contiguous()
+        attn_out = torch.empty(t, h * v, dtype=torch.bfloat16,
+                               device=st["q_full"].device)
+        lse = torch.empty(h, t, dtype=torch.float32, device=attn_out.device)
         K.dsa_sparse_attn_fwd(
-            kctx, st.pop("q_full"), st.pop("k_full"), st.pop("v_pad"),
-            st.pop("idx"), out_pad, lse,
-            n_heads=h, head_dim=qk, seq_bounds=_seq_bounds(d),
+            kctx, st.pop("q_full"), st.pop("k_full"), vals,
+            st.pop("idx"), attn_out, lse,
+            n_heads=h, head_dim=qk, seq_bounds=_seq_bounds(d), v_head_dim=v,
         )
-        attn_out = out_pad.view(t, h, qk)[..., :v].reshape(t, h * v).contiguous()
-        del out_pad
+        del vals
         if a is not None:
             a["lse"].copy_(lse.reshape(a["lse"].shape))
             a["attn_out"].copy_(attn_out)
@@ -247,7 +266,8 @@ class Dsv32DenseBlockBwd(Dsv32ProfileFill, Dsv3DenseBlockBwd):
 
 
     def _indexer_kl_bwd(self, kctx, d, a, x, w, acc, h1, q_lora_n,
-                        q_full, k_full, idx, lse, bounds, pos):
+                        q_full, k_full, idx, lse, bounds, pos,
+                        bits_by_seq=None):
         """The indexer's KL training path (detached seam). Extracted so
         the train_indexer=False ablation skips it wholesale."""
         K = self.kernels
@@ -258,7 +278,7 @@ class Dsv32DenseBlockBwd(Dsv32ProfileFill, Dsv3DenseBlockBwd):
         dk_idx = torch.empty_like(k_idx)
         dwts = torch.empty_like(wts)
         hi_, di = d.index_n_heads, d.index_head_dim
-        for lo, hi in bounds:
+        for si, (lo, hi) in enumerate(bounds):
             length = hi - lo
             # rebuild indexer scores for this sequence
             iscores = torch.empty(length, length, dtype=torch.float32,
@@ -280,6 +300,8 @@ class Dsv32DenseBlockBwd(Dsv32ProfileFill, Dsv3DenseBlockBwd):
             K.dsa_probs_sum(
                 kctx, q_full, k_full, idx, lse, p,
                 n_heads=h, head_dim=qk, seq_bounds=((lo, hi),),
+                bits_by_seq=None if bits_by_seq is None
+                else [bits_by_seq[si]],
             )
             p = p / p.sum(-1, keepdim=True).clamp_min(1e-20)
             sig = torch.softmax(iscores + m, dim=-1)
@@ -332,7 +354,7 @@ class Dsv32DenseBlockBwd(Dsv32ProfileFill, Dsv3DenseBlockBwd):
         qk, kvl = d.qk_head_dim, d.kv_lora_rank
         bounds = _seq_bounds(d)
 
-        d_attn_v = dh_mid @ w["wo"].T
+        d_attn_v = (dh_mid @ w["wo"].T).contiguous()
         acc("wo", a["attn_out"].T @ dh_mid)
 
         pos = ops.positions_for(d.seq_spec, t, x.device)
@@ -340,26 +362,22 @@ class Dsv32DenseBlockBwd(Dsv32ProfileFill, Dsv3DenseBlockBwd):
         latent_n, k_full, vals = _mla_expand_kv(
             kctx, K, d, a["kv_a"], a["rstd_kva"], w, pos,
         )
-        v_pad = _pad_v(vals, qk)
-        del vals
-        d_attn_pad = _pad_v(d_attn_v.view(t, h, v), qk)
-        del d_attn_v
+        vals = vals.reshape(t, h * v).contiguous()
 
         lse = a["lse"].reshape(h, t)
         idx = a["dsa_idx"]
+        # selection bitmask packed ONCE per sequence, shared by the sparse
+        # backward and the KL target kernel
+        bits_by_seq = _bits_for_bounds(idx, bounds, x.device)
         dq = torch.empty_like(q_full)
         dk = torch.empty_like(k_full)
-        dv_pad = torch.empty_like(v_pad)
-        # padded O from ctx: V's pad columns are zero, so O's are too —
-        # zero-padding the saved attn_out is EXACT (saves a fwd re-run)
-        out_pad = _pad_v(a["attn_out"].view(t, h, v), qk)
+        dv = torch.empty_like(vals)
         K.dsa_sparse_attn_bwd(
-            kctx, d_attn_pad, q_full, k_full, v_pad, idx, lse,
-            dq, dk, dv_pad, n_heads=h, head_dim=qk, seq_bounds=bounds,
-            out=out_pad.view(t, h * qk),
+            kctx, d_attn_v, q_full, k_full, vals, idx, lse,
+            dq, dk, dv, n_heads=h, head_dim=qk, seq_bounds=bounds,
+            out=a["attn_out"], bits_by_seq=bits_by_seq, v_head_dim=v,
         )
-        del out_pad
-        del d_attn_pad
+        del d_attn_v
 
         # ---- indexer KL injection (detached seam: touches ONLY idx weights)
         h1 = torch.empty_like(x)
@@ -373,14 +391,14 @@ class Dsv32DenseBlockBwd(Dsv32ProfileFill, Dsv3DenseBlockBwd):
                 acc(name, torch.zeros_like(w[name]))
         if d.train_indexer:
             self._indexer_kl_bwd(kctx, d, a, x, w, acc, h1, q_lora_n,
-                                 q_full, k_full, idx, lse, bounds, pos)
+                                 q_full, k_full, idx, lse, bounds, pos,
+                                 bits_by_seq=bits_by_seq)
 
         # ---- main-path chains (identical to dsv3 from here) ---------------
         dk3 = dk.view(t, h, qk)
-        dv = dv_pad.view(t, h, qk)[..., :v]
-        dkvb = torch.cat([dk3[..., :nope], dv], dim=-1).reshape(
+        dkvb = torch.cat([dk3[..., :nope], dv.view(t, h, v)], dim=-1).reshape(
             t, h * (nope + v)).contiguous()
-        del dv_pad, dv
+        del dv
         dk_rope_sum = dk3[..., nope:].sum(dim=1).contiguous()
         del dk, dk3
         dk_rope_pre = torch.empty_like(dk_rope_sum)
