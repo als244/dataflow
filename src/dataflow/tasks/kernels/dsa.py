@@ -88,7 +88,8 @@ def _mask_for(idx, lo, hi, rows_lo, rows_hi):
 
 
 def _eager_sparse_attn_fwd(kctx, q, kf, vp, idx, out, lse_out, *,
-                           n_heads, head_dim, seq_bounds):
+                           n_heads, head_dim, seq_bounds, bits_by_seq=None):
+    del bits_by_seq
     t = q.shape[0]
     scale = head_dim ** -0.5
     q3 = q.view(t, n_heads, head_dim)
@@ -112,7 +113,9 @@ def _eager_sparse_attn_fwd(kctx, q, kf, vp, idx, out, lse_out, *,
 
 def _eager_sparse_attn_bwd(kctx, d_attn, q, kf, vp, idx, lse,
                            dq_out, dk_out, dv_out, *,
-                           n_heads, head_dim, seq_bounds):
+                           n_heads, head_dim, seq_bounds, out=None,
+                           bits_by_seq=None):
+    del out, bits_by_seq  # row_dot formulation needs only lse
     t = q.shape[0]
     scale = head_dim ** -0.5
     q3 = q.view(t, n_heads, head_dim)
@@ -258,23 +261,26 @@ if triton is not None:
         hi_n = (pid_m + 1) * BM
         hi_n = tl.minimum(hi_n, L)
         for n0 in range(0, hi_n, BN):
-            rn = n0 + tl.arange(0, BN)
-            nmask = rn < L
-            kt = tl.load(k_ptr + rn[:, None] * skt + pid_h * skh + rd[None, :],
-                         mask=nmask[:, None] & dmask[None, :], other=0.0)
-            s = tl.dot(q, tl.trans(kt)) * scale
             word = tl.load(bits_ptr + rm * n_words + (n0 >> 6),
                            mask=mmask, other=0)
-            bit = (word[:, None] >> (rn[None, :] - n0)) & 1
-            s = tl.where((bit == 1) & nmask[None, :], s, float("-inf"))
-            m_new = tl.maximum(m_i, tl.max(s, 1))
-            alpha = tl.exp(m_i - m_new)
-            p = tl.exp(s - m_new[:, None])
-            l_i = l_i * alpha + tl.sum(p, 1)
-            vt = tl.load(v_ptr + rn[:, None] * svt + pid_h * svh + rd[None, :],
-                         mask=nmask[:, None] & dmask[None, :], other=0.0)
-            acc = acc * alpha[:, None] + tl.dot(p.to(vt.dtype), vt)
-            m_i = m_new
+            alive = tl.sum((word != 0).to(tl.int32), 0) > 0
+            if alive:  # dead tile: zero live bits -> exact no-op for
+                # online softmax (p = 0, m/l unchanged) — skip all work
+                rn = n0 + tl.arange(0, BN)
+                nmask = rn < L
+                kt = tl.load(k_ptr + rn[:, None] * skt + pid_h * skh + rd[None, :],
+                             mask=nmask[:, None] & dmask[None, :], other=0.0)
+                s = tl.dot(q, tl.trans(kt)) * scale
+                bit = (word[:, None] >> (rn[None, :] - n0)) & 1
+                s = tl.where((bit == 1) & nmask[None, :], s, float("-inf"))
+                m_new = tl.maximum(m_i, tl.max(s, 1))
+                alpha = tl.exp(m_i - m_new)
+                p = tl.exp(s - m_new[:, None])
+                l_i = l_i * alpha + tl.sum(p, 1)
+                vt = tl.load(v_ptr + rn[:, None] * svt + pid_h * svh + rd[None, :],
+                             mask=nmask[:, None] & dmask[None, :], other=0.0)
+                acc = acc * alpha[:, None] + tl.dot(p.to(vt.dtype), vt)
+                m_i = m_new
         l_safe = tl.where(l_i > 0, l_i, 1.0)
         o = acc / l_safe[:, None]
         tl.store(o_ptr + rm[:, None] * sot + pid_h * soh + rd[None, :],
@@ -310,21 +316,23 @@ if triton is not None:
         dq_acc = tl.zeros((BM, DP), tl.float32)
         hi_n = tl.minimum((pid_m + 1) * BM, L)
         for n0 in range(0, hi_n, BN):
-            rn = n0 + tl.arange(0, BN)
-            nmask = rn < L
-            kt = tl.load(k_ptr + rn[:, None] * skt + pid_h * skh + rd[None, :],
-                         mask=nmask[:, None] & dmask[None, :], other=0.0)
-            s = tl.dot(q, tl.trans(kt)) * scale
             word = tl.load(bits_ptr + rm * n_words + (n0 >> 6),
                            mask=mmask, other=0)
-            bit = (word[:, None] >> (rn[None, :] - n0)) & 1
-            live = (bit == 1) & nmask[None, :]
-            p = tl.where(live, tl.exp(s - lse[:, None]), 0.0)
-            vt = tl.load(v_ptr + rn[:, None] * svt + pid_h * svh + rd[None, :],
-                         mask=nmask[:, None] & dmask[None, :], other=0.0)
-            dp = tl.dot(do.to(vt.dtype), tl.trans(vt))
-            ds = p * (dp - delta[:, None]) * scale
-            dq_acc += tl.dot(ds.to(kt.dtype), kt)
+            alive = tl.sum((word != 0).to(tl.int32), 0) > 0
+            if alive:  # dead tile contributes exactly zero dq
+                rn = n0 + tl.arange(0, BN)
+                nmask = rn < L
+                kt = tl.load(k_ptr + rn[:, None] * skt + pid_h * skh + rd[None, :],
+                             mask=nmask[:, None] & dmask[None, :], other=0.0)
+                s = tl.dot(q, tl.trans(kt)) * scale
+                bit = (word[:, None] >> (rn[None, :] - n0)) & 1
+                live = (bit == 1) & nmask[None, :]
+                p = tl.where(live, tl.exp(s - lse[:, None]), 0.0)
+                vt = tl.load(v_ptr + rn[:, None] * svt + pid_h * svh + rd[None, :],
+                             mask=nmask[:, None] & dmask[None, :], other=0.0)
+                dp = tl.dot(do.to(vt.dtype), tl.trans(vt))
+                ds = p * (dp - delta[:, None]) * scale
+                dq_acc += tl.dot(ds.to(kt.dtype), kt)
         tl.store(dq_ptr + rm[:, None] * sqt + pid_h * sqh + rd[None, :],
                  dq_acc.to(dq_ptr.dtype.element_ty),
                  mask=mmask[:, None] & dmask[None, :])
@@ -352,27 +360,29 @@ if triton is not None:
         for m0 in range(pid_n * BN, L, BM):
             rm = m0 + tl.arange(0, BM)
             mmask = rm < L
-            q = tl.load(q_ptr + rm[:, None] * sqt + pid_h * sqh + rd[None, :],
-                        mask=mmask[:, None] & dmask[None, :], other=0.0)
-            do = tl.load(do_ptr + rm[:, None] * sot + pid_h * soh + rd[None, :],
-                         mask=mmask[:, None] & dmask[None, :], other=0.0
-                         ).to(tl.float32)
-            o = tl.load(o_ptr + rm[:, None] * sot + pid_h * soh + rd[None, :],
-                        mask=mmask[:, None] & dmask[None, :], other=0.0
-                        ).to(tl.float32)
-            delta = tl.sum(do * o, 1)
-            lse = tl.load(lse_ptr + pid_h * slh + rm * slt, mask=mmask,
-                          other=0.0)
-            s = tl.dot(q, tl.trans(kt)) * scale
             word = tl.load(bits_ptr + rm * n_words + ((pid_n * BN) >> 6),
                            mask=mmask, other=0)
-            bit = (word[:, None] >> (rn[None, :] - pid_n * BN)) & 1
-            live = (bit == 1) & nmask[None, :] & mmask[:, None]
-            p = tl.where(live, tl.exp(s - lse[:, None]), 0.0)
-            dv_acc += tl.dot(tl.trans(p.to(vt.dtype)), do.to(vt.dtype))
-            dp = tl.dot(do.to(vt.dtype), tl.trans(vt))
-            ds = p * (dp - delta[:, None]) * scale
-            dk_acc += tl.dot(tl.trans(ds.to(q.dtype)), q)
+            alive = tl.sum((word != 0).to(tl.int32), 0) > 0
+            if alive:  # dead (m, n) tile contributes zero dk/dv
+                q = tl.load(q_ptr + rm[:, None] * sqt + pid_h * sqh + rd[None, :],
+                            mask=mmask[:, None] & dmask[None, :], other=0.0)
+                do = tl.load(do_ptr + rm[:, None] * sot + pid_h * soh + rd[None, :],
+                             mask=mmask[:, None] & dmask[None, :], other=0.0
+                             ).to(tl.float32)
+                o = tl.load(o_ptr + rm[:, None] * sot + pid_h * soh + rd[None, :],
+                            mask=mmask[:, None] & dmask[None, :], other=0.0
+                            ).to(tl.float32)
+                delta = tl.sum(do * o, 1)
+                lse = tl.load(lse_ptr + pid_h * slh + rm * slt, mask=mmask,
+                              other=0.0)
+                s = tl.dot(q, tl.trans(kt)) * scale
+                bit = (word[:, None] >> (rn[None, :] - pid_n * BN)) & 1
+                live = (bit == 1) & nmask[None, :] & mmask[:, None]
+                p = tl.where(live, tl.exp(s - lse[:, None]), 0.0)
+                dv_acc += tl.dot(tl.trans(p.to(vt.dtype)), do.to(vt.dtype))
+                dp = tl.dot(do.to(vt.dtype), tl.trans(vt))
+                ds = p * (dp - delta[:, None]) * scale
+                dk_acc += tl.dot(tl.trans(ds.to(q.dtype)), q)
         tl.store(dk_ptr + rn[:, None] * skt + pid_h * skh + rd[None, :],
                  dk_acc.to(dk_ptr.dtype.element_ty),
                  mask=nmask[:, None] & dmask[None, :])
@@ -384,15 +394,22 @@ if triton is not None:
               workspace=internal(_score_hint),
               requires=lambda c: c.get("triton"), priority=10,
               allocates="torch")
+    # static sweep at s4k mini dims (dead-tile skip active), 2026-07-07:
+    # fwd (BM=64, w=4, s=3) 0.52 ms; dq (64, 8, 3) 0.77; dkv (128, 8, 2)
+    # 0.97 — BN pinned at 64 by the bitmask word width
     def _triton_sparse_fwd(kctx, q, kf, vp, idx, out, lse_out, *,
-                           n_heads, head_dim, seq_bounds):
+                           n_heads, head_dim, seq_bounds, bits_by_seq=None):
         t = q.shape[0]
         BM, BN = 64, 64
-        for lo, hi in seq_bounds:
+        for si, (lo, hi) in enumerate(seq_bounds):
             length = hi - lo
             words = (length + 63) // 64
-            bits = torch.empty(length, words, dtype=torch.int64, device=q.device)
-            _pack_local_bits(idx[lo:hi], lo, length, bits)
+            if bits_by_seq is not None:
+                bits = bits_by_seq[si]
+            else:
+                bits = torch.empty(length, words, dtype=torch.int64,
+                                   device=q.device)
+                _pack_local_bits(idx[lo:hi], lo, length, bits)
             grid = ((length + BM - 1) // BM, n_heads)
             _mf_fwd_kernel[grid](
                 q[lo:hi], kf[lo:hi], vp[lo:hi], bits, out[lo:hi],
@@ -403,26 +420,26 @@ if triton is not None:
                 lse_out.stride(0), 1,
                 H=n_heads, D=head_dim, DP=triton.next_power_of_2(head_dim),
                 BM=BM, BN=BN,
-                num_warps=4, num_stages=2,
+                num_warps=4, num_stages=3,
             )
         return out
 
     def _pack_local_bits(idx_slice, lo, length, bits_out):
         device = idx_slice.device
         r = idx_slice.shape[0]
-        local = (idx_slice.long() - lo).clamp_(0, length - 1)
         rows = torch.arange(r, device=device).unsqueeze(1)
-        onehot = torch.zeros(r, length, dtype=torch.bool, device=device)
-        onehot.scatter_(1, local, True)
-        cols = torch.arange(length, device=device).unsqueeze(0)
-        onehot &= cols <= rows
-        words = bits_out.shape[1]
-        pad = words * 64 - length
-        if pad:
-            onehot = torch.nn.functional.pad(onehot, (0, pad))
-        shifts = (torch.ones(64, dtype=torch.int64, device=device)
-                  << torch.arange(64, dtype=torch.int64, device=device))
-        bits_out.copy_((onehot.view(r, words, 64).long() * shifts).sum(-1))
+        local = (idx_slice.long() - lo).clamp_(0, length - 1)
+        # causal re-suppression of pad indices (point at future rows):
+        # clamp them onto the row's own diagonal (always a legal bit)
+        local = torch.minimum(local, rows)
+        srt, _ = torch.sort(local, dim=1)
+        uniq = torch.ones_like(srt, dtype=torch.bool)
+        uniq[:, 1:] = srt[:, 1:] != srt[:, :-1]
+        contrib = torch.where(
+            uniq, torch.ones_like(srt) << (srt & 63), torch.zeros_like(srt),
+        )
+        bits_out.zero_()
+        bits_out.scatter_add_(1, srt >> 6, contrib)
 
     @register("dsa_sparse_attn_bwd", "triton", deterministic=True,
               workspace=internal(_score_hint),
@@ -430,19 +447,26 @@ if triton is not None:
               allocates="torch")
     def _triton_sparse_bwd(kctx, d_attn, q, kf, vp, idx, lse,
                            dq_out, dk_out, dv_out, *,
-                           n_heads, head_dim, seq_bounds):
+                           n_heads, head_dim, seq_bounds, out=None,
+                           bits_by_seq=None):
         BM, BN = 64, 64
-        # forward outputs are re-derived per sequence for delta = <dO, O>
-        out = torch.empty_like(q)
-        lse_chk = torch.empty_like(lse)
-        _triton_sparse_fwd(kctx, q, kf, vp, idx, out, lse_chk,
-                           n_heads=n_heads, head_dim=head_dim,
-                           seq_bounds=seq_bounds)
-        for lo, hi in seq_bounds:
+        # delta = <dO, O> needs the forward output: rebuilt by the CALLER
+        # from ctx attn_out when available (out=), else re-derived here
+        if out is None:
+            out = torch.empty_like(q)
+            lse_chk = torch.empty_like(lse)
+            _triton_sparse_fwd(kctx, q, kf, vp, idx, out, lse_chk,
+                               n_heads=n_heads, head_dim=head_dim,
+                               seq_bounds=seq_bounds)
+        for si, (lo, hi) in enumerate(seq_bounds):
             length = hi - lo
             words = (length + 63) // 64
-            bits = torch.zeros(length, words, dtype=torch.int64, device=q.device)
-            _pack_local_bits(idx[lo:hi], lo, length, bits)
+            if bits_by_seq is not None:
+                bits = bits_by_seq[si]
+            else:
+                bits = torch.empty(length, words, dtype=torch.int64,
+                                   device=q.device)
+                _pack_local_bits(idx[lo:hi], lo, length, bits)
             grid_m = ((length + BM - 1) // BM, n_heads)
             _mf_bwd_dq_kernel[grid_m](
                 d_attn[lo:hi], q[lo:hi], kf[lo:hi], vp[lo:hi], out[lo:hi],
@@ -453,7 +477,7 @@ if triton is not None:
                 lse.stride(0), 1,
                 H=n_heads, D=head_dim, DP=triton.next_power_of_2(head_dim),
                 BM=BM, BN=BN,
-                num_warps=4, num_stages=2,
+                num_warps=8, num_stages=3,
             )
             grid_n = ((length + BN - 1) // BN, n_heads)
             _mf_bwd_dkv_kernel[grid_n](
@@ -464,8 +488,8 @@ if triton is not None:
                 vp.stride(0), head_dim, d_attn.stride(0), head_dim,
                 lse.stride(0), 1,
                 H=n_heads, D=head_dim, DP=triton.next_power_of_2(head_dim),
-                BM=BM, BN=BN,
-                num_warps=4, num_stages=2,
+                BM=128, BN=BN,
+                num_warps=8, num_stages=2,
             )
 
     @triton.jit
@@ -547,11 +571,11 @@ if triton is not None:
             for n0 in range(0, hi_n, BN):
                 rn = n0 + tl.arange(0, BN)
                 nmask = rn < L
+                dI = tl.load(ds_ptr + rm[:, None] * s_stride + rn[None, :],
+                             mask=mmask[:, None] & nmask[None, :], other=0.0)
                 k = tl.load(k_ptr + rn[:, None] * DI + rd[None, :],
                             mask=nmask[:, None] & dmask[None, :], other=0.0)
                 r = tl.dot(q, tl.trans(k))
-                dI = tl.load(ds_ptr + rm[:, None] * s_stride + rn[None, :],
-                             mask=mmask[:, None] & nmask[None, :], other=0.0)
                 relu_r = tl.maximum(r, 0.0)
                 dw_acc += tl.sum(dI * relu_r, 1)
                 g = tl.where(r > 0, dI * w[:, None], 0.0)
@@ -580,12 +604,12 @@ if triton is not None:
             for m0 in range(pid_n * BN, L, BM):
                 rm = m0 + tl.arange(0, BM)
                 mmask = rm < L
+                dI = tl.load(ds_ptr + rm[:, None] * s_stride + rn[None, :],
+                             mask=mmask[:, None] & nmask[None, :], other=0.0)
                 q = tl.load(q_ptr + rm[:, None] * (HI * DI) + h * DI + rd[None, :],
                             mask=mmask[:, None] & dmask[None, :], other=0.0)
                 w = tl.load(w_ptr + rm * HI + h, mask=mmask, other=0.0)
                 r = tl.dot(q, tl.trans(k))
-                dI = tl.load(ds_ptr + rm[:, None] * s_stride + rn[None, :],
-                             mask=mmask[:, None] & nmask[None, :], other=0.0)
                 g = tl.where(r > 0, dI * w[:, None], 0.0)
                 dk_acc += tl.dot(tl.trans(g.to(q.dtype)), q)
         tl.store(dk_ptr + rn[:, None] * DI + rd[None, :],
@@ -643,6 +667,9 @@ if triton is not None:
         dmask = rd < D
         word = tl.load(bits_ptr + rm * n_words + ((pid_n * BN) >> 6),
                        mask=mmask, other=0)
+        alive = tl.sum((word != 0).to(tl.int32), 0) > 0
+        if not alive:
+            return  # p_out pre-zeroed by the launcher
         bit = (word[:, None] >> (rn[None, :] - pid_n * BN)) & 1
         live = (bit == 1) & mmask[:, None] & nmask[None, :]
         acc = tl.zeros((BM, BN), tl.float32)
@@ -658,15 +685,19 @@ if triton is not None:
                  mask=mmask[:, None] & nmask[None, :])
 
     def _dsa_probs_sum(kctx, q, kf, idx, lse, p_out, *,
-                       n_heads, head_dim, seq_bounds):
+                       n_heads, head_dim, seq_bounds, bits_by_seq=None):
         """Head-summed masked attention probs (t-local (L,L) fp32 per seq)
         — the indexer KL target's expensive half, at flash-tile speeds."""
         BM, BN = 64, 64
-        for lo, hi in seq_bounds:
+        for si, (lo, hi) in enumerate(seq_bounds):
             length = hi - lo
             words = (length + 63) // 64
-            bits = torch.empty(length, words, dtype=torch.int64, device=q.device)
-            _pack_local_bits(idx[lo:hi], lo, length, bits)
+            if bits_by_seq is not None:
+                bits = bits_by_seq[si]
+            else:
+                bits = torch.empty(length, words, dtype=torch.int64,
+                                   device=q.device)
+                _pack_local_bits(idx[lo:hi], lo, length, bits)
             p_slice = p_out[lo:hi, lo:hi] if p_out.shape[0] != length else p_out
             p_slice.zero_()
             grid = ((length + BM - 1) // BM, (length + BN - 1) // BN)
@@ -686,7 +717,8 @@ if triton is not None:
 
 
 def _eager_probs_sum(kctx, q, kf, idx, lse, p_out, *,
-                     n_heads, head_dim, seq_bounds):
+                     n_heads, head_dim, seq_bounds, bits_by_seq=None):
+    del bits_by_seq
     t = q.shape[0]
     scale = head_dim ** -0.5
     q3 = q.view(t, n_heads, head_dim)

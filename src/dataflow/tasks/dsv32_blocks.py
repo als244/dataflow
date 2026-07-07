@@ -350,10 +350,15 @@ class Dsv32DenseBlockBwd(Dsv32ProfileFill, Dsv3DenseBlockBwd):
         dq = torch.empty_like(q_full)
         dk = torch.empty_like(k_full)
         dv_pad = torch.empty_like(v_pad)
+        # padded O from ctx: V's pad columns are zero, so O's are too —
+        # zero-padding the saved attn_out is EXACT (saves a fwd re-run)
+        out_pad = _pad_v(a["attn_out"].view(t, h, v), qk)
         K.dsa_sparse_attn_bwd(
             kctx, d_attn_pad, q_full, k_full, v_pad, idx, lse,
             dq, dk, dv_pad, n_heads=h, head_dim=qk, seq_bounds=bounds,
+            out=out_pad.view(t, h * qk),
         )
+        del out_pad
         del d_attn_pad
 
         # ---- indexer KL injection (detached seam: touches ONLY idx weights)
