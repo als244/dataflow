@@ -94,12 +94,14 @@ def _causal_mask(dims, t: int, device) -> torch.Tensor:
     return m
 
 
-def dsa_topk_reference(scores: torch.Tensor, k_sel: int) -> torch.Tensor:
-    """(t, k_sel) int64 selected indices. Stable descending sort =>
-    smallest-index tie-break; short-prefix rows pad with the -inf slots
-    (ascending future indices — pad-safe under scatter+causal masks)."""
-    _, idx = torch.sort(scores, dim=-1, descending=True, stable=True)
-    return idx[:, :k_sel]
+def dsa_topk_reference(scores: torch.Tensor, k: int) -> torch.Tensor:
+    """Top-k selection per row — torch.topk semantics (DeepSeek's model.py
+    selects via scores.topk(k); torch's device tie rule IS the model's
+    rule). Short prefixes pad with -inf columns; pad picks are causal-
+    re-suppressed by the mask builder, so they carry no gradient/output
+    weight."""
+    _, order = torch.topk(scores, k, dim=-1, sorted=True)
+    return order.to(torch.int64)
 
 
 def dsa_mask_from_idx(idx: torch.Tensor, dims, t: int) -> torch.Tensor:

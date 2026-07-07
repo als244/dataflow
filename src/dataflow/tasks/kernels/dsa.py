@@ -67,11 +67,18 @@ def _eager_index_scores(kctx, q_idx, k_idx, wts, scores_out, *,
 
 
 def _eager_topk(kctx, scores, idx_out):
+    # torch.topk, NOT stable sort: DeepSeek's own model.py selects via
+    # scores.topk(k), so torch's device tie rule IS the model's rule (our
+    # earlier smallest-index pin was a MoE-router convention imported by
+    # mistake). Ties resolve identically in runtime and reference (both
+    # torch.topk on CUDA); per-input determinism unchanged; -inf pad
+    # picks remain mathematically irrelevant (scatter-then-causal). Also
+    # ~1.4x faster than the radix SORT (selection needs fewer passes).
     k = idx_out.shape[1]
     for r0 in range(0, scores.shape[0], _ROW_CHUNK):
         r1 = min(r0 + _ROW_CHUNK, scores.shape[0])
-        _, order = torch.sort(scores[r0:r1], dim=-1, descending=True, stable=True)
-        idx_out[r0:r1].copy_(order[:, :k].to(idx_out.dtype))
+        _, order = torch.topk(scores[r0:r1], k, dim=-1, sorted=True)
+        idx_out[r0:r1].copy_(order.to(idx_out.dtype))
 
 
 def _mask_for(idx, lo, hi, rows_lo, rows_hi):
@@ -655,7 +662,7 @@ if triton is not None:
                 length, ds.stride(0),
                 HI=n_heads, DI=head_dim,
                 DIP=triton.next_power_of_2(head_dim), BM=BM, BN=BN,
-                num_warps=4, num_stages=2,
+                num_warps=4, num_stages=4,
             )
             grid_n = ((length + BN - 1) // BN,)
             _idx_bwd_dk_kernel[grid_n](
