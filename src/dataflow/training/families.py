@@ -252,6 +252,32 @@ def _dsv32() -> Family:
     )
 
 
+def _glm52() -> Family:
+    from .glm52 import (
+        ShapedGlm52Config,
+        dims_of_glm52,
+        initial_values_glm52,
+        lower_glm52,
+    )
+
+    def _resolver_stub(dims):
+        raise NotImplementedError("glm52 block executables land in M-I2")
+
+    def _golden_stub():
+        raise NotImplementedError("glm52 golden lands in M-I2")
+
+    # IndexShare: lowering/planning complete (S/P grammar); runtime M-I2
+    return Family(
+        name="glm52",
+        config_type=ShapedGlm52Config,
+        dims_of=dims_of_glm52,
+        lower=lower_glm52,
+        initial_values=initial_values_glm52,
+        build_resolver=_resolver_stub,
+        golden=_golden_stub,
+    )
+
+
 _FAMILIES: dict[str, Callable[[], Family]] = {
     "llama3": _llama3,
     "qwen3": _qwen3,
@@ -261,6 +287,7 @@ _FAMILIES: dict[str, Callable[[], Family]] = {
     "qwen3moe": _qwen3moe,
     "dsv3": _dsv3,
     "dsv32": _dsv32,
+    "glm52": _glm52,
 }
 _cache: dict[str, Family] = {}
 

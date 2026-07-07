@@ -593,6 +593,52 @@ class Dsv32Dims(Dsv3Dims):
     train_indexer: bool = True
 
 
+@dataclass(frozen=True)
+class Glm52Dims(Dsv32Dims):
+    """GLM-5.2 IndexShare dims: dsv32 fields + the per-layer indexer role
+    pattern. ``indexer_types[i]`` in {"full", "shared"}: full layers run
+    their own lightning indexer and EMIT the selection object S consumed
+    by the trailing run of shared layers (nearest-preceding-full rule,
+    arXiv 2603.12201 — the pattern is greedy-searched upstream, so it is
+    stored explicitly, never derived from a frequency formula). Shared
+    layers carry NO indexer weights. Layer 0 must be full. Training: the
+    leader's indexer aligns to the AVERAGED attention distributions of
+    all layers it serves (paper L^I_multi; dI = sigma - P/N).
+
+    Kinds: gdl (dense FFN + full indexer), gml (MoE + full), gmf (MoE +
+    shared). Dense-FFN shared layers are rejected until a real config
+    needs them (GLM-5.2's dense layers are all full)."""
+
+    indexer_types: tuple[str, ...] = ()
+
+    def role_of(self, layer: int) -> str:
+        return self.indexer_types[layer]
+
+    def leader_of(self, layer: int) -> int:
+        i = layer
+        while self.indexer_types[i] != "full":
+            i -= 1
+        return i
+
+    def group_members(self, leader: int) -> tuple[int, ...]:
+        members = [leader]
+        i = leader + 1
+        while i < len(self.indexer_types) and self.indexer_types[i] == "shared":
+            members.append(i)
+            i += 1
+        return tuple(members)
+
+    def leaders(self) -> tuple[int, ...]:
+        return tuple(i for i, r in enumerate(self.indexer_types) if r == "full")
+
+    def kind_of(self, layer: int) -> str:
+        ffn_dense = layer < self.first_k_dense
+        full = self.indexer_types[layer] == "full"
+        if ffn_dense:
+            return "gdl"  # dense shared rejected at dims validation
+        return "gml" if full else "gmf"
+
+
 def _dsv32_attn_weight_specs(dims: Dsv32Dims) -> list[tuple[str, tuple[int, ...]]]:
     specs = _dsv3_attn_weight_specs(dims)
     idx = [
