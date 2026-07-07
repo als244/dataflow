@@ -584,7 +584,34 @@ def main() -> None:
         torch.cuda.reset_peak_memory_stats()  # scratch peak of THIS run only
         from dataflow.runtime.placement import PlacementError
 
+        def _measured_peak(rep) -> float:
+            return (fixed + rep.placement_extent_bytes
+                    + torch.cuda.max_memory_reserved()) / GIB
+
         try:
+            env_gib_row = device_meta[gib][0] if gib in device_meta else None
+            # AUTO-HEADROOM (closed loop, no hand leeway): probe ONE step,
+            # measure the true device peak; if it exceeds the envelope,
+            # shrink the ledger by the actual overage and re-plan. The
+            # static reserve constants are only the loop's initial guess.
+            if env_gib_row is not None and args.steps > 1:
+                for _probe in range(2):
+                    probe = train(
+                        planned.program, cfg, backend, steps=1, seed=11,
+                        placement_mode=args.placement, placement=placement,
+                        values=shared_values,
+                    )
+                    over = _measured_peak(probe) - env_gib_row
+                    if over <= 0.0:
+                        break
+                    eff = int(eff - (over + 0.0625) * GIB)
+                    print(f"  auto-headroom: probe peak "
+                          f"{_measured_peak(probe):.2f} > {env_gib_row:g} — "
+                          f"re-planning at ledger {eff / GIB:.2f} GiB")
+                    planned = plan_at(eff)
+                    placement = None
+                    torch.cuda.empty_cache()
+                    torch.cuda.reset_peak_memory_stats()
             report = train(
                 planned.program, cfg, backend, steps=args.steps, seed=11,
                 placement_mode=args.placement, placement=placement,
