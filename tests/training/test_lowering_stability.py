@@ -42,6 +42,8 @@ EXPECTED = {
     # dsv32: dsv3 + DSA (lightning indexer, sparse mode)
     "dsv32-tiny": "5a8b067ab9ba917c",
     "dsv32-tiny-ga2": "3011582ba1b32080",
+    # dsv32 dense warm-up (M-H3): dsv3-shaped ctx (no dsa_idx), frozen main
+    "dsv32-tiny-dense": "18b566d9b545b6ac",
 }
 
 
@@ -84,6 +86,9 @@ def test_lowered_programs_bit_identical():
         "dsv32-tiny": _hash(lower_dsv32(ShapedDsv32Config.tiny())),
         "dsv32-tiny-ga2": _hash(
             lower_dsv32(replace(ShapedDsv32Config.tiny(), grad_accum_rounds=2))
+        ),
+        "dsv32-tiny-dense": _hash(
+            lower_dsv32(replace(ShapedDsv32Config.tiny(), sparse_mode=False))
         ),
     }
     assert got == EXPECTED, {k: (got[k], EXPECTED[k]) for k in got if got[k] != EXPECTED[k]}

@@ -185,6 +185,13 @@ CONFIGS = {
     "dsv32-mini-s4k-bs4ga4": ShapedDsv32Config.dsv32_mini(
         seq_len=4096, batch=4, grad_accum_rounds=4,
     ),
+    # dense warm-up phase (M-H3): frozen main, indexer-only training
+    "dsv32-mini-s4k-dense-bs16ga1": ShapedDsv32Config.dsv32_mini(
+        seq_len=4096, batch=16, grad_accum_rounds=1, sparse_mode=False,
+    ),
+    "dsv32-mini-s4k-dense-bs8ga2": ShapedDsv32Config.dsv32_mini(
+        seq_len=4096, batch=8, grad_accum_rounds=2, sparse_mode=False,
+    ),
 }
 
 

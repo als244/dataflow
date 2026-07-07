@@ -153,6 +153,7 @@ class ShapedDsv32Config:
     @classmethod
     def dsv32_mini(cls, *, seq_len: int = 4096, batch: int = 1,
                    grad_accum_rounds: int = 1, num_steps: int = 1,
+                   sparse_mode: bool = True,
                    ) -> "ShapedDsv32Config":
         return cls(
             n_layers=18, d_model=2048, n_heads=16, q_lora_rank=512,
@@ -161,7 +162,7 @@ class ShapedDsv32Config:
             n_experts=128, top_k=8, d_ff_expert=1024, n_group=8, topk_group=4,
             d_ff_shared=1024,
             index_n_heads=8, index_head_dim=64, index_topk=1024,
-            seq_len=seq_len, batch=batch,
+            seq_len=seq_len, batch=batch, sparse_mode=sparse_mode,
             grad_accum_rounds=grad_accum_rounds, num_steps=num_steps,
         )
 
@@ -218,9 +219,13 @@ def _kind_specs(cfg: ShapedDsv32Config, hw: ShapedHardware) -> dict[str, LayerKi
         + d * cfg.index_head_dim + d * cfg.index_n_heads
     )
     # DSA: indexer scores over the causal prefix + SPARSE core over k_eff
+    # (dense warm-up: the core runs the FULL prefix like dsv3, and the
+    # bwd's KL target sweeps the full prefix too — no dsa_idx bytes)
     idx_flops = 2.0 * t * sbar * cfg.index_n_heads * cfg.index_head_dim
-    attn_flops = 2.0 * t * k_eff * h * qk * 2.0 + idx_flops
-    attn_bytes = BF16 * t * 4 * h * qk + 4.0 * t * cfg.index_topk
+    core = k_eff if cfg.sparse_mode else sbar
+    attn_flops = 2.0 * t * core * h * qk * 2.0 + idx_flops
+    attn_bytes = BF16 * t * 4 * h * qk + (
+        4.0 * t * cfg.index_topk if cfg.sparse_mode else 0.0)
 
     def spec(prefix, wl, cl, ffn_active, extra_traffic):
         total_params = sum(int(math.prod(fl.shape)) for fl in wl.fields)
@@ -321,11 +326,9 @@ def lower_dsv32(
     fast_memory_capacity: int | None = None,
 ) -> Program:
     dims, fl = family_layouts(cfg)
-    if not cfg.sparse_mode:
-        raise NotImplementedError(
-            "dense warm-up mode (sparse_mode=False) is the M-H3 deliverable "
-            "— sparse correctness and perf land first (Shein order)"
-        )
+    if not cfg.sparse_mode and not cfg.train_indexer:
+        raise ValueError("dense warm-up trains ONLY the indexer; "
+                         "train_indexer=False there trains nothing")
     if dims.moe.is_partial:
         raise NotImplementedError(
             "partial expert ownership (expert_ids) is accounting-only in v1"

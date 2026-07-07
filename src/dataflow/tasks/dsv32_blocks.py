@@ -44,6 +44,9 @@ from .llama3_blocks import AdamWHyper, AdamWStep, BlockRecompute, EmbedBwd, Embe
 from .dsv3_blocks import (
     Dsv3DenseBlockBwd,
     Dsv3DenseBlockFwd,
+    Dsv3MoeBlockBwd,
+    Dsv3MoeBlockFwd,
+    Dsv3MoeBlockRecompute,
     _mla_expand_kv,
     _mla_expand_q,
 )
@@ -55,6 +58,18 @@ _LN_EPS = 1e-5
 def _seq_bounds(d):
     lens = ops.seq_lens_of(d.seq_spec, d.tokens)
     return tuple(ops.seq_bounds_of(lens, d.tokens))
+
+
+def _causal_bits(length, device):
+    # full-causal selection words: row r has bits set for cols 0..r
+    words = (length + 63) // 64
+    r = torch.arange(length, device=device).unsqueeze(1)
+    w = torch.arange(words, device=device).unsqueeze(0)
+    n_live = (r + 1 - 64 * w).clamp(0, 64)
+    full = torch.full((), -1, dtype=torch.int64, device=device)
+    partial = (torch.ones((), dtype=torch.int64, device=device)
+               << n_live.clamp(0, 63)) - 1
+    return torch.where(n_live >= 64, full, partial)
 
 
 def _bits_for_bounds(idx, bounds, device):
@@ -278,40 +293,56 @@ class Dsv32DenseBlockBwd(Dsv32ProfileFill, Dsv3DenseBlockBwd):
         dk_idx = torch.empty_like(k_idx)
         dwts = torch.empty_like(wts)
         hi_, di = d.index_n_heads, d.index_head_dim
+        dense = idx is None  # warm-up: KL over the FULL causal prefix
         for si, (lo, hi) in enumerate(bounds):
             length = hi - lo
-            # rebuild indexer scores for this sequence
+            # rebuild indexer scores for this sequence (causal -inf
+            # outside the prefix is built into the score op)
             iscores = torch.empty(length, length, dtype=torch.float32,
                                   device=x.device)
             K.dsa_index_scores(
                 kctx, q_idx[lo:hi], k_idx[lo:hi], wts[lo:hi], iscores,
                 n_heads=hi_, head_dim=di, seq_bounds=((0, length),),
             )
-            # mask from saved selection (scatter + causal — pad-safe)
-            m = torch.full((length, length), float("-inf"), device=x.device)
-            m.scatter_(-1, (idx[lo:hi].long() - lo).clamp_(0, length - 1), 0.0)
-            rows = torch.arange(length, device=x.device).unsqueeze(1)
-            cols = torch.arange(length, device=x.device).unsqueeze(0)
-            m.masked_fill_(cols > rows, float("-inf"))
-            live = m == 0
-            # target p: head-summed masked attention probs from the saved
-            # lse — fused kernel (flash tiling, all heads inside a tile)
+            if dense:
+                seq_bits = [_causal_bits(length, x.device)]
+                sig = torch.softmax(iscores, dim=-1)  # causal via -inf
+                rows = torch.arange(length, device=x.device).unsqueeze(1)
+                cols = torch.arange(length, device=x.device).unsqueeze(0)
+                live = cols <= rows
+            else:
+                seq_bits = (None if bits_by_seq is None
+                            else [bits_by_seq[si]])
+                # mask from saved selection (scatter + causal — pad-safe)
+                m = torch.full((length, length), float("-inf"),
+                               device=x.device)
+                m.scatter_(-1, (idx[lo:hi].long() - lo).clamp_(0, length - 1),
+                           0.0)
+                rows = torch.arange(length, device=x.device).unsqueeze(1)
+                cols = torch.arange(length, device=x.device).unsqueeze(0)
+                m.masked_fill_(cols > rows, float("-inf"))
+                live = m == 0
+                sig = torch.softmax(iscores + m, dim=-1)
+            # target p: head-summed attention probs from the saved lse —
+            # fused kernel (flash tiling, all heads inside a tile); in
+            # dense mode the "selection" is the full causal prefix
             p = torch.empty(length, length, device=x.device)
             K.dsa_probs_sum(
-                kctx, q_full, k_full, idx, lse, p,
+                kctx, q_full, k_full,
+                idx if idx is not None else torch.zeros(
+                    d.tokens, 1, dtype=torch.int32, device=x.device),
+                lse, p,
                 n_heads=h, head_dim=qk, seq_bounds=((lo, hi),),
-                bits_by_seq=None if bits_by_seq is None
-                else [bits_by_seq[si]],
+                bits_by_seq=seq_bits,
             )
             p = p / p.sum(-1, keepdim=True).clamp_min(1e-20)
-            sig = torch.softmax(iscores + m, dim=-1)
             d_scores = (sig - p).masked_fill(~live, 0.0)
             K.dsa_index_bwd(
                 kctx, d_scores, q_idx[lo:hi], k_idx[lo:hi], wts[lo:hi],
                 dq_idx[lo:hi], dk_idx[lo:hi], dwts[lo:hi],
                 n_heads=hi_, head_dim=di, seq_bounds=((0, length),),
             )
-            del iscores, m, p, sig, d_scores
+            del iscores, p, sig, d_scores
         # chain to the four indexer weights (inputs detached)
         dq_pre = torch.empty_like(dq_idx)
         dq3i = dq_idx.view(t, hi_, di)
@@ -475,6 +506,105 @@ class Dsv32MoeBlockBwd(Dsv32DenseBlockBwd):
         )
 
 
+
+class _WarmupKLMixin:
+    """Dense warm-up backward: dsv3's flash backward runs UNCHANGED (main
+    gradients computed normally, then ignored by the frozen optimizer),
+    followed by the FULL-PREFIX indexer KL injection (report formula 3).
+    The MLA expansions are re-derived for the KL — a deliberate warm-up-
+    phase overhead that keeps the dsv3 backward untouched."""
+
+    def _attn_bwd(self, kctx, dh_mid, a, x, w, acc, norm_bwd, dx_out) -> None:
+        super()._attn_bwd(kctx, dh_mid, a, x, w, acc, norm_bwd, dx_out)
+        d = self.dims
+        K = self.kernels
+        if not d.train_indexer:
+            for name in ("w_idx_q", "w_idx_k", "idx_k_ln_w", "idx_k_ln_b",
+                         "w_idx_w"):
+                acc(name, torch.zeros_like(w[name]))
+            return
+        t = d.tokens
+        bounds = _seq_bounds(d)
+        pos = ops.positions_for(d.seq_spec, t, x.device)
+        h1 = torch.empty_like(x)
+        K.rmsnorm_apply(kctx, x, a["rstd_attn"], w["attn_norm_w"], h1)
+        q_lora_n, q_full = _mla_expand_q(kctx, K, d, a["q_a"], a["rstd_qa"],
+                                         w, pos)
+        _latent, k_full, _vals = _mla_expand_kv(
+            kctx, K, d, a["kv_a"], a["rstd_kva"], w, pos,
+        )
+        del _latent, _vals
+        lse = a["lse"].reshape(d.n_heads, t)
+        self._indexer_kl_bwd(kctx, d, a, x, w, acc, h1, q_lora_n,
+                             q_full, k_full, None, lse, bounds, pos)
+
+
+@dataclass(frozen=True)
+class Dsv32WarmupDenseBlockFwd(Dsv3DenseBlockFwd):
+    """Dense warm-up forward = dsv3's flash path verbatim (no selection,
+    no dsa_idx ctx); only the layouts widen for the indexer weights."""
+
+    dims: Dsv32Dims = None  # type: ignore[assignment]
+
+    def _weight_layout(self, layer: int | None = None) -> PackedLayout:
+        return dsv32_dense_weight_layout(self.dims, layer=layer)
+
+    @property
+    def cl(self) -> PackedLayout:
+        return dsv32_dense_context_layout(self.dims)
+
+
+@dataclass(frozen=True)
+class Dsv32WarmupDenseBlockRecompute(Dsv32WarmupDenseBlockFwd, BlockRecompute):
+    pass
+
+
+@dataclass(frozen=True)
+class Dsv32WarmupDenseBlockBwd(_WarmupKLMixin, Dsv3DenseBlockBwd):
+    dims: Dsv32Dims = None  # type: ignore[assignment]
+    _indexer_kl_bwd = Dsv32DenseBlockBwd._indexer_kl_bwd
+
+    def _weight_layout(self, layer: int | None = None) -> PackedLayout:
+        return dsv32_dense_weight_layout(self.dims, layer=layer)
+
+    @property
+    def cl(self) -> PackedLayout:
+        return dsv32_dense_context_layout(self.dims)
+
+
+@dataclass(frozen=True)
+class Dsv32WarmupMoeBlockFwd(Dsv3MoeBlockFwd):
+    dims: Dsv32Dims = None  # type: ignore[assignment]
+
+    def _weight_layout(self, layer: int | None = None) -> PackedLayout:
+        return dsv32_moe_weight_layout(self.dims, layer=layer)
+
+    @property
+    def cl(self) -> PackedLayout:
+        return dsv32_moe_context_layout(self.dims)
+
+
+@dataclass(frozen=True)
+class Dsv32WarmupMoeBlockRecompute(Dsv32WarmupMoeBlockFwd, BlockRecompute):
+    pass
+
+
+@dataclass(frozen=True)
+class Dsv32WarmupMoeBlockBwd(_WarmupKLMixin, Dsv3MoeBlockBwd):
+    dims: Dsv32Dims = None  # type: ignore[assignment]
+    _indexer_kl_bwd = Dsv32DenseBlockBwd._indexer_kl_bwd
+
+    def _weight_layout(self, layer: int | None = None) -> PackedLayout:
+        return dsv32_moe_weight_layout(self.dims, layer=layer)
+
+    @property
+    def cl(self) -> PackedLayout:
+        return dsv32_moe_context_layout(self.dims)
+
+
+_IDX_FIELDS = ("w_idx_q", "w_idx_k", "idx_k_ln_w", "idx_k_ln_b", "w_idx_w")
+
+
 def build_dsv32_resolver(
     dims: Dsv32Dims,
     hyper: AdamWHyper = AdamWHyper(),
@@ -483,10 +613,27 @@ def build_dsv32_resolver(
     kernels = kernels if kernels is not None else resolve_kernels()
     from functools import partial
 
+    if not dims.sparse_mode and not dims.train_indexer:
+        raise ValueError(
+            "dense warm-up trains ONLY the indexer; train_indexer=False "
+            "in dense mode would train nothing"
+        )
     bias_special = {
         "w_router_bias": partial(moe_bias_update,
                                  speed=dims.moe.bias_update_speed),
     }
+    if not dims.sparse_mode:
+        # freeze the main model (paper warm-up): AdamW no-ops for EVERY
+        # non-indexer field — embed/head/bias included. Gradients still
+        # compute (grammar unchanged); they are simply never applied.
+        def _frozen_main(kctx, kernels, w_view, g_view):
+            pass
+
+        names = set()
+        for wl in (dsv32_dense_weight_layout(dims),
+                   dsv32_moe_weight_layout(dims)):
+            names |= {f.name for f in wl.fields}
+        bias_special = {n: _frozen_main for n in names - set(_IDX_FIELDS)}
     if not dims.train_indexer:
         # frozen indexer: skip AdamW ENTIRELY for its fields (no decay)
         def _frozen(kctx, kernels, w_view, g_view):
@@ -502,22 +649,45 @@ def build_dsv32_resolver(
             return dsv32_dense_weight_layout(d, layer=layer), None
         return dsv32_moe_weight_layout(d, layer=layer), None
 
+    if dims.sparse_mode:
+        blocks = {
+            "dsadense_fwd": Dsv32DenseBlockFwd(dims, kernels),
+            "dsadense_recompute": Dsv32DenseBlockRecompute(dims, kernels),
+            "dsadense_bwd": Dsv32DenseBlockBwd(dims, kernels),
+            "dsamoe_fwd": Dsv32MoeBlockFwd(dims, kernels),
+            "dsamoe_recompute": Dsv32MoeBlockRecompute(dims, kernels),
+            "dsamoe_bwd": Dsv32MoeBlockBwd(dims, kernels),
+        }
+        opt_embed = AdamWStep(dims, kernels, hyper, kind="embed")
+        opt_head = AdamWStep(dims, kernels, hyper, kind="head")
+    else:
+        blocks = {
+            "dsadense_fwd": Dsv32WarmupDenseBlockFwd(dims, kernels),
+            "dsadense_recompute": Dsv32WarmupDenseBlockRecompute(dims, kernels),
+            "dsadense_bwd": Dsv32WarmupDenseBlockBwd(dims, kernels),
+            "dsamoe_fwd": Dsv32WarmupMoeBlockFwd(dims, kernels),
+            "dsamoe_recompute": Dsv32WarmupMoeBlockRecompute(dims, kernels),
+            "dsamoe_bwd": Dsv32WarmupMoeBlockBwd(dims, kernels),
+        }
+
+        def _frozen_w(kctx, kernels_, w_view, g_view):
+            pass
+
+        opt_embed = AdamWStep(dims, kernels, hyper, kind="embed",
+                              update_specials={"w": _frozen_w})
+        opt_head = AdamWStep(dims, kernels, hyper, kind="head",
+                             update_specials={"w": _frozen_w})
     table = {
         "embed_fwd": EmbedFwd(dims, kernels),
-        "dsadense_fwd": Dsv32DenseBlockFwd(dims, kernels),
-        "dsadense_recompute": Dsv32DenseBlockRecompute(dims, kernels),
-        "dsadense_bwd": Dsv32DenseBlockBwd(dims, kernels),
-        "dsamoe_fwd": Dsv32MoeBlockFwd(dims, kernels),
-        "dsamoe_recompute": Dsv32MoeBlockRecompute(dims, kernels),
-        "dsamoe_bwd": Dsv32MoeBlockBwd(dims, kernels),
+        **blocks,
         "head_loss": HeadLoss(dims, kernels),
         "embed_bwd": EmbedBwd(dims, kernels),
         "optimizer_block": AdamWStep(
             dims, kernels, hyper, layout_for=_opt_layout,
             update_specials=bias_special,
         ),
-        "optimizer_embed": AdamWStep(dims, kernels, hyper, kind="embed"),
-        "optimizer_head": AdamWStep(dims, kernels, hyper, kind="head"),
+        "optimizer_embed": opt_embed,
+        "optimizer_head": opt_head,
     }
 
     def resolver(task: TaskSpec):

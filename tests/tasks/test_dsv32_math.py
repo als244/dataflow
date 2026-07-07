@@ -456,3 +456,73 @@ def test_dsv32_frozen_indexer_ablation():
     dry.close()
     for buf in values.values():
         backend.free(buf)
+
+
+def test_dsv32_dense_warmup_model_step():
+    """M-H3 gate: dense warm-up (sparse_mode=False) — model-step matches
+    golden; the MAIN MODEL (every non-indexer field, embed/head/router-
+    bias included) is BIT-FROZEN across a real engine step; the indexer
+    fields MOVE (full-prefix KL is live)."""
+    import dataclasses
+
+    from dataflow.runtime import Engine
+    from dataflow.runtime.device.cuda import CudaBackend
+    from dataflow.runtime.device.fake import FakeBackend
+    from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME, torch_view
+    from dataflow.tasks.layouts import dsv32_dense_weight_layout, dsv32_moe_weight_layout
+    from dataflow.training.families import resolve_family
+    from dataflow.training.planning import plan_program
+
+    cfg = _tiny_cfg(sparse_mode=False)
+    check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
+                     field_atol=_BIAS_ATOL).assert_ok()
+
+    fam = resolve_family(cfg)
+    dims = fam.dims_of(cfg)
+    planned = plan_program(fam.lower(cfg), fast_memory_capacity=64 * 1024 * 1024)
+    backend = CudaBackend()
+    values = fam.initial_values(planned.program, cfg, backend, seed=13)
+    idx_fields = ("w_idx_q", "w_idx_k", "idx_k_ln_w", "idx_k_ln_b", "w_idx_w")
+    before = {}
+    wl_of = {}
+    for i in range(cfg.n_layers):
+        wl = (dsv32_dense_weight_layout(dims) if dims.kind_of(i) == "dense"
+              else dsv32_moe_weight_layout(dims))
+        wl_of[i] = wl
+        buf = values[f"W_{i}"]
+        before[i] = {
+            f.name: torch_view(buf, f.shape, TORCH_DTYPE_BY_NAME[f.dtype],
+                               offset_bytes=f.offset_bytes).clone()
+            for f in wl.fields
+        }
+    embed_before = torch_view(values["W_embed"],
+                              (values["W_embed"].size_bytes,), torch.uint8).clone()
+    head_before = torch_view(values["W_head"],
+                             (values["W_head"].size_bytes,), torch.uint8).clone()
+    dry = Engine(FakeBackend()).execute(planned.program, initial_buffers=values)
+    result = Engine(backend).execute(
+        planned.program, resolver=fam.build_resolver(dims),
+        initial_buffers=values, pool_prewarm=dry.pool_demand,
+    )
+    moved = 0
+    for i in range(cfg.n_layers):
+        rec = result.objects.get(f"W_{i}")
+        slot = rec.backing or rec.fast
+        for f in wl_of[i].fields:
+            after = torch_view(slot.buffer, f.shape, TORCH_DTYPE_BY_NAME[f.dtype],
+                               offset_bytes=f.offset_bytes)
+            if f.name in idx_fields:
+                moved += int(not torch.equal(after, before[i][f.name]))
+            else:
+                assert torch.equal(after, before[i][f.name]), \
+                    (i, f.name, "main field moved in warm-up")
+    assert moved > 0, "no indexer field moved — KL not training"
+    for obj, ref in (("W_embed", embed_before), ("W_head", head_before)):
+        rec = result.objects.get(obj)
+        slot = rec.backing or rec.fast
+        got = torch_view(slot.buffer, (rec.size_bytes,), torch.uint8)
+        assert torch.equal(got, ref), f"{obj} moved in warm-up"
+    result.close()
+    dry.close()
+    for buf in values.values():
+        backend.free(buf)

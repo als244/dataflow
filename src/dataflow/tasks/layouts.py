@@ -575,8 +575,12 @@ class Dsv32Dims(Dsv3Dims):
     k^I = rope(LayerNorm(h1 @ w_idx_k)) — ONE shared key per token;
     rope-FIRST head layout (opposite of main MLA); selection = per-token
     top-min(k, prefix) of ReLU-weighted scores, stored (t, k) int32
-    (pad-safe short prefixes). sparse_mode=False (dense warm-up) is an
-    M-H3 deliverable — lowering rejects it until then."""
+    (pad-safe short prefixes). sparse_mode=False = the paper's DENSE
+    WARM-UP stage: main attention runs dense (dsv3 flash path, no
+    selection, no dsa_idx ctx), the MAIN MODEL IS FROZEN (optimizer
+    no-ops every non-indexer field, embed/head/bias included), and the
+    indexer trains from the full-prefix KL (report formula 3) — its
+    only signal. Dense mode requires train_indexer=True."""
 
     index_n_heads: int = 8
     index_head_dim: int = 64
@@ -604,6 +608,10 @@ def _dsv32_attn_weight_specs(dims: Dsv32Dims) -> list[tuple[str, tuple[int, ...]
 
 def _dsv32_attn_ctx_specs(dims: Dsv32Dims) -> list[tuple[str, tuple[int, ...], str]]:
     specs = _dsv3_attn_ctx_specs(dims)
+    if not dims.sparse_mode:
+        # dense warm-up: no selection — ctx is exactly dsv3's (the KL
+        # target rebuilds from lse + latents over the full causal prefix)
+        return specs
     # the ONLY DSA ctx addition: the selection (indexer q/k/wts recompute
     # from the latents already saved for the MLA backward); emitted
     # before the attention stage, so it sits before lse in layout order
