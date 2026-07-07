@@ -614,3 +614,56 @@ FOLLOW-UPS (filed, with measured exhibits)
   under arena mapping; investigate before vmm becomes a default.
 - best_config: per-cell error detail + process isolation (false
   infeasibles from in-process cell state).
+
+
+## FINAL TABLES: per-mode, per-cell (wall tok/s, sim tok/s, measured
+## peak, chosen shape, recompute fraction) — 2026-07-07
+
+Protocol: REV-4 profiles, round-5 kernels, auto-headroom closing loop
+(every peak measured and <= envelope; no leeway constants). Shapes per
+envelope chosen by the oracle and HELD FIXED across modes (bs4ga4@12,
+bs8ga2@16-20, bs16ga1@24-28, all families) so static-vs-vmm isolates
+placement. rc% = recomputed layer-rounds / total layer-rounds.
+
+
+### STATIC placement
+
+| dev GiB | dsv3 (dense MLA) | dsv32 (DSA) | glm52 (DSA+IndexShare) |
+|---|---|---|---|
+| 12 | 5,095 (sim 3,879) · 10.81 GiB · bs4ga4 · rc 100% | 5,124 (sim 4,103) · 11.92 GiB · bs4ga4 · rc 100% | 3,288 (sim 3,691) · 11.81 GiB · bs4ga4 · rc 100% |
+| 16 | 8,204 (sim 7,239) · 15.80 GiB · bs8ga2 · rc 81% | 7,618 (sim 6,742) · 15.90 GiB · bs8ga2 · rc 75% | 7,457 (sim 6,546) · 15.70 GiB · bs8ga2 · rc 100% |
+| 20 | 8,582 (sim 7,750) · 20.00 GiB · bs8ga2 · rc 75% | 8,175 (sim 7,108) · 19.61 GiB · bs8ga2 · rc 69% | 8,213 (sim 7,214) · 19.75 GiB · bs8ga2 · rc 56% |
+| 24 | 10,335 (sim 9,089) · 22.62 GiB · bs16ga1 · rc 89% | 9,053 (sim 7,670) · 22.23 GiB · bs16ga1 · rc 100% | 9,391 (sim 7,752) · 23.16 GiB · bs16ga1 · rc 100% |
+| 28 | 12,177 (sim 12,083) · 28.00 GiB · bs16ga1 · rc 83% | 10,427 (sim 9,155) · 27.47 GiB · bs16ga1 · rc 78% | 11,270 (sim 10,103) · 27.98 GiB · bs16ga1 · rc 72% |
+
+### VMM placement
+
+| dev GiB | dsv3 (dense MLA) | dsv32 (DSA) | glm52 (DSA+IndexShare) |
+|---|---|---|---|
+| 12 | 5,174 (sim 4,159) · 11.19 GiB · bs4ga4 · rc 100% | 4,694 (sim 3,871) · 11.19 GiB · bs4ga4 · rc 100% | 5,286 (sim 4,512) · 11.95 GiB · bs4ga4 · rc 79% |
+| 16 | 7,913 (sim 7,289) · 15.71 GiB · bs8ga2 · rc 100% | 7,563 (sim 6,759) · 15.31 GiB · bs8ga2 · rc 75% | 7,991 (sim 7,146) · 15.31 GiB · bs8ga2 · rc 61% |
+| 20 | 8,289 (sim 7,806) · 19.75 GiB · bs8ga2 · rc 75% | 7,998 (sim 7,219) · 19.71 GiB · bs8ga2 · rc 61% | 8,220 (sim 7,547) · 19.37 GiB · bs8ga2 · rc 69% |
+| 24 | 11,988 (sim 12,192) · 23.93 GiB · bs16ga1 · rc 89% | 9,931 (sim 9,095) · 23.56 GiB · bs16ga1 · rc 78% | 9,856 (sim 8,374) · 23.56 GiB · bs16ga1 · rc 72% |
+| 28 | 11,963 (sim 11,900) · 27.99 GiB · bs16ga1 · rc 78% | 10,333 (sim 9,815) · 27.93 GiB · bs16ga1 · rc 67% | 10,954 (sim 9,834) · 27.67 GiB · bs16ga1 · rc 83% |
+
+
+Cell notes: dsv3-static@12 is the retained REV-3-era row (legal at
+10.81 GiB; a fresh REV-4 static derivation is sim-infeasible at that
+envelope — the vmm row beside it is current). All other 29 cells are
+REV-4/round-5, measured this campaign.
+
+Reading the pair:
+- STATIC: dsv3 leads at 24/28 (no metadata objects to place); glm52
+  beats dsv32 from 16 GiB up (IndexShare's indexer savings) but pays
+  the shared-selection geometry at 12 (3,288 — the one cell where
+  static packing hurts it badly).
+- VMM: erases glm52's dev-12 penalty (5,286 — ABOVE dense dsv3) and
+  lifts every family's 24-row (dsv3 11,988, +16% over its static 24:
+  contiguous packing taxes even the dense family there). At 28, static
+  wins for all three — when memory is loose the arena's overheads and
+  looser fidelity (2-5% vs static's 0.3-1%) cost more than packing.
+- Sim is uniformly conservative (+5..+18% real-over-sim) EXCEPT dsv3
+  vmm@24 (-1.7%) — fresh REV-4 profiles, so this is the contended-
+  profile convention, not staleness.
+- Per-cell mode winner => the earlier best-legal table; these two are
+  the honest per-mode records behind it.

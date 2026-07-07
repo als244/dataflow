@@ -1,5 +1,5 @@
 {
-  "config": "dsv3-mini-s4k-bs8ga2",
+  "config": "dsv32-mini-s4k-bs8ga2",
   "steps": 3,
   "pcie": {
     "uni_h2d": 35338,
@@ -55,50 +55,65 @@
     {
       "budget_gib": 20.0,
       "budget_semantics": "device",
-      "planned_budget_gib": 13.630345776677132,
-      "actual_device_peak_gib": 20.004899978637695,
+      "planned_budget_gib": 14.303552246652544,
+      "vmm": {
+        "maps": 399,
+        "handle_creates": 412,
+        "handle_reflows": 395,
+        "prewarmed": 18,
+        "slot_adoptions": 558,
+        "t_create_s": 0.023,
+        "t_destroy_s": 0.0586,
+        "t_map_s": 0.5274,
+        "t_unmap_s": 0.2684,
+        "reclaim_drains": 0,
+        "peak_mapped_bytes": 15072231424,
+        "peak_physical_bytes": 15888023552,
+        "pool_bytes": 15896412160
+      },
+      "actual_device_peak_gib": 19.70562744140625,
       "envelope_ok": true,
-      "fixed_overhead_gib": 1.47113037109375,
+      "fixed_overhead_gib": 1.41656494140625,
       "torch_scratch_peak_gib": 3.484375,
       "device_envelope_gib": 20.0,
       "scratch_reserve_gib": 3.3798828125,
-      "placement_mode": "static",
+      "placement_mode": "vmm",
       "extent_budget": false,
-      "sim_ms_per_step": 8455.79146142578,
-      "real_ms_per_step_steady": 7619.423583984375,
-      "sim_tokens_per_s": 7750.427656472691,
-      "real_tokens_per_s": 8601.17557156859,
-      "wall_tokens_per_s": 8582.334246719647,
-      "real_vs_sim_pct": 10.976786737508682,
-      "replay_fidelity_gap_pct": 0.5411012642720748,
+      "sim_ms_per_step": 9078.679453125,
+      "real_ms_per_step_steady": 8178.0810546875,
+      "sim_tokens_per_s": 7218.6709904645495,
+      "real_tokens_per_s": 8013.615854594175,
+      "wall_tokens_per_s": 7997.959852432923,
+      "real_vs_sim_pct": 11.012343756623654,
+      "replay_fidelity_gap_pct": 2.8804414567602077,
       "losses": [
-        12.166515350341797,
-        12.184014320373535,
-        12.173824310302734
+        NaN,
+        NaN,
+        NaN
       ],
-      "peak_fast_gib": 13.527778148651123,
-      "peak_backing_gib": 103.42233753576875,
-      "pinned_host_gib": 106.16574574261904,
+      "peak_fast_gib": 14.030893564224243,
+      "peak_backing_gib": 103.3467354811728,
+      "pinned_host_gib": 111.57647181302309,
       "step_makespans_ms": [
-        8234.6943359375,
-        7629.548828125,
-        7609.29833984375
+        8968.4853515625,
+        8183.80859375,
+        8172.353515625
       ],
       "step_wall_s": [
-        13.773060008883476,
-        7.646349632879719,
-        7.625952311092988
+        15.48051254497841,
+        8.199912447948009,
+        8.188266840064898
       ],
       "step_slab_overflows": [
         0,
         0,
         0
       ],
-      "placement_extent_gib": 15.049394607543945,
+      "placement_extent_gib": 14.8046875,
       "placement_escapes": 0,
       "pressure_evictions": 0,
-      "placement_overhead": 1.1124808850479666,
-      "recompute_chosen": 27
+      "placement_overhead": 1.0551492983845852,
+      "recompute_chosen": 22
     }
   ]
 }
