@@ -407,11 +407,11 @@ def main() -> None:
         from dataflow.runtime.device.fake import FakeBackend
         from dataflow.runtime.placement import PlacementRecorder, compute_placement
 
-        # measured calibration (2026-07-07): run-time torch reserved peaks
-        # exceed the profiled per-task max by allocator/fragmentation slack
-        # — rows kept landing 0.09-0.35 GiB over their envelopes. Reserve
-        # the margin so "N GiB" stays a hard bound.
-        scratch = max(p.workspace_bytes for p in profiles.values()) + (640 << 20)
+        # initial reserve only — the AUTO-HEADROOM closing loop (post-run
+        # measured-peak check + shrink-and-rerun) is what enforces the
+        # envelope; keeping this guess lean avoids false infeasibility at
+        # tight envelopes (dsv3@12 went infeasible under a fat margin)
+        scratch = max(p.workspace_bytes for p in profiles.values()) + (256 << 20)
 
         def extent_of(planned_prog) -> int:
             rec = PlacementRecorder()
