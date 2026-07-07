@@ -155,3 +155,40 @@ sim + replay + profiler; a bounded new timing sensitivity (host-value
 availability = event completion + token-poll latency, tens of µs); and
 plans gain edges that only exist under dynamic routing — replay fidelity
 machinery must carry the host-value table across runs.
+
+### The rejected alternative, argued honestly: a sanctioned early block
+
+Shein's challenge (2026-07-06): flextrain's dispatch thread just
+`.synchronize()`s after the sort and reads pinned counts — why not allow
+that? The concession first: **it would work today, at ~1%/step.** Strict
+pacing is precisely what makes a *deliberate early* sync cheap — the
+compute queue is empty at task start, so the drain is the task's own
+prefix (~0.3-1 ms), not the 22 ms tail-position drain aten paid; pinned
+staging avoids the pageable driver path; and for the early-position
+pattern, profiled stream time ≈ in-run stream time (the gap the sync
+creates is the same host-wake latency in back-to-back reps as in the
+paced run), so the cost model stays honest. The incidents in the table
+above condemn *hidden, tail-position, pageable* syncs — not this pattern.
+
+Why the contract still says no:
+1. **It freezes strict pacing into an ABI.** Dispatch-ahead (multi-
+   outstanding compute) is the engine's stated M2 evolution and the
+   obvious cure for the per-task boundary tax; under depth-2 dispatch an
+   early sync in task N+1 drains all of task N — the aten pathology
+   returns by design. Kernels that block are a veto on future pacing.
+2. **Parity-by-construction is the project's instrument.** Every
+   real-vs-sim gap to date was a bug found; a sanctioned block turns
+   parity into "parity up to epsilons" and erodes exactly the signal
+   that caught the hidden-sync class in the first place.
+3. **Bright lines are auditable.** The violation that burned us was not
+   chosen — it shipped inside an aten op. "Never block" is spin-audit-
+   checkable per op in isolation; "block only if early + pinned + small"
+   cannot be audited without knowing every op's position in every task.
+4. **Blocked host = frozen transfer starts and directives** (the
+   dispatcher is the transfer driver). Bounded by block length today;
+   grows with anything that puts more in flight.
+
+The readback directive is the same information with the wait relocated
+into the token loop — where every other wait in this engine lives — at
+lower latency (~20-100 µs token round-trip vs 0.3-1 ms block), with zero
+compute-stream involvement, and it stays correct under dispatch-ahead.
