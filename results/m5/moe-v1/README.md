@@ -517,3 +517,42 @@ full-prefix KL only).
   conservative +2..+21% (contended-profile convention, ranking-correct).
 - bs16ga1 claims 20-28 under round-4 kernels (attention cheap enough
   that stream-once wins from dev-20 now).
+
+
+## M-I3: glm52-mini (IndexShare) first curve vs dsv32-mini (2026-07-07)
+
+Same backbone as dsv32-mini; 6 of 18 layers carry indexers (F F +
+[F S S S] x4). Selection size REALITY CHECK (Shein q): the shared
+selection is per-token top-k index LISTS — (t, k) int32 = t*k*4B:
+268 MB/round at bs16ga1, 134 at bs8, 67 at bs4; dM doubles the bwd
+window in fp32. Identical bytes to dsv32's per-layer M — the delta is
+LIFETIME: a leader's M serves 4 layers across fwd + the group's whole
+bwd span (more reloads), plus the dM round-trip.
+
+| dev GiB | glm52 (shape) | sim | r/s% | fid% | dsv32 | delta |
+|---|---|---|---|---|---|---|
+| 12 | 3,288 (bs4ga4 rc-72) | 3,691 | +18.8* | 1.22 | 5,289 | -38% |
+| 16 | 5,298 (bs8ga2 rc-25) | 6,878 | -22.9 | 0.96 | 7,680 | -31% |
+| 20 | 8,041 (bs8ga2 rc-19) | 7,093 | +13.6 | 0.68 | 8,796 | -8.6% |
+| 24 | 9,689 (bs16ga1 rc-18) | 8,084 | +20.1 | 0.73 | 9,947 | -2.6% |
+| 28 | 11,230 (bs16ga1 rc-12) | 10,220 | +10.2 | 0.29 | 10,093 | +11.3% |
+
+- IndexShare on THIS box: +11% at 28 GiB (sim predicted +12 — ranking
+  and magnitude both right), crossover ~23 GiB, SLOWER below: the
+  indexer savings are modest at s4k while the shared-M lifetime + dM
+  round-trip add transfer pressure that tight-memory plans pay for.
+  dev-16's real-below-sim (-22.9% with tight fid 0.96) is the
+  transfer-overlap-optimism signature — the plan is transfer-bound on
+  M/dM traffic the sim under-charges (the known contention-aware-
+  costing gap, now with a second family exhibiting it).
+- The paper's 2.9x-fewer-indexer-FLOPs claim is a 1M-context statement;
+  at s4k the indexer is ~15% of DSA time, so +11% at high memory is
+  the expected shape of the win here.
+- ORACLE BUG (filed): best_config marked bs4ga4@12 (and bs16@16/20)
+  infeasible:ValueError with the detail swallowed — bench_train runs
+  the same cell fine solo (derivation converges: ledger 6.68, extent
+  8.55 <= 8.71 avail; measured peak 11.81 <= 12, wall 3,288). The
+  in-process cell-state class again (allocator/cublas residue between
+  cells); fresh-process = truth. best_config needs per-cell error
+  detail + probably per-cell process isolation.
+* dev-12 quoted from the solo bench_train repro run.
