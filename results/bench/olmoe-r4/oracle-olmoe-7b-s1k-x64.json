@@ -1,0 +1,303 @@
+{
+ "family": "olmoe",
+ "preset": "olmoe_7b",
+ "model_overrides": null,
+ "seq_len": 1024,
+ "seqs_per_step": 64,
+ "tokens_per_step": 65536,
+ "calibrated": false,
+ "calibration": 1.0,
+ "note": "raw sim on contended profiles is conservative: measured wall ran +2.6..+6.6% above it on the validated frontier; margins <=2% are noise \u2014 verify top-2 with real runs",
+ "envelopes": [
+  {
+   "device_gib": 28.0,
+   "cells": [
+    {
+     "bs": 64,
+     "ga": 1,
+     "tok_s": 16592,
+     "ledger_gib": 19.71,
+     "recompute": 8,
+     "rewrites": 16
+    },
+    {
+     "bs": 32,
+     "ga": 2,
+     "tok_s": 14633,
+     "ledger_gib": 20.75,
+     "recompute": 15,
+     "rewrites": 32
+    },
+    {
+     "bs": 16,
+     "ga": 4,
+     "tok_s": 12130,
+     "ledger_gib": 24.91,
+     "recompute": 32,
+     "rewrites": 64,
+     "reduced_search": true
+    },
+    {
+     "bs": 8,
+     "ga": 8,
+     "tok_s": 10498,
+     "ledger_gib": 25.29,
+     "recompute": 128,
+     "rewrites": 128,
+     "reduced_search": true
+    },
+    {
+     "bs": 4,
+     "ga": 16,
+     "tok_s": 7600,
+     "ledger_gib": 24.25,
+     "recompute": 256,
+     "rewrites": 256
+    },
+    {
+     "bs": 2,
+     "ga": 32,
+     "status": "skip:bounded",
+     "bound": 12564
+    },
+    {
+     "bs": 1,
+     "ga": 64,
+     "status": "skip:bounded",
+     "bound": 10273
+    }
+   ],
+   "best": {
+    "bs": 64,
+    "ga": 1,
+    "tok_s": 16592,
+    "margin_pct": 13.39
+   }
+  },
+  {
+   "device_gib": 24.0,
+   "cells": [
+    {
+     "bs": 64,
+     "ga": 1,
+     "tok_s": 15709,
+     "ledger_gib": 14.72,
+     "recompute": 8,
+     "rewrites": 16
+    },
+    {
+     "bs": 32,
+     "ga": 2,
+     "status": "skip:bounded",
+     "bound": 14633
+    },
+    {
+     "bs": 16,
+     "ga": 4,
+     "status": "skip:bounded",
+     "bound": 12130
+    },
+    {
+     "bs": 8,
+     "ga": 8,
+     "status": "skip:bounded",
+     "bound": 10498
+    },
+    {
+     "bs": 4,
+     "ga": 16,
+     "status": "skip:bounded",
+     "bound": 7600
+    },
+    {
+     "bs": 2,
+     "ga": 32,
+     "status": "skip:bounded",
+     "bound": 12564
+    },
+    {
+     "bs": 1,
+     "ga": 64,
+     "status": "skip:bounded",
+     "bound": 10273
+    }
+   ],
+   "best": {
+    "bs": 64,
+    "ga": 1,
+    "tok_s": 15709,
+    "margin_pct": null
+   }
+  },
+  {
+   "device_gib": 20.0,
+   "cells": [
+    {
+     "bs": 64,
+     "ga": 1,
+     "tok_s": 14543,
+     "ledger_gib": 11.37,
+     "recompute": 15,
+     "rewrites": 16
+    },
+    {
+     "bs": 32,
+     "ga": 2,
+     "tok_s": 14245,
+     "ledger_gib": 14.06,
+     "recompute": 20,
+     "rewrites": 32
+    },
+    {
+     "bs": 16,
+     "ga": 4,
+     "status": "skip:bounded",
+     "bound": 12130
+    },
+    {
+     "bs": 8,
+     "ga": 8,
+     "status": "skip:bounded",
+     "bound": 10498
+    },
+    {
+     "bs": 4,
+     "ga": 16,
+     "status": "skip:bounded",
+     "bound": 7600
+    },
+    {
+     "bs": 2,
+     "ga": 32,
+     "status": "skip:bounded",
+     "bound": 12564
+    },
+    {
+     "bs": 1,
+     "ga": 64,
+     "status": "skip:bounded",
+     "bound": 10273
+    }
+   ],
+   "best": {
+    "bs": 64,
+    "ga": 1,
+    "tok_s": 14543,
+    "margin_pct": 2.09
+   }
+  },
+  {
+   "device_gib": 16.0,
+   "cells": [
+    {
+     "bs": 64,
+     "ga": 1,
+     "tok_s": 14315,
+     "ledger_gib": 8.22,
+     "recompute": 13,
+     "rewrites": 16
+    },
+    {
+     "bs": 32,
+     "ga": 2,
+     "tok_s": 13452,
+     "ledger_gib": 10.13,
+     "recompute": 27,
+     "rewrites": 32
+    },
+    {
+     "bs": 16,
+     "ga": 4,
+     "status": "skip:bounded",
+     "bound": 12130
+    },
+    {
+     "bs": 8,
+     "ga": 8,
+     "status": "skip:bounded",
+     "bound": 10498
+    },
+    {
+     "bs": 4,
+     "ga": 16,
+     "status": "skip:bounded",
+     "bound": 7600
+    },
+    {
+     "bs": 2,
+     "ga": 32,
+     "status": "skip:bounded",
+     "bound": 12564
+    },
+    {
+     "bs": 1,
+     "ga": 64,
+     "status": "skip:bounded",
+     "bound": 10273
+    }
+   ],
+   "best": {
+    "bs": 64,
+    "ga": 1,
+    "tok_s": 14315,
+    "margin_pct": 6.42
+   }
+  },
+  {
+   "device_gib": 12.0,
+   "cells": [
+    {
+     "bs": 64,
+     "ga": 1,
+     "status": "infeasible:ValueError"
+    },
+    {
+     "bs": 32,
+     "ga": 2,
+     "tok_s": 12204,
+     "ledger_gib": 6.33,
+     "recompute": 28,
+     "rewrites": 32
+    },
+    {
+     "bs": 16,
+     "ga": 4,
+     "status": "skip:bounded",
+     "bound": 12130
+    },
+    {
+     "bs": 8,
+     "ga": 8,
+     "status": "skip:bounded",
+     "bound": 10498
+    },
+    {
+     "bs": 4,
+     "ga": 16,
+     "status": "skip:bounded",
+     "bound": 7600
+    },
+    {
+     "bs": 2,
+     "ga": 32,
+     "tok_s": 1600,
+     "ledger_gib": 9.37,
+     "recompute": 424,
+     "rewrites": 512
+    },
+    {
+     "bs": 1,
+     "ga": 64,
+     "status": "skip:bounded",
+     "bound": 10273
+    }
+   ],
+   "best": {
+    "bs": 32,
+    "ga": 2,
+    "tok_s": 12204,
+    "margin_pct": 662.75
+   }
+  }
+ ]
+}

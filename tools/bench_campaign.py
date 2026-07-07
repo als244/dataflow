@@ -281,6 +281,9 @@ def main() -> None:
                     help="print the bench_train commands without running")
     ap.add_argument("--pace-seconds", type=int, default=40,
                     help="sleep between invocations (oomd pressure decay)")
+    ap.add_argument("--no-legacy", action="store_true",
+                    help="scan ONLY {out-dir}/raw for rows (fresh-campaign "
+                         "mode: never fall back to repo-wide artifact pools)")
     ap.add_argument("--allow-illegal", action="store_true",
                     help="render envelope-busting rows (flagged) instead of dropping")
     ap.add_argument("--out-dir", default=None,
@@ -311,9 +314,13 @@ def main() -> None:
     if out_dir is not None:
         raw_dir = out_dir / "raw"
         raw_dir.mkdir(parents=True, exist_ok=True)
+        if args.no_legacy:
+            SUMMARY_DIRS.clear()
         if raw_dir not in SUMMARY_DIRS:
             SUMMARY_DIRS.insert(0, raw_dir)
         cells = load_cells(presets, args.allow_illegal)
+    elif args.no_legacy:
+        sys.exit("--no-legacy requires --out-dir")
 
     if (args.run or args.rerun or args.dry_run) and not args.render_only:
         run_cells(presets, devs, modes, shapes, args.seq_tag, args.steps,

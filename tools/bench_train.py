@@ -650,11 +650,14 @@ def main() -> None:
         # (scratch grows past step 1), so the loop closes HERE — if the
         # measured full-run peak busts the envelope, shrink the ledger by
         # the measured overage and re-run the row (once). No hand leeway.
-        for _retry in range(2):
-            if env_gib is None or actual / GIB <= env_gib + 0.02 or _retry:
+        for _retry in range(3):
+            if env_gib is None or actual / GIB <= env_gib + 0.02 or _retry == 2:
                 break
             over_gib = actual / GIB - env_gib
-            eff = int(eff - (over_gib + 0.0625) * GIB)
+            # shrink by the overage PLUS a margin that beats run-to-run
+            # torch-scratch variance (~±0.2 GiB measured) — a timid step
+            # can land the retry inside the noise and waste it
+            eff = int(eff - (over_gib + 0.25) * GIB)
             print(f"  auto-headroom (post-run): peak {actual / GIB:.2f} > "
                   f"{env_gib:g} — re-planning at ledger {eff / GIB:.2f} GiB "
                   f"and re-running")

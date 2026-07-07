@@ -1,0 +1,54 @@
+{
+  "budget_gib": 16.0,
+  "budget_semantics": "device",
+  "planned_budget_gib": 8.07330322265625,
+  "actual_device_peak_gib": 15.92799425125122,
+  "envelope_ok": true,
+  "fixed_overhead_gib": 1.41693115234375,
+  "torch_scratch_peak_gib": 6.5859375,
+  "device_envelope_gib": 16,
+  "scratch_reserve_gib": 6.509765625,
+  "placement_mode": "static",
+  "extent_budget": false,
+  "sim_ms_per_step": 4736.416428710938,
+  "real_ms_per_step_steady": 4623.055419921875,
+  "sim_tokens_per_s": 13836.621206433125,
+  "real_tokens_per_s": 14175.906202116757,
+  "wall_tokens_per_s": 14153.703116468378,
+  "real_vs_sim_pct": 2.452079815019337,
+  "replay_fidelity_gap_pct": 0.37451044134588113,
+  "losses": [
+    11.233720779418945,
+    11.232572555541992,
+    11.240737915039062
+  ],
+  "peak_fast_gib": 7.925125598907471,
+  "peak_backing_gib": 49.01295804977417,
+  "pinned_host_gib": 49.01320219412446,
+  "step_makespans_ms": [
+    5018.4267578125,
+    4628.0947265625,
+    4618.01611328125
+  ],
+  "step_wall_s": [
+    6.983251414028928,
+    4.635132126044482,
+    4.625483199954033
+  ],
+  "step_slab_overflows": [
+    0,
+    0,
+    0
+  ],
+  "placement_extent_gib": 7.925125598907471,
+  "placement_escapes": 0,
+  "pressure_evictions": 0,
+  "placement_overhead": 1.0,
+  "recompute_chosen": 13,
+  "plan_path": "results/bench/olmoe-r4/raw/olmoe-shaped-16L-d2048-s1024-b64-r1-steps1-8.0733gib.annotated.json",
+  "webapp_path": "results/bench/olmoe-r4/raw/olmoe-shaped-16L-d2048-s1024-b64-r1-steps1-8.0733gib.webapp.json",
+  "family": "olmoe-7b",
+  "config": "olmoe-7b-s1k-bs64ga1",
+  "source_summary": "results/bench/olmoe-r4/raw/bench-olmoe-7b-s1k-bs64ga1-16_20_24_28dev-rc.summary.json",
+  "generated_by": "tools/bench_campaign.py"
+}

@@ -1,0 +1,207 @@
+  envelope 16: ledger 8.07 -> extent 7.93 (avail 8.07)
+  envelope 20: ledger 12.07 -> extent 12.48 (avail 12.07)
+  envelope 20: ledger 11.68 -> extent 12.34 (avail 12.07)
+  envelope 20: ledger 11.43 -> extent 11.96 (avail 12.07)
+  envelope 24: ledger 16.07 -> extent 17.87 (avail 16.07)
+  envelope 24: ledger 14.46 -> extent 16.39 (avail 16.07)
+  envelope 24: ledger 14.18 -> extent 16.39 (avail 16.07)
+  envelope 24: ledger 13.90 -> extent 15.33 (avail 16.07)
+  envelope 28: ledger 20.07 -> extent 20.48 (avail 20.07)
+  envelope 28: ledger 19.68 -> extent 19.54 (avail 20.07)
+device mode: fixed 1.42 GiB, scratch reserve 6.51 GiB; ledger budgets [8.07330322265625, 11.42554920911789, 13.90030514728278, 19.67801402322948]
+
+=== budget 8.0733 GiB: sim predicts 4736.4 ms/step (13837 tok/s), peak 7.93 GiB, recompute 13/16 ===
+device peak (measured): 15.93 GiB = fixed 1.42 + extent 7.93 + torch scratch 6.59
+device envelope check: actual peak 15.93 GiB <= envelope 16 GiB
+{
+  "budget_gib": 16.0,
+  "budget_semantics": "device",
+  "planned_budget_gib": 8.07330322265625,
+  "actual_device_peak_gib": 15.92799425125122,
+  "envelope_ok": true,
+  "fixed_overhead_gib": 1.41693115234375,
+  "torch_scratch_peak_gib": 6.5859375,
+  "device_envelope_gib": 16.0,
+  "scratch_reserve_gib": 6.509765625,
+  "placement_mode": "static",
+  "extent_budget": false,
+  "sim_ms_per_step": 4736.416428710938,
+  "real_ms_per_step_steady": 4623.055419921875,
+  "sim_tokens_per_s": 13836.621206433125,
+  "real_tokens_per_s": 14175.906202116757,
+  "wall_tokens_per_s": 14153.703116468378,
+  "real_vs_sim_pct": 2.452079815019337,
+  "replay_fidelity_gap_pct": 0.37451044134588113,
+  "peak_fast_gib": 7.925125598907471,
+  "peak_backing_gib": 49.01295804977417,
+  "pinned_host_gib": 49.01320219412446,
+  "step_makespans_ms": [
+    5018.4267578125,
+    4628.0947265625,
+    4618.01611328125
+  ],
+  "step_wall_s": [
+    6.983251414028928,
+    4.635132126044482,
+    4.625483199954033
+  ],
+  "step_slab_overflows": [
+    0,
+    0,
+    0
+  ],
+  "placement_extent_gib": 7.925125598907471,
+  "placement_escapes": 0,
+  "pressure_evictions": 0,
+  "placement_overhead": 1.0,
+  "recompute_chosen": 13
+}
+losses: [11.2337, 11.2326, 11.2407]
+
+=== budget 11.4255 GiB: sim predicts 4506.3 ms/step (14543 tok/s), peak 11.35 GiB, recompute 15/16 ===
+  auto-headroom (post-run): peak 20.02 > 20 — re-planning at ledger 11.34 GiB and re-running
+device peak (measured): 20.08 GiB = fixed 1.42 + extent 11.96 + torch scratch 6.70
+!!! ENVELOPE BUSTED: measured peak 20.08 GiB > 20 GiB — NOT a valid <= 20 GiB row (summary carries envelope_ok=False); re-run with --extent-budget or --placement vmm
+device envelope check: actual peak 20.08 GiB EXCEEDS envelope 20 GiB
+{
+  "budget_gib": 20.0,
+  "budget_semantics": "device",
+  "planned_budget_gib": 11.342004001140594,
+  "actual_device_peak_gib": 20.079638957977295,
+  "envelope_ok": false,
+  "fixed_overhead_gib": 1.41693115234375,
+  "torch_scratch_peak_gib": 6.703125,
+  "device_envelope_gib": 20.0,
+  "scratch_reserve_gib": 6.509765625,
+  "placement_mode": "static",
+  "extent_budget": false,
+  "sim_ms_per_step": 4514.302528320312,
+  "real_ms_per_step_steady": 4355.6728515625,
+  "sim_tokens_per_s": 14543.16110444079,
+  "real_tokens_per_s": 15046.125416992792,
+  "wall_tokens_per_s": 15019.581253715356,
+  "real_vs_sim_pct": 3.458424952732053,
+  "replay_fidelity_gap_pct": 0.35299014729767025,
+  "peak_fast_gib": 11.17586374282837,
+  "peak_backing_gib": 38.6640739440918,
+  "pinned_host_gib": 49.01320219412446,
+  "step_makespans_ms": [
+    4308.22900390625,
+    4295.5634765625,
+    4297.0419921875
+  ],
+  "step_wall_s": [
+    4.314954373985529,
+    4.302297421032563,
+    4.303587788948789
+  ],
+  "step_slab_overflows": [
+    0,
+    0,
+    0
+  ],
+  "placement_extent_gib": 11.959582805633545,
+  "placement_escapes": 0,
+  "pressure_evictions": 0,
+  "placement_overhead": 1.0669070395396942,
+  "recompute_chosen": 15
+}
+losses: [10.0122, 10.0795, 10.1044]
+
+=== budget 13.9003 GiB: sim predicts 4164.6 ms/step (15736 tok/s), peak 13.75 GiB, recompute 8/16 ===
+device peak (measured): 23.51 GiB = fixed 1.42 + extent 15.33 + torch scratch 6.76
+device envelope check: actual peak 23.51 GiB <= envelope 24 GiB
+{
+  "budget_gib": 24.0,
+  "budget_semantics": "device",
+  "planned_budget_gib": 13.90030514728278,
+  "actual_device_peak_gib": 23.5103120803833,
+  "envelope_ok": true,
+  "fixed_overhead_gib": 1.41693115234375,
+  "torch_scratch_peak_gib": 6.76171875,
+  "device_envelope_gib": 24.0,
+  "scratch_reserve_gib": 6.509765625,
+  "placement_mode": "static",
+  "extent_budget": false,
+  "sim_ms_per_step": 4164.589884765625,
+  "real_ms_per_step_steady": 4160.37060546875,
+  "sim_tokens_per_s": 15736.483498587819,
+  "real_tokens_per_s": 15752.442802536347,
+  "wall_tokens_per_s": 15726.465515410171,
+  "real_vs_sim_pct": 0.10141594816885924,
+  "replay_fidelity_gap_pct": 0.7560302435004131,
+  "peak_fast_gib": 13.755967140197754,
+  "peak_backing_gib": 63.32130718231201,
+  "pinned_host_gib": 63.3215513266623,
+  "step_makespans_ms": [
+    4171.8583984375,
+    4172.32470703125,
+    4148.41650390625
+  ],
+  "step_wall_s": [
+    8.8146942271851,
+    4.179273358080536,
+    4.15521221794188
+  ],
+  "step_slab_overflows": [
+    0,
+    0,
+    0
+  ],
+  "placement_extent_gib": 15.33166217803955,
+  "placement_escapes": 0,
+  "pressure_evictions": 0,
+  "placement_overhead": 1.1149420906978207,
+  "recompute_chosen": 8
+}
+losses: [9.5997, 9.6619, 9.6831]
+
+=== budget 19.678 GiB: sim predicts 3949.9 ms/step (16592 tok/s), peak 19.54 GiB, recompute 8/16 ===
+device peak (measured): 27.78 GiB = fixed 1.42 + extent 19.54 + torch scratch 6.82
+device envelope check: actual peak 27.78 GiB <= envelope 28 GiB
+{
+  "budget_gib": 28.0,
+  "budget_semantics": "device",
+  "planned_budget_gib": 19.67801402322948,
+  "actual_device_peak_gib": 27.775439262390137,
+  "envelope_ok": true,
+  "fixed_overhead_gib": 1.41693115234375,
+  "torch_scratch_peak_gib": 6.8203125,
+  "device_envelope_gib": 28.0,
+  "scratch_reserve_gib": 6.509765625,
+  "placement_mode": "static",
+  "extent_budget": false,
+  "sim_ms_per_step": 3949.8590703125,
+  "real_ms_per_step_steady": 4033.2303466796875,
+  "sim_tokens_per_s": 16591.98438055032,
+  "real_tokens_per_s": 16249.009941609656,
+  "wall_tokens_per_s": 16222.190409282248,
+  "real_vs_sim_pct": -2.067109220176877,
+  "replay_fidelity_gap_pct": 0.2955391823793968,
+  "peak_fast_gib": 18.23006010055542,
+  "peak_backing_gib": 55.02150011062622,
+  "pinned_host_gib": 63.3215513266623,
+  "step_makespans_ms": [
+    4051.455078125,
+    4028.742431640625,
+    4037.71826171875
+  ],
+  "step_wall_s": [
+    7.1369772150646895,
+    4.035347463097423,
+    4.044449203880504
+  ],
+  "step_slab_overflows": [
+    0,
+    0,
+    0
+  ],
+  "placement_extent_gib": 19.538195610046387,
+  "placement_escapes": 0,
+  "pressure_evictions": 0,
+  "placement_overhead": 1.0,
+  "recompute_chosen": 8
+}
+losses: [9.1982, 9.2634, 9.2871]
+
+wrote results/bench/olmoe-r4/raw/bench-olmoe-7b-s1k-bs64ga1-16_20_24_28dev-rc.summary.json

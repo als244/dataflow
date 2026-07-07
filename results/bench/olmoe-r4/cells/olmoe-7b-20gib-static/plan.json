@@ -1,0 +1,4911 @@
+{
+  "schema_version": "dataflow-rt/v1",
+  "name": "olmoe-shaped-16L-d2048-s1024-b64-r1-steps1",
+  "initial_objects": [
+    {
+      "id": "W_embed",
+      "size_bytes": 206045184,
+      "location": "backing",
+      "role": "parameter"
+    },
+    {
+      "id": "O_embed",
+      "size_bytes": 412090368,
+      "location": "backing",
+      "role": "optimizer_state"
+    },
+    {
+      "id": "W_0",
+      "size_bytes": 839139328,
+      "location": "backing",
+      "role": "parameter"
+    },
+    {
+      "id": "O_0",
+      "size_bytes": 1678278656,
+      "location": "backing",
+      "role": "optimizer_state"
+    },
+    {
+      "id": "W_1",
+      "size_bytes": 839139328,
+      "location": "backing",
+      "role": "parameter"
+    },
+    {
+      "id": "O_1",
+      "size_bytes": 1678278656,
+      "location": "backing",
+      "role": "optimizer_state"
+    },
+    {
+      "id": "W_2",
+      "size_bytes": 839139328,
+      "location": "backing",
+      "role": "parameter"
+    },
+    {
+      "id": "O_2",
+      "size_bytes": 1678278656,
+      "location": "backing",
+      "role": "optimizer_state"
+    },
+    {
+      "id": "W_3",
+      "size_bytes": 839139328,
+      "location": "backing",
+      "role": "parameter"
+    },
+    {
+      "id": "O_3",
+      "size_bytes": 1678278656,
+      "location": "backing",
+      "role": "optimizer_state"
+    },
+    {
+      "id": "W_4",
+      "size_bytes": 839139328,
+      "location": "backing",
+      "role": "parameter"
+    },
+    {
+      "id": "O_4",
+      "size_bytes": 1678278656,
+      "location": "backing",
+      "role": "optimizer_state"
+    },
+    {
+      "id": "W_5",
+      "size_bytes": 839139328,
+      "location": "backing",
+      "role": "parameter"
+    },
+    {
+      "id": "O_5",
+      "size_bytes": 1678278656,
+      "location": "backing",
+      "role": "optimizer_state"
+    },
+    {
+      "id": "W_6",
+      "size_bytes": 839139328,
+      "location": "backing",
+      "role": "parameter"
+    },
+    {
+      "id": "O_6",
+      "size_bytes": 1678278656,
+      "location": "backing",
+      "role": "optimizer_state"
+    },
+    {
+      "id": "W_7",
+      "size_bytes": 839139328,
+      "location": "backing",
+      "role": "parameter"
+    },
+    {
+      "id": "O_7",
+      "size_bytes": 1678278656,
+      "location": "backing",
+      "role": "optimizer_state"
+    },
+    {
+      "id": "W_8",
+      "size_bytes": 839139328,
+      "location": "backing",
+      "role": "parameter"
+    },
+    {
+      "id": "O_8",
+      "size_bytes": 1678278656,
+      "location": "backing",
+      "role": "optimizer_state"
+    },
+    {
+      "id": "W_9",
+      "size_bytes": 839139328,
+      "location": "backing",
+      "role": "parameter"
+    },
+    {
+      "id": "O_9",
+      "size_bytes": 1678278656,
+      "location": "backing",
+      "role": "optimizer_state"
+    },
+    {
+      "id": "W_10",
+      "size_bytes": 839139328,
+      "location": "backing",
+      "role": "parameter"
+    },
+    {
+      "id": "O_10",
+      "size_bytes": 1678278656,
+      "location": "backing",
+      "role": "optimizer_state"
+    },
+    {
+      "id": "W_11",
+      "size_bytes": 839139328,
+      "location": "backing",
+      "role": "parameter"
+    },
+    {
+      "id": "O_11",
+      "size_bytes": 1678278656,
+      "location": "backing",
+      "role": "optimizer_state"
+    },
+    {
+      "id": "W_12",
+      "size_bytes": 839139328,
+      "location": "backing",
+      "role": "parameter"
+    },
+    {
+      "id": "O_12",
+      "size_bytes": 1678278656,
+      "location": "backing",
+      "role": "optimizer_state"
+    },
+    {
+      "id": "W_13",
+      "size_bytes": 839139328,
+      "location": "backing",
+      "role": "parameter"
+    },
+    {
+      "id": "O_13",
+      "size_bytes": 1678278656,
+      "location": "backing",
+      "role": "optimizer_state"
+    },
+    {
+      "id": "W_14",
+      "size_bytes": 839139328,
+      "location": "backing",
+      "role": "parameter"
+    },
+    {
+      "id": "O_14",
+      "size_bytes": 1678278656,
+      "location": "backing",
+      "role": "optimizer_state"
+    },
+    {
+      "id": "W_15",
+      "size_bytes": 839139328,
+      "location": "backing",
+      "role": "parameter"
+    },
+    {
+      "id": "O_15",
+      "size_bytes": 1678278656,
+      "location": "backing",
+      "role": "optimizer_state"
+    },
+    {
+      "id": "W_head",
+      "size_bytes": 206049280,
+      "location": "backing",
+      "role": "parameter"
+    },
+    {
+      "id": "O_head",
+      "size_bytes": 412098560,
+      "location": "backing",
+      "role": "optimizer_state"
+    },
+    {
+      "id": "tokens_0_0",
+      "size_bytes": 262144,
+      "location": "fast",
+      "role": "input",
+      "tensor": {
+        "dtype": "int32",
+        "shape": [
+          65536
+        ]
+      }
+    },
+    {
+      "id": "targets_0_0",
+      "size_bytes": 262144,
+      "location": "backing",
+      "role": "input",
+      "tensor": {
+        "dtype": "int32",
+        "shape": [
+          65536
+        ]
+      }
+    },
+    {
+      "id": "W_embed",
+      "size_bytes": 206045184,
+      "location": "fast",
+      "role": "parameter"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "embed_fwd_0_0",
+      "runtime_us": 218.75,
+      "inputs": [
+        "tokens_0_0",
+        "W_embed"
+      ],
+      "outputs": [
+        {
+          "id": "y_embed_0_0",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "activation",
+          "tensor": {
+            "dtype": "bf16",
+            "shape": [
+              65536,
+              2048
+            ]
+          }
+        }
+      ],
+      "group": "forward",
+      "compute_block_key": "embed_fwd",
+      "prefetch_after": [
+        {
+          "object_id": "W_0"
+        },
+        {
+          "object_id": "W_1"
+        }
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "gather",
+            "flops": 0,
+            "memory_bytes": 537133056,
+            "efficiency": "memory"
+          }
+        ],
+        "measured": {
+          "runtime_us": 218.75,
+          "workspace_bytes": 0,
+          "repeats": 9,
+          "mean_us": 215.60329861111111,
+          "stdev_us": 17.213405006470254,
+          "min_us": 187.5,
+          "max_us": 244.140625,
+          "estimate_runtime_us": 447.61088
+        }
+      }
+    },
+    {
+      "id": "block_fwd_0_0_0",
+      "runtime_us": 62960.9375,
+      "inputs": [
+        "y_embed_0_0",
+        "W_0"
+      ],
+      "outputs": [
+        {
+          "id": "y_0_0_0",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "activation",
+          "tensor": {
+            "dtype": "bf16",
+            "shape": [
+              65536,
+              2048
+            ]
+          }
+        },
+        {
+          "id": "M_0_0_0",
+          "size_bytes": 5243392,
+          "location": "fast",
+          "role": "activation"
+        }
+      ],
+      "group": "forward",
+      "compute_block_key": "moeattn_fwd",
+      "block_params": {
+        "layer": 0
+      },
+      "releases_after": [
+        "W_0"
+      ],
+      "prefetch_after": [
+        {
+          "object_id": "W_2"
+        }
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "moeattn_matmuls",
+            "flops": 8813272891392,
+            "memory_bytes": 9429073920,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "attention",
+            "flops": 274877906944,
+            "memory_bytes": 1073741824,
+            "efficiency": "attention"
+          }
+        ],
+        "measured": {
+          "runtime_us": 62960.9375,
+          "workspace_bytes": 5949624320,
+          "repeats": 9,
+          "mean_us": 62429.036458333336,
+          "stdev_us": 2654.721347532436,
+          "min_us": 57958.0078125,
+          "max_us": 66013.671875,
+          "estimate_runtime_us": 61254.04267240727
+        }
+      }
+    },
+    {
+      "id": "block_fwd_0_0_1",
+      "runtime_us": 62960.9375,
+      "inputs": [
+        "y_0_0_0",
+        "W_1"
+      ],
+      "outputs": [
+        {
+          "id": "y_0_0_1",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "activation",
+          "tensor": {
+            "dtype": "bf16",
+            "shape": [
+              65536,
+              2048
+            ]
+          }
+        },
+        {
+          "id": "M_0_0_1",
+          "size_bytes": 5243392,
+          "location": "fast",
+          "role": "activation"
+        }
+      ],
+      "group": "forward",
+      "compute_block_key": "moeattn_fwd",
+      "block_params": {
+        "layer": 1
+      },
+      "releases_after": [
+        "W_1"
+      ],
+      "prefetch_after": [
+        {
+          "object_id": "W_3"
+        }
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "moeattn_matmuls",
+            "flops": 8813272891392,
+            "memory_bytes": 9429073920,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "attention",
+            "flops": 274877906944,
+            "memory_bytes": 1073741824,
+            "efficiency": "attention"
+          }
+        ],
+        "measured": {
+          "runtime_us": 62960.9375,
+          "workspace_bytes": 5949624320,
+          "repeats": 9,
+          "mean_us": 62429.036458333336,
+          "stdev_us": 2654.721347532436,
+          "min_us": 57958.0078125,
+          "max_us": 66013.671875,
+          "estimate_runtime_us": 61254.04267240727
+        }
+      }
+    },
+    {
+      "id": "block_fwd_0_0_2",
+      "runtime_us": 62960.9375,
+      "inputs": [
+        "y_0_0_1",
+        "W_2"
+      ],
+      "outputs": [
+        {
+          "id": "y_0_0_2",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "activation",
+          "tensor": {
+            "dtype": "bf16",
+            "shape": [
+              65536,
+              2048
+            ]
+          }
+        },
+        {
+          "id": "M_0_0_2",
+          "size_bytes": 5243392,
+          "location": "fast",
+          "role": "activation"
+        }
+      ],
+      "group": "forward",
+      "compute_block_key": "moeattn_fwd",
+      "block_params": {
+        "layer": 2
+      },
+      "releases_after": [
+        "W_2"
+      ],
+      "prefetch_after": [
+        {
+          "object_id": "W_4"
+        }
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "moeattn_matmuls",
+            "flops": 8813272891392,
+            "memory_bytes": 9429073920,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "attention",
+            "flops": 274877906944,
+            "memory_bytes": 1073741824,
+            "efficiency": "attention"
+          }
+        ],
+        "measured": {
+          "runtime_us": 62960.9375,
+          "workspace_bytes": 5949624320,
+          "repeats": 9,
+          "mean_us": 62429.036458333336,
+          "stdev_us": 2654.721347532436,
+          "min_us": 57958.0078125,
+          "max_us": 66013.671875,
+          "estimate_runtime_us": 61254.04267240727
+        }
+      }
+    },
+    {
+      "id": "block_fwd_0_0_3",
+      "runtime_us": 62960.9375,
+      "inputs": [
+        "y_0_0_2",
+        "W_3"
+      ],
+      "outputs": [
+        {
+          "id": "y_0_0_3",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "activation",
+          "tensor": {
+            "dtype": "bf16",
+            "shape": [
+              65536,
+              2048
+            ]
+          }
+        },
+        {
+          "id": "M_0_0_3",
+          "size_bytes": 5243392,
+          "location": "fast",
+          "role": "activation"
+        }
+      ],
+      "group": "forward",
+      "compute_block_key": "moeattn_fwd",
+      "block_params": {
+        "layer": 3
+      },
+      "releases_after": [
+        "W_3"
+      ],
+      "prefetch_after": [
+        {
+          "object_id": "W_5"
+        }
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "moeattn_matmuls",
+            "flops": 8813272891392,
+            "memory_bytes": 9429073920,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "attention",
+            "flops": 274877906944,
+            "memory_bytes": 1073741824,
+            "efficiency": "attention"
+          }
+        ],
+        "measured": {
+          "runtime_us": 62960.9375,
+          "workspace_bytes": 5949624320,
+          "repeats": 9,
+          "mean_us": 62429.036458333336,
+          "stdev_us": 2654.721347532436,
+          "min_us": 57958.0078125,
+          "max_us": 66013.671875,
+          "estimate_runtime_us": 61254.04267240727
+        }
+      }
+    },
+    {
+      "id": "block_fwd_0_0_4",
+      "runtime_us": 62960.9375,
+      "inputs": [
+        "y_0_0_3",
+        "W_4"
+      ],
+      "outputs": [
+        {
+          "id": "y_0_0_4",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "activation",
+          "tensor": {
+            "dtype": "bf16",
+            "shape": [
+              65536,
+              2048
+            ]
+          }
+        },
+        {
+          "id": "M_0_0_4",
+          "size_bytes": 5243392,
+          "location": "fast",
+          "role": "activation"
+        }
+      ],
+      "group": "forward",
+      "compute_block_key": "moeattn_fwd",
+      "block_params": {
+        "layer": 4
+      },
+      "releases_after": [
+        "W_4"
+      ],
+      "prefetch_after": [
+        {
+          "object_id": "W_6"
+        }
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "moeattn_matmuls",
+            "flops": 8813272891392,
+            "memory_bytes": 9429073920,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "attention",
+            "flops": 274877906944,
+            "memory_bytes": 1073741824,
+            "efficiency": "attention"
+          }
+        ],
+        "measured": {
+          "runtime_us": 62960.9375,
+          "workspace_bytes": 5949624320,
+          "repeats": 9,
+          "mean_us": 62429.036458333336,
+          "stdev_us": 2654.721347532436,
+          "min_us": 57958.0078125,
+          "max_us": 66013.671875,
+          "estimate_runtime_us": 61254.04267240727
+        }
+      }
+    },
+    {
+      "id": "block_fwd_0_0_5",
+      "runtime_us": 62960.9375,
+      "inputs": [
+        "y_0_0_4",
+        "W_5"
+      ],
+      "outputs": [
+        {
+          "id": "y_0_0_5",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "activation",
+          "tensor": {
+            "dtype": "bf16",
+            "shape": [
+              65536,
+              2048
+            ]
+          }
+        },
+        {
+          "id": "M_0_0_5",
+          "size_bytes": 5243392,
+          "location": "fast",
+          "role": "activation"
+        }
+      ],
+      "group": "forward",
+      "compute_block_key": "moeattn_fwd",
+      "block_params": {
+        "layer": 5
+      },
+      "releases_after": [
+        "W_5"
+      ],
+      "prefetch_after": [
+        {
+          "object_id": "W_7"
+        }
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "moeattn_matmuls",
+            "flops": 8813272891392,
+            "memory_bytes": 9429073920,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "attention",
+            "flops": 274877906944,
+            "memory_bytes": 1073741824,
+            "efficiency": "attention"
+          }
+        ],
+        "measured": {
+          "runtime_us": 62960.9375,
+          "workspace_bytes": 5949624320,
+          "repeats": 9,
+          "mean_us": 62429.036458333336,
+          "stdev_us": 2654.721347532436,
+          "min_us": 57958.0078125,
+          "max_us": 66013.671875,
+          "estimate_runtime_us": 61254.04267240727
+        }
+      }
+    },
+    {
+      "id": "block_fwd_0_0_6",
+      "runtime_us": 62960.9375,
+      "inputs": [
+        "y_0_0_5",
+        "W_6"
+      ],
+      "outputs": [
+        {
+          "id": "y_0_0_6",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "activation",
+          "tensor": {
+            "dtype": "bf16",
+            "shape": [
+              65536,
+              2048
+            ]
+          }
+        },
+        {
+          "id": "M_0_0_6",
+          "size_bytes": 5243392,
+          "location": "fast",
+          "role": "activation"
+        }
+      ],
+      "group": "forward",
+      "compute_block_key": "moeattn_fwd",
+      "block_params": {
+        "layer": 6
+      },
+      "releases_after": [
+        "W_6"
+      ],
+      "prefetch_after": [
+        {
+          "object_id": "W_8"
+        }
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "moeattn_matmuls",
+            "flops": 8813272891392,
+            "memory_bytes": 9429073920,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "attention",
+            "flops": 274877906944,
+            "memory_bytes": 1073741824,
+            "efficiency": "attention"
+          }
+        ],
+        "measured": {
+          "runtime_us": 62960.9375,
+          "workspace_bytes": 5949624320,
+          "repeats": 9,
+          "mean_us": 62429.036458333336,
+          "stdev_us": 2654.721347532436,
+          "min_us": 57958.0078125,
+          "max_us": 66013.671875,
+          "estimate_runtime_us": 61254.04267240727
+        }
+      }
+    },
+    {
+      "id": "block_fwd_0_0_7",
+      "runtime_us": 62960.9375,
+      "inputs": [
+        "y_0_0_6",
+        "W_7"
+      ],
+      "outputs": [
+        {
+          "id": "y_0_0_7",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "activation",
+          "tensor": {
+            "dtype": "bf16",
+            "shape": [
+              65536,
+              2048
+            ]
+          }
+        },
+        {
+          "id": "M_0_0_7",
+          "size_bytes": 5243392,
+          "location": "fast",
+          "role": "activation"
+        }
+      ],
+      "group": "forward",
+      "compute_block_key": "moeattn_fwd",
+      "block_params": {
+        "layer": 7
+      },
+      "releases_after": [
+        "W_7"
+      ],
+      "prefetch_after": [
+        {
+          "object_id": "W_9"
+        }
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "moeattn_matmuls",
+            "flops": 8813272891392,
+            "memory_bytes": 9429073920,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "attention",
+            "flops": 274877906944,
+            "memory_bytes": 1073741824,
+            "efficiency": "attention"
+          }
+        ],
+        "measured": {
+          "runtime_us": 62960.9375,
+          "workspace_bytes": 5949624320,
+          "repeats": 9,
+          "mean_us": 62429.036458333336,
+          "stdev_us": 2654.721347532436,
+          "min_us": 57958.0078125,
+          "max_us": 66013.671875,
+          "estimate_runtime_us": 61254.04267240727
+        }
+      }
+    },
+    {
+      "id": "block_fwd_0_0_8",
+      "runtime_us": 62960.9375,
+      "inputs": [
+        "y_0_0_7",
+        "W_8"
+      ],
+      "outputs": [
+        {
+          "id": "y_0_0_8",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "activation",
+          "tensor": {
+            "dtype": "bf16",
+            "shape": [
+              65536,
+              2048
+            ]
+          }
+        },
+        {
+          "id": "M_0_0_8",
+          "size_bytes": 5243392,
+          "location": "fast",
+          "role": "activation"
+        }
+      ],
+      "group": "forward",
+      "compute_block_key": "moeattn_fwd",
+      "block_params": {
+        "layer": 8
+      },
+      "releases_after": [
+        "W_8"
+      ],
+      "prefetch_after": [
+        {
+          "object_id": "W_10"
+        }
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "moeattn_matmuls",
+            "flops": 8813272891392,
+            "memory_bytes": 9429073920,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "attention",
+            "flops": 274877906944,
+            "memory_bytes": 1073741824,
+            "efficiency": "attention"
+          }
+        ],
+        "measured": {
+          "runtime_us": 62960.9375,
+          "workspace_bytes": 5949624320,
+          "repeats": 9,
+          "mean_us": 62429.036458333336,
+          "stdev_us": 2654.721347532436,
+          "min_us": 57958.0078125,
+          "max_us": 66013.671875,
+          "estimate_runtime_us": 61254.04267240727
+        }
+      }
+    },
+    {
+      "id": "block_fwd_0_0_9",
+      "runtime_us": 62960.9375,
+      "inputs": [
+        "y_0_0_8",
+        "W_9"
+      ],
+      "outputs": [
+        {
+          "id": "y_0_0_9",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "activation",
+          "tensor": {
+            "dtype": "bf16",
+            "shape": [
+              65536,
+              2048
+            ]
+          }
+        },
+        {
+          "id": "M_0_0_9",
+          "size_bytes": 5243392,
+          "location": "fast",
+          "role": "activation"
+        }
+      ],
+      "group": "forward",
+      "compute_block_key": "moeattn_fwd",
+      "block_params": {
+        "layer": 9
+      },
+      "releases_after": [
+        "W_9"
+      ],
+      "prefetch_after": [
+        {
+          "object_id": "W_11"
+        }
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "moeattn_matmuls",
+            "flops": 8813272891392,
+            "memory_bytes": 9429073920,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "attention",
+            "flops": 274877906944,
+            "memory_bytes": 1073741824,
+            "efficiency": "attention"
+          }
+        ],
+        "measured": {
+          "runtime_us": 62960.9375,
+          "workspace_bytes": 5949624320,
+          "repeats": 9,
+          "mean_us": 62429.036458333336,
+          "stdev_us": 2654.721347532436,
+          "min_us": 57958.0078125,
+          "max_us": 66013.671875,
+          "estimate_runtime_us": 61254.04267240727
+        }
+      }
+    },
+    {
+      "id": "block_fwd_0_0_10",
+      "runtime_us": 62960.9375,
+      "inputs": [
+        "y_0_0_9",
+        "W_10"
+      ],
+      "outputs": [
+        {
+          "id": "y_0_0_10",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "activation",
+          "tensor": {
+            "dtype": "bf16",
+            "shape": [
+              65536,
+              2048
+            ]
+          }
+        },
+        {
+          "id": "M_0_0_10",
+          "size_bytes": 5243392,
+          "location": "fast",
+          "role": "activation"
+        }
+      ],
+      "group": "forward",
+      "compute_block_key": "moeattn_fwd",
+      "block_params": {
+        "layer": 10
+      },
+      "releases_after": [
+        "W_10"
+      ],
+      "prefetch_after": [
+        {
+          "object_id": "W_12"
+        }
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "moeattn_matmuls",
+            "flops": 8813272891392,
+            "memory_bytes": 9429073920,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "attention",
+            "flops": 274877906944,
+            "memory_bytes": 1073741824,
+            "efficiency": "attention"
+          }
+        ],
+        "measured": {
+          "runtime_us": 62960.9375,
+          "workspace_bytes": 5949624320,
+          "repeats": 9,
+          "mean_us": 62429.036458333336,
+          "stdev_us": 2654.721347532436,
+          "min_us": 57958.0078125,
+          "max_us": 66013.671875,
+          "estimate_runtime_us": 61254.04267240727
+        }
+      }
+    },
+    {
+      "id": "block_fwd_0_0_11",
+      "runtime_us": 62960.9375,
+      "inputs": [
+        "y_0_0_10",
+        "W_11"
+      ],
+      "outputs": [
+        {
+          "id": "y_0_0_11",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "activation",
+          "tensor": {
+            "dtype": "bf16",
+            "shape": [
+              65536,
+              2048
+            ]
+          }
+        },
+        {
+          "id": "M_0_0_11",
+          "size_bytes": 5243392,
+          "location": "fast",
+          "role": "activation"
+        }
+      ],
+      "group": "forward",
+      "compute_block_key": "moeattn_fwd",
+      "block_params": {
+        "layer": 11
+      },
+      "releases_after": [
+        "W_11"
+      ],
+      "prefetch_after": [
+        {
+          "object_id": "W_13"
+        }
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "moeattn_matmuls",
+            "flops": 8813272891392,
+            "memory_bytes": 9429073920,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "attention",
+            "flops": 274877906944,
+            "memory_bytes": 1073741824,
+            "efficiency": "attention"
+          }
+        ],
+        "measured": {
+          "runtime_us": 62960.9375,
+          "workspace_bytes": 5949624320,
+          "repeats": 9,
+          "mean_us": 62429.036458333336,
+          "stdev_us": 2654.721347532436,
+          "min_us": 57958.0078125,
+          "max_us": 66013.671875,
+          "estimate_runtime_us": 61254.04267240727
+        }
+      }
+    },
+    {
+      "id": "block_fwd_0_0_12",
+      "runtime_us": 62960.9375,
+      "inputs": [
+        "y_0_0_11",
+        "W_12"
+      ],
+      "outputs": [
+        {
+          "id": "y_0_0_12",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "activation",
+          "tensor": {
+            "dtype": "bf16",
+            "shape": [
+              65536,
+              2048
+            ]
+          }
+        },
+        {
+          "id": "M_0_0_12",
+          "size_bytes": 5243392,
+          "location": "fast",
+          "role": "activation"
+        }
+      ],
+      "group": "forward",
+      "compute_block_key": "moeattn_fwd",
+      "block_params": {
+        "layer": 12
+      },
+      "releases_after": [
+        "W_12"
+      ],
+      "prefetch_after": [
+        {
+          "object_id": "W_14"
+        }
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "moeattn_matmuls",
+            "flops": 8813272891392,
+            "memory_bytes": 9429073920,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "attention",
+            "flops": 274877906944,
+            "memory_bytes": 1073741824,
+            "efficiency": "attention"
+          }
+        ],
+        "measured": {
+          "runtime_us": 62960.9375,
+          "workspace_bytes": 5949624320,
+          "repeats": 9,
+          "mean_us": 62429.036458333336,
+          "stdev_us": 2654.721347532436,
+          "min_us": 57958.0078125,
+          "max_us": 66013.671875,
+          "estimate_runtime_us": 61254.04267240727
+        }
+      }
+    },
+    {
+      "id": "block_fwd_0_0_13",
+      "runtime_us": 62960.9375,
+      "inputs": [
+        "y_0_0_12",
+        "W_13"
+      ],
+      "outputs": [
+        {
+          "id": "y_0_0_13",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "activation",
+          "tensor": {
+            "dtype": "bf16",
+            "shape": [
+              65536,
+              2048
+            ]
+          }
+        },
+        {
+          "id": "M_0_0_13",
+          "size_bytes": 5243392,
+          "location": "fast",
+          "role": "activation"
+        }
+      ],
+      "group": "forward",
+      "compute_block_key": "moeattn_fwd",
+      "block_params": {
+        "layer": 13
+      },
+      "releases_after": [
+        "W_13"
+      ],
+      "prefetch_after": [
+        {
+          "object_id": "W_15"
+        }
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "moeattn_matmuls",
+            "flops": 8813272891392,
+            "memory_bytes": 9429073920,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "attention",
+            "flops": 274877906944,
+            "memory_bytes": 1073741824,
+            "efficiency": "attention"
+          }
+        ],
+        "measured": {
+          "runtime_us": 62960.9375,
+          "workspace_bytes": 5949624320,
+          "repeats": 9,
+          "mean_us": 62429.036458333336,
+          "stdev_us": 2654.721347532436,
+          "min_us": 57958.0078125,
+          "max_us": 66013.671875,
+          "estimate_runtime_us": 61254.04267240727
+        }
+      }
+    },
+    {
+      "id": "block_fwd_0_0_14",
+      "runtime_us": 62960.9375,
+      "inputs": [
+        "y_0_0_13",
+        "W_14"
+      ],
+      "outputs": [
+        {
+          "id": "y_0_0_14",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "activation",
+          "tensor": {
+            "dtype": "bf16",
+            "shape": [
+              65536,
+              2048
+            ]
+          }
+        },
+        {
+          "id": "M_0_0_14",
+          "size_bytes": 5243392,
+          "location": "fast",
+          "role": "activation"
+        }
+      ],
+      "group": "forward",
+      "compute_block_key": "moeattn_fwd",
+      "block_params": {
+        "layer": 14
+      },
+      "releases_after": [
+        "W_14"
+      ],
+      "prefetch_after": [
+        {
+          "object_id": "W_head"
+        },
+        {
+          "object_id": "targets_0_0"
+        }
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "moeattn_matmuls",
+            "flops": 8813272891392,
+            "memory_bytes": 9429073920,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "attention",
+            "flops": 274877906944,
+            "memory_bytes": 1073741824,
+            "efficiency": "attention"
+          }
+        ],
+        "measured": {
+          "runtime_us": 62960.9375,
+          "workspace_bytes": 5949624320,
+          "repeats": 9,
+          "mean_us": 62429.036458333336,
+          "stdev_us": 2654.721347532436,
+          "min_us": 57958.0078125,
+          "max_us": 66013.671875,
+          "estimate_runtime_us": 61254.04267240727
+        }
+      }
+    },
+    {
+      "id": "block_fwd_0_0_15",
+      "runtime_us": 61041.1376953125,
+      "inputs": [
+        "y_0_0_14",
+        "W_15"
+      ],
+      "outputs": [
+        {
+          "id": "y_0_0_15",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "activation",
+          "tensor": {
+            "dtype": "bf16",
+            "shape": [
+              65536,
+              2048
+            ]
+          }
+        },
+        {
+          "id": "A_0_0_15",
+          "size_bytes": 3503292416,
+          "location": "fast",
+          "role": "activation"
+        },
+        {
+          "id": "M_0_0_15",
+          "size_bytes": 5243392,
+          "location": "fast",
+          "role": "activation"
+        }
+      ],
+      "group": "forward",
+      "compute_block_key": "moeattn_fwd",
+      "block_params": {
+        "layer": 15
+      },
+      "prefetch_after": [
+        {
+          "object_id": "O_head"
+        }
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "moeattn_matmuls",
+            "flops": 8813272891392,
+            "memory_bytes": 9429073920,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "attention",
+            "flops": 274877906944,
+            "memory_bytes": 1073741824,
+            "efficiency": "attention"
+          }
+        ],
+        "measured": {
+          "runtime_us": 61041.1376953125,
+          "workspace_bytes": 3525578752,
+          "repeats": 9,
+          "mean_us": 61778.4423828125,
+          "stdev_us": 2624.8133009695384,
+          "min_us": 58232.48291015625,
+          "max_us": 66125.6103515625,
+          "estimate_runtime_us": 61254.04267240727
+        }
+      }
+    },
+    {
+      "id": "head_loss_0_0",
+      "runtime_us": 231169.921875,
+      "inputs": [
+        "y_0_0_15",
+        "targets_0_0",
+        "W_head"
+      ],
+      "outputs": [
+        {
+          "id": "dy_0_0_15",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "gradient",
+          "tensor": {
+            "dtype": "bf16",
+            "shape": [
+              65536,
+              2048
+            ]
+          }
+        },
+        {
+          "id": "loss_0_0",
+          "size_bytes": 4,
+          "location": "fast",
+          "role": "output",
+          "tensor": {
+            "dtype": "fp32",
+            "shape": [
+              1
+            ]
+          }
+        },
+        {
+          "id": "dW_head_0",
+          "size_bytes": 206049280,
+          "location": "fast",
+          "role": "gradient"
+        }
+      ],
+      "group": "backward",
+      "compute_block_key": "head_loss",
+      "releases_after": [
+        "targets_0_0",
+        "y_0_0_15"
+      ],
+      "offload_after": [
+        {
+          "object_id": "loss_0_0"
+        }
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "lm_head",
+            "flops": 13503377178624,
+            "memory_bytes": 7067926528,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "ce_loss",
+            "flops": 0,
+            "memory_bytes": 13186891776,
+            "efficiency": "memory"
+          },
+          {
+            "kind": "roofline",
+            "name": "lm_head_bwd",
+            "flops": 27006754357248,
+            "memory_bytes": 14135853056,
+            "efficiency": "matmul"
+          }
+        ],
+        "measured": {
+          "runtime_us": 231169.921875,
+          "workspace_bytes": 1278252032,
+          "repeats": 9,
+          "mean_us": 230656.68402777778,
+          "stdev_us": 2742.760888434158,
+          "min_us": 226125.0,
+          "max_us": 233644.53125,
+          "estimate_runtime_us": 281056.62005248
+        }
+      }
+    },
+    {
+      "id": "optimizer_head_0",
+      "runtime_us": 1013.671875,
+      "inputs": [
+        "W_head",
+        "dW_head_0",
+        "O_head"
+      ],
+      "mutates": [
+        "W_head",
+        "O_head"
+      ],
+      "group": "optimizer",
+      "compute_block_key": "optimizer_head",
+      "block_params": {
+        "step": 0
+      },
+      "releases_after": [
+        "dW_head_0"
+      ],
+      "offload_after": [
+        {
+          "object_id": "O_head"
+        },
+        {
+          "object_id": "W_head"
+        }
+      ],
+      "prefetch_after": [
+        {
+          "object_id": "O_15"
+        },
+        {
+          "object_id": "W_14"
+        }
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "adamw",
+            "flops": 0,
+            "memory_bytes": 1442316288,
+            "efficiency": "memory"
+          }
+        ],
+        "measured": {
+          "runtime_us": 1013.671875,
+          "workspace_bytes": 0,
+          "repeats": 9,
+          "mean_us": 1002.6041666666666,
+          "stdev_us": 17.332264989549657,
+          "min_us": 974.609375,
+          "max_us": 1021.484375,
+          "estimate_runtime_us": 1201.9302400000001
+        }
+      }
+    },
+    {
+      "id": "block_bwd_0_0_15",
+      "runtime_us": 133562.5,
+      "inputs": [
+        "dy_0_0_15",
+        "A_0_0_15",
+        "y_0_0_14",
+        "W_15",
+        "M_0_0_15"
+      ],
+      "outputs": [
+        {
+          "id": "dy_0_0_14",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "gradient",
+          "tensor": {
+            "dtype": "bf16",
+            "shape": [
+              65536,
+              2048
+            ]
+          }
+        },
+        {
+          "id": "dW_0_15",
+          "size_bytes": 839139328,
+          "location": "fast",
+          "role": "gradient"
+        }
+      ],
+      "group": "backward",
+      "compute_block_key": "moeattn_bwd",
+      "block_params": {
+        "layer": 15
+      },
+      "releases_after": [
+        "A_0_0_15",
+        "M_0_0_15",
+        "dy_0_0_15",
+        "y_0_0_14"
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "moeattn_matmuls_bwd",
+            "flops": 17626545782784,
+            "memory_bytes": 18858147840,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "attention_bwd",
+            "flops": 687194767360,
+            "memory_bytes": 2147483648,
+            "efficiency": "attention"
+          }
+        ],
+        "measured": {
+          "runtime_us": 133562.5,
+          "workspace_bytes": 6721372160,
+          "repeats": 9,
+          "mean_us": 134636.28472222222,
+          "stdev_us": 2370.0618156744927,
+          "min_us": 132242.1875,
+          "max_us": 139199.21875,
+          "estimate_runtime_us": 123757.53037637817
+        }
+      }
+    },
+    {
+      "id": "optimizer_0_15",
+      "runtime_us": 5246.09375,
+      "inputs": [
+        "W_15",
+        "dW_0_15",
+        "O_15"
+      ],
+      "mutates": [
+        "W_15",
+        "O_15"
+      ],
+      "group": "optimizer",
+      "compute_block_key": "optimizer_block",
+      "block_params": {
+        "layer": 15,
+        "step": 0
+      },
+      "releases_after": [
+        "dW_0_15"
+      ],
+      "offload_after": [
+        {
+          "object_id": "O_15"
+        },
+        {
+          "object_id": "W_15"
+        }
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "adamw",
+            "flops": 0,
+            "memory_bytes": 5873975296,
+            "efficiency": "memory"
+          }
+        ],
+        "measured": {
+          "runtime_us": 5246.09375,
+          "workspace_bytes": 0,
+          "repeats": 9,
+          "mean_us": 4967.447916666667,
+          "stdev_us": 698.0133748781531,
+          "min_us": 3933.59375,
+          "max_us": 5738.28125,
+          "estimate_runtime_us": 4894.9794133333335
+        }
+      }
+    },
+    {
+      "id": "block_recompute_0_0_14",
+      "runtime_us": 43751.953125,
+      "inputs": [
+        "y_0_0_13",
+        "W_14",
+        "M_0_0_14"
+      ],
+      "outputs": [
+        {
+          "id": "A_0_0_14",
+          "size_bytes": 3503292416,
+          "location": "fast",
+          "role": "activation"
+        }
+      ],
+      "group": "recompute",
+      "compute_block_key": "moeattn_recompute",
+      "block_params": {
+        "layer": 14
+      },
+      "prefetch_after": [
+        {
+          "object_id": "O_14"
+        },
+        {
+          "object_id": "W_13"
+        }
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "moeattn_matmuls",
+            "flops": 8813272891392,
+            "memory_bytes": 9429073920,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "attention",
+            "flops": 274877906944,
+            "memory_bytes": 1073741824,
+            "efficiency": "attention"
+          }
+        ],
+        "measured": {
+          "runtime_us": 43751.953125,
+          "workspace_bytes": 2424307712,
+          "repeats": 9,
+          "mean_us": 43914.27951388889,
+          "stdev_us": 2150.766547514967,
+          "min_us": 41011.71875,
+          "max_us": 48144.53125,
+          "estimate_runtime_us": 61254.04267240727
+        }
+      }
+    },
+    {
+      "id": "block_bwd_0_0_14",
+      "runtime_us": 133562.5,
+      "inputs": [
+        "dy_0_0_14",
+        "A_0_0_14",
+        "y_0_0_13",
+        "W_14",
+        "M_0_0_14"
+      ],
+      "outputs": [
+        {
+          "id": "dy_0_0_13",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "gradient",
+          "tensor": {
+            "dtype": "bf16",
+            "shape": [
+              65536,
+              2048
+            ]
+          }
+        },
+        {
+          "id": "dW_0_14",
+          "size_bytes": 839139328,
+          "location": "fast",
+          "role": "gradient"
+        }
+      ],
+      "group": "backward",
+      "compute_block_key": "moeattn_bwd",
+      "block_params": {
+        "layer": 14
+      },
+      "releases_after": [
+        "A_0_0_14",
+        "M_0_0_14",
+        "dy_0_0_14",
+        "y_0_0_13"
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "moeattn_matmuls_bwd",
+            "flops": 17626545782784,
+            "memory_bytes": 18858147840,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "attention_bwd",
+            "flops": 687194767360,
+            "memory_bytes": 2147483648,
+            "efficiency": "attention"
+          }
+        ],
+        "measured": {
+          "runtime_us": 133562.5,
+          "workspace_bytes": 6721372160,
+          "repeats": 9,
+          "mean_us": 134636.28472222222,
+          "stdev_us": 2370.0618156744927,
+          "min_us": 132242.1875,
+          "max_us": 139199.21875,
+          "estimate_runtime_us": 123757.53037637817
+        }
+      }
+    },
+    {
+      "id": "optimizer_0_14",
+      "runtime_us": 5246.09375,
+      "inputs": [
+        "W_14",
+        "dW_0_14",
+        "O_14"
+      ],
+      "mutates": [
+        "W_14",
+        "O_14"
+      ],
+      "group": "optimizer",
+      "compute_block_key": "optimizer_block",
+      "block_params": {
+        "layer": 14,
+        "step": 0
+      },
+      "releases_after": [
+        "dW_0_14"
+      ],
+      "offload_after": [
+        {
+          "object_id": "O_14"
+        },
+        {
+          "object_id": "W_14"
+        }
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "adamw",
+            "flops": 0,
+            "memory_bytes": 5873975296,
+            "efficiency": "memory"
+          }
+        ],
+        "measured": {
+          "runtime_us": 5246.09375,
+          "workspace_bytes": 0,
+          "repeats": 9,
+          "mean_us": 4967.447916666667,
+          "stdev_us": 698.0133748781531,
+          "min_us": 3933.59375,
+          "max_us": 5738.28125,
+          "estimate_runtime_us": 4894.9794133333335
+        }
+      }
+    },
+    {
+      "id": "block_recompute_0_0_13",
+      "runtime_us": 43751.953125,
+      "inputs": [
+        "y_0_0_12",
+        "W_13",
+        "M_0_0_13"
+      ],
+      "outputs": [
+        {
+          "id": "A_0_0_13",
+          "size_bytes": 3503292416,
+          "location": "fast",
+          "role": "activation"
+        }
+      ],
+      "group": "recompute",
+      "compute_block_key": "moeattn_recompute",
+      "block_params": {
+        "layer": 13
+      },
+      "prefetch_after": [
+        {
+          "object_id": "O_13"
+        },
+        {
+          "object_id": "W_12"
+        }
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "moeattn_matmuls",
+            "flops": 8813272891392,
+            "memory_bytes": 9429073920,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "attention",
+            "flops": 274877906944,
+            "memory_bytes": 1073741824,
+            "efficiency": "attention"
+          }
+        ],
+        "measured": {
+          "runtime_us": 43751.953125,
+          "workspace_bytes": 2424307712,
+          "repeats": 9,
+          "mean_us": 43914.27951388889,
+          "stdev_us": 2150.766547514967,
+          "min_us": 41011.71875,
+          "max_us": 48144.53125,
+          "estimate_runtime_us": 61254.04267240727
+        }
+      }
+    },
+    {
+      "id": "block_bwd_0_0_13",
+      "runtime_us": 133562.5,
+      "inputs": [
+        "dy_0_0_13",
+        "A_0_0_13",
+        "y_0_0_12",
+        "W_13",
+        "M_0_0_13"
+      ],
+      "outputs": [
+        {
+          "id": "dy_0_0_12",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "gradient",
+          "tensor": {
+            "dtype": "bf16",
+            "shape": [
+              65536,
+              2048
+            ]
+          }
+        },
+        {
+          "id": "dW_0_13",
+          "size_bytes": 839139328,
+          "location": "fast",
+          "role": "gradient"
+        }
+      ],
+      "group": "backward",
+      "compute_block_key": "moeattn_bwd",
+      "block_params": {
+        "layer": 13
+      },
+      "releases_after": [
+        "A_0_0_13",
+        "M_0_0_13",
+        "dy_0_0_13",
+        "y_0_0_12"
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "moeattn_matmuls_bwd",
+            "flops": 17626545782784,
+            "memory_bytes": 18858147840,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "attention_bwd",
+            "flops": 687194767360,
+            "memory_bytes": 2147483648,
+            "efficiency": "attention"
+          }
+        ],
+        "measured": {
+          "runtime_us": 133562.5,
+          "workspace_bytes": 6721372160,
+          "repeats": 9,
+          "mean_us": 134636.28472222222,
+          "stdev_us": 2370.0618156744927,
+          "min_us": 132242.1875,
+          "max_us": 139199.21875,
+          "estimate_runtime_us": 123757.53037637817
+        }
+      }
+    },
+    {
+      "id": "optimizer_0_13",
+      "runtime_us": 5246.09375,
+      "inputs": [
+        "W_13",
+        "dW_0_13",
+        "O_13"
+      ],
+      "mutates": [
+        "W_13",
+        "O_13"
+      ],
+      "group": "optimizer",
+      "compute_block_key": "optimizer_block",
+      "block_params": {
+        "layer": 13,
+        "step": 0
+      },
+      "releases_after": [
+        "dW_0_13"
+      ],
+      "offload_after": [
+        {
+          "object_id": "O_13"
+        },
+        {
+          "object_id": "W_13"
+        }
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "adamw",
+            "flops": 0,
+            "memory_bytes": 5873975296,
+            "efficiency": "memory"
+          }
+        ],
+        "measured": {
+          "runtime_us": 5246.09375,
+          "workspace_bytes": 0,
+          "repeats": 9,
+          "mean_us": 4967.447916666667,
+          "stdev_us": 698.0133748781531,
+          "min_us": 3933.59375,
+          "max_us": 5738.28125,
+          "estimate_runtime_us": 4894.9794133333335
+        }
+      }
+    },
+    {
+      "id": "block_recompute_0_0_12",
+      "runtime_us": 43751.953125,
+      "inputs": [
+        "y_0_0_11",
+        "W_12",
+        "M_0_0_12"
+      ],
+      "outputs": [
+        {
+          "id": "A_0_0_12",
+          "size_bytes": 3503292416,
+          "location": "fast",
+          "role": "activation"
+        }
+      ],
+      "group": "recompute",
+      "compute_block_key": "moeattn_recompute",
+      "block_params": {
+        "layer": 12
+      },
+      "prefetch_after": [
+        {
+          "object_id": "O_12"
+        },
+        {
+          "object_id": "W_11"
+        }
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "moeattn_matmuls",
+            "flops": 8813272891392,
+            "memory_bytes": 9429073920,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "attention",
+            "flops": 274877906944,
+            "memory_bytes": 1073741824,
+            "efficiency": "attention"
+          }
+        ],
+        "measured": {
+          "runtime_us": 43751.953125,
+          "workspace_bytes": 2424307712,
+          "repeats": 9,
+          "mean_us": 43914.27951388889,
+          "stdev_us": 2150.766547514967,
+          "min_us": 41011.71875,
+          "max_us": 48144.53125,
+          "estimate_runtime_us": 61254.04267240727
+        }
+      }
+    },
+    {
+      "id": "block_bwd_0_0_12",
+      "runtime_us": 133562.5,
+      "inputs": [
+        "dy_0_0_12",
+        "A_0_0_12",
+        "y_0_0_11",
+        "W_12",
+        "M_0_0_12"
+      ],
+      "outputs": [
+        {
+          "id": "dy_0_0_11",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "gradient",
+          "tensor": {
+            "dtype": "bf16",
+            "shape": [
+              65536,
+              2048
+            ]
+          }
+        },
+        {
+          "id": "dW_0_12",
+          "size_bytes": 839139328,
+          "location": "fast",
+          "role": "gradient"
+        }
+      ],
+      "group": "backward",
+      "compute_block_key": "moeattn_bwd",
+      "block_params": {
+        "layer": 12
+      },
+      "releases_after": [
+        "A_0_0_12",
+        "M_0_0_12",
+        "dy_0_0_12",
+        "y_0_0_11"
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "moeattn_matmuls_bwd",
+            "flops": 17626545782784,
+            "memory_bytes": 18858147840,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "attention_bwd",
+            "flops": 687194767360,
+            "memory_bytes": 2147483648,
+            "efficiency": "attention"
+          }
+        ],
+        "measured": {
+          "runtime_us": 133562.5,
+          "workspace_bytes": 6721372160,
+          "repeats": 9,
+          "mean_us": 134636.28472222222,
+          "stdev_us": 2370.0618156744927,
+          "min_us": 132242.1875,
+          "max_us": 139199.21875,
+          "estimate_runtime_us": 123757.53037637817
+        }
+      }
+    },
+    {
+      "id": "optimizer_0_12",
+      "runtime_us": 5246.09375,
+      "inputs": [
+        "W_12",
+        "dW_0_12",
+        "O_12"
+      ],
+      "mutates": [
+        "W_12",
+        "O_12"
+      ],
+      "group": "optimizer",
+      "compute_block_key": "optimizer_block",
+      "block_params": {
+        "layer": 12,
+        "step": 0
+      },
+      "releases_after": [
+        "dW_0_12"
+      ],
+      "offload_after": [
+        {
+          "object_id": "O_12"
+        },
+        {
+          "object_id": "W_12"
+        }
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "adamw",
+            "flops": 0,
+            "memory_bytes": 5873975296,
+            "efficiency": "memory"
+          }
+        ],
+        "measured": {
+          "runtime_us": 5246.09375,
+          "workspace_bytes": 0,
+          "repeats": 9,
+          "mean_us": 4967.447916666667,
+          "stdev_us": 698.0133748781531,
+          "min_us": 3933.59375,
+          "max_us": 5738.28125,
+          "estimate_runtime_us": 4894.9794133333335
+        }
+      }
+    },
+    {
+      "id": "block_recompute_0_0_11",
+      "runtime_us": 43751.953125,
+      "inputs": [
+        "y_0_0_10",
+        "W_11",
+        "M_0_0_11"
+      ],
+      "outputs": [
+        {
+          "id": "A_0_0_11",
+          "size_bytes": 3503292416,
+          "location": "fast",
+          "role": "activation"
+        }
+      ],
+      "group": "recompute",
+      "compute_block_key": "moeattn_recompute",
+      "block_params": {
+        "layer": 11
+      },
+      "prefetch_after": [
+        {
+          "object_id": "O_11"
+        },
+        {
+          "object_id": "W_10"
+        }
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "moeattn_matmuls",
+            "flops": 8813272891392,
+            "memory_bytes": 9429073920,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "attention",
+            "flops": 274877906944,
+            "memory_bytes": 1073741824,
+            "efficiency": "attention"
+          }
+        ],
+        "measured": {
+          "runtime_us": 43751.953125,
+          "workspace_bytes": 2424307712,
+          "repeats": 9,
+          "mean_us": 43914.27951388889,
+          "stdev_us": 2150.766547514967,
+          "min_us": 41011.71875,
+          "max_us": 48144.53125,
+          "estimate_runtime_us": 61254.04267240727
+        }
+      }
+    },
+    {
+      "id": "block_bwd_0_0_11",
+      "runtime_us": 133562.5,
+      "inputs": [
+        "dy_0_0_11",
+        "A_0_0_11",
+        "y_0_0_10",
+        "W_11",
+        "M_0_0_11"
+      ],
+      "outputs": [
+        {
+          "id": "dy_0_0_10",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "gradient",
+          "tensor": {
+            "dtype": "bf16",
+            "shape": [
+              65536,
+              2048
+            ]
+          }
+        },
+        {
+          "id": "dW_0_11",
+          "size_bytes": 839139328,
+          "location": "fast",
+          "role": "gradient"
+        }
+      ],
+      "group": "backward",
+      "compute_block_key": "moeattn_bwd",
+      "block_params": {
+        "layer": 11
+      },
+      "releases_after": [
+        "A_0_0_11",
+        "M_0_0_11",
+        "dy_0_0_11",
+        "y_0_0_10"
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "moeattn_matmuls_bwd",
+            "flops": 17626545782784,
+            "memory_bytes": 18858147840,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "attention_bwd",
+            "flops": 687194767360,
+            "memory_bytes": 2147483648,
+            "efficiency": "attention"
+          }
+        ],
+        "measured": {
+          "runtime_us": 133562.5,
+          "workspace_bytes": 6721372160,
+          "repeats": 9,
+          "mean_us": 134636.28472222222,
+          "stdev_us": 2370.0618156744927,
+          "min_us": 132242.1875,
+          "max_us": 139199.21875,
+          "estimate_runtime_us": 123757.53037637817
+        }
+      }
+    },
+    {
+      "id": "optimizer_0_11",
+      "runtime_us": 5246.09375,
+      "inputs": [
+        "W_11",
+        "dW_0_11",
+        "O_11"
+      ],
+      "mutates": [
+        "W_11",
+        "O_11"
+      ],
+      "group": "optimizer",
+      "compute_block_key": "optimizer_block",
+      "block_params": {
+        "layer": 11,
+        "step": 0
+      },
+      "releases_after": [
+        "dW_0_11"
+      ],
+      "offload_after": [
+        {
+          "object_id": "O_11"
+        },
+        {
+          "object_id": "W_11"
+        }
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "adamw",
+            "flops": 0,
+            "memory_bytes": 5873975296,
+            "efficiency": "memory"
+          }
+        ],
+        "measured": {
+          "runtime_us": 5246.09375,
+          "workspace_bytes": 0,
+          "repeats": 9,
+          "mean_us": 4967.447916666667,
+          "stdev_us": 698.0133748781531,
+          "min_us": 3933.59375,
+          "max_us": 5738.28125,
+          "estimate_runtime_us": 4894.9794133333335
+        }
+      }
+    },
+    {
+      "id": "block_recompute_0_0_10",
+      "runtime_us": 43751.953125,
+      "inputs": [
+        "y_0_0_9",
+        "W_10",
+        "M_0_0_10"
+      ],
+      "outputs": [
+        {
+          "id": "A_0_0_10",
+          "size_bytes": 3503292416,
+          "location": "fast",
+          "role": "activation"
+        }
+      ],
+      "group": "recompute",
+      "compute_block_key": "moeattn_recompute",
+      "block_params": {
+        "layer": 10
+      },
+      "prefetch_after": [
+        {
+          "object_id": "O_10"
+        },
+        {
+          "object_id": "W_9"
+        }
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "moeattn_matmuls",
+            "flops": 8813272891392,
+            "memory_bytes": 9429073920,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "attention",
+            "flops": 274877906944,
+            "memory_bytes": 1073741824,
+            "efficiency": "attention"
+          }
+        ],
+        "measured": {
+          "runtime_us": 43751.953125,
+          "workspace_bytes": 2424307712,
+          "repeats": 9,
+          "mean_us": 43914.27951388889,
+          "stdev_us": 2150.766547514967,
+          "min_us": 41011.71875,
+          "max_us": 48144.53125,
+          "estimate_runtime_us": 61254.04267240727
+        }
+      }
+    },
+    {
+      "id": "block_bwd_0_0_10",
+      "runtime_us": 133562.5,
+      "inputs": [
+        "dy_0_0_10",
+        "A_0_0_10",
+        "y_0_0_9",
+        "W_10",
+        "M_0_0_10"
+      ],
+      "outputs": [
+        {
+          "id": "dy_0_0_9",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "gradient",
+          "tensor": {
+            "dtype": "bf16",
+            "shape": [
+              65536,
+              2048
+            ]
+          }
+        },
+        {
+          "id": "dW_0_10",
+          "size_bytes": 839139328,
+          "location": "fast",
+          "role": "gradient"
+        }
+      ],
+      "group": "backward",
+      "compute_block_key": "moeattn_bwd",
+      "block_params": {
+        "layer": 10
+      },
+      "releases_after": [
+        "A_0_0_10",
+        "M_0_0_10",
+        "dy_0_0_10",
+        "y_0_0_9"
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "moeattn_matmuls_bwd",
+            "flops": 17626545782784,
+            "memory_bytes": 18858147840,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "attention_bwd",
+            "flops": 687194767360,
+            "memory_bytes": 2147483648,
+            "efficiency": "attention"
+          }
+        ],
+        "measured": {
+          "runtime_us": 133562.5,
+          "workspace_bytes": 6721372160,
+          "repeats": 9,
+          "mean_us": 134636.28472222222,
+          "stdev_us": 2370.0618156744927,
+          "min_us": 132242.1875,
+          "max_us": 139199.21875,
+          "estimate_runtime_us": 123757.53037637817
+        }
+      }
+    },
+    {
+      "id": "optimizer_0_10",
+      "runtime_us": 5246.09375,
+      "inputs": [
+        "W_10",
+        "dW_0_10",
+        "O_10"
+      ],
+      "mutates": [
+        "W_10",
+        "O_10"
+      ],
+      "group": "optimizer",
+      "compute_block_key": "optimizer_block",
+      "block_params": {
+        "layer": 10,
+        "step": 0
+      },
+      "releases_after": [
+        "dW_0_10"
+      ],
+      "offload_after": [
+        {
+          "object_id": "O_10"
+        },
+        {
+          "object_id": "W_10"
+        }
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "adamw",
+            "flops": 0,
+            "memory_bytes": 5873975296,
+            "efficiency": "memory"
+          }
+        ],
+        "measured": {
+          "runtime_us": 5246.09375,
+          "workspace_bytes": 0,
+          "repeats": 9,
+          "mean_us": 4967.447916666667,
+          "stdev_us": 698.0133748781531,
+          "min_us": 3933.59375,
+          "max_us": 5738.28125,
+          "estimate_runtime_us": 4894.9794133333335
+        }
+      }
+    },
+    {
+      "id": "block_recompute_0_0_9",
+      "runtime_us": 43751.953125,
+      "inputs": [
+        "y_0_0_8",
+        "W_9",
+        "M_0_0_9"
+      ],
+      "outputs": [
+        {
+          "id": "A_0_0_9",
+          "size_bytes": 3503292416,
+          "location": "fast",
+          "role": "activation"
+        }
+      ],
+      "group": "recompute",
+      "compute_block_key": "moeattn_recompute",
+      "block_params": {
+        "layer": 9
+      },
+      "prefetch_after": [
+        {
+          "object_id": "O_9"
+        },
+        {
+          "object_id": "W_8"
+        }
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "moeattn_matmuls",
+            "flops": 8813272891392,
+            "memory_bytes": 9429073920,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "attention",
+            "flops": 274877906944,
+            "memory_bytes": 1073741824,
+            "efficiency": "attention"
+          }
+        ],
+        "measured": {
+          "runtime_us": 43751.953125,
+          "workspace_bytes": 2424307712,
+          "repeats": 9,
+          "mean_us": 43914.27951388889,
+          "stdev_us": 2150.766547514967,
+          "min_us": 41011.71875,
+          "max_us": 48144.53125,
+          "estimate_runtime_us": 61254.04267240727
+        }
+      }
+    },
+    {
+      "id": "block_bwd_0_0_9",
+      "runtime_us": 133562.5,
+      "inputs": [
+        "dy_0_0_9",
+        "A_0_0_9",
+        "y_0_0_8",
+        "W_9",
+        "M_0_0_9"
+      ],
+      "outputs": [
+        {
+          "id": "dy_0_0_8",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "gradient",
+          "tensor": {
+            "dtype": "bf16",
+            "shape": [
+              65536,
+              2048
+            ]
+          }
+        },
+        {
+          "id": "dW_0_9",
+          "size_bytes": 839139328,
+          "location": "fast",
+          "role": "gradient"
+        }
+      ],
+      "group": "backward",
+      "compute_block_key": "moeattn_bwd",
+      "block_params": {
+        "layer": 9
+      },
+      "releases_after": [
+        "A_0_0_9",
+        "M_0_0_9",
+        "dy_0_0_9",
+        "y_0_0_8"
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "moeattn_matmuls_bwd",
+            "flops": 17626545782784,
+            "memory_bytes": 18858147840,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "attention_bwd",
+            "flops": 687194767360,
+            "memory_bytes": 2147483648,
+            "efficiency": "attention"
+          }
+        ],
+        "measured": {
+          "runtime_us": 133562.5,
+          "workspace_bytes": 6721372160,
+          "repeats": 9,
+          "mean_us": 134636.28472222222,
+          "stdev_us": 2370.0618156744927,
+          "min_us": 132242.1875,
+          "max_us": 139199.21875,
+          "estimate_runtime_us": 123757.53037637817
+        }
+      }
+    },
+    {
+      "id": "optimizer_0_9",
+      "runtime_us": 5246.09375,
+      "inputs": [
+        "W_9",
+        "dW_0_9",
+        "O_9"
+      ],
+      "mutates": [
+        "W_9",
+        "O_9"
+      ],
+      "group": "optimizer",
+      "compute_block_key": "optimizer_block",
+      "block_params": {
+        "layer": 9,
+        "step": 0
+      },
+      "releases_after": [
+        "dW_0_9"
+      ],
+      "offload_after": [
+        {
+          "object_id": "O_9"
+        },
+        {
+          "object_id": "W_9"
+        }
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "adamw",
+            "flops": 0,
+            "memory_bytes": 5873975296,
+            "efficiency": "memory"
+          }
+        ],
+        "measured": {
+          "runtime_us": 5246.09375,
+          "workspace_bytes": 0,
+          "repeats": 9,
+          "mean_us": 4967.447916666667,
+          "stdev_us": 698.0133748781531,
+          "min_us": 3933.59375,
+          "max_us": 5738.28125,
+          "estimate_runtime_us": 4894.9794133333335
+        }
+      }
+    },
+    {
+      "id": "block_recompute_0_0_8",
+      "runtime_us": 43751.953125,
+      "inputs": [
+        "y_0_0_7",
+        "W_8",
+        "M_0_0_8"
+      ],
+      "outputs": [
+        {
+          "id": "A_0_0_8",
+          "size_bytes": 3503292416,
+          "location": "fast",
+          "role": "activation"
+        }
+      ],
+      "group": "recompute",
+      "compute_block_key": "moeattn_recompute",
+      "block_params": {
+        "layer": 8
+      },
+      "prefetch_after": [
+        {
+          "object_id": "O_8"
+        },
+        {
+          "object_id": "W_7"
+        }
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "moeattn_matmuls",
+            "flops": 8813272891392,
+            "memory_bytes": 9429073920,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "attention",
+            "flops": 274877906944,
+            "memory_bytes": 1073741824,
+            "efficiency": "attention"
+          }
+        ],
+        "measured": {
+          "runtime_us": 43751.953125,
+          "workspace_bytes": 2424307712,
+          "repeats": 9,
+          "mean_us": 43914.27951388889,
+          "stdev_us": 2150.766547514967,
+          "min_us": 41011.71875,
+          "max_us": 48144.53125,
+          "estimate_runtime_us": 61254.04267240727
+        }
+      }
+    },
+    {
+      "id": "block_bwd_0_0_8",
+      "runtime_us": 133562.5,
+      "inputs": [
+        "dy_0_0_8",
+        "A_0_0_8",
+        "y_0_0_7",
+        "W_8",
+        "M_0_0_8"
+      ],
+      "outputs": [
+        {
+          "id": "dy_0_0_7",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "gradient",
+          "tensor": {
+            "dtype": "bf16",
+            "shape": [
+              65536,
+              2048
+            ]
+          }
+        },
+        {
+          "id": "dW_0_8",
+          "size_bytes": 839139328,
+          "location": "fast",
+          "role": "gradient"
+        }
+      ],
+      "group": "backward",
+      "compute_block_key": "moeattn_bwd",
+      "block_params": {
+        "layer": 8
+      },
+      "releases_after": [
+        "A_0_0_8",
+        "M_0_0_8",
+        "dy_0_0_8",
+        "y_0_0_7"
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "moeattn_matmuls_bwd",
+            "flops": 17626545782784,
+            "memory_bytes": 18858147840,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "attention_bwd",
+            "flops": 687194767360,
+            "memory_bytes": 2147483648,
+            "efficiency": "attention"
+          }
+        ],
+        "measured": {
+          "runtime_us": 133562.5,
+          "workspace_bytes": 6721372160,
+          "repeats": 9,
+          "mean_us": 134636.28472222222,
+          "stdev_us": 2370.0618156744927,
+          "min_us": 132242.1875,
+          "max_us": 139199.21875,
+          "estimate_runtime_us": 123757.53037637817
+        }
+      }
+    },
+    {
+      "id": "optimizer_0_8",
+      "runtime_us": 5246.09375,
+      "inputs": [
+        "W_8",
+        "dW_0_8",
+        "O_8"
+      ],
+      "mutates": [
+        "W_8",
+        "O_8"
+      ],
+      "group": "optimizer",
+      "compute_block_key": "optimizer_block",
+      "block_params": {
+        "layer": 8,
+        "step": 0
+      },
+      "releases_after": [
+        "dW_0_8"
+      ],
+      "offload_after": [
+        {
+          "object_id": "O_8"
+        },
+        {
+          "object_id": "W_8"
+        }
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "adamw",
+            "flops": 0,
+            "memory_bytes": 5873975296,
+            "efficiency": "memory"
+          }
+        ],
+        "measured": {
+          "runtime_us": 5246.09375,
+          "workspace_bytes": 0,
+          "repeats": 9,
+          "mean_us": 4967.447916666667,
+          "stdev_us": 698.0133748781531,
+          "min_us": 3933.59375,
+          "max_us": 5738.28125,
+          "estimate_runtime_us": 4894.9794133333335
+        }
+      }
+    },
+    {
+      "id": "block_recompute_0_0_7",
+      "runtime_us": 43751.953125,
+      "inputs": [
+        "y_0_0_6",
+        "W_7",
+        "M_0_0_7"
+      ],
+      "outputs": [
+        {
+          "id": "A_0_0_7",
+          "size_bytes": 3503292416,
+          "location": "fast",
+          "role": "activation"
+        }
+      ],
+      "group": "recompute",
+      "compute_block_key": "moeattn_recompute",
+      "block_params": {
+        "layer": 7
+      },
+      "prefetch_after": [
+        {
+          "object_id": "O_7"
+        },
+        {
+          "object_id": "W_6"
+        }
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "moeattn_matmuls",
+            "flops": 8813272891392,
+            "memory_bytes": 9429073920,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "attention",
+            "flops": 274877906944,
+            "memory_bytes": 1073741824,
+            "efficiency": "attention"
+          }
+        ],
+        "measured": {
+          "runtime_us": 43751.953125,
+          "workspace_bytes": 2424307712,
+          "repeats": 9,
+          "mean_us": 43914.27951388889,
+          "stdev_us": 2150.766547514967,
+          "min_us": 41011.71875,
+          "max_us": 48144.53125,
+          "estimate_runtime_us": 61254.04267240727
+        }
+      }
+    },
+    {
+      "id": "block_bwd_0_0_7",
+      "runtime_us": 133562.5,
+      "inputs": [
+        "dy_0_0_7",
+        "A_0_0_7",
+        "y_0_0_6",
+        "W_7",
+        "M_0_0_7"
+      ],
+      "outputs": [
+        {
+          "id": "dy_0_0_6",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "gradient",
+          "tensor": {
+            "dtype": "bf16",
+            "shape": [
+              65536,
+              2048
+            ]
+          }
+        },
+        {
+          "id": "dW_0_7",
+          "size_bytes": 839139328,
+          "location": "fast",
+          "role": "gradient"
+        }
+      ],
+      "group": "backward",
+      "compute_block_key": "moeattn_bwd",
+      "block_params": {
+        "layer": 7
+      },
+      "releases_after": [
+        "A_0_0_7",
+        "M_0_0_7",
+        "dy_0_0_7",
+        "y_0_0_6"
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "moeattn_matmuls_bwd",
+            "flops": 17626545782784,
+            "memory_bytes": 18858147840,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "attention_bwd",
+            "flops": 687194767360,
+            "memory_bytes": 2147483648,
+            "efficiency": "attention"
+          }
+        ],
+        "measured": {
+          "runtime_us": 133562.5,
+          "workspace_bytes": 6721372160,
+          "repeats": 9,
+          "mean_us": 134636.28472222222,
+          "stdev_us": 2370.0618156744927,
+          "min_us": 132242.1875,
+          "max_us": 139199.21875,
+          "estimate_runtime_us": 123757.53037637817
+        }
+      }
+    },
+    {
+      "id": "optimizer_0_7",
+      "runtime_us": 5246.09375,
+      "inputs": [
+        "W_7",
+        "dW_0_7",
+        "O_7"
+      ],
+      "mutates": [
+        "W_7",
+        "O_7"
+      ],
+      "group": "optimizer",
+      "compute_block_key": "optimizer_block",
+      "block_params": {
+        "layer": 7,
+        "step": 0
+      },
+      "releases_after": [
+        "dW_0_7"
+      ],
+      "offload_after": [
+        {
+          "object_id": "O_7"
+        },
+        {
+          "object_id": "W_7"
+        }
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "adamw",
+            "flops": 0,
+            "memory_bytes": 5873975296,
+            "efficiency": "memory"
+          }
+        ],
+        "measured": {
+          "runtime_us": 5246.09375,
+          "workspace_bytes": 0,
+          "repeats": 9,
+          "mean_us": 4967.447916666667,
+          "stdev_us": 698.0133748781531,
+          "min_us": 3933.59375,
+          "max_us": 5738.28125,
+          "estimate_runtime_us": 4894.9794133333335
+        }
+      }
+    },
+    {
+      "id": "block_recompute_0_0_6",
+      "runtime_us": 43751.953125,
+      "inputs": [
+        "y_0_0_5",
+        "W_6",
+        "M_0_0_6"
+      ],
+      "outputs": [
+        {
+          "id": "A_0_0_6",
+          "size_bytes": 3503292416,
+          "location": "fast",
+          "role": "activation"
+        }
+      ],
+      "group": "recompute",
+      "compute_block_key": "moeattn_recompute",
+      "block_params": {
+        "layer": 6
+      },
+      "prefetch_after": [
+        {
+          "object_id": "O_6"
+        },
+        {
+          "object_id": "W_5"
+        }
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "moeattn_matmuls",
+            "flops": 8813272891392,
+            "memory_bytes": 9429073920,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "attention",
+            "flops": 274877906944,
+            "memory_bytes": 1073741824,
+            "efficiency": "attention"
+          }
+        ],
+        "measured": {
+          "runtime_us": 43751.953125,
+          "workspace_bytes": 2424307712,
+          "repeats": 9,
+          "mean_us": 43914.27951388889,
+          "stdev_us": 2150.766547514967,
+          "min_us": 41011.71875,
+          "max_us": 48144.53125,
+          "estimate_runtime_us": 61254.04267240727
+        }
+      }
+    },
+    {
+      "id": "block_bwd_0_0_6",
+      "runtime_us": 133562.5,
+      "inputs": [
+        "dy_0_0_6",
+        "A_0_0_6",
+        "y_0_0_5",
+        "W_6",
+        "M_0_0_6"
+      ],
+      "outputs": [
+        {
+          "id": "dy_0_0_5",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "gradient",
+          "tensor": {
+            "dtype": "bf16",
+            "shape": [
+              65536,
+              2048
+            ]
+          }
+        },
+        {
+          "id": "dW_0_6",
+          "size_bytes": 839139328,
+          "location": "fast",
+          "role": "gradient"
+        }
+      ],
+      "group": "backward",
+      "compute_block_key": "moeattn_bwd",
+      "block_params": {
+        "layer": 6
+      },
+      "releases_after": [
+        "A_0_0_6",
+        "M_0_0_6",
+        "dy_0_0_6",
+        "y_0_0_5"
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "moeattn_matmuls_bwd",
+            "flops": 17626545782784,
+            "memory_bytes": 18858147840,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "attention_bwd",
+            "flops": 687194767360,
+            "memory_bytes": 2147483648,
+            "efficiency": "attention"
+          }
+        ],
+        "measured": {
+          "runtime_us": 133562.5,
+          "workspace_bytes": 6721372160,
+          "repeats": 9,
+          "mean_us": 134636.28472222222,
+          "stdev_us": 2370.0618156744927,
+          "min_us": 132242.1875,
+          "max_us": 139199.21875,
+          "estimate_runtime_us": 123757.53037637817
+        }
+      }
+    },
+    {
+      "id": "optimizer_0_6",
+      "runtime_us": 5246.09375,
+      "inputs": [
+        "W_6",
+        "dW_0_6",
+        "O_6"
+      ],
+      "mutates": [
+        "W_6",
+        "O_6"
+      ],
+      "group": "optimizer",
+      "compute_block_key": "optimizer_block",
+      "block_params": {
+        "layer": 6,
+        "step": 0
+      },
+      "releases_after": [
+        "dW_0_6"
+      ],
+      "offload_after": [
+        {
+          "object_id": "O_6"
+        },
+        {
+          "object_id": "W_6"
+        }
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "adamw",
+            "flops": 0,
+            "memory_bytes": 5873975296,
+            "efficiency": "memory"
+          }
+        ],
+        "measured": {
+          "runtime_us": 5246.09375,
+          "workspace_bytes": 0,
+          "repeats": 9,
+          "mean_us": 4967.447916666667,
+          "stdev_us": 698.0133748781531,
+          "min_us": 3933.59375,
+          "max_us": 5738.28125,
+          "estimate_runtime_us": 4894.9794133333335
+        }
+      }
+    },
+    {
+      "id": "block_recompute_0_0_5",
+      "runtime_us": 43751.953125,
+      "inputs": [
+        "y_0_0_4",
+        "W_5",
+        "M_0_0_5"
+      ],
+      "outputs": [
+        {
+          "id": "A_0_0_5",
+          "size_bytes": 3503292416,
+          "location": "fast",
+          "role": "activation"
+        }
+      ],
+      "group": "recompute",
+      "compute_block_key": "moeattn_recompute",
+      "block_params": {
+        "layer": 5
+      },
+      "prefetch_after": [
+        {
+          "object_id": "O_5"
+        },
+        {
+          "object_id": "W_4"
+        }
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "moeattn_matmuls",
+            "flops": 8813272891392,
+            "memory_bytes": 9429073920,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "attention",
+            "flops": 274877906944,
+            "memory_bytes": 1073741824,
+            "efficiency": "attention"
+          }
+        ],
+        "measured": {
+          "runtime_us": 43751.953125,
+          "workspace_bytes": 2424307712,
+          "repeats": 9,
+          "mean_us": 43914.27951388889,
+          "stdev_us": 2150.766547514967,
+          "min_us": 41011.71875,
+          "max_us": 48144.53125,
+          "estimate_runtime_us": 61254.04267240727
+        }
+      }
+    },
+    {
+      "id": "block_bwd_0_0_5",
+      "runtime_us": 133562.5,
+      "inputs": [
+        "dy_0_0_5",
+        "A_0_0_5",
+        "y_0_0_4",
+        "W_5",
+        "M_0_0_5"
+      ],
+      "outputs": [
+        {
+          "id": "dy_0_0_4",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "gradient",
+          "tensor": {
+            "dtype": "bf16",
+            "shape": [
+              65536,
+              2048
+            ]
+          }
+        },
+        {
+          "id": "dW_0_5",
+          "size_bytes": 839139328,
+          "location": "fast",
+          "role": "gradient"
+        }
+      ],
+      "group": "backward",
+      "compute_block_key": "moeattn_bwd",
+      "block_params": {
+        "layer": 5
+      },
+      "releases_after": [
+        "A_0_0_5",
+        "M_0_0_5",
+        "dy_0_0_5",
+        "y_0_0_4"
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "moeattn_matmuls_bwd",
+            "flops": 17626545782784,
+            "memory_bytes": 18858147840,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "attention_bwd",
+            "flops": 687194767360,
+            "memory_bytes": 2147483648,
+            "efficiency": "attention"
+          }
+        ],
+        "measured": {
+          "runtime_us": 133562.5,
+          "workspace_bytes": 6721372160,
+          "repeats": 9,
+          "mean_us": 134636.28472222222,
+          "stdev_us": 2370.0618156744927,
+          "min_us": 132242.1875,
+          "max_us": 139199.21875,
+          "estimate_runtime_us": 123757.53037637817
+        }
+      }
+    },
+    {
+      "id": "optimizer_0_5",
+      "runtime_us": 5246.09375,
+      "inputs": [
+        "W_5",
+        "dW_0_5",
+        "O_5"
+      ],
+      "mutates": [
+        "W_5",
+        "O_5"
+      ],
+      "group": "optimizer",
+      "compute_block_key": "optimizer_block",
+      "block_params": {
+        "layer": 5,
+        "step": 0
+      },
+      "releases_after": [
+        "dW_0_5"
+      ],
+      "offload_after": [
+        {
+          "object_id": "O_5"
+        },
+        {
+          "object_id": "W_5"
+        }
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "adamw",
+            "flops": 0,
+            "memory_bytes": 5873975296,
+            "efficiency": "memory"
+          }
+        ],
+        "measured": {
+          "runtime_us": 5246.09375,
+          "workspace_bytes": 0,
+          "repeats": 9,
+          "mean_us": 4967.447916666667,
+          "stdev_us": 698.0133748781531,
+          "min_us": 3933.59375,
+          "max_us": 5738.28125,
+          "estimate_runtime_us": 4894.9794133333335
+        }
+      }
+    },
+    {
+      "id": "block_recompute_0_0_4",
+      "runtime_us": 43751.953125,
+      "inputs": [
+        "y_0_0_3",
+        "W_4",
+        "M_0_0_4"
+      ],
+      "outputs": [
+        {
+          "id": "A_0_0_4",
+          "size_bytes": 3503292416,
+          "location": "fast",
+          "role": "activation"
+        }
+      ],
+      "group": "recompute",
+      "compute_block_key": "moeattn_recompute",
+      "block_params": {
+        "layer": 4
+      },
+      "prefetch_after": [
+        {
+          "object_id": "O_4"
+        },
+        {
+          "object_id": "W_3"
+        }
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "moeattn_matmuls",
+            "flops": 8813272891392,
+            "memory_bytes": 9429073920,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "attention",
+            "flops": 274877906944,
+            "memory_bytes": 1073741824,
+            "efficiency": "attention"
+          }
+        ],
+        "measured": {
+          "runtime_us": 43751.953125,
+          "workspace_bytes": 2424307712,
+          "repeats": 9,
+          "mean_us": 43914.27951388889,
+          "stdev_us": 2150.766547514967,
+          "min_us": 41011.71875,
+          "max_us": 48144.53125,
+          "estimate_runtime_us": 61254.04267240727
+        }
+      }
+    },
+    {
+      "id": "block_bwd_0_0_4",
+      "runtime_us": 133562.5,
+      "inputs": [
+        "dy_0_0_4",
+        "A_0_0_4",
+        "y_0_0_3",
+        "W_4",
+        "M_0_0_4"
+      ],
+      "outputs": [
+        {
+          "id": "dy_0_0_3",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "gradient",
+          "tensor": {
+            "dtype": "bf16",
+            "shape": [
+              65536,
+              2048
+            ]
+          }
+        },
+        {
+          "id": "dW_0_4",
+          "size_bytes": 839139328,
+          "location": "fast",
+          "role": "gradient"
+        }
+      ],
+      "group": "backward",
+      "compute_block_key": "moeattn_bwd",
+      "block_params": {
+        "layer": 4
+      },
+      "releases_after": [
+        "A_0_0_4",
+        "M_0_0_4",
+        "dy_0_0_4",
+        "y_0_0_3"
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "moeattn_matmuls_bwd",
+            "flops": 17626545782784,
+            "memory_bytes": 18858147840,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "attention_bwd",
+            "flops": 687194767360,
+            "memory_bytes": 2147483648,
+            "efficiency": "attention"
+          }
+        ],
+        "measured": {
+          "runtime_us": 133562.5,
+          "workspace_bytes": 6721372160,
+          "repeats": 9,
+          "mean_us": 134636.28472222222,
+          "stdev_us": 2370.0618156744927,
+          "min_us": 132242.1875,
+          "max_us": 139199.21875,
+          "estimate_runtime_us": 123757.53037637817
+        }
+      }
+    },
+    {
+      "id": "optimizer_0_4",
+      "runtime_us": 5246.09375,
+      "inputs": [
+        "W_4",
+        "dW_0_4",
+        "O_4"
+      ],
+      "mutates": [
+        "W_4",
+        "O_4"
+      ],
+      "group": "optimizer",
+      "compute_block_key": "optimizer_block",
+      "block_params": {
+        "layer": 4,
+        "step": 0
+      },
+      "releases_after": [
+        "dW_0_4"
+      ],
+      "offload_after": [
+        {
+          "object_id": "O_4"
+        },
+        {
+          "object_id": "W_4"
+        }
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "adamw",
+            "flops": 0,
+            "memory_bytes": 5873975296,
+            "efficiency": "memory"
+          }
+        ],
+        "measured": {
+          "runtime_us": 5246.09375,
+          "workspace_bytes": 0,
+          "repeats": 9,
+          "mean_us": 4967.447916666667,
+          "stdev_us": 698.0133748781531,
+          "min_us": 3933.59375,
+          "max_us": 5738.28125,
+          "estimate_runtime_us": 4894.9794133333335
+        }
+      }
+    },
+    {
+      "id": "block_recompute_0_0_3",
+      "runtime_us": 43751.953125,
+      "inputs": [
+        "y_0_0_2",
+        "W_3",
+        "M_0_0_3"
+      ],
+      "outputs": [
+        {
+          "id": "A_0_0_3",
+          "size_bytes": 3503292416,
+          "location": "fast",
+          "role": "activation"
+        }
+      ],
+      "group": "recompute",
+      "compute_block_key": "moeattn_recompute",
+      "block_params": {
+        "layer": 3
+      },
+      "prefetch_after": [
+        {
+          "object_id": "O_3"
+        },
+        {
+          "object_id": "W_2"
+        }
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "moeattn_matmuls",
+            "flops": 8813272891392,
+            "memory_bytes": 9429073920,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "attention",
+            "flops": 274877906944,
+            "memory_bytes": 1073741824,
+            "efficiency": "attention"
+          }
+        ],
+        "measured": {
+          "runtime_us": 43751.953125,
+          "workspace_bytes": 2424307712,
+          "repeats": 9,
+          "mean_us": 43914.27951388889,
+          "stdev_us": 2150.766547514967,
+          "min_us": 41011.71875,
+          "max_us": 48144.53125,
+          "estimate_runtime_us": 61254.04267240727
+        }
+      }
+    },
+    {
+      "id": "block_bwd_0_0_3",
+      "runtime_us": 133562.5,
+      "inputs": [
+        "dy_0_0_3",
+        "A_0_0_3",
+        "y_0_0_2",
+        "W_3",
+        "M_0_0_3"
+      ],
+      "outputs": [
+        {
+          "id": "dy_0_0_2",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "gradient",
+          "tensor": {
+            "dtype": "bf16",
+            "shape": [
+              65536,
+              2048
+            ]
+          }
+        },
+        {
+          "id": "dW_0_3",
+          "size_bytes": 839139328,
+          "location": "fast",
+          "role": "gradient"
+        }
+      ],
+      "group": "backward",
+      "compute_block_key": "moeattn_bwd",
+      "block_params": {
+        "layer": 3
+      },
+      "releases_after": [
+        "A_0_0_3",
+        "M_0_0_3",
+        "dy_0_0_3",
+        "y_0_0_2"
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "moeattn_matmuls_bwd",
+            "flops": 17626545782784,
+            "memory_bytes": 18858147840,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "attention_bwd",
+            "flops": 687194767360,
+            "memory_bytes": 2147483648,
+            "efficiency": "attention"
+          }
+        ],
+        "measured": {
+          "runtime_us": 133562.5,
+          "workspace_bytes": 6721372160,
+          "repeats": 9,
+          "mean_us": 134636.28472222222,
+          "stdev_us": 2370.0618156744927,
+          "min_us": 132242.1875,
+          "max_us": 139199.21875,
+          "estimate_runtime_us": 123757.53037637817
+        }
+      }
+    },
+    {
+      "id": "optimizer_0_3",
+      "runtime_us": 5246.09375,
+      "inputs": [
+        "W_3",
+        "dW_0_3",
+        "O_3"
+      ],
+      "mutates": [
+        "W_3",
+        "O_3"
+      ],
+      "group": "optimizer",
+      "compute_block_key": "optimizer_block",
+      "block_params": {
+        "layer": 3,
+        "step": 0
+      },
+      "releases_after": [
+        "dW_0_3"
+      ],
+      "offload_after": [
+        {
+          "object_id": "O_3"
+        },
+        {
+          "object_id": "W_3"
+        }
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "adamw",
+            "flops": 0,
+            "memory_bytes": 5873975296,
+            "efficiency": "memory"
+          }
+        ],
+        "measured": {
+          "runtime_us": 5246.09375,
+          "workspace_bytes": 0,
+          "repeats": 9,
+          "mean_us": 4967.447916666667,
+          "stdev_us": 698.0133748781531,
+          "min_us": 3933.59375,
+          "max_us": 5738.28125,
+          "estimate_runtime_us": 4894.9794133333335
+        }
+      }
+    },
+    {
+      "id": "block_recompute_0_0_2",
+      "runtime_us": 43751.953125,
+      "inputs": [
+        "y_0_0_1",
+        "W_2",
+        "M_0_0_2"
+      ],
+      "outputs": [
+        {
+          "id": "A_0_0_2",
+          "size_bytes": 3503292416,
+          "location": "fast",
+          "role": "activation"
+        }
+      ],
+      "group": "recompute",
+      "compute_block_key": "moeattn_recompute",
+      "block_params": {
+        "layer": 2
+      },
+      "prefetch_after": [
+        {
+          "object_id": "O_2"
+        },
+        {
+          "object_id": "W_1"
+        }
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "moeattn_matmuls",
+            "flops": 8813272891392,
+            "memory_bytes": 9429073920,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "attention",
+            "flops": 274877906944,
+            "memory_bytes": 1073741824,
+            "efficiency": "attention"
+          }
+        ],
+        "measured": {
+          "runtime_us": 43751.953125,
+          "workspace_bytes": 2424307712,
+          "repeats": 9,
+          "mean_us": 43914.27951388889,
+          "stdev_us": 2150.766547514967,
+          "min_us": 41011.71875,
+          "max_us": 48144.53125,
+          "estimate_runtime_us": 61254.04267240727
+        }
+      }
+    },
+    {
+      "id": "block_bwd_0_0_2",
+      "runtime_us": 133562.5,
+      "inputs": [
+        "dy_0_0_2",
+        "A_0_0_2",
+        "y_0_0_1",
+        "W_2",
+        "M_0_0_2"
+      ],
+      "outputs": [
+        {
+          "id": "dy_0_0_1",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "gradient",
+          "tensor": {
+            "dtype": "bf16",
+            "shape": [
+              65536,
+              2048
+            ]
+          }
+        },
+        {
+          "id": "dW_0_2",
+          "size_bytes": 839139328,
+          "location": "fast",
+          "role": "gradient"
+        }
+      ],
+      "group": "backward",
+      "compute_block_key": "moeattn_bwd",
+      "block_params": {
+        "layer": 2
+      },
+      "releases_after": [
+        "A_0_0_2",
+        "M_0_0_2",
+        "dy_0_0_2",
+        "y_0_0_1"
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "moeattn_matmuls_bwd",
+            "flops": 17626545782784,
+            "memory_bytes": 18858147840,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "attention_bwd",
+            "flops": 687194767360,
+            "memory_bytes": 2147483648,
+            "efficiency": "attention"
+          }
+        ],
+        "measured": {
+          "runtime_us": 133562.5,
+          "workspace_bytes": 6721372160,
+          "repeats": 9,
+          "mean_us": 134636.28472222222,
+          "stdev_us": 2370.0618156744927,
+          "min_us": 132242.1875,
+          "max_us": 139199.21875,
+          "estimate_runtime_us": 123757.53037637817
+        }
+      }
+    },
+    {
+      "id": "optimizer_0_2",
+      "runtime_us": 5246.09375,
+      "inputs": [
+        "W_2",
+        "dW_0_2",
+        "O_2"
+      ],
+      "mutates": [
+        "W_2",
+        "O_2"
+      ],
+      "group": "optimizer",
+      "compute_block_key": "optimizer_block",
+      "block_params": {
+        "layer": 2,
+        "step": 0
+      },
+      "releases_after": [
+        "dW_0_2"
+      ],
+      "offload_after": [
+        {
+          "object_id": "O_2"
+        },
+        {
+          "object_id": "W_2"
+        }
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "adamw",
+            "flops": 0,
+            "memory_bytes": 5873975296,
+            "efficiency": "memory"
+          }
+        ],
+        "measured": {
+          "runtime_us": 5246.09375,
+          "workspace_bytes": 0,
+          "repeats": 9,
+          "mean_us": 4967.447916666667,
+          "stdev_us": 698.0133748781531,
+          "min_us": 3933.59375,
+          "max_us": 5738.28125,
+          "estimate_runtime_us": 4894.9794133333335
+        }
+      }
+    },
+    {
+      "id": "block_recompute_0_0_1",
+      "runtime_us": 43751.953125,
+      "inputs": [
+        "y_0_0_0",
+        "W_1",
+        "M_0_0_1"
+      ],
+      "outputs": [
+        {
+          "id": "A_0_0_1",
+          "size_bytes": 3503292416,
+          "location": "fast",
+          "role": "activation"
+        }
+      ],
+      "group": "recompute",
+      "compute_block_key": "moeattn_recompute",
+      "block_params": {
+        "layer": 1
+      },
+      "prefetch_after": [
+        {
+          "object_id": "O_1"
+        },
+        {
+          "object_id": "W_0"
+        }
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "moeattn_matmuls",
+            "flops": 8813272891392,
+            "memory_bytes": 9429073920,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "attention",
+            "flops": 274877906944,
+            "memory_bytes": 1073741824,
+            "efficiency": "attention"
+          }
+        ],
+        "measured": {
+          "runtime_us": 43751.953125,
+          "workspace_bytes": 2424307712,
+          "repeats": 9,
+          "mean_us": 43914.27951388889,
+          "stdev_us": 2150.766547514967,
+          "min_us": 41011.71875,
+          "max_us": 48144.53125,
+          "estimate_runtime_us": 61254.04267240727
+        }
+      }
+    },
+    {
+      "id": "block_bwd_0_0_1",
+      "runtime_us": 133562.5,
+      "inputs": [
+        "dy_0_0_1",
+        "A_0_0_1",
+        "y_0_0_0",
+        "W_1",
+        "M_0_0_1"
+      ],
+      "outputs": [
+        {
+          "id": "dy_0_0_0",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "gradient",
+          "tensor": {
+            "dtype": "bf16",
+            "shape": [
+              65536,
+              2048
+            ]
+          }
+        },
+        {
+          "id": "dW_0_1",
+          "size_bytes": 839139328,
+          "location": "fast",
+          "role": "gradient"
+        }
+      ],
+      "group": "backward",
+      "compute_block_key": "moeattn_bwd",
+      "block_params": {
+        "layer": 1
+      },
+      "releases_after": [
+        "A_0_0_1",
+        "M_0_0_1",
+        "dy_0_0_1",
+        "y_0_0_0"
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "moeattn_matmuls_bwd",
+            "flops": 17626545782784,
+            "memory_bytes": 18858147840,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "attention_bwd",
+            "flops": 687194767360,
+            "memory_bytes": 2147483648,
+            "efficiency": "attention"
+          }
+        ],
+        "measured": {
+          "runtime_us": 133562.5,
+          "workspace_bytes": 6721372160,
+          "repeats": 9,
+          "mean_us": 134636.28472222222,
+          "stdev_us": 2370.0618156744927,
+          "min_us": 132242.1875,
+          "max_us": 139199.21875,
+          "estimate_runtime_us": 123757.53037637817
+        }
+      }
+    },
+    {
+      "id": "optimizer_0_1",
+      "runtime_us": 5246.09375,
+      "inputs": [
+        "W_1",
+        "dW_0_1",
+        "O_1"
+      ],
+      "mutates": [
+        "W_1",
+        "O_1"
+      ],
+      "group": "optimizer",
+      "compute_block_key": "optimizer_block",
+      "block_params": {
+        "layer": 1,
+        "step": 0
+      },
+      "releases_after": [
+        "dW_0_1"
+      ],
+      "offload_after": [
+        {
+          "object_id": "O_1"
+        },
+        {
+          "object_id": "W_1"
+        }
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "adamw",
+            "flops": 0,
+            "memory_bytes": 5873975296,
+            "efficiency": "memory"
+          }
+        ],
+        "measured": {
+          "runtime_us": 5246.09375,
+          "workspace_bytes": 0,
+          "repeats": 9,
+          "mean_us": 4967.447916666667,
+          "stdev_us": 698.0133748781531,
+          "min_us": 3933.59375,
+          "max_us": 5738.28125,
+          "estimate_runtime_us": 4894.9794133333335
+        }
+      }
+    },
+    {
+      "id": "block_recompute_0_0_0",
+      "runtime_us": 43751.953125,
+      "inputs": [
+        "y_embed_0_0",
+        "W_0",
+        "M_0_0_0"
+      ],
+      "outputs": [
+        {
+          "id": "A_0_0_0",
+          "size_bytes": 3503292416,
+          "location": "fast",
+          "role": "activation"
+        }
+      ],
+      "group": "recompute",
+      "compute_block_key": "moeattn_recompute",
+      "block_params": {
+        "layer": 0
+      },
+      "prefetch_after": [
+        {
+          "object_id": "O_0"
+        }
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "moeattn_matmuls",
+            "flops": 8813272891392,
+            "memory_bytes": 9429073920,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "attention",
+            "flops": 274877906944,
+            "memory_bytes": 1073741824,
+            "efficiency": "attention"
+          }
+        ],
+        "measured": {
+          "runtime_us": 43751.953125,
+          "workspace_bytes": 2424307712,
+          "repeats": 9,
+          "mean_us": 43914.27951388889,
+          "stdev_us": 2150.766547514967,
+          "min_us": 41011.71875,
+          "max_us": 48144.53125,
+          "estimate_runtime_us": 61254.04267240727
+        }
+      }
+    },
+    {
+      "id": "block_bwd_0_0_0",
+      "runtime_us": 133562.5,
+      "inputs": [
+        "dy_0_0_0",
+        "A_0_0_0",
+        "y_embed_0_0",
+        "W_0",
+        "M_0_0_0"
+      ],
+      "outputs": [
+        {
+          "id": "dy_embed_0_0",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "gradient",
+          "tensor": {
+            "dtype": "bf16",
+            "shape": [
+              65536,
+              2048
+            ]
+          }
+        },
+        {
+          "id": "dW_0_0",
+          "size_bytes": 839139328,
+          "location": "fast",
+          "role": "gradient"
+        }
+      ],
+      "group": "backward",
+      "compute_block_key": "moeattn_bwd",
+      "block_params": {
+        "layer": 0
+      },
+      "releases_after": [
+        "A_0_0_0",
+        "M_0_0_0",
+        "dy_0_0_0",
+        "y_embed_0_0"
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "moeattn_matmuls_bwd",
+            "flops": 17626545782784,
+            "memory_bytes": 18858147840,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "attention_bwd",
+            "flops": 687194767360,
+            "memory_bytes": 2147483648,
+            "efficiency": "attention"
+          }
+        ],
+        "measured": {
+          "runtime_us": 133562.5,
+          "workspace_bytes": 6721372160,
+          "repeats": 9,
+          "mean_us": 134636.28472222222,
+          "stdev_us": 2370.0618156744927,
+          "min_us": 132242.1875,
+          "max_us": 139199.21875,
+          "estimate_runtime_us": 123757.53037637817
+        }
+      }
+    },
+    {
+      "id": "optimizer_0_0",
+      "runtime_us": 5246.09375,
+      "inputs": [
+        "W_0",
+        "dW_0_0",
+        "O_0"
+      ],
+      "mutates": [
+        "W_0",
+        "O_0"
+      ],
+      "group": "optimizer",
+      "compute_block_key": "optimizer_block",
+      "block_params": {
+        "layer": 0,
+        "step": 0
+      },
+      "releases_after": [
+        "dW_0_0"
+      ],
+      "offload_after": [
+        {
+          "object_id": "O_0"
+        },
+        {
+          "object_id": "W_0"
+        }
+      ],
+      "prefetch_after": [
+        {
+          "object_id": "O_embed"
+        }
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "adamw",
+            "flops": 0,
+            "memory_bytes": 5873975296,
+            "efficiency": "memory"
+          }
+        ],
+        "measured": {
+          "runtime_us": 5246.09375,
+          "workspace_bytes": 0,
+          "repeats": 9,
+          "mean_us": 4967.447916666667,
+          "stdev_us": 698.0133748781531,
+          "min_us": 3933.59375,
+          "max_us": 5738.28125,
+          "estimate_runtime_us": 4894.9794133333335
+        }
+      }
+    },
+    {
+      "id": "embed_bwd_0_0",
+      "runtime_us": 63855.46875,
+      "inputs": [
+        "dy_embed_0_0",
+        "tokens_0_0"
+      ],
+      "outputs": [
+        {
+          "id": "dW_embed_0",
+          "size_bytes": 206045184,
+          "location": "fast",
+          "role": "gradient"
+        }
+      ],
+      "group": "backward",
+      "compute_block_key": "embed_bwd",
+      "releases_after": [
+        "dy_embed_0_0",
+        "tokens_0_0"
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "scatter_accum",
+            "flops": 0,
+            "memory_bytes": 1074266112,
+            "efficiency": "memory"
+          }
+        ],
+        "measured": {
+          "runtime_us": 63855.46875,
+          "workspace_bytes": 3177984,
+          "repeats": 9,
+          "mean_us": 63977.864583333336,
+          "stdev_us": 504.57482748425105,
+          "min_us": 63367.1875,
+          "max_us": 64806.640625,
+          "estimate_runtime_us": 895.22176
+        }
+      }
+    },
+    {
+      "id": "optimizer_embed_0",
+      "runtime_us": 998.046875,
+      "inputs": [
+        "W_embed",
+        "dW_embed_0",
+        "O_embed"
+      ],
+      "mutates": [
+        "W_embed",
+        "O_embed"
+      ],
+      "group": "optimizer",
+      "compute_block_key": "optimizer_embed",
+      "block_params": {
+        "step": 0
+      },
+      "releases_after": [
+        "dW_embed_0"
+      ],
+      "offload_after": [
+        {
+          "object_id": "O_embed"
+        },
+        {
+          "object_id": "W_embed"
+        }
+      ],
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "adamw",
+            "flops": 0,
+            "memory_bytes": 1442316288,
+            "efficiency": "memory"
+          }
+        ],
+        "measured": {
+          "runtime_us": 998.046875,
+          "workspace_bytes": 0,
+          "repeats": 9,
+          "mean_us": 1004.3402777777778,
+          "stdev_us": 25.517594527690118,
+          "min_us": 966.796875,
+          "max_us": 1048.828125,
+          "estimate_runtime_us": 1201.9302400000001
+        }
+      }
+    }
+  ],
+  "final_locations": {
+    "W_embed": "backing",
+    "O_embed": "backing",
+    "W_0": "backing",
+    "O_0": "backing",
+    "W_1": "backing",
+    "O_1": "backing",
+    "W_2": "backing",
+    "O_2": "backing",
+    "W_3": "backing",
+    "O_3": "backing",
+    "W_4": "backing",
+    "O_4": "backing",
+    "W_5": "backing",
+    "O_5": "backing",
+    "W_6": "backing",
+    "O_6": "backing",
+    "W_7": "backing",
+    "O_7": "backing",
+    "W_8": "backing",
+    "O_8": "backing",
+    "W_9": "backing",
+    "O_9": "backing",
+    "W_10": "backing",
+    "O_10": "backing",
+    "W_11": "backing",
+    "O_11": "backing",
+    "W_12": "backing",
+    "O_12": "backing",
+    "W_13": "backing",
+    "O_13": "backing",
+    "W_14": "backing",
+    "O_14": "backing",
+    "W_15": "backing",
+    "O_15": "backing",
+    "W_head": "backing",
+    "O_head": "backing",
+    "loss_0_0": "backing"
+  },
+  "fast_memory_capacity": 12264369231,
+  "bandwidth_from_slow": 25529,
+  "bandwidth_to_slow": 25783,
+  "recompute_rewrites": [
+    {
+      "object_id": "A_0_0_0",
+      "f_task_id": "block_fwd_0_0_0",
+      "r_task_id": "block_recompute_0_0_0",
+      "options": [
+        {
+          "level": 0,
+          "saved_bytes": 3503292416,
+          "recompute_us": 0.0,
+          "label": "save"
+        },
+        {
+          "level": 1,
+          "saved_bytes": 0,
+          "recompute_us": 61254.04267240727,
+          "label": "recompute"
+        }
+      ],
+      "f_compute_block_key": "moeattn_fwd",
+      "r_compute_block_key": "moeattn_recompute",
+      "group_key": "layer_0"
+    },
+    {
+      "object_id": "A_0_0_1",
+      "f_task_id": "block_fwd_0_0_1",
+      "r_task_id": "block_recompute_0_0_1",
+      "options": [
+        {
+          "level": 0,
+          "saved_bytes": 3503292416,
+          "recompute_us": 0.0,
+          "label": "save"
+        },
+        {
+          "level": 1,
+          "saved_bytes": 0,
+          "recompute_us": 61254.04267240727,
+          "label": "recompute"
+        }
+      ],
+      "f_compute_block_key": "moeattn_fwd",
+      "r_compute_block_key": "moeattn_recompute",
+      "group_key": "layer_1"
+    },
+    {
+      "object_id": "A_0_0_2",
+      "f_task_id": "block_fwd_0_0_2",
+      "r_task_id": "block_recompute_0_0_2",
+      "options": [
+        {
+          "level": 0,
+          "saved_bytes": 3503292416,
+          "recompute_us": 0.0,
+          "label": "save"
+        },
+        {
+          "level": 1,
+          "saved_bytes": 0,
+          "recompute_us": 61254.04267240727,
+          "label": "recompute"
+        }
+      ],
+      "f_compute_block_key": "moeattn_fwd",
+      "r_compute_block_key": "moeattn_recompute",
+      "group_key": "layer_2"
+    },
+    {
+      "object_id": "A_0_0_3",
+      "f_task_id": "block_fwd_0_0_3",
+      "r_task_id": "block_recompute_0_0_3",
+      "options": [
+        {
+          "level": 0,
+          "saved_bytes": 3503292416,
+          "recompute_us": 0.0,
+          "label": "save"
+        },
+        {
+          "level": 1,
+          "saved_bytes": 0,
+          "recompute_us": 61254.04267240727,
+          "label": "recompute"
+        }
+      ],
+      "f_compute_block_key": "moeattn_fwd",
+      "r_compute_block_key": "moeattn_recompute",
+      "group_key": "layer_3"
+    },
+    {
+      "object_id": "A_0_0_4",
+      "f_task_id": "block_fwd_0_0_4",
+      "r_task_id": "block_recompute_0_0_4",
+      "options": [
+        {
+          "level": 0,
+          "saved_bytes": 3503292416,
+          "recompute_us": 0.0,
+          "label": "save"
+        },
+        {
+          "level": 1,
+          "saved_bytes": 0,
+          "recompute_us": 61254.04267240727,
+          "label": "recompute"
+        }
+      ],
+      "f_compute_block_key": "moeattn_fwd",
+      "r_compute_block_key": "moeattn_recompute",
+      "group_key": "layer_4"
+    },
+    {
+      "object_id": "A_0_0_5",
+      "f_task_id": "block_fwd_0_0_5",
+      "r_task_id": "block_recompute_0_0_5",
+      "options": [
+        {
+          "level": 0,
+          "saved_bytes": 3503292416,
+          "recompute_us": 0.0,
+          "label": "save"
+        },
+        {
+          "level": 1,
+          "saved_bytes": 0,
+          "recompute_us": 61254.04267240727,
+          "label": "recompute"
+        }
+      ],
+      "f_compute_block_key": "moeattn_fwd",
+      "r_compute_block_key": "moeattn_recompute",
+      "group_key": "layer_5"
+    },
+    {
+      "object_id": "A_0_0_6",
+      "f_task_id": "block_fwd_0_0_6",
+      "r_task_id": "block_recompute_0_0_6",
+      "options": [
+        {
+          "level": 0,
+          "saved_bytes": 3503292416,
+          "recompute_us": 0.0,
+          "label": "save"
+        },
+        {
+          "level": 1,
+          "saved_bytes": 0,
+          "recompute_us": 61254.04267240727,
+          "label": "recompute"
+        }
+      ],
+      "f_compute_block_key": "moeattn_fwd",
+      "r_compute_block_key": "moeattn_recompute",
+      "group_key": "layer_6"
+    },
+    {
+      "object_id": "A_0_0_7",
+      "f_task_id": "block_fwd_0_0_7",
+      "r_task_id": "block_recompute_0_0_7",
+      "options": [
+        {
+          "level": 0,
+          "saved_bytes": 3503292416,
+          "recompute_us": 0.0,
+          "label": "save"
+        },
+        {
+          "level": 1,
+          "saved_bytes": 0,
+          "recompute_us": 61254.04267240727,
+          "label": "recompute"
+        }
+      ],
+      "f_compute_block_key": "moeattn_fwd",
+      "r_compute_block_key": "moeattn_recompute",
+      "group_key": "layer_7"
+    },
+    {
+      "object_id": "A_0_0_8",
+      "f_task_id": "block_fwd_0_0_8",
+      "r_task_id": "block_recompute_0_0_8",
+      "options": [
+        {
+          "level": 0,
+          "saved_bytes": 3503292416,
+          "recompute_us": 0.0,
+          "label": "save"
+        },
+        {
+          "level": 1,
+          "saved_bytes": 0,
+          "recompute_us": 61254.04267240727,
+          "label": "recompute"
+        }
+      ],
+      "f_compute_block_key": "moeattn_fwd",
+      "r_compute_block_key": "moeattn_recompute",
+      "group_key": "layer_8"
+    },
+    {
+      "object_id": "A_0_0_9",
+      "f_task_id": "block_fwd_0_0_9",
+      "r_task_id": "block_recompute_0_0_9",
+      "options": [
+        {
+          "level": 0,
+          "saved_bytes": 3503292416,
+          "recompute_us": 0.0,
+          "label": "save"
+        },
+        {
+          "level": 1,
+          "saved_bytes": 0,
+          "recompute_us": 61254.04267240727,
+          "label": "recompute"
+        }
+      ],
+      "f_compute_block_key": "moeattn_fwd",
+      "r_compute_block_key": "moeattn_recompute",
+      "group_key": "layer_9"
+    },
+    {
+      "object_id": "A_0_0_10",
+      "f_task_id": "block_fwd_0_0_10",
+      "r_task_id": "block_recompute_0_0_10",
+      "options": [
+        {
+          "level": 0,
+          "saved_bytes": 3503292416,
+          "recompute_us": 0.0,
+          "label": "save"
+        },
+        {
+          "level": 1,
+          "saved_bytes": 0,
+          "recompute_us": 61254.04267240727,
+          "label": "recompute"
+        }
+      ],
+      "f_compute_block_key": "moeattn_fwd",
+      "r_compute_block_key": "moeattn_recompute",
+      "group_key": "layer_10"
+    },
+    {
+      "object_id": "A_0_0_11",
+      "f_task_id": "block_fwd_0_0_11",
+      "r_task_id": "block_recompute_0_0_11",
+      "options": [
+        {
+          "level": 0,
+          "saved_bytes": 3503292416,
+          "recompute_us": 0.0,
+          "label": "save"
+        },
+        {
+          "level": 1,
+          "saved_bytes": 0,
+          "recompute_us": 61254.04267240727,
+          "label": "recompute"
+        }
+      ],
+      "f_compute_block_key": "moeattn_fwd",
+      "r_compute_block_key": "moeattn_recompute",
+      "group_key": "layer_11"
+    },
+    {
+      "object_id": "A_0_0_12",
+      "f_task_id": "block_fwd_0_0_12",
+      "r_task_id": "block_recompute_0_0_12",
+      "options": [
+        {
+          "level": 0,
+          "saved_bytes": 3503292416,
+          "recompute_us": 0.0,
+          "label": "save"
+        },
+        {
+          "level": 1,
+          "saved_bytes": 0,
+          "recompute_us": 61254.04267240727,
+          "label": "recompute"
+        }
+      ],
+      "f_compute_block_key": "moeattn_fwd",
+      "r_compute_block_key": "moeattn_recompute",
+      "group_key": "layer_12"
+    },
+    {
+      "object_id": "A_0_0_13",
+      "f_task_id": "block_fwd_0_0_13",
+      "r_task_id": "block_recompute_0_0_13",
+      "options": [
+        {
+          "level": 0,
+          "saved_bytes": 3503292416,
+          "recompute_us": 0.0,
+          "label": "save"
+        },
+        {
+          "level": 1,
+          "saved_bytes": 0,
+          "recompute_us": 61254.04267240727,
+          "label": "recompute"
+        }
+      ],
+      "f_compute_block_key": "moeattn_fwd",
+      "r_compute_block_key": "moeattn_recompute",
+      "group_key": "layer_13"
+    },
+    {
+      "object_id": "A_0_0_14",
+      "f_task_id": "block_fwd_0_0_14",
+      "r_task_id": "block_recompute_0_0_14",
+      "options": [
+        {
+          "level": 0,
+          "saved_bytes": 3503292416,
+          "recompute_us": 0.0,
+          "label": "save"
+        },
+        {
+          "level": 1,
+          "saved_bytes": 0,
+          "recompute_us": 61254.04267240727,
+          "label": "recompute"
+        }
+      ],
+      "f_compute_block_key": "moeattn_fwd",
+      "r_compute_block_key": "moeattn_recompute",
+      "group_key": "layer_14"
+    },
+    {
+      "object_id": "A_0_0_15",
+      "f_task_id": "block_fwd_0_0_15",
+      "r_task_id": "block_recompute_0_0_15",
+      "options": [
+        {
+          "level": 0,
+          "saved_bytes": 3503292416,
+          "recompute_us": 0.0,
+          "label": "save"
+        },
+        {
+          "level": 1,
+          "saved_bytes": 0,
+          "recompute_us": 61254.04267240727,
+          "label": "recompute"
+        }
+      ],
+      "f_compute_block_key": "moeattn_fwd",
+      "r_compute_block_key": "moeattn_recompute",
+      "group_key": "layer_15"
+    }
+  ],
+  "metadata": {
+    "family": "olmoe-shaped",
+    "primary_unit": "tokens",
+    "primary_count": 65536.0,
+    "config": {
+      "n_layers": 16,
+      "d_model": 2048,
+      "n_heads": 16,
+      "n_kv_heads": 16,
+      "d_ff": 1024,
+      "vocab_size": 50304,
+      "seq_len": 1024,
+      "batch": 64,
+      "grad_accum_rounds": 1,
+      "num_steps": 1
+    },
+    "lowering": "olmoe-exact-v1"
+  }
+}
