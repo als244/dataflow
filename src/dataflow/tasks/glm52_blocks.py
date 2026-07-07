@@ -266,19 +266,13 @@ class _Glm52LeaderKL:
         t = d.tokens
         rope = d.qk_rope_dim
         hi_, di = d.index_n_heads, d.index_head_dim
-        dq3i = dq_idx.view(t, hi_, di)
-        rb = torch.empty(t, hi_ * rope, dtype=dq_idx.dtype, device=x.device)
-        K.rope_bwd(kctx, dq3i[..., :rope].reshape(t, hi_ * rope).contiguous(),
-                   rb, pos, hi_, rope, d.rope_base)
-        dq_pre = torch.cat([rb.view(t, hi_, rope), dq3i[..., rope:]], dim=-1
-                           ).reshape(t, hi_ * di).contiguous()
-        acc("w_idx_q", q_lora_n.T @ dq_pre)
-        del dq_idx, dq_pre, rb
-        rbk = torch.empty(t, rope, dtype=dk_idx.dtype, device=x.device)
-        K.rope_bwd(kctx, dk_idx[:, :rope].contiguous(), rbk, pos, 1, rope,
-                   d.rope_base)
-        dk_post_ln = torch.cat([rbk, dk_idx[:, rope:]], dim=-1)
-        del dk_idx, rbk
+        K.rope_bwd(kctx, dq_idx, dq_idx, pos, hi_, rope, d.rope_base,
+                   row_stride=hi_ * di, head_stride=di, col_base=0)
+        acc("w_idx_q", q_lora_n.T @ dq_idx)
+        del dq_idx
+        K.rope_bwd(kctx, dk_idx, dk_idx, pos, 1, rope, d.rope_base,
+                   row_stride=di, head_stride=di, col_base=0)
+        dk_post_ln = dk_idx
         k_pre = (h1 @ w["w_idx_k"]).float()
         mu = k_pre.mean(-1, keepdim=True)
         xc = k_pre - mu

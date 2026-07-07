@@ -62,12 +62,13 @@ def _mla_expand_q(kctx, K, d, q_a_pre, rstd_qa, w, pos):
     qk = d.qk_head_dim
     q_lora_n = torch.empty_like(q_a_pre)
     K.rmsnorm_apply(kctx, q_a_pre, rstd_qa, w["q_a_norm_w"], q_lora_n)
-    q = (q_lora_n @ w["w_q_b"]).view(t, h, qk)
-    q_rope = torch.empty(t, h * rope, dtype=q.dtype, device=q.device)
-    K.rope_fwd(kctx, q[..., nope:].reshape(t, h * rope).contiguous(), q_rope,
-               pos, h, rope, d.rope_base)
-    q_full = torch.cat([q[..., :nope], q_rope.view(t, h, rope)], dim=-1)
-    return q_lora_n, q_full.reshape(t, h * qk).contiguous()
+    # in-place strided rope on the assembled projection: the GEMM output
+    # already has the final [nope | rope] per-head layout — no extract,
+    # no temp, no cat
+    q_full = q_lora_n @ w["w_q_b"]
+    K.rope_fwd(kctx, q_full, q_full, pos, h, rope, d.rope_base,
+               row_stride=h * qk, head_stride=qk, col_base=nope)
+    return q_lora_n, q_full
 
 
 def _mla_expand_kv(kctx, K, d, kv_a_pre, rstd_kva, w, pos):
@@ -131,13 +132,10 @@ class Dsv3DenseBlockFwd(BlockFwd):
         K.rmsnorm_fwd(kctx, q_a, w["q_a_norm_w"], q_lora_n, rstd_qa)
         pos = ops.positions_for(d.seq_spec, t, h1.device)
         h, nope, rope = d.n_heads, d.qk_nope_dim, d.qk_rope_dim
-        q = (q_lora_n @ w["w_q_b"]).view(t, h, d.qk_head_dim)
-        q_rope = torch.empty(t, h * rope, dtype=q.dtype, device=q.device)
-        K.rope_fwd(kctx, q[..., nope:].reshape(t, h * rope).contiguous(),
-                   q_rope, pos, h, rope, d.rope_base)
-        q_full = torch.cat(
-            [q[..., :nope], q_rope.view(t, h, rope)], dim=-1,
-        ).reshape(t, h * d.qk_head_dim).contiguous()
+        q_full = q_lora_n @ w["w_q_b"]
+        K.rope_fwd(kctx, q_full, q_full, pos, h, rope, d.rope_base,
+                   row_stride=h * d.qk_head_dim, head_stride=d.qk_head_dim,
+                   col_base=nope)
         st.update(q_full=q_full, pos=pos)
         if a is not None:
             a["rstd_qa"].copy_(rstd_qa)
@@ -304,14 +302,10 @@ class Dsv3DenseBlockBwd(BlockBwd):
         del dlatent, dk_rope_pre
 
         # ---- q stack ----
-        dq3 = dq.view(t, h, qk)
-        dq_rope_pre = torch.empty(t, h * rope, dtype=dq.dtype, device=dq.device)
-        K.rope_bwd(kctx, dq3[..., nope:].reshape(t, h * rope).contiguous(),
-                   dq_rope_pre, pos, h, rope, d.rope_base)
-        dq_pre = torch.cat(
-            [dq3[..., :nope], dq_rope_pre.view(t, h, rope)], dim=-1,
-        ).reshape(t, h * qk).contiguous()
-        del dq, dq3, dq_rope_pre
+        K.rope_bwd(kctx, dq, dq, pos, h, rope, d.rope_base,
+                   row_stride=h * qk, head_stride=qk, col_base=nope)
+        dq_pre = dq
+        del dq
         acc("w_q_b", q_lora_n.T @ dq_pre)
         dq_lora_n = dq_pre @ w["w_q_b"].T
         del dq_pre, q_lora_n

@@ -96,18 +96,16 @@ def _indexer_inputs(kctx, K, d, h1, q_lora_n, w, pos):
     rope-first assembled indexer tensors."""
     t = h1.shape[0]
     hi, di, rope = d.index_n_heads, d.index_head_dim, d.qk_rope_dim
-    q = (q_lora_n @ w["w_idx_q"]).view(t, hi, di)
-    q_pe = torch.empty(t, hi * rope, dtype=q.dtype, device=q.device)
-    K.rope_fwd(kctx, q[..., :rope].reshape(t, hi * rope).contiguous(), q_pe,
-               pos, hi, rope, d.rope_base)
-    q_idx = torch.cat([q_pe.view(t, hi, rope), q[..., rope:]], dim=-1
-                      ).reshape(t, hi * di).contiguous()
+    # in-place strided rope on the assembled projections (rope-FIRST
+    # indexer layout: col_base=0) — no extracts, no temps, no cats
+    q_idx = q_lora_n @ w["w_idx_q"]
+    K.rope_fwd(kctx, q_idx, q_idx, pos, hi, rope, d.rope_base,
+               row_stride=hi * di, head_stride=di, col_base=0)
     k_pre = h1 @ w["w_idx_k"]
-    k = F.layer_norm(k_pre.float(), (di,), w["idx_k_ln_w"].float(),
-                     w["idx_k_ln_b"].float(), _LN_EPS).to(k_pre.dtype)
-    k_pe = torch.empty(t, rope, dtype=k.dtype, device=k.device)
-    K.rope_fwd(kctx, k[:, :rope].contiguous(), k_pe, pos, 1, rope, d.rope_base)
-    k_idx = torch.cat([k_pe, k[:, rope:]], dim=-1).contiguous()
+    k_idx = F.layer_norm(k_pre.float(), (di,), w["idx_k_ln_w"].float(),
+                         w["idx_k_ln_b"].float(), _LN_EPS).to(k_pre.dtype)
+    K.rope_fwd(kctx, k_idx, k_idx, pos, 1, rope, d.rope_base,
+               row_stride=di, head_stride=di, col_base=0)
     wts = (h1.float() @ w["w_idx_w"].float()) \
         * (hi ** -0.5) * (di ** -0.5)
     return q_idx, k_idx, wts.contiguous()
@@ -400,22 +398,15 @@ class Dsv32DenseBlockBwd(Dsv32MetaState, Dsv32ProfileFill, Dsv3DenseBlockBwd):
                 n_heads=hi_, head_dim=di, seq_bounds=((0, length),),
             )
             del p, d_scores
-        # chain to the four indexer weights (inputs detached)
-        dq_pre = torch.empty_like(dq_idx)
-        dq3i = dq_idx.view(t, hi_, di)
-        rb = torch.empty(t, hi_ * rope, dtype=dq_idx.dtype, device=x.device)
-        K.rope_bwd(kctx, dq3i[..., :rope].reshape(t, hi_ * rope).contiguous(),
-                   rb, pos, hi_, rope, d.rope_base)
-        dq_pre = torch.cat([rb.view(t, hi_, rope), dq3i[..., rope:]], dim=-1
-                           ).reshape(t, hi_ * di).contiguous()
-        acc("w_idx_q", q_lora_n.T @ dq_pre)
-        del dq_idx, dq_pre, rb
-        dk3i = dk_idx
-        rbk = torch.empty(t, rope, dtype=dk_idx.dtype, device=x.device)
-        K.rope_bwd(kctx, dk3i[:, :rope].contiguous(), rbk, pos, 1, rope,
-                   d.rope_base)
-        dk_post_ln = torch.cat([rbk, dk3i[:, rope:]], dim=-1)
-        del dk_idx, rbk
+        # chain to the four indexer weights (inputs detached) — rope_bwd
+        # runs IN PLACE on the assembled grads (rope-first: col_base=0)
+        K.rope_bwd(kctx, dq_idx, dq_idx, pos, hi_, rope, d.rope_base,
+                   row_stride=hi_ * di, head_stride=di, col_base=0)
+        acc("w_idx_q", q_lora_n.T @ dq_idx)
+        del dq_idx
+        K.rope_bwd(kctx, dk_idx, dk_idx, pos, 1, rope, d.rope_base,
+                   row_stride=di, head_stride=di, col_base=0)
+        dk_post_ln = dk_idx
         # LayerNorm backward (eager: standard formulas, fp32)
         k_pre = (h1 @ w["w_idx_k"]).float()
         mu = k_pre.mean(-1, keepdim=True)
@@ -429,7 +420,7 @@ class Dsv32DenseBlockBwd(Dsv32MetaState, Dsv32ProfileFill, Dsv3DenseBlockBwd):
         dk_pre = rstd * (g - g.mean(-1, keepdim=True)
                          - xhat * (g * xhat).mean(-1, keepdim=True))
         acc("w_idx_k", h1.T @ dk_pre.to(torch.bfloat16))
-        del k_pre, mu, xc, var, rstd, xhat, g, dk_post_ln, dk_pre
+        del k_pre, mu, xc, var, rstd, xhat, g, dk_post_ln, dk_idx, dk_pre
         acc("w_idx_w", (h1.float().T @ (dwts * (hi_ ** -0.5) * (di ** -0.5))))
         del dwts, q_idx, k_idx, wts
 
@@ -503,14 +494,10 @@ class Dsv32DenseBlockBwd(Dsv32MetaState, Dsv32ProfileFill, Dsv3DenseBlockBwd):
         d_kv_a = torch.cat([dlatent, dk_rope_pre], dim=-1)
         del dlatent, dk_rope_pre
 
-        dq3 = dq.view(t, h, qk)
-        dq_rope_pre = torch.empty(t, h * rope, dtype=dq.dtype, device=dq.device)
-        K.rope_bwd(kctx, dq3[..., nope:].reshape(t, h * rope).contiguous(),
-                   dq_rope_pre, pos, h, rope, d.rope_base)
-        dq_pre_m = torch.cat(
-            [dq3[..., :nope], dq_rope_pre.view(t, h, rope)], dim=-1,
-        ).reshape(t, h * qk).contiguous()
-        del dq, dq3, dq_rope_pre
+        K.rope_bwd(kctx, dq, dq, pos, h, rope, d.rope_base,
+                   row_stride=h * qk, head_stride=qk, col_base=nope)
+        dq_pre_m = dq
+        del dq
         acc("w_q_b", q_lora_n.T @ dq_pre_m)
         dq_lora_n = dq_pre_m @ w["w_q_b"].T
         del dq_pre_m, q_lora_n
