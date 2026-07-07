@@ -1,7 +1,7 @@
 # End-to-end usage: memory-constrained training
 
 The full path from model config to multi-step training under a fast-memory
-budget, as exercised by `tools/m4_train.py`.
+budget, as exercised by `tools/bench_train.py`.
 
 ```python
 import torch
@@ -72,10 +72,10 @@ renders in the main window next to the sim's prediction of the same plan.
 ## The CLI instead (what the results tables were built with)
 
 ```
-python tools/m4_train.py --config 8b-s1k-bs8ga8 --budgets 12,16,20 --steps 3 --recompute
-python tools/m4_train.py --config 8b-s1k-bs8ga8 --budgets 24 --probe-max ...   # largest feasible budget
-python tools/m4_train.py --config ... --device-gib 29 ...   # HARD device envelope (actual usage <= 29)
-python tools/m4_train.py --config ... --annotated <saved>.annotated.json  # exact replay of a saved plan
+python tools/bench_train.py --config 8b-s1k-bs8ga8 --budgets 12,16,20 --steps 3 --recompute
+python tools/bench_train.py --config 8b-s1k-bs8ga8 --budgets 24 --probe-max ...   # largest feasible budget
+python tools/bench_train.py --config ... --device-gib 29 ...   # HARD device envelope (actual usage <= 29)
+python tools/bench_train.py --config ... --annotated <saved>.annotated.json  # exact replay of a saved plan
 python tools/gap_analysis.py --config ... --budget ...      # real-vs-sim gap decomposition
 python tools/window_plans.py --config ... --budgets ...     # k-step window oracle (step-seam analysis)
 ```

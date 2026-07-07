@@ -167,7 +167,7 @@ Gates, in order:
    (different plans, identical math) is the highest-leverage async check;
 2. `tests/tasks/test_m3_gate.py` style poison-on-free + interleaving-stress
    runs;
-3. throughput: `tools/m4_train.py --config <yours> --budgets ...` sweeps
+3. throughput: `tools/bench_train.py --config <yours> --budgets ...` sweeps
    real-vs-sim (report both `real_tokens_per_s` and `wall_tokens_per_s`;
    wall is the honest number), `tools/gap_analysis.py` decomposes any gap,
    `tools/window_plans.py` checks the step seam if the family's shape
@@ -192,7 +192,7 @@ What adding a family (e.g. Qwen3) actually touches, in order:
    the `LayerKindSpec`(s) into `build_shaped_program`, the config->dims
    mapping, and the `FamilyLayouts` into the generic lowering (§4). The
    recompute `build_variant` is just the builder re-invoked with levels.
-5. `tools/m4_train.py` `CONFIGS` — add named configs.
+5. `tools/bench_train.py` `CONFIGS` — add named configs.
 6. Ladder 3 + gates (§5).
 
 Variants the qwen35 family (hybrid DeltaNet + gated attention, tied
@@ -258,7 +258,7 @@ Known llama-couplings to check when the family's TASK/OBJECT NAMES differ
   names only);
 - `tools/window_plans.py` `_TASK_RE`/`_OBJ_RE` — the seam analyzer asserts
   full name coverage and raises on unknown ids;
-- `tools/m4_train.py` reads `loss_{s}_{r}` / `tokens_{s}_{r}` /
+- `tools/bench_train.py` reads `loss_{s}_{r}` / `tokens_{s}_{r}` /
   `targets_{s}_{r}` conventions via the train loop (`round_views`,
   loss readback).
 
