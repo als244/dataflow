@@ -516,13 +516,15 @@ class EmbedBwd(_Base):
 
     def launch(self, ctx: TaskContext) -> None:
         d = self.dims
-        with torch.cuda.stream(external_stream(ctx.stream)):
+        es, kctx = self._stream_ctx(ctx)
+        with torch.cuda.stream(es):
             dy = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
             tokens = torch_view(self._in(ctx, 1), (d.tokens,), torch.int32)
             accum = bool(ctx.task.mutates)
             buf = ctx.mutates[ctx.task.mutates[0]] if accum else self._out(ctx, 0)
             dwe = self.egl.view(buf, "w")
-            ops.embed_bwd_accum(tokens, dy, dwe, zero_first=not accum)
+            self.kernels.embed_bwd_accum(kctx, tokens, dy, dwe,
+                                         zero_first=not accum)
 
 
 @dataclass(frozen=True)
