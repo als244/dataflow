@@ -584,34 +584,7 @@ def main() -> None:
         torch.cuda.reset_peak_memory_stats()  # scratch peak of THIS run only
         from dataflow.runtime.placement import PlacementError
 
-        def _measured_peak(rep) -> float:
-            return (fixed + rep.placement_extent_bytes
-                    + torch.cuda.max_memory_reserved()) / GIB
-
         try:
-            env_gib_row = device_meta[gib][0] if gib in device_meta else None
-            # AUTO-HEADROOM (closed loop, no hand leeway): probe ONE step,
-            # measure the true device peak; if it exceeds the envelope,
-            # shrink the ledger by the actual overage and re-plan. The
-            # static reserve constants are only the loop's initial guess.
-            if env_gib_row is not None and args.steps > 1:
-                for _probe in range(2):
-                    probe = train(
-                        planned.program, cfg, backend, steps=1, seed=11,
-                        placement_mode=args.placement, placement=placement,
-                        values=shared_values,
-                    )
-                    over = _measured_peak(probe) - env_gib_row
-                    if over <= 0.0:
-                        break
-                    eff = int(eff - (over + 0.0625) * GIB)
-                    print(f"  auto-headroom: probe peak "
-                          f"{_measured_peak(probe):.2f} > {env_gib_row:g} — "
-                          f"re-planning at ledger {eff / GIB:.2f} GiB")
-                    planned = plan_at(eff)
-                    placement = None
-                    torch.cuda.empty_cache()
-                    torch.cuda.reset_peak_memory_stats()
             report = train(
                 planned.program, cfg, backend, steps=args.steps, seed=11,
                 placement_mode=args.placement, placement=placement,
@@ -655,11 +628,38 @@ def main() -> None:
         # healthy runs) would add unmeasured backend allocations.
         torch_scratch_peak = torch.cuda.max_memory_reserved()
         actual = fixed + report.placement_extent_bytes + torch_scratch_peak
+        env_gib = device_meta[gib][0] if gib in device_meta else None
+        # AUTO-HEADROOM, closing pass: the one-step probe underestimates
+        # (scratch grows past step 1), so the loop closes HERE — if the
+        # measured full-run peak busts the envelope, shrink the ledger by
+        # the measured overage and re-run the row (once). No hand leeway.
+        for _retry in range(2):
+            if env_gib is None or actual / GIB <= env_gib + 0.02 or _retry:
+                break
+            over_gib = actual / GIB - env_gib
+            eff = int(eff - (over_gib + 0.0625) * GIB)
+            print(f"  auto-headroom (post-run): peak {actual / GIB:.2f} > "
+                  f"{env_gib:g} — re-planning at ledger {eff / GIB:.2f} GiB "
+                  f"and re-running")
+            try:
+                planned = plan_at(eff)
+            except Exception as exc:
+                print(f"  auto-headroom re-plan infeasible: {str(exc)[:100]}")
+                break
+            placement = None
+            torch.cuda.empty_cache()
+            torch.cuda.reset_peak_memory_stats()
+            report = train(
+                planned.program, cfg, backend, steps=args.steps, seed=11,
+                placement_mode=args.placement, placement=placement,
+                values=shared_values,
+            )
+            torch_scratch_peak = torch.cuda.max_memory_reserved()
+            actual = fixed + report.placement_extent_bytes + torch_scratch_peak
         print(f"device peak (measured): {actual / GIB:.2f} GiB = "
               f"fixed {fixed / GIB:.2f} + extent "
               f"{report.placement_extent_bytes / GIB:.2f} + torch scratch "
               f"{torch_scratch_peak / GIB:.2f}")
-        env_gib = device_meta[gib][0] if gib in device_meta else None
         if env_gib is not None and actual / GIB > env_gib + 0.02:
             print(f"!!! ENVELOPE BUSTED: measured peak {actual / GIB:.2f} GiB "
                   f"> {env_gib:.0f} GiB — NOT a valid <= {env_gib:.0f} GiB row "
