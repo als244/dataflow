@@ -568,6 +568,80 @@ def dsv3_moe_context_layout(dims: Dsv3Dims) -> PackedLayout:
 
 
 @dataclass(frozen=True)
+class Dsv32Dims(Dsv3Dims):
+    """DeepSeek-V3.2 dims: the dsv3 backbone + DSA (lightning indexer +
+    fine-grained top-k selection) in EVERY layer's attention. Indexer:
+    H_I heads of d_I dims; q^I taps the shared post-norm q_lora latent;
+    k^I = rope(LayerNorm(h1 @ w_idx_k)) — ONE shared key per token;
+    rope-FIRST head layout (opposite of main MLA); selection = per-token
+    top-min(k, prefix) of ReLU-weighted scores, stored (t, k) int32
+    (pad-safe short prefixes). sparse_mode=False (dense warm-up) is an
+    M-H3 deliverable — lowering rejects it until then."""
+
+    index_n_heads: int = 8
+    index_head_dim: int = 64
+    index_topk: int = 1024
+    sparse_mode: bool = True
+
+
+def _dsv32_attn_weight_specs(dims: Dsv32Dims) -> list[tuple[str, tuple[int, ...]]]:
+    specs = _dsv3_attn_weight_specs(dims)
+    idx = [
+        ("w_idx_q", (dims.q_lora_rank, dims.index_n_heads * dims.index_head_dim)),
+        ("w_idx_k", (dims.d_model, dims.index_head_dim)),
+        ("idx_k_ln_w", (dims.index_head_dim,)),
+        ("idx_k_ln_b", (dims.index_head_dim,)),
+        ("w_idx_w", (dims.d_model, dims.index_n_heads)),  # fp32 via policy
+    ]
+    # insert after wo, before ffn_norm_w
+    return specs[:-1] + idx + specs[-1:]
+
+
+def _dsv32_attn_ctx_specs(dims: Dsv32Dims) -> list[tuple[str, tuple[int, ...], str]]:
+    specs = _dsv3_attn_ctx_specs(dims)
+    # the ONLY DSA ctx addition: the selection (indexer q/k/wts recompute
+    # from the latents already saved for the MLA backward); emitted
+    # before the attention stage, so it sits before lse in layout order
+    sel = ("dsa_idx", (dims.tokens, dims.index_topk), "int32")
+    i = next(j for j, s in enumerate(specs) if s[0] == "lse")
+    return specs[:i] + [sel] + specs[i:]
+
+
+def dsv32_dense_weight_layout(dims: Dsv32Dims, layer: int | None = None) -> PackedLayout:
+    d, ff = dims.d_model, dims.d_ff
+    return PackedLayout.build(_param_specs(dims, _dsv32_attn_weight_specs(dims) + [
+        ("w1", (d, ff)),
+        ("w3", (d, ff)),
+        ("w2", (ff, d)),
+    ], layer=layer))
+
+
+def dsv32_dense_context_layout(dims: Dsv32Dims) -> PackedLayout:
+    t, ff = dims.tokens, dims.d_ff
+    return PackedLayout.build(_dsv32_attn_ctx_specs(dims) + [
+        ("x1", (t, ff), "bf16"),
+        ("x3", (t, ff), "bf16"),
+    ])
+
+
+def dsv32_moe_weight_layout(dims: Dsv32Dims, layer: int | None = None) -> PackedLayout:
+    from .moe.spec import moe_weight_specs
+
+    return PackedLayout.build(_param_specs(
+        dims, _dsv32_attn_weight_specs(dims) + moe_weight_specs(dims, dims.moe),
+        layer=layer,
+    ))
+
+
+def dsv32_moe_context_layout(dims: Dsv32Dims) -> PackedLayout:
+    from .moe.spec import moe_context_specs
+
+    return PackedLayout.build(
+        _dsv32_attn_ctx_specs(dims) + moe_context_specs(dims, dims.moe)
+    )
+
+
+@dataclass(frozen=True)
 class Qwen35Dims:
     """Qwen3.5-dense dims: hybrid Gated-DeltaNet + gated-attention layers.
 

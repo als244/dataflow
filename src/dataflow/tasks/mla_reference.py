@@ -40,12 +40,12 @@ def mla_head_dims(dims) -> tuple[int, int]:
     return dims.qk_nope_dim + dims.qk_rope_dim, dims.v_head_dim
 
 
-def mla_attention_reference(
+def mla_qkv_reference(
     h1: torch.Tensor, w: dict[str, torch.Tensor], dims,
-) -> torch.Tensor:
-    """Post-attn-norm input h1 (t, d) -> attention output (t, n_heads*v)
-    (caller applies wo + residual). Pure autograd; mirrors the runtime
-    stage decomposition 1:1 so ladders compare piecewise."""
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """The MLA expansion shared by dense (dsv3) and DSA (dsv32) forms:
+    returns (q_lora_n (t, q_lora), q_full (t,h,qk), k_full (t,h,qk),
+    v_pad (t,h,qk)) — padded-v convention."""
     d = dims
     t = h1.shape[0]
     h, nope, rope, v = d.n_heads, d.qk_nope_dim, d.qk_rope_dim, d.v_head_dim
@@ -70,12 +70,24 @@ def mla_attention_reference(
     k_full = torch.cat(
         [kvb[..., :nope], k_rope.view(t, 1, rope).expand(t, h, rope)], dim=-1,
     )
-
-    # padded-v attention at shared head_dim=qk (exactness pinned by test)
     v_pad = torch.cat(
         [kvb[..., nope:], torch.zeros(t, h, qk - v, dtype=h1.dtype, device=h1.device)],
         dim=-1,
     )
+    return q_lora, q_full, k_full, v_pad
+
+
+def mla_attention_reference(
+    h1: torch.Tensor, w: dict[str, torch.Tensor], dims,
+) -> torch.Tensor:
+    """Post-attn-norm input h1 (t, d) -> attention output (t, n_heads*v)
+    (caller applies wo + residual). Pure autograd; mirrors the runtime
+    stage decomposition 1:1 so ladders compare piecewise."""
+    d = dims
+    t = h1.shape[0]
+    h, v = d.n_heads, d.v_head_dim
+    qk = d.qk_nope_dim + d.qk_rope_dim
+    _, q_full, k_full, v_pad = mla_qkv_reference(h1, w, dims)
     attn = ops.attention_reference(
         q_full.reshape(t, h * qk), k_full.reshape(t, h * qk),
         v_pad.reshape(t, h * qk), h, h, qk, d.seq_spec,

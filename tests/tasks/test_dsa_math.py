@@ -362,3 +362,179 @@ def test_dsa_index_bwd_vs_autograd():
     assert rel_l2(dq, gq) < 6e-3
     assert rel_l2(dk, gk) < 6e-3
     assert rel_l2(dw, gw) < 1e-4
+
+
+# --- dsv32 block executables vs golden autograd (M-H1c gate) ----------------------
+
+
+def _dsv32_dims(**over):
+    from dataflow.tasks.layouts import Dsv32Dims, DTypePolicy, ParamDTypes
+    from dataflow.tasks.moe.spec import MoESpec
+
+    moe = MoESpec(
+        n_experts=8, top_k=2, d_ff_expert=32,
+        routing_mode="sigmoid_noaux_tc", aux_coef=1e-4,
+        n_shared_experts=1, d_ff_shared=32, shared_gate=False,
+        n_group=4, topk_group=2, routed_scaling=2.5, bias_update_speed=0.001,
+    )
+    kw = dict(
+        d_model=128, n_heads=4, q_lora_rank=64, kv_lora_rank=32,
+        qk_nope_dim=16, qk_rope_dim=8, v_head_dim=16,
+        d_ff=256, first_k_dense=1, vocab_size=512, tokens=128, seq_len=64,
+        index_n_heads=8, index_head_dim=32, index_topk=24,
+        dtypes=DTypePolicy(overrides=(
+            ("w_router_bias", ParamDTypes("fp32", "fp32", "fp32")),
+            ("w_idx_w", ParamDTypes("fp32", "fp32", "fp32")),
+        )),
+        moe=moe,
+    )
+    kw.update(over)
+    return Dsv32Dims(**kw)
+
+
+def _golden_dsv32_block(x_ref, leaves, dims, kind, sel_idx=None, route_ids=None):
+    from dataflow.tasks import ops
+    from dataflow.tasks.dsa_reference import (
+        dsa_index_scores_reference,
+        dsa_indexer_kl_reference,
+        dsa_mask_from_idx,
+        dsa_sparse_attention_reference,
+        dsa_topk_reference,
+    )
+    from dataflow.tasks.mla_reference import mla_qkv_reference
+    from dataflow.tasks.moe.reference import moe_mlp_reference
+
+    d = dims
+    t = x_ref.shape[0]
+    h, qk, v = d.n_heads, d.qk_head_dim, d.v_head_dim
+    h1 = ops.rmsnorm_reference(x_ref, leaves["attn_norm_w"])
+    q_lora, q_full, k_full, v_pad = mla_qkv_reference(h1, leaves, d)
+
+    scores = dsa_index_scores_reference(h1.detach(), q_lora.detach(), leaves, d)
+    if sel_idx is None:
+        sel_idx = dsa_topk_reference(scores.detach(), d.index_topk)
+    mask = dsa_mask_from_idx(sel_idx.long(), d, t)
+
+    qf = q_full.reshape(t, h * qk)
+    kf = k_full.reshape(t, h * qk)
+    vp = v_pad.reshape(t, h * qk)
+    attn_pad = dsa_sparse_attention_reference(qf, kf, vp, mask, d)
+    attn = attn_pad.view(t, h, qk)[..., :v].reshape(t, h * v)
+    h_mid = x_ref + attn @ leaves["wo"]
+
+    # KL target from the same attention math, DETACHED
+    with torch.no_grad():
+        p = torch.zeros(t, t, device=x_ref.device)
+        scale = qk ** -0.5
+        q3 = q_full.detach().float()
+        k3 = k_full.detach().float()
+        lens = ops.seq_lens_of(d.seq_spec, t)
+        lo = 0
+        for L in lens:
+            hi = lo + L
+            for hh in range(h):
+                lg = (q3[lo:hi, hh] @ k3[lo:hi, hh].T) * scale
+                lg = lg + mask[lo:hi, lo:hi]
+                p[lo:hi, lo:hi] += torch.softmax(lg, dim=-1)
+            lo = hi
+    kl = dsa_indexer_kl_reference(scores, mask, p)
+
+    h2 = ops.rmsnorm_reference(h_mid, leaves["ffn_norm_w"])
+    if kind == "dense":
+        s = ops.swiglu_fwd(h2 @ leaves["w1"], h2 @ leaves["w3"])
+        return h_mid + s @ leaves["w2"], kl
+    lens = d.seq_lens if d.seq_lens is not None else (
+        d.seq_len,) * (t // d.seq_len)
+    y, aux = moe_mlp_reference(h2, leaves, d.moe, h_mid,
+                               route_ids=route_ids, seq_lens=tuple(lens))
+    return y, aux + kl
+
+
+@pytest.mark.parametrize("kind", ["dense", "moe"])
+def test_dsv32_block_ladder2(kind):
+    from dataflow.tasks.dsv32_blocks import (
+        Dsv32DenseBlockBwd,
+        Dsv32DenseBlockFwd,
+        Dsv32DenseBlockRecompute,
+        Dsv32MoeBlockBwd,
+        Dsv32MoeBlockFwd,
+        Dsv32MoeBlockRecompute,
+    )
+    from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME
+    from dataflow.tasks.kernels import KernelCtx, resolve_kernels
+    from dataflow.tasks.layouts import grad_layout
+
+    dims = _dsv32_dims()
+    kernels = resolve_kernels()
+    kctx = KernelCtx()
+    if kind == "dense":
+        fwd = Dsv32DenseBlockFwd(dims, kernels)
+        rc = Dsv32DenseBlockRecompute(dims, kernels)
+        bwd = Dsv32DenseBlockBwd(dims, kernels)
+    else:
+        fwd = Dsv32MoeBlockFwd(dims, kernels)
+        rc = Dsv32MoeBlockRecompute(dims, kernels)
+        bwd = Dsv32MoeBlockBwd(dims, kernels)
+    wl, cl = fwd.wl, fwd.cl
+
+    gen = torch.Generator(device="cuda").manual_seed(41)
+    w = {}
+    for f in wl.fields:
+        n = int(torch.tensor(f.shape).prod())
+        dt = TORCH_DTYPE_BY_NAME[f.dtype]
+        if f.name.endswith("_norm_w") or f.name == "idx_k_ln_w":
+            w[f.name] = torch.ones(f.shape, device="cuda", dtype=dt)
+        elif f.name in ("w_router_bias", "idx_k_ln_b"):
+            w[f.name] = torch.zeros(f.shape, device="cuda", dtype=dt)
+        else:
+            w[f.name] = (torch.randn(n, generator=gen, device="cuda") * 0.06
+                         ).to(dt).view(f.shape)
+    x = (torch.randn(dims.tokens, dims.d_model, generator=gen, device="cuda") * 0.5).to(torch.bfloat16)
+    dy = (torch.randn(dims.tokens, dims.d_model, generator=gen, device="cuda") * 0.5).to(torch.bfloat16)
+
+    a = {f.name: torch.empty(f.shape, dtype=TORCH_DTYPE_BY_NAME[f.dtype], device="cuda")
+         for f in cl.fields}
+    y = torch.empty_like(x)
+    fwd._forward(kctx, x, w, y, a)
+
+    a2 = {f.name: torch.empty(f.shape, dtype=TORCH_DTYPE_BY_NAME[f.dtype], device="cuda")
+          for f in cl.fields}
+    rc._run_stages(kctx, x, w, a2, count=rc.recompute_stage_count())
+    torch.cuda.synchronize()
+    errors = {}
+    int_fields = ("route_ids", "route_order", "route_offsets", "dsa_idx")
+    for name in a:
+        if name in int_fields:
+            assert torch.equal(a2[name], a[name]), f"recompute int field {name}"
+        else:
+            errors[f"recompute:{name}"] = rel_l2(a2[name], a[name])
+
+    gl = grad_layout(wl, dims.dtypes)
+    dwv = {f.name: torch.zeros(f.shape, device="cuda", dtype=TORCH_DTYPE_BY_NAME[f.dtype])
+           for f in gl.fields}
+    dx = torch.empty_like(x)
+    bwd._backward(kctx, dy, a, x, w, dx, dwv, accum=False)
+
+    leaves = {n: (t_.detach().clone().requires_grad_()
+                  if n != "w_router_bias" else t_)
+              for n, t_ in w.items()}
+    x_ref = x.clone().requires_grad_()
+    y_ref, aux_ref = _golden_dsv32_block(
+        x_ref, leaves, dims, kind,
+        sel_idx=a["dsa_idx"], route_ids=a.get("route_ids"),
+    )
+    y_ref.backward(dy, retain_graph=True)
+    aux_ref.backward()
+
+    errors["fwd:y"] = rel_l2(y, y_ref)
+    errors["bwd:dx"] = rel_l2(dx, x_ref.grad)
+    for name in dwv:
+        if name == "w_router_bias":
+            cnt = torch.bincount(a["route_ids"].reshape(-1).long(),
+                                 minlength=dims.moe.n_experts).float()
+            assert torch.equal(dwv[name].float(), cnt)
+            continue
+        errors[f"bwd:d{name}"] = rel_l2(dwv[name], leaves[name].grad)
+
+    bad = {k: round(v, 4) for k, v in errors.items() if v > 4e-2}
+    assert not bad, bad
