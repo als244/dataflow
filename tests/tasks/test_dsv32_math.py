@@ -277,7 +277,7 @@ def test_dsv32_ga2_matches_golden():
 # --- engine gates -------------------------------------------------------------------
 
 
-def _run(engine_kwargs=None, program=None, seed=7):
+def _run(engine_kwargs=None, program=None, seed=7, resolver_wrapper=None):
     from dataflow.runtime import Engine
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.runtime.device.fake import FakeBackend
@@ -294,8 +294,11 @@ def _run(engine_kwargs=None, program=None, seed=7):
     backend = CudaBackend()
     values = fam.initial_values(prog, cfg, backend, seed=seed)
     dry = Engine(FakeBackend()).execute(prog, initial_buffers=values)
+    resolver = fam.build_resolver(fam.dims_of(cfg))
+    if resolver_wrapper is not None:
+        resolver = resolver_wrapper(resolver, backend)
     result = Engine(backend, **(engine_kwargs or {})).execute(
-        prog, resolver=fam.build_resolver(fam.dims_of(cfg)),
+        prog, resolver=resolver,
         initial_buffers=values, pool_prewarm=dry.pool_demand,
     )
     out = {}
@@ -527,3 +530,33 @@ def test_dsv32_dense_warmup_model_step():
     dry.close()
     for buf in values.values():
         backend.free(buf)
+
+
+def test_dsv32_poison_on_free_changes_nothing():
+    base = _run()
+    poisoned = _run(engine_kwargs={"poison_on_free": True})
+    _assert_same(poisoned, base)
+    assert poisoned["loss"] == poisoned["loss"]  # not NaN
+
+
+def test_dsv32_interleaving_stress_changes_nothing():
+    from dataflow.runtime.device.cuda_spin import SpinKernel
+
+    def wrapper(resolver, backend):
+        kernel = SpinKernel()
+        rng = torch.Generator().manual_seed(123)
+
+        class Jitter:
+            def __init__(self, inner):
+                self.inner = inner
+
+            def launch(self, ctx):
+                delay = float(torch.randint(20, 400, (1,), generator=rng)[0])
+                kernel.launch_us(ctx.stream, delay)
+                self.inner.launch(ctx)
+
+        return lambda task: Jitter(resolver(task))
+
+    base = _run()
+    jittered = _run(resolver_wrapper=wrapper)
+    _assert_same(jittered, base)
