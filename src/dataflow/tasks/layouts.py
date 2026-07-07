@@ -277,7 +277,8 @@ def opt_state_layout(weight: PackedLayout, policy: DTypePolicy,
     specs: list[tuple[str, tuple[int, ...], str]] = []
     for f in weight.fields:
         o = policy.for_field(key(f.name), layer).opt
-        for slot in OPTIMIZERS[op.for_field(key(f.name), layer)].slots:
+        for slot in OPTIMIZERS[op.for_field(key(f.name), layer,
+                                            f.shape)].slots:
             specs.append((f"{slot}_{f.name}", f.shape, o))
     return PackedLayout.build(specs)
 

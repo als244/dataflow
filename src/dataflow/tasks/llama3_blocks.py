@@ -55,6 +55,7 @@ class AdamWHyper:
     eps: float = 1e-8
     weight_decay: float = 0.0
     momentum: float = 0.95      # sgdm/muon (tasks/optim.py); unused by adamw
+    muon_lr: float | None = None  # muon fields use this when set (else lr)
 
 
 @dataclass(frozen=True)
@@ -628,7 +629,7 @@ class AdamWStep(_Base):  # name kept for resolver back-compat; see OptimizerStep
                         gl_.view(g_buf, f.name).view(-1),
                     )
                     continue
-                opt = OPTIMIZERS[op.for_field(key(f.name), layer)]
+                opt = OPTIMIZERS[op.for_field(key(f.name), layer, f.shape)]
                 states = {slot: ol_.view(o_buf, f"{slot}_{f.name}").view(-1)
                           for slot in opt.slots}
                 opt.step(kctx, self.kernels, hp, step,

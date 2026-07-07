@@ -242,14 +242,29 @@ through `tasks/optim.py`:
   the default, byte-identical to the historical layout), `sgdm`/`muon`
   ("m",), `sgd` (stateless). `register_optimizer()` adds new ones —
   from plugins too.
-- assignment is an **`OptPolicy`** on the Shaped config
-  (`opt_policy="sgd"` or fnmatch overrides per FIELD — the finest
-  grain: one packed-layout entry):
+- assignment is per FIELD (the finest grain: one packed-layout entry).
+  Three forms, ergonomic to precise:
 
   ```python
-  cfg = replace(Cfg.tiny(), opt_policy=OptPolicy(
+  cfg = replace(Cfg.tiny(), opt_policy="muon")     # THE RECIPE (below)
+  cfg = replace(Cfg.tiny(), opt_policy=OptPolicy(  # explicit patterns
       default="adamw", overrides=(("w?", "muon"), ("embed.*", "sgd"))))
+  cfg = replace(Cfg.tiny(), opt_policy=MuonRecipePolicy(
+      overrides=(("w_router", "muon"),)))          # recipe + exceptions
   ```
+
+  **`opt_policy="muon"` means the hybrid recipe** (`MuonRecipePolicy`,
+  flextrain's classification): muon for structurally-matrix weights —
+  rank-2 projections and rank-3 stacked expert weights (Newton-Schulz
+  per expert slice, batched) — and adamw for embeddings, the LM head,
+  norms/gains, routers, indexer fields, and every 1D parameter. That
+  split is the only configuration muon is meant to run in, so the
+  string gives it to you; raw muon-on-everything requires the explicit
+  `OptPolicy(default="muon")`. Muon is nesterov-momentum + quintic NS
+  (flextrain-aligned coefficients; singular values land in a band near
+  ~0.9 by design), and `AdamWHyper.muon_lr` sets its learning rate
+  separately from the adamw fields' `lr` (the two rules want very
+  different values).
 
   O-object sizes follow the policy automatically (lowering asks the
   same layout fn the executable views through), so plans, transfers,
@@ -257,10 +272,7 @@ through `tasks/optim.py`:
 - `update_specials` (noaux router bias, frozen fields) remain the
   HIGHEST-priority per-field override on top of the policy.
 - All step math is fp32 with storage-dtype round-trips (the AdamW
-  kernel's convention); muon applies quintic Newton-Schulz to 2D
-  fields (singular values land in a band near ~0.9 by design) and
-  plain momentum to 1D fields — route those to adamw via the policy
-  if you want the usual deployment split.
+  kernel's convention).
 - Gates: `tests/tasks/test_optim.py` — per-step math vs inline
   formulas, NS properties, slot layouts, and a mixed-policy model
   step through the REAL engine vs a hand replica. The all-adamw

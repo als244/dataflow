@@ -69,15 +69,39 @@ def test_muon_orthogonalizes_2d_and_falls_back_1d():
     assert 0.5 < sv.min() and sv.max() < 1.3, (sv.min(), sv.max())
     # and it preserves direction: positive alignment with the input
     assert (o * m).sum() > 0
-    # 1D field: muon == sgdm (same momentum step, no NS)
+    # 1D field: muon = NESTEROV momentum step (no NS): from zero state
+    # m = g, eff = g + mu*m = (1+mu)*g
     w1, g1 = _mk(seed=3)
     m1 = torch.zeros_like(w1)
-    w2, m2 = w1.clone(), m1.clone()
+    w0 = w1.clone()
     OPTIMIZERS["muon"].step(None, None, _Hyper, 1, w1, g1,
                             {"m": m1}, (w1.numel(),))
-    OPTIMIZERS["sgdm"].step(None, None, _Hyper, 1, w2, g1,
-                            {"m": m2}, (w2.numel(),))
-    assert torch.equal(w1, w2) and torch.equal(m1, m2)
+    eff = (1 + _Hyper.momentum) * g1.float()
+    expect = (w0.float() * (1 - _Hyper.lr * _Hyper.weight_decay)
+              - _Hyper.lr * eff).to(w1.dtype)
+    assert torch.equal(w1, expect)
+
+
+def test_muon_recipe_classification_and_3d():
+    from dataflow.tasks.optim import _ns_orthogonalize_batched, resolve_opt_policy
+
+    r = resolve_opt_policy("muon")
+    assert r.for_field("wq", None, (256, 256)) == "muon"
+    assert r.for_field("w13_experts", None, (8, 128, 256)) == "muon"
+    for key, shape in (("attn_norm_w", (128,)), ("embed.w", (512, 128)),
+                       ("head.w", (512, 128)), ("w_router", (128, 8)),
+                       ("w_idx_q", (64, 256)), ("dt_bias", (32,))):
+        assert r.for_field(key, None, shape) == "adamw", key
+    # overrides beat the rules
+    r2 = resolve_opt_policy("muon").__class__(overrides=(("w_router", "muon"),))
+    assert r2.for_field("w_router", None, (128, 8)) == "muon"
+    # batched NS: every expert slice lands in the singular-value band
+    g = torch.Generator(device="cuda").manual_seed(5)
+    stack = torch.randn(4, 48, 96, generator=g, device="cuda")
+    o = _ns_orthogonalize_batched(stack).float()
+    for b in range(4):
+        sv = torch.linalg.svdvals(o[b])
+        assert 0.5 < sv.min() and sv.max() < 1.3
 
 
 # ------------------------------------------------------ policy + layout
@@ -173,13 +197,14 @@ def test_mixed_policy_model_step_vs_hand_replica():
             out = w32 * (1 - hp.lr * hp.weight_decay) - hp.lr * g32
         elif kind == "sgdm":
             out = w32 * (1 - hp.lr * hp.weight_decay) - hp.lr * g32
-        else:  # muon, step 1: m = g
+        else:  # muon, step 1 from zero state: m = g, eff = (1+mu)*g
             out = w32 * (1 - hp.lr * hp.weight_decay)
+            eff = (1 + hp.momentum) * g32
             if w.dim() == 2 and min(w.shape) > 1:
                 scale = max(1.0, w.shape[0] / w.shape[1]) ** 0.5
-                out = out - hp.lr * scale * _ns_orthogonalize(g32).float()
+                out = out - hp.lr * scale * _ns_orthogonalize(eff).float()
             else:
-                out = out - hp.lr * g32
+                out = out - hp.lr * eff
         return out.to(w.dtype)
 
     dry = Engine(FakeBackend()).execute(planned.program,
@@ -207,6 +232,94 @@ def test_mixed_policy_model_step_vs_hand_replica():
                               param.grad).reshape(f.shape)
             got = torch_view(buf, f.shape, TORCH_DTYPE_BY_NAME[f.dtype],
                              offset_bytes=f.offset_bytes)
+            r = rel_l2(got, expect)
+            if r > worst[0]:
+                worst = (r, f"W_{i}.{name}")
+    assert worst[0] <= 3e-2, worst
+
+
+def test_muon_recipe_string_model_step_vs_hand_replica():
+    """opt_policy="muon" (THE RECIPE) on llama3 tiny through the real
+    engine: 2D projections take nesterov-NS muon, embed/head/norms take
+    adamw — verified against golden autograd grads + inline reference
+    steps for BOTH rules."""
+    from dataflow.runtime import Engine
+    from dataflow.runtime.device.cuda import CudaBackend
+    from dataflow.runtime.device.fake import FakeBackend
+    from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME, torch_view
+    from dataflow.tasks.llama3_blocks import AdamWHyper
+    from dataflow.training.families import resolve_family
+    from dataflow.training.llama3 import ShapedLlamaConfig
+    from dataflow.training.planning import plan_program
+    from dataflow.training.testing.gradcheck import rel_l2
+    from dataflow.tasks.optim import _ns_orthogonalize, resolve_opt_policy
+
+    cfg = replace(ShapedLlamaConfig.tiny(), opt_policy="muon")
+    fam = resolve_family(cfg)
+    dims = fam.dims_of(cfg)
+    assert resolve_opt_policy(dims.opt_policy).for_field(
+        "wq", None, (2, 2)) == "muon"
+    planned = plan_program(fam.lower(cfg),
+                           fast_memory_capacity=64 * 1024 * 1024)
+    backend = CudaBackend()
+    values = fam.initial_values(planned.program, cfg, backend, seed=9)
+
+    def pinned(name):
+        buf = values[name]
+        return torch_view(buf, (buf.size_bytes,), torch.uint8).clone()
+
+    leaves = [pinned("W_embed"),
+              [pinned(f"W_{i}") for i in range(cfg.n_layers)],
+              pinned("W_head")]
+    golden = fam.golden().from_packed_bytes(dims, cfg.n_layers, *leaves)
+    tokens = torch_view(values["tokens_0_0"], (dims.tokens,),
+                        torch.int32).long().cuda()
+    targets = torch_view(values["targets_0_0"], (dims.tokens,),
+                         torch.int32).long().cuda()
+    for p in golden.parameters():
+        p.grad = None
+    golden.loss(tokens, targets).backward()
+
+    hp = AdamWHyper()
+    policy = resolve_opt_policy("muon")
+
+    def ref_step(name, w, g):
+        w32, g32 = w.detach().float(), g.detach().float()
+        if policy.for_field(name, None, tuple(w.shape)) == "adamw":
+            m = g32 * (1 - hp.beta1)
+            v = g32 * g32 * (1 - hp.beta2)
+            out = (w32 * (1 - hp.lr * hp.weight_decay)
+                   - hp.lr * (m / (1 - hp.beta1))
+                   / ((v / (1 - hp.beta2)).sqrt() + hp.eps))
+        else:
+            eff = (1 + hp.momentum) * g32
+            out = w32 * (1 - hp.lr * hp.weight_decay)
+            scale = max(1.0, w.shape[0] / w.shape[1]) ** 0.5
+            out = out - hp.lr * scale * _ns_orthogonalize(eff).float()
+        return out.to(w.dtype)
+
+    dry = Engine(FakeBackend()).execute(planned.program,
+                                        initial_buffers=values)
+    result = Engine(backend).execute(
+        planned.program, resolver=fam.build_resolver(dims),
+        initial_buffers=values, pool_prewarm=dry.pool_demand)
+
+    worst = (0.0, "")
+    for i in range(cfg.n_layers):
+        layout, _ = golden.final_leaves(f"W_{i}")
+        rec = result.objects.get(f"W_{i}")
+        buf = (rec.backing or rec.fast).buffer
+        w0 = leaves[1][i]
+        for f, (name, param) in zip(layout.fields,
+                                    golden.w_blocks[i].items()):
+            assert f.name == name
+            dt = TORCH_DTYPE_BY_NAME[f.dtype]
+            nbytes = param.numel() * dt.itemsize
+            base = (w0[f.offset_bytes:f.offset_bytes + nbytes]
+                    .view(dt).view(*f.shape).cuda())
+            expect = ref_step(name, base.reshape(param.shape),
+                              param.grad).reshape(f.shape)
+            got = torch_view(buf, f.shape, dt, offset_bytes=f.offset_bytes)
             r = rel_l2(got, expect)
             if r > worst[0]:
                 worst = (r, f"W_{i}.{name}")
