@@ -53,6 +53,30 @@ isolated autograd`). CI runs all five: `tests/examples/test_rl_training.py`.
 | `dsv32` | DSA index selection + routing | per-layer selections; `train_indexer=False` — selection is data, not a trainable path |
 | `glm52` | shared selections (IndexShare) + routing | leader M consumed by follower layers; the richest metadata case |
 
+## What reaches the engine (the whole handoff)
+
+`harness.run()` ends in exactly one call — everything before it is
+preparation you can inspect:
+
+```python
+result = Engine(backend).execute(
+    planned.program,      # plan.json: the PressureFit-ANNOTATED program
+                          # (program.json + offload/prefetch directives)
+    resolver=resolver,    # task -> executable: the family resolver for
+                          # recompute/bwd/optimizer tasks + the one
+                          # custom RLHeadLoss for compute key "rl_head_loss"
+    initial_buffers=values,   # pinned host buffers, one per initial
+                          # object: weights + zeroed optimizer state,
+                          # the per-layer checkpoints (y_*), the M
+                          # payloads, tokens/actions/logprobs/advantages
+    pool_prewarm=dry.pool_demand,  # from a FakeBackend dry run
+)
+```
+
+Losses and final weights are read back from `result.objects[...]`.
+Nothing else is passed; there is no hidden model object — the program,
+the resolver, and the buffers ARE the model.
+
 ## How it works (shared machinery)
 
 - `builder.py` — family-GENERIC surgery on the standard lowering:
