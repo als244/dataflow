@@ -239,3 +239,126 @@ def test_index_scores_ragged_packing_matches_per_sequence():
     la, lb = ~torch.isinf(sa), ~torch.isinf(sb)
     assert rel_l2(s_packed[:64, :64][la], sa[la]) < 1e-6
     assert rel_l2(s_packed[64:, 64:][lb], sb[lb]) < 1e-6
+
+
+# --- eager kernel ops vs references (M-H1b) ----------------------------------------
+
+
+def _mla_pad_tensors(d, seed):
+    g = torch.Generator(device="cuda").manual_seed(seed)
+    t, h, qk = d.tokens, d.n_heads, d.qk_head_dim
+    qf = (torch.randn(t, h * qk, generator=g, device="cuda") * 0.3).to(torch.bfloat16)
+    kf = (torch.randn(t, h * qk, generator=g, device="cuda") * 0.3).to(torch.bfloat16)
+    vp3 = torch.zeros(t, h, qk, device="cuda", dtype=torch.bfloat16)
+    vp3[..., :d.v_head_dim] = (
+        torch.randn(t, h, d.v_head_dim, generator=g, device="cuda") * 0.3
+    ).to(torch.bfloat16)
+    return qf, kf, vp3.reshape(t, h * qk).contiguous()
+
+
+def test_dsa_kernels_vs_references_and_autograd():
+    from dataflow.tasks import ops
+    from dataflow.tasks.dsa_reference import (
+        _causal_mask,
+        dsa_mask_from_idx,
+        dsa_sparse_attention_reference,
+        dsa_topk_reference,
+    )
+    from dataflow.tasks.kernels import KernelCtx, resolve_kernels
+
+    d = _Dims()
+    K = resolve_kernels()
+    kctx = KernelCtx()
+    t, h, qk = d.tokens, d.n_heads, d.qk_head_dim
+    g = torch.Generator(device="cuda").manual_seed(11)
+    scores = torch.randn(t, t, generator=g, device="cuda") + _causal_mask(d, t, "cuda")
+    ref_idx = dsa_topk_reference(scores, d.index_topk)
+    idx = torch.empty(t, d.index_topk, dtype=torch.int32, device="cuda")
+    K.dsa_topk(kctx, scores, idx)
+    assert torch.equal(idx.long(), ref_idx)
+
+    mask = dsa_mask_from_idx(ref_idx, d, t)
+    bounds = tuple(ops.seq_bounds_of(ops.seq_lens_of(d.seq_spec, t), t))
+    qf, kf, vp = _mla_pad_tensors(d, seed=12)
+
+    ref_out = dsa_sparse_attention_reference(qf, kf, vp, mask, d)
+    out = torch.empty_like(qf)
+    lse = torch.empty(h, t, dtype=torch.float32, device="cuda")
+    K.dsa_sparse_attn_fwd(kctx, qf, kf, vp, idx, out, lse,
+                          n_heads=h, head_dim=qk, seq_bounds=bounds)
+    assert rel_l2(out, ref_out) < 5e-3
+
+    # bwd vs autograd — dy pads ZERO (the block always constructs them so)
+    qf2 = qf.detach().clone().requires_grad_()
+    kf2 = kf.detach().clone().requires_grad_()
+    vp2 = vp.detach().clone().requires_grad_()
+    ref2 = dsa_sparse_attention_reference(qf2, kf2, vp2, mask, d)
+    dy3 = torch.zeros(t, h, qk, device="cuda", dtype=torch.bfloat16)
+    dy3[..., :d.v_head_dim] = (
+        torch.randn(t, h, d.v_head_dim, generator=g, device="cuda") * 0.5
+    ).to(torch.bfloat16)
+    dy = dy3.reshape(t, h * qk)
+    gq, gk, gv = torch.autograd.grad(ref2, (qf2, kf2, vp2), dy)
+    dq = torch.empty_like(qf)
+    dk = torch.empty_like(kf)
+    dv = torch.empty_like(vp)
+    K.dsa_sparse_attn_bwd(kctx, dy, qf, kf, vp, idx, lse, dq, dk, dv,
+                          n_heads=h, head_dim=qk, seq_bounds=bounds)
+    assert rel_l2(dq, gq) < 6e-3
+    assert rel_l2(dk, gk) < 6e-3
+    assert rel_l2(dv, gv) < 6e-3
+    dv3 = dv.view(t, h, qk)
+    assert torch.equal(dv3[..., d.v_head_dim:],
+                       torch.zeros_like(dv3[..., d.v_head_dim:]))
+
+    # determinism twice
+    out2 = torch.empty_like(qf)
+    lse2 = torch.empty_like(lse)
+    K.dsa_sparse_attn_fwd(kctx, qf, kf, vp, idx, out2, lse2,
+                          n_heads=h, head_dim=qk, seq_bounds=bounds)
+    torch.cuda.synchronize()
+    assert torch.equal(out, out2) and torch.equal(lse, lse2)
+
+
+def test_dsa_index_bwd_vs_autograd():
+    from dataflow.tasks import ops
+    from dataflow.tasks.kernels import KernelCtx, resolve_kernels
+
+    d = _Dims(tokens=96, seq_len=48)
+    K = resolve_kernels()
+    kctx = KernelCtx()
+    t, hi, di = d.tokens, d.index_n_heads, d.index_head_dim
+    g = torch.Generator(device="cuda").manual_seed(13)
+    q_idx = (torch.randn(t, hi * di, generator=g, device="cuda") * 0.3
+             ).to(torch.bfloat16).requires_grad_()
+    k_idx = (torch.randn(t, di, generator=g, device="cuda") * 0.3
+             ).to(torch.bfloat16).requires_grad_()
+    wts = (torch.randn(t, hi, generator=g, device="cuda") * 0.2
+           ).float().requires_grad_()
+    bounds = tuple(ops.seq_bounds_of(ops.seq_lens_of(d.seq_spec, t), t))
+
+    # autograd of the score formula with an injected upstream d_scores
+    q3 = q_idx.view(t, hi, di).float()
+    total = None
+    d_scores = torch.zeros(t, t, device="cuda")
+    for lo, hi_ in bounds:
+        r = torch.einsum("rhd,sd->rhs", q3[lo:hi_], k_idx[lo:hi_].float())
+        blk = torch.einsum("rh,rhs->rs", wts[lo:hi_], r.clamp_min(0.0))
+        rows = torch.arange(lo, hi_, device="cuda").unsqueeze(1)
+        cols = torch.arange(lo, hi_, device="cuda").unsqueeze(0)
+        dsc = (torch.randn(hi_ - lo, hi_ - lo, generator=g, device="cuda")
+               .masked_fill(cols > rows, 0.0))
+        d_scores[lo:hi_, lo:hi_] = dsc
+        term = (blk * dsc).sum()
+        total = term if total is None else total + term
+    gq, gk, gw = torch.autograd.grad(total, (q_idx, k_idx, wts))
+
+    dq = torch.empty_like(q_idx.detach())
+    dk = torch.empty_like(k_idx.detach())
+    dw = torch.empty_like(wts.detach())
+    K.dsa_index_bwd(kctx, d_scores, q_idx.detach(), k_idx.detach(),
+                    wts.detach(), dq, dk, dw,
+                    n_heads=hi, head_dim=di, seq_bounds=bounds)
+    assert rel_l2(dq, gq) < 6e-3
+    assert rel_l2(dk, gk) < 6e-3
+    assert rel_l2(dw, gw) < 1e-4

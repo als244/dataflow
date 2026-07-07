@@ -128,7 +128,7 @@ def dsa_sparse_attention_reference(
         q4 = q_full[lo:hi].view(1, L, h, qk).transpose(1, 2)
         k4 = k_full[lo:hi].view(1, L, h, qk).transpose(1, 2)
         v4 = v_pad[lo:hi].view(1, L, h, qk).transpose(1, 2)
-        m = add_mask[lo:hi, lo:hi].view(1, 1, L, L)
+        m = add_mask[lo:hi, lo:hi].view(1, 1, L, L).to(q4.dtype)
         o = F.scaled_dot_product_attention(q4, k4, v4, attn_mask=m)
         outs.append(o.transpose(1, 2).reshape(L, h * qk))
         lo = hi

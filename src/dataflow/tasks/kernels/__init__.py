@@ -38,6 +38,7 @@ from . import (  # noqa: F401,E402
     adamw,
     causal_conv,
     cross_entropy,
+    dsa,
     gated_rmsnorm,
     moe_dispatch,
     moe_grouped_gemm,
