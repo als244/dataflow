@@ -30,7 +30,7 @@ Shape sources (--shapes):
 Usage:
     python tools/bench_frontier.py \
         --presets dsv3-mini,dsv32-mini,glm52-mini \
-        --seq-tag s4k --device-gib 12,16,20,24,28 \
+        --seq-len 4096 --device-gib 12,16,20,24,28 \
         --placements static,vmm --steps 3 \
         --shapes 12:bs4ga4,16:bs8ga2,20:bs8ga2,24:bs16ga1,28:bs16ga1 \
         --run --pace-seconds 40 \
@@ -118,12 +118,13 @@ def shapes_cached(cells: dict, presets: list[str], devs: list[int]) -> dict:
     return out
 
 
-def shapes_oracle(presets, devs, seq_tag, seqs_per_step, out_dir=None):
+def shapes_oracle(presets, devs, seq_tag, seqs_per_step, out_dir=None,
+                  seq_len=None):
     """Fresh best_config sweep per preset. The oracle profiles every
     (bs, ga) divisor combo of seqs_per_step itself (profile cache
     shared with bench_train) and sims each envelope; we take its
     per-envelope winner. Oracle JSONs are stashed under out_dir."""
-    seq_len = int(seq_tag[1:-1]) * 1024
+    seq_len = seq_len or int(seq_tag[1:-1]) * 1024
     out: dict[tuple[str, int], str] = {}
     for preset in presets:
         family = preset.split("-", 1)[0]
@@ -266,7 +267,9 @@ def main() -> None:
                     help="comma list of family PRESETS (bench_train config "
                          "prefixes), e.g. dsv3-mini,glm52-mini — the family "
                          "is the part before the first dash (dsv3, glm52)")
-    ap.add_argument("--seq-tag", default="s4k")
+    ap.add_argument("--seq-len", type=int, default=4096,
+                    help="sequence length; config names use the derived "
+                         "tag (4096 -> s4k, 1024 -> s1k)")
     ap.add_argument("--device-gib", required=True, help="comma list, e.g. 12,16,20")
     ap.add_argument("--placements", default="static",
                     help="comma list; static is the default mode")
@@ -282,9 +285,10 @@ def main() -> None:
                     help="print the bench_train commands without running")
     ap.add_argument("--pace-seconds", type=int, default=40,
                     help="sleep between invocations (oomd pressure decay)")
-    ap.add_argument("--no-legacy", action="store_true",
-                    help="scan ONLY {out-dir}/raw for rows (fresh-sweep "
-                         "mode: never reuse the shared artifacts/bench pool)")
+    ap.add_argument("--reuse-shared", action="store_true",
+                    help="ALSO scan the shared artifacts/bench pool for "
+                         "existing rows (resume/compare mode). Default: a "
+                         "sweep with --out-dir is ISOLATED to its own raw/")
     ap.add_argument("--allow-illegal", action="store_true",
                     help="render envelope-busting rows (flagged) instead of dropping")
     ap.add_argument("--out-dir", default=None,
@@ -300,6 +304,9 @@ def main() -> None:
                            for m in arg.split(",")])
 
     presets = args.presets.split(",")
+    if args.seq_len % 1024:
+        ap.error("--seq-len must be a multiple of 1024")
+    seq_tag = f"s{args.seq_len // 1024}k"
     devs = [int(x) for x in args.device_gib.split(",")]
     modes = args.placements.split(",")
     labels = {"dsv3-mini": "dsv3 (dense MLA)", "dsv32-mini": "dsv32 (DSA)",
@@ -309,8 +316,9 @@ def main() -> None:
     if args.shapes == "cached":
         shapes = shapes_cached(cells, presets, devs)
     elif args.shapes == "oracle":
-        shapes = shapes_oracle(presets, devs, args.seq_tag,
-                               args.seqs_per_step, out_dir=args.out_dir)
+        shapes = shapes_oracle(presets, devs, seq_tag,
+                               args.seqs_per_step, out_dir=args.out_dir,
+                               seq_len=args.seq_len)
     else:
         per_dev = dict(kv.split(":") for kv in args.shapes.split(","))
         shapes = {(f, int(d)): s for f in presets for d, s in per_dev.items()}
@@ -320,16 +328,16 @@ def main() -> None:
     if out_dir is not None:
         raw_dir = out_dir / "raw"
         raw_dir.mkdir(parents=True, exist_ok=True)
-        if args.no_legacy:
-            SUMMARY_DIRS.clear()
+        if not args.reuse_shared:
+            SUMMARY_DIRS.clear()      # isolated: this sweep's rows only
         if raw_dir not in SUMMARY_DIRS:
             SUMMARY_DIRS.insert(0, raw_dir)
         cells = load_cells(presets, args.allow_illegal)
-    elif args.no_legacy:
-        sys.exit("--no-legacy requires --out-dir")
+    elif args.reuse_shared:
+        pass                          # no out-dir: pool scan is the default
 
     if (args.run or args.rerun or args.dry_run) and not args.render_only:
-        run_cells(presets, devs, modes, shapes, args.seq_tag, args.steps,
+        run_cells(presets, devs, modes, shapes, seq_tag, args.steps,
                   args.pace_seconds, args.rerun, cells, args.dry_run,
                   raw_dir=raw_dir)
         if not args.dry_run:

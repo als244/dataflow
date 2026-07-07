@@ -21,9 +21,9 @@ One command, reproducible, self-contained:
 
 ```bash
 python tools/bench_frontier.py \
-    --presets olmoe-7b --seq-tag s1k --seqs-per-step 64 \
+    --presets olmoe-7b --seq-len 1024 --seqs-per-step 64 \
     --device-gib 12,16,20,24,28 \
-    --shapes oracle --run --rerun --no-legacy \
+    --shapes oracle --run --rerun \
     --steps 3 --out-dir results/bench/<sweep-name>
 ```
 
@@ -31,12 +31,36 @@ python tools/bench_frontier.py \
   shape) and pins its per-envelope winners. Alternatives: `cached`
   (best legal shape already on disk) or an explicit map
   (`12:bs4ga4,16:bs8ga2,...`).
-- `--rerun --no-legacy` is FRESH-CAMPAIGN mode: re-execute every cell
-  and never render rows from outside this sweep's `raw/`. Without
-  them, existing rows are reused (resume mode).
+- A sweep with `--out-dir` is ISOLATED to its own `raw/` by default —
+  it neither reuses nor renders rows from anywhere else.
+  `--reuse-shared` opts into scanning the shared `artifacts/bench`
+  pool (resume/compare across sweeps); `--rerun` re-executes cells
+  that already exist.
 - Placement defaults to `static`; pass `--placements static,vmm` for a
   mode comparison (shapes are held fixed across modes so the pair
   isolates placement).
+
+### bench_frontier flag reference
+
+`--help` is authoritative; this table is kept in sync:
+
+| flag | meaning |
+|---|---|
+| `--presets` | comma list of family presets (bench_train config prefixes), e.g. `dsv32-mini,glm52-mini` |
+| `--seq-len` | sequence length (multiple of 1024); config names use the derived tag (4096 -> `s4k`) |
+| `--seqs-per-step` | sequences per optimizer step (tokens/step = this x seq-len); used by the oracle |
+| `--device-gib` | comma list of device-memory envelopes to sweep |
+| `--placements` | comma list of placement modes (default `static`) |
+| `--shapes` | `oracle` (fresh best_config sweep) / `cached` (best legal on disk) / explicit `12:bs4ga4,...` map |
+| `--steps` | training steps per cell (default 3; step 1 is warm-up, the rest steady-state) |
+| `--run` | execute missing cells (paced bench_train subprocesses) |
+| `--rerun` | re-execute cells even if rows already exist |
+| `--reuse-shared` | also scan the shared `artifacts/bench` pool (default: isolated to `{out-dir}/raw`) |
+| `--dry-run` | print the bench_train commands without running |
+| `--pace-seconds` | sleep between subprocess launches (memory-pressure decay; default 40) |
+| `--allow-illegal` | render envelope-busting rows, flagged, instead of dropping them |
+| `--out-dir` | sweep directory: `TABLES.md` + `cells/` + `raw/` (omit for stdout tables) |
+| `--plugin` | external family plugin module(s); installed entry points load automatically |
 
 Output layout under `--out-dir`:
 

@@ -76,7 +76,7 @@ sizes/lifetimes, and per-task costs — no model knowledge — so it
 applies unchanged to hand-built programs
 ([docs/extending_programs.md](docs/extending_programs.md)).
 
-Task costs come from a profiling pass (each unique task signature is
+Task costs come from a either a roofline estimate or a profiling pass (each unique task signature is
 measured once and cached), and the simulator's makespan prediction for
 the chosen plan is reported next to every real measurement — the
 sim-vs-real gap is tracked as a first-class fidelity metric.
