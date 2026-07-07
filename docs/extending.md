@@ -225,7 +225,35 @@ Gates, in order:
    (`training/profiling.py`) — stale cached task costs silently skew both
    sim and the planner's recompute choices.
 
-## 6. New model family checklist
+## 6. The Family contract, registration, and validation
+
+A family IS its `Family` record (`training/families.py`) — five typed
+callables plus the config type, each field a `typing.Protocol` with the
+exact signature documented in its docstring:
+
+| field | contract (see the Protocol docstring for the full text) |
+|---|---|
+| `config_type` | frozen dataclass with preset classmethods (`tiny()` at minimum; `mini`/real-scale for benching) |
+| `dims_of: DimsOfFn` | cfg -> Dims; incompatible knob combinations raise HERE, at build time |
+| `lower: LowerFn` | cfg -> Program; MUST keep the task/object naming shape `<prefix>_{step}_{round}_{layer}` / `A_ dW_ W_ O_ M_ dM_`; accepts `recompute_levels=` for planner re-lowering |
+| `initial_values: InitialValuesFn` | (program, cfg, backend, seed) -> pinned host tensors; generation ORDER is part of golden comparability |
+| `build_resolver: BuildResolverFn` | dims -> callable `task -> executable` (with `.launch(ctx)`); must resolve planner-inserted recompute tasks (key by compute key, never task id) |
+| `golden: GoldenFn` | zero-arg -> golden CLASS with `from_packed_bytes` + `train_step` |
+
+Builtin families register in the `_FAMILIES` table; external families
+call `register_family()` from a plugin module discovered via a
+`dataflow.families` entry point or the tools' `--plugin` flag
+(extending_external.md — same contract, different registration).
+
+**`validate_family("name")`** structurally checks the whole surface in
+seconds, no GPU math: presets exist, lowering runs and keeps the naming
+shape, the resolver covers every emitted task, the golden exposes the
+harness members. `tools/verify_family.py` runs it as level 0 before the
+test module; run it directly while wiring a new family — it catches
+plumbing mistakes (missing resolver keys, misnamed tasks) long before a
+ladder would.
+
+## 7. New model family checklist
 
 (Exercised end-to-end by the qwen3 family — `training/families.py` is the
 registry an addition plugs into.

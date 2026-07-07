@@ -115,8 +115,6 @@ def divisor_combos(seqs: int, cap: int | None) -> list[tuple[int, int]]:
 def main() -> None:
     from dataflow.training.families import load_plugins
 
-    load_plugins()
-
     ap = argparse.ArgumentParser(
         description="simulate tok/s for every bs/ga combo per device budget")
     ap.add_argument("--family", required=True,
@@ -149,7 +147,12 @@ def main() -> None:
                          "conservative raw sim")
     ap.add_argument("--json", type=str, default=None,
                     help="write results as JSON (for automated selection)")
+    ap.add_argument("--plugin", action="append", default=None,
+                   help="external family plugin module(s); installed "
+                        "dataflow.families entry points load automatically")
     args = ap.parse_args()
+    load_plugins(explicit=[m for arg in (args.plugin or [])
+                           for m in arg.split(",")])
 
     import torch  # noqa: F401
 

@@ -14,8 +14,23 @@ and both now have registration functions.
 
 ## The plugin contract
 
-Write one module (any importable path) that registers your family at
-import time:
+The API surface a family implements is TYPED and VALIDATED:
+
+- `dataflow.training.families.Family` — the registration record. Its
+  fields are `typing.Protocol`s with documented signatures (`DimsOfFn`,
+  `LowerFn`, `InitialValuesFn`, `BuildResolverFn`, `GoldenFn` — see
+  their docstrings in `families.py` for the exact contracts, including
+  the task-naming shape `lower` must keep and what the golden class
+  must expose).
+- Block executables subclass `BlockFwd` / `BlockRecompute` / `BlockBwd`
+  (the stage grammar, MetaState, ProfileFill machinery is inherited).
+- Fused kernels register through `dataflow.tasks.kernels.registry.register`.
+- `validate_family("mymodel")` structurally checks the whole surface in
+  seconds — config presets, lowering + task-naming shape, resolver
+  coverage of every emitted task, golden class members — before any
+  deep math runs (verify_family runs it as level 0).
+
+Write one module that registers your family at import time:
 
 ```python
 # mypkg/dataflow_plugin.py
@@ -47,17 +62,63 @@ register_bench_config("mymodel-mini-s4k-bs8ga2",
                       ShapedMyModelConfig.mini(batch=8, grad_accum_rounds=2))
 ```
 
-Activate it via the environment — every tool entrypoint calls
-`load_plugins()` at startup:
+Two discovery paths, both first-class:
+
+1. **Packaging (the normal path)** — declare an entry point in YOUR
+   package's `pyproject.toml`; every dataflow tool discovers it
+   automatically once your package is installed, zero configuration:
+
+   ```toml
+   [project.entry-points."dataflow.families"]
+   mymodel = "mypkg.dataflow_plugin"
+   ```
+
+2. **Dev loop (uninstalled code)** — every tool takes `--plugin`:
+
+   ```bash
+   python tools/verify_family.py --plugin mypkg.dataflow_plugin --family mymodel ...
+   ```
+
+Programmatic use (your own scripts) needs neither: import your plugin
+module, then call the dataflow APIs directly.
+
+## After it's built: validate -> verify -> benchmark -> use
 
 ```bash
-export DATAFLOW_PLUGINS=mypkg.dataflow_plugin      # comma-separated list
+# 0. structural contract (seconds, no GPU math)
+python - <<'PY'
+import mypkg.dataflow_plugin  # registers
+from dataflow.training.families import validate_family
+assert validate_family("mymodel") == [], validate_family("mymodel")
+PY
 
-python tools/verify_family.py --family mymodel \
-    --module mypkg/tests/test_mymodel_math.py      # correctness
-python tools/bench_train.py --config mymodel-mini-s4k-bs8ga2 --device-gib 16
-python tools/bench_campaign.py --presets mymodel-mini --seq-tag s4k \
-    --device-gib 12,16,20 --shapes oracle --run --out-dir results/bench/mymodel
+# 1. correctness: per-op, per-task (fwd/recompute/bwd), per-model —
+#    your test module follows the 11-gate canon (extending.md §7);
+#    verify_family runs it + the contract check + the coverage audit
+python tools/verify_family.py --plugin mypkg.dataflow_plugin \
+    --family mymodel --module mypkg/tests/test_mymodel_math.py
+
+# 2. throughput: single cells or a full campaign
+python tools/bench_train.py --plugin mypkg.dataflow_plugin \
+    --config mymodel-mini-s4k-bs8ga2 --device-gib 16 --steps 3 \
+    --out artifacts/bench
+python tools/bench_campaign.py --plugin mypkg.dataflow_plugin \
+    --presets mymodel-mini --seq-tag s4k --device-gib 12,16,20 \
+    --shapes oracle --run --no-legacy --out-dir results/bench/mymodel
+
+# 3. programmatic training (no tools at all)
+python - <<'PY'
+import mypkg.dataflow_plugin
+from dataflow.training.families import family
+from dataflow.training.planning import plan_program
+from dataflow.training.train_loop import train
+from dataflow.runtime.device.cuda import CudaBackend
+
+fam = family("mymodel")
+cfg = mypkg.dataflow_plugin.ShapedMyModelConfig.mini()
+planned = plan_program(fam.lower(cfg), fast_memory_capacity=16 << 30)
+report = train(planned.program, cfg, CudaBackend(), steps=10)
+PY
 ```
 
 ## What your package implements (all public imports)
@@ -84,7 +145,7 @@ dataclasses remain the cleaner default.
 ## Verification and benchmarking
 
 - Correctness: your test module follows the same 11-gate canon
-  (`extending.md` §6); `verify_family --family mymodel --module <path>`
+  (`extending.md` §7); `verify_family --family mymodel --module <path>`
   runs it and audits coverage. Pin your lowering tripwire hash inside
   your own module (the builtin `test_lowering_stability.py` stays
   builtin-only).

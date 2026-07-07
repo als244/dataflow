@@ -260,8 +260,6 @@ def render(cells, presets, devs, modes, labels) -> str:
 def main() -> None:
     from dataflow.training.families import load_plugins
 
-    load_plugins()
-
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--presets", required=True,
@@ -294,7 +292,12 @@ def main() -> None:
                          "(measured/plan/program json per cell), raw/ (all "
                          "bench_train output: summaries, plans, webapp "
                          "programs, logs). Omit for stdout tables only.")
+    ap.add_argument("--plugin", action="append", default=None,
+                   help="external family plugin module(s); installed "
+                        "dataflow.families entry points load automatically")
     args = ap.parse_args()
+    load_plugins(explicit=[m for arg in (args.plugin or [])
+                           for m in arg.split(",")])
 
     presets = args.presets.split(",")
     devs = [int(x) for x in args.device_gib.split(",")]

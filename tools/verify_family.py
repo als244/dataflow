@@ -65,7 +65,7 @@ EXTRA_MODULES = {
 FLEET_MODULES = [
     "tests/runtime/test_cuda_backend.py",
     "tests/runtime/test_placement.py",
-    "tests/training/test_profiling.py",
+    "tests/training/test_planning.py",
 ]
 FLEET_OK = {"poison-on-free stress", "interleave stress",
             "profiling E2E (measured-costs replan)",
@@ -84,11 +84,16 @@ def main() -> None:
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--audit-only", action="store_true",
                     help="coverage audit without running the tests")
+    ap.add_argument("--plugin", action="append", default=None,
+                    help="external family plugin module(s), comma or "
+                         "repeat; installed packages with a "
+                         "dataflow.families entry point load automatically")
     args = ap.parse_args()
 
     from dataflow.training import families as F
 
-    F.load_plugins()
+    F.load_plugins(explicit=[m for arg in (args.plugin or [])
+                             for m in arg.split(",")])
     if args.list or not args.family:
         print("families:", ", ".join(sorted(F._FAMILIES)))
         return
@@ -100,10 +105,16 @@ def main() -> None:
                  f"module is unverified. Copy the NEWEST family's module "
                  f"as the template (docs/extending.md, ladder canon).")
 
+    problems = F.validate_family(args.family)
+    print(f"[0 contract] validate_family: {'OK' if not problems else 'PROBLEMS'}")
+    for prob in problems:
+        print(f"    - {prob}")
+
     src = mod.read_text()
     for extra in EXTRA_MODULES.get(args.family, ()):
         src += (REPO / extra).read_text()
-    fleet_src = "".join((REPO / f).read_text() for f in FLEET_MODULES)
+    fleet_src = "".join((REPO / f).read_text() for f in FLEET_MODULES
+                        if (REPO / f).exists())
     print(f"canon coverage of {mod.name} (+ shared modules):")
     missing = []
     for label, pat in CANON:
@@ -125,13 +136,16 @@ def main() -> None:
         missing.append("lowering tripwire")
 
     if args.audit_only:
-        sys.exit(f"missing canon gates: {missing}" if missing else None)
+        sys.exit(f"missing canon gates: {missing}" if (missing or problems)
+                 else None)
 
     print(f"\nrunning pytest {mod.name} ...")
     r = subprocess.run([sys.executable, "-m", "pytest", str(mod),
                         str(REPO / "tests/training/test_lowering_stability.py"),
                         "-q", "-p", "no:warnings"], cwd=REPO)
     print()
+    if problems:
+        sys.exit(f"contract problems: {problems}")
     if r.returncode != 0:
         sys.exit(f"FAILED: {mod.name}")
     if missing:

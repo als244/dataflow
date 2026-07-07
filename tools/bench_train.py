@@ -214,10 +214,21 @@ CONFIGS = {
 
 
 def main() -> None:
+    import sys as _sys
+
     from dataflow.training.families import load_plugins
     from dataflow.training.presets import EXTRA_CONFIGS
 
-    load_plugins()  # DATAFLOW_PLUGINS: external families + presets
+    # external families: installed dataflow.families entry points load
+    # automatically; --plugin imports uninstalled dev modules. Pre-scanned
+    # from argv so plugin-registered configs are legal --config choices.
+    argv = list(_sys.argv[1:])
+    plugins: list[str] = []
+    while "--plugin" in argv:
+        i = argv.index("--plugin")
+        plugins.extend(argv[i + 1].split(","))
+        del argv[i:i + 2]
+    load_plugins(explicit=plugins)
     CONFIGS.update(EXTRA_CONFIGS)
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", choices=sorted(CONFIGS), default="8b")
@@ -301,7 +312,7 @@ def main() -> None:
              "greedy (fills spare capacity — the runtime then pays "
              "the whole set as a synchronous upload before each step)",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if args.budgets is not None:
         parser.error(
             "--budgets is retired: ledger-budget rows were not peak-verified "
