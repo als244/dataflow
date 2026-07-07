@@ -22,15 +22,27 @@ Rows at/after offsets[-1] are zero-filled in fwd/dgrad outputs and ignored
 by wgrad (in our use offsets[-1] == M always). Empty segments are legal:
 their dw slice is ZERO-filled in create mode (pinned by ladder test).
 
-Default implementation is ``aten-grouped`` (torch F.grouped_mm — probed on
-sm_120: bitwise-repeatable, 131-162 TF/s at target shapes = parity with a
-per-expert cuBLAS loop, empty segments handled). Offsets ABI note:
-F.grouped_mm takes cumulative segment ENDS (E,), i.e. ``offsets[1:]``.
+Default implementation is ``triton`` (ours): device-side offsets end to
+end — a tiny async prep computes per-expert TILE prefix sums on device,
+the main kernel binary-searches its tile, and a STATIC worst-case grid
+(ceil(M/BM) + E partial tiles) early-exits past the real tile count, so
+NO host code ever reads a count. Deterministic: every output tile has
+exactly one owning program (wgrad loops its segment's K-dim in-program —
+no atomics, no split-k); the epilogue writes/accumulates IN PLACE.
 
-The eager fallback is a masked dense E-loop — E-times the flops, exists for
-DATAFLOW_KERNELS=eager numerics bisection at ladder scale only. Weight dim
-0 is the LOCAL expert count (kernels never assume it equals global E — the
-expert-parallelism sharding seam).
+``aten-grouped`` (torch F.grouped_mm) is KEPT FOR A/B ONLY and demoted:
+it HARD-SYNCS on every call (reads its offs tensor back to host to build
+cutlass group descriptors — a full compute-stream drain; spin-kernel
+audited). In the strict-paced engine that starved the pipeline inside
+every MoE task (rc windows 48% GPU-idle) and, because profiling's
+back-to-back reps hide drain costs, made in-run costs inflate
+plan-dependently (the bs64 envelope-curve inversion). It violates the
+registry ABI's no-sync contract.
+
+The eager fallback is a masked dense E-loop — E-times the flops, exists
+for DATAFLOW_KERNELS=eager numerics bisection at ladder scale only.
+Weight dim 0 is the LOCAL expert count (kernels never assume it equals
+global E — the expert-parallelism sharding seam).
 """
 from __future__ import annotations
 
@@ -64,7 +76,7 @@ def _aten_grouped_available(caps: dict) -> bool:
 
 @register("moe_grouped_mm_fwd", "aten-grouped", deterministic=True,
           workspace=internal(), requires=_aten_grouped_available,
-          priority=10, allocates="torch")
+          priority=5, allocates="vendor")
 def _fwd_aten(kctx, x, w, offsets, out=None):
     import torch.nn.functional as F
 
@@ -77,7 +89,7 @@ def _fwd_aten(kctx, x, w, offsets, out=None):
 
 @register("moe_grouped_mm_dgrad", "aten-grouped", deterministic=True,
           workspace=internal(), requires=_aten_grouped_available,
-          priority=10, allocates="torch")
+          priority=5, allocates="vendor")
 def _dgrad_aten(kctx, dy, w, offsets, dx_out=None):
     import torch.nn.functional as F
 
@@ -90,7 +102,7 @@ def _dgrad_aten(kctx, dy, w, offsets, dx_out=None):
 
 @register("moe_grouped_mm_wgrad", "aten-grouped", deterministic=True,
           workspace=internal(), requires=_aten_grouped_available,
-          priority=10, allocates="torch")
+          priority=5, allocates="vendor")
 def _wgrad_aten(kctx, x, dy, offsets, dw, *, accumulate: bool):
     import torch.nn.functional as F
 
@@ -152,3 +164,185 @@ for _op, _fn in (
 ):
     register(_op, "eager", deterministic=True, workspace=internal(),
              priority=0, allocates="torch", fn=_fn)
+
+
+# --- triton grouped GEMM (default): device offsets, zero host syncs -----------
+
+try:
+    import triton
+    import triton.language as tl
+except Exception:  # pragma: no cover - CPU-only environments
+    triton = None
+
+if triton is not None:
+
+    # BM is FIXED (the tile-prefix prep depends on it). 128x256x64 won a
+    # static config sweep at BOTH perf shapes (bs16 131k rows / bs64 524k
+    # rows, ragged multinomial segments): fwd 6% faster than
+    # F.grouped_mm, wgrad within 9% (aten pays a hard sync on top
+    # in-run). Static choice, NOT triton autotune — autotune's
+    # timing-based selection is nondeterministic across runs.
+    _BM, _BN, _BK = 128, 256, 64
+
+    def _tile_prefix(offsets: torch.Tensor) -> torch.Tensor:
+        """(E+1,) int32 device: cumsum of per-expert M-tile counts. Pure
+        async torch — nothing reads device values on host."""
+        counts = offsets[1:] - offsets[:-1]
+        tiles = (counts + (_BM - 1)) // _BM
+        tp = torch.zeros_like(offsets)
+        tp[1:].copy_(torch.cumsum(tiles, 0).to(offsets.dtype))
+        return tp
+
+    @triton.jit
+    def _grouped_mm_kernel(
+        a_ptr, b_ptr, c_ptr, offs_ptr, tp_ptr,
+        n_dim, k_dim, n_experts,
+        sam, sak, sbe, sbk, sbn, scm, scn,
+        BM: tl.constexpr, BN: tl.constexpr, BK: tl.constexpr,
+    ):
+        """C[r, n] = A[r, :] @ B[e(r), :, n] over expert-contiguous row
+        segments. Grid dim0 is the STATIC worst case (ceil(M/BM) + E);
+        programs past the true tile count (read from device) exit early.
+        dgrad reuses this kernel with B's k/n strides swapped."""
+        pid_m = tl.program_id(0)
+        pid_n = tl.program_id(1)
+        total = tl.load(tp_ptr + n_experts)
+        if pid_m >= total:
+            return
+        # binary search: largest e with tile_prefix[e] <= pid_m
+        lo = 0
+        hi = n_experts
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if tl.load(tp_ptr + mid) <= pid_m:
+                lo = mid
+            else:
+                hi = mid - 1
+        e = lo
+        seg_end = tl.load(offs_ptr + e + 1).to(tl.int64)
+        row0 = tl.load(offs_ptr + e).to(tl.int64) \
+            + (pid_m - tl.load(tp_ptr + e)).to(tl.int64) * BM
+        rm = row0 + tl.arange(0, BM).to(tl.int64)
+        rmask = rm < seg_end
+        rn = (pid_n * BN + tl.arange(0, BN)).to(tl.int64)
+        nmask = rn < n_dim
+        acc = tl.zeros((BM, BN), dtype=tl.float32)
+        b_base = b_ptr + e.to(tl.int64) * sbe
+        for kk in range(0, k_dim, BK):
+            rk = (kk + tl.arange(0, BK)).to(tl.int64)
+            kmask = rk < k_dim
+            a = tl.load(
+                a_ptr + rm[:, None] * sam + rk[None, :] * sak,
+                mask=rmask[:, None] & kmask[None, :], other=0.0,
+            )
+            b = tl.load(
+                b_base + rk[:, None] * sbk + rn[None, :] * sbn,
+                mask=kmask[:, None] & nmask[None, :], other=0.0,
+            )
+            acc = tl.dot(a, b, acc)
+        tl.store(
+            c_ptr + rm[:, None] * scm + rn[None, :] * scn,
+            acc.to(c_ptr.dtype.element_ty),
+            mask=rmask[:, None] & nmask[None, :],
+        )
+
+    @triton.jit
+    def _grouped_wgrad_kernel(
+        a_ptr, g_ptr, d_ptr, offs_ptr,
+        k_dim, n_dim,
+        sam, sak, sgm, sgn, sde, sdk, sdn,
+        ACCUM: tl.constexpr, BI: tl.constexpr, BJ: tl.constexpr, BK: tl.constexpr,
+    ):
+        """D[e] (+)= A_e^T @ G_e. Grid (E, ceil(Kd/BI), ceil(N/BJ)): every
+        output tile has exactly ONE owning program (segment K-loop runs
+        in-program) — deterministic, no atomics, no split-k. Empty
+        segments store zeros in create mode and leave D unchanged in
+        accumulate mode. The epilogue is IN PLACE (single rounding)."""
+        e = tl.program_id(0).to(tl.int64)
+        pid_i = tl.program_id(1)
+        pid_j = tl.program_id(2)
+        seg_s = tl.load(offs_ptr + e).to(tl.int64)
+        seg_e = tl.load(offs_ptr + e + 1).to(tl.int64)
+        ri = (pid_i * BI + tl.arange(0, BI)).to(tl.int64)
+        imask = ri < k_dim
+        rj = (pid_j * BJ + tl.arange(0, BJ)).to(tl.int64)
+        jmask = rj < n_dim
+        acc = tl.zeros((BI, BJ), dtype=tl.float32)
+        for rr in range(seg_s, seg_e, BK):
+            rk = rr + tl.arange(0, BK).to(tl.int64)
+            kmask = rk < seg_e
+            at = tl.load(  # A^T tile loaded directly: (BI, BK)
+                a_ptr + rk[None, :] * sam + ri[:, None] * sak,
+                mask=kmask[None, :] & imask[:, None], other=0.0,
+            )
+            g = tl.load(
+                g_ptr + rk[:, None] * sgm + rj[None, :] * sgn,
+                mask=kmask[:, None] & jmask[None, :], other=0.0,
+            )
+            acc = tl.dot(at, g, acc)
+        ptr = d_ptr + e * sde + ri[:, None] * sdk + rj[None, :] * sdn
+        m = imask[:, None] & jmask[None, :]
+        if ACCUM:
+            acc += tl.load(ptr, mask=m, other=0.0).to(tl.float32)
+        tl.store(ptr, acc.to(d_ptr.dtype.element_ty), mask=m)
+
+    def _check_grouped(x, w, offsets):
+        assert x.is_cuda and x.is_contiguous() and x.dim() == 2
+        assert w.is_cuda and w.dim() == 3
+        assert offsets.is_cuda and offsets.dtype == torch.int32
+        assert offsets.numel() == w.shape[0] + 1
+
+    def _grid0(m: int, e: int) -> int:
+        return (m + _BM - 1) // _BM + e  # static worst case; kernel early-exits
+
+    @register("moe_grouped_mm_fwd", "triton", deterministic=True,
+              workspace=none() if triton is None else internal(),
+              requires=lambda c: c.get("triton"), priority=20, allocates="torch")
+    def _fwd_triton(kctx, x, w, offsets, out=None):
+        _check_grouped(x, w, offsets)
+        m, n = x.shape[0], w.shape[2]
+        if out is None:
+            out = torch.empty(m, n, dtype=x.dtype, device=x.device)
+        tp = _tile_prefix(offsets)
+        _grouped_mm_kernel[(_grid0(m, w.shape[0]), (n + _BN - 1) // _BN)](
+            x, w, out, offsets, tp, n, w.shape[1], w.shape[0],
+            x.stride(0), x.stride(1), w.stride(0), w.stride(1), w.stride(2),
+            out.stride(0), out.stride(1),
+            BM=_BM, BN=_BN, BK=_BK, num_warps=8, num_stages=3,
+        )
+        return out
+
+    @register("moe_grouped_mm_dgrad", "triton", deterministic=True,
+              workspace=none() if triton is None else internal(),
+              requires=lambda c: c.get("triton"), priority=20, allocates="torch")
+    def _dgrad_triton(kctx, dy, w, offsets, dx_out=None):
+        # dx = dy @ w[e].T == the fwd kernel with w's k/n strides swapped
+        _check_grouped(dy, w, offsets)
+        m, kd = dy.shape[0], w.shape[1]
+        if dx_out is None:
+            dx_out = torch.empty(m, kd, dtype=dy.dtype, device=dy.device)
+        tp = _tile_prefix(offsets)
+        _grouped_mm_kernel[(_grid0(m, w.shape[0]), (kd + _BN - 1) // _BN)](
+            dy, w, dx_out, offsets, tp, kd, w.shape[2], w.shape[0],
+            dy.stride(0), dy.stride(1), w.stride(0), w.stride(2), w.stride(1),
+            dx_out.stride(0), dx_out.stride(1),
+            BM=_BM, BN=_BN, BK=_BK, num_warps=8, num_stages=3,
+        )
+        return dx_out
+
+    @register("moe_grouped_mm_wgrad", "triton", deterministic=True,
+              workspace=none() if triton is None else internal(),
+              requires=lambda c: c.get("triton"), priority=20, allocates="torch")
+    def _wgrad_triton(kctx, x, dy, offsets, dw, *, accumulate: bool):
+        assert x.is_cuda and dy.is_cuda and dw.is_cuda and dw.dim() == 3
+        kd, n = dw.shape[1], dw.shape[2]
+        assert x.shape[1] == kd and dy.shape[1] == n
+        _grouped_wgrad_kernel[(
+            dw.shape[0], (kd + _BM - 1) // _BM, (n + _BN - 1) // _BN,
+        )](
+            x, dy, dw, offsets, kd, n,
+            x.stride(0), x.stride(1), dy.stride(0), dy.stride(1),
+            dw.stride(0), dw.stride(1), dw.stride(2),
+            ACCUM=accumulate, BI=_BM, BJ=_BN, BK=_BK,
+            num_warps=8, num_stages=3,
+        )
