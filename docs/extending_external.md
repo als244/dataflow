@@ -93,7 +93,7 @@ assert validate_family("mymodel") == [], validate_family("mymodel")
 PY
 
 # 1. correctness: per-op, per-task (fwd/recompute/bwd), per-model —
-#    your test module follows the 11-gate canon (extending.md §7);
+#    your test module follows the 11-gate canon (extending.md §8);
 #    verify_family runs it + the contract check + the coverage audit
 python tools/verify_family.py --plugin mypkg.dataflow_plugin \
     --family mymodel --module mypkg/tests/test_mymodel_math.py
@@ -145,7 +145,7 @@ dataclasses remain the cleaner default.
 ## Verification and benchmarking
 
 - Correctness: your test module follows the same 11-gate canon
-  (`extending.md` §7); `verify_family --family mymodel --module <path>`
+  (`extending.md` §8); `verify_family --family mymodel --module <path>`
   runs it and audits coverage. Pin your lowering tripwire hash inside
   your own module (the builtin `test_lowering_stability.py` stays
   builtin-only).

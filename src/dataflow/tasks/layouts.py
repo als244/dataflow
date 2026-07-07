@@ -175,6 +175,11 @@ class LlamaDims:
     @property
     def kv_dim(self) -> int:
         return self.n_kv_heads * self.head_dim
+    # per-field optimizer assignment (tasks/optim.py): "adamw" (default,
+    # historical behavior) | "sgd" | "sgdm" | "muon" | an OptPolicy with
+    # fnmatch overrides. update_specials (noaux bias, frozen) stay the
+    # highest-priority per-field override on top of this.
+    opt_policy: object = "adamw"
 
 
 @dataclass(frozen=True)
@@ -211,6 +216,11 @@ class Qwen3Dims:
     @property
     def kv_dim(self) -> int:
         return self.n_kv_heads * self.head_dim
+    # per-field optimizer assignment (tasks/optim.py): "adamw" (default,
+    # historical behavior) | "sgd" | "sgdm" | "muon" | an OptPolicy with
+    # fnmatch overrides. update_specials (noaux bias, frozen) stay the
+    # highest-priority per-field override on top of this.
+    opt_policy: object = "adamw"
 
 
 def _param_specs(dims, names_shapes, ns: str | None = None,
@@ -253,18 +263,22 @@ def grad_layout(weight: PackedLayout, policy: DTypePolicy,
 
 
 def opt_state_layout(weight: PackedLayout, policy: DTypePolicy,
-                     ns: str | None = None, layer: int | None = None) -> PackedLayout:
-    """AdamW state for one weight object: per-field first/second moments at
-    the policy's opt dtype. Under the all-bf16 default this packs to the
-    same total bytes as the historical flat bf16-halves layout (every
-    m/v span is the field's byte span, alignment included) but the interior
-    MAPPING is per-field [m_f | v_f] pairs, never covering padding gaps."""
+                     ns: str | None = None, layer: int | None = None,
+                     opt_policy=None) -> PackedLayout:
+    """Optimizer state for one weight object: per-field slots at the
+    dtype policy's opt dtype, with the SLOT SET per field decided by the
+    optimizer policy (tasks/optim.py): adamw [m_f | v_f] (the default —
+    byte-identical to the historical layout), sgdm/muon [m_f], sgd
+    nothing. Interior mapping is per-field, never covering padding."""
+    from .optim import OPTIMIZERS, resolve_opt_policy
+
+    op = resolve_opt_policy(opt_policy)
     key = (lambda n: f"{ns}.{n}") if ns else (lambda n: n)
     specs: list[tuple[str, tuple[int, ...], str]] = []
     for f in weight.fields:
         o = policy.for_field(key(f.name), layer).opt
-        specs.append((f"m_{f.name}", f.shape, o))
-        specs.append((f"v_{f.name}", f.shape, o))
+        for slot in OPTIMIZERS[op.for_field(key(f.name), layer)].slots:
+            specs.append((f"{slot}_{f.name}", f.shape, o))
     return PackedLayout.build(specs)
 
 
@@ -496,6 +510,11 @@ class Dsv3Dims:
 
     def kind_of(self, layer: int) -> str:
         return "dense" if layer < self.first_k_dense else "moe"
+    # per-field optimizer assignment (tasks/optim.py): "adamw" (default,
+    # historical behavior) | "sgd" | "sgdm" | "muon" | an OptPolicy with
+    # fnmatch overrides. update_specials (noaux bias, frozen) stay the
+    # highest-priority per-field override on top of this.
+    opt_policy: object = "adamw"
 
 
 def _dsv3_attn_weight_specs(dims: Dsv3Dims) -> list[tuple[str, tuple[int, ...]]]:
@@ -799,6 +818,11 @@ class Qwen35Dims:
 
     def kind_of(self, layer: int) -> str:
         return "full" if (layer + 1) % self.full_attention_interval == 0 else "lin"
+    # per-field optimizer assignment (tasks/optim.py): "adamw" (default,
+    # historical behavior) | "sgd" | "sgdm" | "muon" | an OptPolicy with
+    # fnmatch overrides. update_specials (noaux bias, frozen) stay the
+    # highest-priority per-field override on top of this.
+    opt_policy: object = "adamw"
 
 
 def _qwen35_lin_attn_specs(dims) -> list[tuple[str, tuple[int, ...]]]:

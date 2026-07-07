@@ -57,11 +57,15 @@ def size_of_factory(dims, fl: FamilyLayouts):
     dw_i = [grad_layout(wl_i[i], p, layer=i).total_bytes for i in range(n)]
     m_i = ([fl.block_meta_at(i).total_bytes for i in range(n)]
            if fl.block_meta_at is not None else None)
-    o_i = [opt_state_layout(wl_i[i], p, layer=i).total_bytes for i in range(n)]
+    op = getattr(dims, "opt_policy", None)
+    o_i = [opt_state_layout(wl_i[i], p, layer=i, opt_policy=op).total_bytes
+           for i in range(n)]
     dw_e = grad_layout(fl.embed, p, ns=fl.embed_ns).total_bytes
     dw_h = grad_layout(fl.head, p, ns="head").total_bytes
-    o_e = opt_state_layout(fl.embed, p, ns=fl.embed_ns).total_bytes
-    o_h = opt_state_layout(fl.head, p, ns="head").total_bytes
+    o_e = opt_state_layout(fl.embed, p, ns=fl.embed_ns,
+                           opt_policy=op).total_bytes
+    o_h = opt_state_layout(fl.head, p, ns="head",
+                           opt_policy=op).total_bytes
 
     def size_of(oid: str) -> int | None:
         if oid.startswith("A_"):            # A_{s}_{r}_{i}

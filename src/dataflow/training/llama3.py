@@ -59,6 +59,11 @@ class ShapedLlamaConfig:
     # GPU-idle PCIe phase at the end of every step (measured 1.5-2.0 s at
     # 8B/seq-1K). Task ids are identical in both modes; only order changes.
     optimizer_placement: str = "interleaved"
+    # per-field optimizer assignment (tasks/optim.py): "adamw" (default,
+    # historical behavior) | "sgd" | "sgdm" | "muon" | an OptPolicy with
+    # fnmatch overrides. update_specials (noaux bias, frozen) stay the
+    # highest-priority per-field override on top of this.
+    opt_policy: object = "adamw"
     # per-field dtype policy for params/grads/opt state (default: all bf16,
     # the historical convention; docs/notes/dtype-policy-design.md)
     dtypes: DTypePolicy = DTypePolicy()
@@ -148,6 +153,7 @@ def build_shaped_llama3(
 
 def dims_of(cfg: ShapedLlamaConfig) -> LlamaDims:
     return LlamaDims(
+        opt_policy=cfg.opt_policy,
         d_model=cfg.d_model,
         n_heads=cfg.n_heads,
         n_kv_heads=cfg.n_kv_heads,

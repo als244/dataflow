@@ -54,6 +54,7 @@ class AdamWHyper:
     beta2: float = 0.95
     eps: float = 1e-8
     weight_decay: float = 0.0
+    momentum: float = 0.95      # sgdm/muon (tasks/optim.py); unused by adamw
 
 
 @dataclass(frozen=True)
@@ -557,7 +558,7 @@ class EmbedBwd(_Base):
 
 
 @dataclass(frozen=True)
-class AdamWStep(_Base):
+class AdamWStep(_Base):  # name kept for resolver back-compat; see OptimizerStep alias
     """Per-FIELD AdamW over one packed weight object.
 
     Each field updates through its own w/g/m/v views at the dtype policy's
@@ -598,35 +599,46 @@ class AdamWStep(_Base):
                 f"{wl_.total_bytes} bytes vs W buffer {w_size} bytes"
             )
         p = d.dtypes
+        op = getattr(d, "opt_policy", None)
         return (wl_, grad_layout(wl_, p, ns=ns, layer=layer),
-                opt_state_layout(wl_, p, ns=ns, layer=layer))
+                opt_state_layout(wl_, p, ns=ns, layer=layer, opt_policy=op),
+                ns)
 
     def launch(self, ctx: TaskContext) -> None:
+        from .optim import OPTIMIZERS, resolve_opt_policy
+
         es, kctx = self._stream_ctx(ctx)
         with torch.cuda.stream(es):
             w_buf = ctx.mutates[ctx.task.mutates[0]]
             g_buf = ctx.inputs[ctx.task.inputs[1]]
             o_buf = ctx.mutates[ctx.task.mutates[1]]
-            wl_, gl_, ol_ = self._layouts(ctx.task, w_buf.size_bytes)
+            wl_, gl_, ol_, ns = self._layouts(ctx.task, w_buf.size_bytes)
             step = int(ctx.task.block_params.get("step", 0)) + 1
             hp = self.hyper
+            op = resolve_opt_policy(getattr(self.dims, "opt_policy", None))
+            layer = self.layer_of(ctx.task)
+            key = (lambda n: f"{ns}.{n}") if ns else (lambda n: n)
             for f in wl_.fields:
                 if self.update_specials is not None and f.name in self.update_specials:
+                    # highest-priority per-field override (noaux bias
+                    # rule, frozen fields) — skips policy AND state
                     self.update_specials[f.name](
                         kctx, self.kernels,
                         wl_.view(w_buf, f.name).view(-1),
                         gl_.view(g_buf, f.name).view(-1),
                     )
                     continue
-                self.kernels.adamw_step(
-                    kctx,
-                    wl_.view(w_buf, f.name).view(-1),
-                    gl_.view(g_buf, f.name).view(-1),
-                    ol_.view(o_buf, f"m_{f.name}").view(-1),
-                    ol_.view(o_buf, f"v_{f.name}").view(-1),
-                    lr=hp.lr, beta1=hp.beta1, beta2=hp.beta2, eps=hp.eps,
-                    weight_decay=hp.weight_decay, step=step,
-                )
+                opt = OPTIMIZERS[op.for_field(key(f.name), layer)]
+                states = {slot: ol_.view(o_buf, f"{slot}_{f.name}").view(-1)
+                          for slot in opt.slots}
+                opt.step(kctx, self.kernels, hp, step,
+                         wl_.view(w_buf, f.name).view(-1),
+                         gl_.view(g_buf, f.name).view(-1),
+                         states, f.shape)
+
+
+
+OptimizerStep = AdamWStep  # the general per-field-policy optimizer executable
 
 
 def build_resolver(

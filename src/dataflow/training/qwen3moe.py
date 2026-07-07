@@ -59,6 +59,11 @@ class ShapedQwen3MoeConfig:
     grad_accum_rounds: int = 1
     num_steps: int = 1
     optimizer_placement: str = "interleaved"
+    # per-field optimizer assignment (tasks/optim.py): "adamw" (default,
+    # historical behavior) | "sgd" | "sgdm" | "muon" | an OptPolicy with
+    # fnmatch overrides. update_specials (noaux bias, frozen) stay the
+    # highest-priority per-field override on top of this.
+    opt_policy: object = "adamw"
     rope_base: float = 1_000_000.0
     dtypes: DTypePolicy = DTypePolicy()
     seq_lens: tuple[int, ...] | None = None
@@ -139,6 +144,7 @@ def moe_spec_of(cfg: ShapedQwen3MoeConfig) -> MoESpec:
 
 def dims_of_qwen3moe(cfg: ShapedQwen3MoeConfig) -> Qwen3MoeDims:
     return Qwen3MoeDims(
+        opt_policy=cfg.opt_policy,
         d_model=cfg.d_model,
         n_heads=cfg.n_heads,
         n_kv_heads=cfg.n_kv_heads,

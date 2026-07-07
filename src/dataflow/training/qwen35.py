@@ -55,6 +55,11 @@ class ShapedQwen35Config:
     grad_accum_rounds: int = 1
     num_steps: int = 1
     optimizer_placement: str = "interleaved"
+    # per-field optimizer assignment (tasks/optim.py): "adamw" (default,
+    # historical behavior) | "sgd" | "sgdm" | "muon" | an OptPolicy with
+    # fnmatch overrides. update_specials (noaux bias, frozen) stay the
+    # highest-priority per-field override on top of this.
+    opt_policy: object = "adamw"
     # Qwen3.5-9B does NOT tie (config.json tie_word_embeddings: false;
     # untied ~8.96B params = the "9B"). The 2B DOES tie — tied stays a
     # supported config choice, exercised by the tiny_tied ladder tests.
@@ -118,6 +123,7 @@ class ShapedQwen35Config:
 
 def dims_of_qwen35(cfg: ShapedQwen35Config) -> Qwen35Dims:
     return Qwen35Dims(
+        opt_policy=cfg.opt_policy,
         d_model=cfg.d_model, n_layers=cfg.n_layers,
         full_attention_interval=cfg.full_attention_interval,
         n_heads=cfg.n_heads, n_kv_heads=cfg.n_kv_heads, head_dim=cfg.head_dim,

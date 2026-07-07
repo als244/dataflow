@@ -83,6 +83,11 @@ class ShapedDsv3Config:
     grad_accum_rounds: int = 1
     num_steps: int = 1
     optimizer_placement: str = "interleaved"
+    # per-field optimizer assignment (tasks/optim.py): "adamw" (default,
+    # historical behavior) | "sgd" | "sgdm" | "muon" | an OptPolicy with
+    # fnmatch overrides. update_specials (noaux bias, frozen) stay the
+    # highest-priority per-field override on top of this.
+    opt_policy: object = "adamw"
     rope_base: float = 10_000.0
     dtypes: DTypePolicy = field(default_factory=lambda: _DSV3_DTYPES)
     seq_lens: tuple[int, ...] | None = None
@@ -217,6 +222,7 @@ def moe_spec_of(cfg: ShapedDsv3Config) -> MoESpec:
 
 def dims_of_dsv3(cfg: ShapedDsv3Config) -> Dsv3Dims:
     return Dsv3Dims(
+        opt_policy=cfg.opt_policy,
         d_model=cfg.d_model, n_heads=cfg.n_heads,
         q_lora_rank=cfg.q_lora_rank, kv_lora_rank=cfg.kv_lora_rank,
         qk_nope_dim=cfg.qk_nope_dim, qk_rope_dim=cfg.qk_rope_dim,

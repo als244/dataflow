@@ -229,7 +229,43 @@ Gates, in order:
    (`training/profiling.py`) — stale cached task costs silently skew both
    sim and the planner's recompute choices.
 
-## 6. The Family contract, registration, and validation
+## 6. Optimizers: per-field choice, per-optimizer state
+
+Nothing in a family hardcodes AdamW. The optimizer executable
+(`OptimizerStep`, shared fleet-wide; `AdamWStep` is its back-compat
+alias) and the O-object sizing (`opt_state_layout`) both dispatch
+through `tasks/optim.py`:
+
+- an **optimizer** = (state slots, step rule): `adamw` ("m","v" —
+  the default, byte-identical to the historical layout), `sgdm`/`muon`
+  ("m",), `sgd` (stateless). `register_optimizer()` adds new ones —
+  from plugins too.
+- assignment is an **`OptPolicy`** on the Shaped config
+  (`opt_policy="sgd"` or fnmatch overrides per FIELD — the finest
+  grain: one packed-layout entry):
+
+  ```python
+  cfg = replace(Cfg.tiny(), opt_policy=OptPolicy(
+      default="adamw", overrides=(("w?", "muon"), ("embed.*", "sgd"))))
+  ```
+
+  O-object sizes follow the policy automatically (lowering asks the
+  same layout fn the executable views through), so plans, transfers,
+  and host pinning all shrink when a field needs fewer slots.
+- `update_specials` (noaux router bias, frozen fields) remain the
+  HIGHEST-priority per-field override on top of the policy.
+- All step math is fp32 with storage-dtype round-trips (the AdamW
+  kernel's convention); muon applies quintic Newton-Schulz to 2D
+  fields (singular values land in a band near ~0.9 by design) and
+  plain momentum to 1D fields — route those to adamw via the policy
+  if you want the usual deployment split.
+- Gates: `tests/tasks/test_optim.py` — per-step math vs inline
+  formulas, NS properties, slot layouts, and a mixed-policy model
+  step through the REAL engine vs a hand replica. The all-adamw
+  default is pinned byte-stable by the lowering tripwires + every
+  family ladder.
+
+## 7. The Family contract, registration, and validation
 
 A family IS its `Family` record (`training/families.py`) — five typed
 callables plus the config type, each field a `typing.Protocol` with the
@@ -257,7 +293,7 @@ test module; run it directly while wiring a new family — it catches
 plumbing mistakes (missing resolver keys, misnamed tasks) long before a
 ladder would.
 
-## 7. New model family checklist
+## 8. New model family checklist
 
 (Exercised end-to-end by the qwen3 family — `training/families.py` is the
 registry an addition plugs into.

@@ -37,6 +37,11 @@ class ShapedQwen3Config:
     grad_accum_rounds: int = 1
     num_steps: int = 1
     optimizer_placement: str = "interleaved"
+    # per-field optimizer assignment (tasks/optim.py): "adamw" (default,
+    # historical behavior) | "sgd" | "sgdm" | "muon" | an OptPolicy with
+    # fnmatch overrides. update_specials (noaux bias, frozen) stay the
+    # highest-priority per-field override on top of this.
+    opt_policy: object = "adamw"
     dtypes: DTypePolicy = DTypePolicy()
     # ragged packing: explicit per-round sequence lengths (sum = tokens
     # per round); None = uniform batch x seq_len
@@ -116,6 +121,7 @@ def build_shaped_qwen3(
 
 def dims_of_qwen3(cfg: ShapedQwen3Config) -> Qwen3Dims:
     return Qwen3Dims(
+        opt_policy=cfg.opt_policy,
         d_model=cfg.d_model,
         n_heads=cfg.n_heads,
         n_kv_heads=cfg.n_kv_heads,
