@@ -119,20 +119,35 @@ def shapes_cached(cells: dict, presets: list[str], devs: list[int]) -> dict:
     return out
 
 
-def shapes_oracle(presets: list[str], devs: list[int], seq_tag: str,
-                  seqs_per_step: int) -> dict:
+def shapes_oracle(presets, devs, seq_tag, seqs_per_step, out_dir=None):
+    """Fresh best_config sweep per preset. The oracle profiles every
+    (bs, ga) divisor combo of seqs_per_step itself (profile cache
+    shared with bench_train) and sims each envelope; we take its
+    per-envelope winner. Oracle JSONs are stashed under out_dir."""
     seq_len = int(seq_tag[1:-1]) * 1024
     out: dict[tuple[str, int], str] = {}
-    for fam in presets:
-        res = subprocess.run(
-            [sys.executable, str(REPO / "tools/best_config.py"),
-             "--family", fam.split("-")[0], "--preset", fam,
-             "--seq-len", str(seq_len), "--seqs-per-step", str(seqs_per_step),
-             "--device-gib", ",".join(map(str, devs)), "--json", "-"],
-            capture_output=True, text=True, check=True)
-        winners = json.loads(res.stdout)
-        for dev_s, w in winners.items():
-            out[(fam, int(float(dev_s)))] = f"bs{w['batch']}ga{w['rounds']}"
+    for preset in presets:
+        family = preset.split("-", 1)[0]
+        oracle_name = preset.replace("-", "_")
+        jdir = Path(out_dir) if out_dir else REPO / "artifacts/bench"
+        jdir.mkdir(parents=True, exist_ok=True)
+        jpath = jdir / f"oracle-{preset}-{seq_tag}-x{seqs_per_step}.json"
+        cmd = [sys.executable, str(REPO / "tools/best_config.py"),
+               "--family", family, "--preset", oracle_name,
+               "--seq-len", str(seq_len),
+               "--seqs-per-step", str(seqs_per_step),
+               "--device-gib", ",".join(map(str, devs)),
+               "--json", str(jpath)]
+        print("[oracle]", " ".join(cmd), file=sys.stderr)
+        subprocess.run(cmd, check=True)
+        payload = json.loads(jpath.read_text())
+        for env in payload["envelopes"]:
+            best = env.get("best")
+            if best:
+                out[(preset, int(env["device_gib"]))] =                     f"bs{best['bs']}ga{best['ga']}"
+            else:
+                print(f"[oracle] {preset}@{env['device_gib']}: no feasible "
+                      f"shape", file=sys.stderr)
     return out
 
 
@@ -252,7 +267,8 @@ def main() -> None:
                          "is the part before the first dash (dsv3, glm52)")
     ap.add_argument("--seq-tag", default="s4k")
     ap.add_argument("--device-gib", required=True, help="comma list, e.g. 12,16,20")
-    ap.add_argument("--placements", default="static,vmm")
+    ap.add_argument("--placements", default="static",
+                    help="comma list; static is the default mode")
     ap.add_argument("--steps", type=int, default=3)
     ap.add_argument("--shapes", default="cached",
                     help='"cached" | "oracle" | explicit "12:bs4ga4,16:bs8ga2,..."')
@@ -284,7 +300,8 @@ def main() -> None:
     if args.shapes == "cached":
         shapes = shapes_cached(cells, presets, devs)
     elif args.shapes == "oracle":
-        shapes = shapes_oracle(presets, devs, args.seq_tag, args.seqs_per_step)
+        shapes = shapes_oracle(presets, devs, args.seq_tag,
+                               args.seqs_per_step, out_dir=args.out_dir)
     else:
         per_dev = dict(kv.split(":") for kv in args.shapes.split(","))
         shapes = {(f, int(d)): s for f in presets for d, s in per_dev.items()}
