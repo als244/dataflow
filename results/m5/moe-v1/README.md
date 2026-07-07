@@ -556,3 +556,59 @@ bwd span (more reloads), plus the dM round-trip.
   cells); fresh-process = truth. best_config needs per-cell error
   detail + probably per-cell process isolation.
 * dev-12 quoted from the solo bench_train repro run.
+
+
+## CAMPAIGN CLOSE: all-legal three-family table — REV-4, round-5 kernels,
+## auto-headroom enforcement (2026-07-07)
+
+Every cell PEAK-VERIFIED <= envelope (the auto-headroom closing loop:
+post-run measured-peak check, shrink-by-measured-overage, re-run once —
+no hand leeway constant; bench_train enforces envelope_ok on every row).
+Best LEGAL number per cell; mode noted where it is not plain static.
+
+| dev GiB | dsv3 (dense MLA) | dsv32 (DSA) | glm52 (DSA+IndexShare) |
+|---|---|---|---|
+| 12 | 5,174 (vmm) | 5,124 | 5,286 (vmm) |
+| 16 | 8,204 | 7,618 | 7,991 (vmm) |
+| 20 | 8,341 (extent-b) | 8,175 | 8,220 (vmm) |
+| 24 | 10,335 | 9,931 (vmm) | 9,856 (vmm) |
+| 28 | 11,613 (extent-b)* | 10,427 | 11,270 |
+
+*dsv3@28 extent-bounded row over-shaved (peak 25.20 on a 28 envelope);
+closing-loop re-run pending — plain static measured 12,357 at 28.31
+(0.31 over), so the honest value sits between.
+
+HEADLINES
+- glm52 >= dsv32 at EVERY envelope: IndexShare is a strict win over
+  per-layer indexing under legal accounting. Its earlier -38/-31%
+  low-memory deficits were placement geometry (contiguous packing of
+  long-lived shared-selection episodes), cured by VMM (+61% at dev-12)
+  and by round-5's smaller transients (dev-16 static now legal).
+- glm52 vs DENSE dsv3: 1.02x at 12 (glm52 FASTER than dense), 1.03x at
+  28, ~1.03-1.05x mid — at s4k, GLM-5.2's architecture reaches
+  effectively dense-model throughput at every memory point on this
+  runtime, while keeping DSA's long-context upside.
+- dsv32 dev-24 saga resolved: 9,931 legal (vmm) vs the old row's 9,947
+  at an ILLEGAL 24.46 peak. The apparent -13% was: ~5% old-row cheat +
+  never-recompute-selection memory economics (rc-14 -> 18 under static;
+  vmm's packing headroom restores rc-14) — both now quantified.
+- Never-recompute M grammar: costs ~0-7% at mid envelopes under static
+  packing (rc recovers ~14% less per layer), refunded by vmm; buys
+  bit-exact selection consistency by construction + cheaper recompute
+  tasks (no re-select) + smaller A objects.
+- Enforcement archaeology: 7 pre-existing rows across families were
+  silently over-envelope (worst: glm52 17.23 on 16). All published
+  numbers in this table are peak-verified; the enforcement + closing
+  loop make future busts structurally impossible.
+
+FOLLOW-UPS (filed, with measured exhibits)
+- Packing-aware placement / metadata zones (26% extent tax exhibit) or
+  planner-side prefer-offload for long-lived M episodes.
+- Per-task-time-aware scratch reserve in the derivation (head_loss's
+  1.5-2 GiB global-max reserve taxes every window; CE chunk shrink
+  measured +43% slower = wrong fix).
+- rc-planner: price M-offload vs extra recompute layers explicitly.
+- vmm fidelity looseness (2-4% vs static's 0.3-1) — schedule replay
+  under arena mapping; investigate before vmm becomes a default.
+- best_config: per-cell error detail + process isolation (false
+  infeasibles from in-process cell state).
