@@ -29,7 +29,7 @@ Shape sources (--shapes):
 
 Usage (reproduce the dsa-round5 campaign):
     python tools/bench_campaign.py \
-        --families dsv3-mini,dsv32-mini,glm52-mini \
+        --presets dsv3-mini,dsv32-mini,glm52-mini \
         --seq-tag s4k --device-gib 12,16,20,24,28 \
         --placements static,vmm --steps 3 \
         --shapes 12:bs4ga4,16:bs8ga2,20:bs8ga2,24:bs16ga1,28:bs16ga1 \
@@ -37,7 +37,7 @@ Usage (reproduce the dsa-round5 campaign):
         --out results/bench/dsa-round5/TABLES.md
 
 Render-only (rebuild tables from existing artifacts, no GPU):
-    python tools/bench_campaign.py --families ... --device-gib ... \
+    python tools/bench_campaign.py --presets ... --device-gib ... \
         --placements static,vmm --render-only --out -
 
 Cells are run in SUBPROCESSES (one bench_train invocation per family x
@@ -62,14 +62,14 @@ REPO = Path(__file__).resolve().parent.parent
 SUMMARY_DIRS = [REPO / "artifacts/bench", REPO / "artifacts/m4"]
 
 
-def load_cells(families: list[str], allow_illegal: bool) -> dict:
+def load_cells(presets: list[str], allow_illegal: bool) -> dict:
     """Newest legal row per (family, dev, mode) from all summary dirs."""
     best: dict[tuple[str, int, str], dict] = {}
     for d in SUMMARY_DIRS:
         if not d.exists():
             continue
         for f in d.glob("*.summary.json"):
-            m = re.search(r"(" + "|".join(map(re.escape, families)) + r")-(s\d+k)-(bs\d+ga\d+)", f.name)
+            m = re.search(r"(" + "|".join(map(re.escape, presets)) + r")-(s\d+k)-(bs\d+ga\d+)", f.name)
             if not m:
                 continue
             fam, shape = m.group(1), m.group(3)
@@ -106,9 +106,9 @@ def load_cells(families: list[str], allow_illegal: bool) -> dict:
     return best
 
 
-def shapes_cached(cells: dict, families: list[str], devs: list[int]) -> dict:
+def shapes_cached(cells: dict, presets: list[str], devs: list[int]) -> dict:
     out: dict[tuple[str, int], str] = {}
-    for fam in families:
+    for fam in presets:
         for dev in devs:
             rows = [c for (f, d, _m), c in cells.items()
                     if f == fam and d == dev and c["ok"]]
@@ -117,11 +117,11 @@ def shapes_cached(cells: dict, families: list[str], devs: list[int]) -> dict:
     return out
 
 
-def shapes_oracle(families: list[str], devs: list[int], seq_tag: str,
+def shapes_oracle(presets: list[str], devs: list[int], seq_tag: str,
                   seqs_per_step: int) -> dict:
     seq_len = int(seq_tag[1:-1]) * 1024
     out: dict[tuple[str, int], str] = {}
-    for fam in families:
+    for fam in presets:
         res = subprocess.run(
             [sys.executable, str(REPO / "tools/best_config.py"),
              "--family", fam.split("-")[0], "--preset", fam,
@@ -134,11 +134,11 @@ def shapes_oracle(families: list[str], devs: list[int], seq_tag: str,
     return out
 
 
-def run_cells(families, devs, modes, shapes, seq_tag, steps, pace,
+def run_cells(presets, devs, modes, shapes, seq_tag, steps, pace,
               rerun, cells, dry_run):
     """One bench_train subprocess per (family, shape, mode); envelopes
     sharing a shape batched into a single invocation."""
-    for fam in families:
+    for fam in presets:
         for mode in modes:
             by_shape: dict[str, list[int]] = defaultdict(list)
             for dev in devs:
@@ -164,13 +164,14 @@ def run_cells(families, devs, modes, shapes, seq_tag, steps, pace,
                 time.sleep(pace)
 
 
-def emit_cells(cells, families, devs, modes, out_dir: Path) -> None:
+def emit_cells(cells, presets, devs, modes, out_dir: Path) -> None:
     """Per cell: measured.json (the full summary row + provenance) and
-    plan.json (the annotated program actually executed — from the row's
-    plan_path when present, else matched by planned ledger)."""
+    plan.json (the annotated program actually executed — replayable via
+    bench_train --annotated) and program.json (the webapp-simulator
+    uploadable form of the same plan)."""
     import shutil
     for (fam, dev, mode), c in sorted(cells.items()):
-        if fam not in families or dev not in devs or mode not in modes:
+        if fam not in presets or dev not in devs or mode not in modes:
             continue
         d = out_dir / f"{fam}-{dev}gib-{mode}"
         d.mkdir(parents=True, exist_ok=True)
@@ -189,13 +190,18 @@ def emit_cells(cells, families, devs, modes, out_dir: Path) -> None:
                 plan = str(hits[0]) if len(hits) == 1 else None
         if plan and Path(plan).exists():
             shutil.copy(plan, d / "plan.json")
+            webapp = c["row"].get("webapp_path") or plan.replace(
+                ".annotated.json", ".webapp.json")
+            if Path(webapp).exists():
+                # the webapp-simulator-uploadable dataflow program
+                shutil.copy(webapp, d / "program.json")
         else:
             (d / "plan.MISSING").write_text(
                 "no unambiguous annotated plan for this row (legacy "
                 "summary without plan_path)\n")
 
 
-def render(cells, families, devs, modes, labels) -> str:
+def render(cells, presets, devs, modes, labels) -> str:
     def cell(fam, dev, mode):
         c = cells.get((fam, dev, mode))
         if not c:
@@ -210,17 +216,17 @@ def render(cells, families, devs, modes, labels) -> str:
     lines = []
     for mode in modes:
         lines += [f"\n### {mode.upper()} placement\n",
-                  "| dev GiB | " + " | ".join(labels.get(f, f) for f in families) + " |",
-                  "|" + "---|" * (len(families) + 1)]
+                  "| dev GiB | " + " | ".join(labels.get(f, f) for f in presets) + " |",
+                  "|" + "---|" * (len(presets) + 1)]
         for dev in devs:
-            row = " | ".join(cell(f, dev, mode) for f in families)
+            row = " | ".join(cell(f, dev, mode) for f in presets)
             lines.append(f"| {dev} | {row} |")
     lines += ["\n### Best legal per cell (mode in parens where not static)\n",
-              "| dev GiB | " + " | ".join(labels.get(f, f) for f in families) + " |",
-              "|" + "---|" * (len(families) + 1)]
+              "| dev GiB | " + " | ".join(labels.get(f, f) for f in presets) + " |",
+              "|" + "---|" * (len(presets) + 1)]
     for dev in devs:
         row = []
-        for fam in families:
+        for fam in presets:
             cands = [(m, cells[(fam, dev, m)]) for m in modes
                      if (fam, dev, m) in cells and cells[(fam, dev, m)]["ok"]]
             if not cands:
@@ -236,8 +242,10 @@ def render(cells, families, devs, modes, labels) -> str:
 def main() -> None:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--families", required=True,
-                    help="comma list of config prefixes, e.g. dsv3-mini,glm52-mini")
+    ap.add_argument("--presets", required=True,
+                    help="comma list of family PRESETS (bench_train config "
+                         "prefixes), e.g. dsv3-mini,glm52-mini — the family "
+                         "is the part before the first dash (dsv3, glm52)")
     ap.add_argument("--seq-tag", default="s4k")
     ap.add_argument("--device-gib", required=True, help="comma list, e.g. 12,16,20")
     ap.add_argument("--placements", default="static,vmm")
@@ -260,30 +268,30 @@ def main() -> None:
                     help="emit per-cell measured.json + plan.json under this dir")
     args = ap.parse_args()
 
-    families = args.families.split(",")
+    presets = args.presets.split(",")
     devs = [int(x) for x in args.device_gib.split(",")]
     modes = args.placements.split(",")
     labels = {"dsv3-mini": "dsv3 (dense MLA)", "dsv32-mini": "dsv32 (DSA)",
               "glm52-mini": "glm52 (DSA+IndexShare)"}
 
-    cells = load_cells(families, args.allow_illegal)
+    cells = load_cells(presets, args.allow_illegal)
     if args.shapes == "cached":
-        shapes = shapes_cached(cells, families, devs)
+        shapes = shapes_cached(cells, presets, devs)
     elif args.shapes == "oracle":
-        shapes = shapes_oracle(families, devs, args.seq_tag, args.seqs_per_step)
+        shapes = shapes_oracle(presets, devs, args.seq_tag, args.seqs_per_step)
     else:
         per_dev = dict(kv.split(":") for kv in args.shapes.split(","))
-        shapes = {(f, int(d)): s for f in families for d, s in per_dev.items()}
+        shapes = {(f, int(d)): s for f in presets for d, s in per_dev.items()}
 
     if (args.run or args.rerun or args.dry_run) and not args.render_only:
-        run_cells(families, devs, modes, shapes, args.seq_tag, args.steps,
+        run_cells(presets, devs, modes, shapes, args.seq_tag, args.steps,
                   args.pace_seconds, args.rerun, cells, args.dry_run)
         if not args.dry_run:
-            cells = load_cells(families, args.allow_illegal)
+            cells = load_cells(presets, args.allow_illegal)
 
-    md = render(cells, families, devs, modes, labels)
+    md = render(cells, presets, devs, modes, labels)
     if args.cells_dir:
-        emit_cells(cells, families, devs, modes, Path(args.cells_dir))
+        emit_cells(cells, presets, devs, modes, Path(args.cells_dir))
         md += (f"\nPer-cell artifacts (measured.json + plan.json): "
                f"`{args.cells_dir}/{{family}}-{{dev}}gib-{{mode}}/`\n")
     if args.out == "-":

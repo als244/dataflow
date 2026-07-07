@@ -1,0 +1,2264 @@
+{
+  "schema_version": "dataflow/v1",
+  "name": "dsv3-shaped-18L-d2048-s4096-b16-r1-steps1",
+  "description": "",
+  "metadata": {
+    "family": "dsv3-shaped",
+    "config": {
+      "n_layers": 18,
+      "d_model": 2048,
+      "n_heads": 16,
+      "n_kv_heads": 16,
+      "d_ff": 8192,
+      "vocab_size": 129280,
+      "seq_len": 4096,
+      "batch": 16,
+      "grad_accum_rounds": 1,
+      "num_steps": 1
+    },
+    "lowering": "dsv3-exact-v1"
+  },
+  "metrics": {
+    "primary_unit": "tokens",
+    "primary_count": 65536.0,
+    "metadata": {}
+  },
+  "objects": [
+    {
+      "id": "W_embed",
+      "size_bytes": 529530880,
+      "initial_location": "backing",
+      "role": "parameter"
+    },
+    {
+      "id": "O_embed",
+      "size_bytes": 1059061760,
+      "initial_location": "backing",
+      "role": "optimizer_state"
+    },
+    {
+      "id": "W_0",
+      "size_bytes": 110765568,
+      "initial_location": "backing",
+      "role": "parameter"
+    },
+    {
+      "id": "O_0",
+      "size_bytes": 221531136,
+      "initial_location": "backing",
+      "role": "optimizer_state"
+    },
+    {
+      "id": "W_1",
+      "size_bytes": 110765568,
+      "initial_location": "backing",
+      "role": "parameter"
+    },
+    {
+      "id": "O_1",
+      "size_bytes": 221531136,
+      "initial_location": "backing",
+      "role": "optimizer_state"
+    },
+    {
+      "id": "W_2",
+      "size_bytes": 1633822720,
+      "initial_location": "backing",
+      "role": "parameter"
+    },
+    {
+      "id": "O_2",
+      "size_bytes": 3267645440,
+      "initial_location": "backing",
+      "role": "optimizer_state"
+    },
+    {
+      "id": "W_3",
+      "size_bytes": 1633822720,
+      "initial_location": "backing",
+      "role": "parameter"
+    },
+    {
+      "id": "O_3",
+      "size_bytes": 3267645440,
+      "initial_location": "backing",
+      "role": "optimizer_state"
+    },
+    {
+      "id": "W_4",
+      "size_bytes": 1633822720,
+      "initial_location": "backing",
+      "role": "parameter"
+    },
+    {
+      "id": "O_4",
+      "size_bytes": 3267645440,
+      "initial_location": "backing",
+      "role": "optimizer_state"
+    },
+    {
+      "id": "W_5",
+      "size_bytes": 1633822720,
+      "initial_location": "backing",
+      "role": "parameter"
+    },
+    {
+      "id": "O_5",
+      "size_bytes": 3267645440,
+      "initial_location": "backing",
+      "role": "optimizer_state"
+    },
+    {
+      "id": "W_6",
+      "size_bytes": 1633822720,
+      "initial_location": "backing",
+      "role": "parameter"
+    },
+    {
+      "id": "O_6",
+      "size_bytes": 3267645440,
+      "initial_location": "backing",
+      "role": "optimizer_state"
+    },
+    {
+      "id": "W_7",
+      "size_bytes": 1633822720,
+      "initial_location": "backing",
+      "role": "parameter"
+    },
+    {
+      "id": "O_7",
+      "size_bytes": 3267645440,
+      "initial_location": "backing",
+      "role": "optimizer_state"
+    },
+    {
+      "id": "W_8",
+      "size_bytes": 1633822720,
+      "initial_location": "backing",
+      "role": "parameter"
+    },
+    {
+      "id": "O_8",
+      "size_bytes": 3267645440,
+      "initial_location": "backing",
+      "role": "optimizer_state"
+    },
+    {
+      "id": "W_9",
+      "size_bytes": 1633822720,
+      "initial_location": "backing",
+      "role": "parameter"
+    },
+    {
+      "id": "O_9",
+      "size_bytes": 3267645440,
+      "initial_location": "backing",
+      "role": "optimizer_state"
+    },
+    {
+      "id": "W_10",
+      "size_bytes": 1633822720,
+      "initial_location": "backing",
+      "role": "parameter"
+    },
+    {
+      "id": "O_10",
+      "size_bytes": 3267645440,
+      "initial_location": "backing",
+      "role": "optimizer_state"
+    },
+    {
+      "id": "W_11",
+      "size_bytes": 1633822720,
+      "initial_location": "backing",
+      "role": "parameter"
+    },
+    {
+      "id": "O_11",
+      "size_bytes": 3267645440,
+      "initial_location": "backing",
+      "role": "optimizer_state"
+    },
+    {
+      "id": "W_12",
+      "size_bytes": 1633822720,
+      "initial_location": "backing",
+      "role": "parameter"
+    },
+    {
+      "id": "O_12",
+      "size_bytes": 3267645440,
+      "initial_location": "backing",
+      "role": "optimizer_state"
+    },
+    {
+      "id": "W_13",
+      "size_bytes": 1633822720,
+      "initial_location": "backing",
+      "role": "parameter"
+    },
+    {
+      "id": "O_13",
+      "size_bytes": 3267645440,
+      "initial_location": "backing",
+      "role": "optimizer_state"
+    },
+    {
+      "id": "W_14",
+      "size_bytes": 1633822720,
+      "initial_location": "backing",
+      "role": "parameter"
+    },
+    {
+      "id": "O_14",
+      "size_bytes": 3267645440,
+      "initial_location": "backing",
+      "role": "optimizer_state"
+    },
+    {
+      "id": "W_15",
+      "size_bytes": 1633822720,
+      "initial_location": "backing",
+      "role": "parameter"
+    },
+    {
+      "id": "O_15",
+      "size_bytes": 3267645440,
+      "initial_location": "backing",
+      "role": "optimizer_state"
+    },
+    {
+      "id": "W_16",
+      "size_bytes": 1633822720,
+      "initial_location": "backing",
+      "role": "parameter"
+    },
+    {
+      "id": "O_16",
+      "size_bytes": 3267645440,
+      "initial_location": "backing",
+      "role": "optimizer_state"
+    },
+    {
+      "id": "W_17",
+      "size_bytes": 1633822720,
+      "initial_location": "backing",
+      "role": "parameter"
+    },
+    {
+      "id": "O_17",
+      "size_bytes": 3267645440,
+      "initial_location": "backing",
+      "role": "optimizer_state"
+    },
+    {
+      "id": "W_head",
+      "size_bytes": 529534976,
+      "initial_location": "backing",
+      "role": "parameter"
+    },
+    {
+      "id": "O_head",
+      "size_bytes": 1059069952,
+      "initial_location": "backing",
+      "role": "optimizer_state"
+    },
+    {
+      "id": "tokens_0_0",
+      "size_bytes": 262144,
+      "initial_location": "fast",
+      "role": "input"
+    },
+    {
+      "id": "targets_0_0",
+      "size_bytes": 262144,
+      "initial_location": "backing",
+      "role": "input"
+    }
+  ],
+  "compute_blocks": [
+    {
+      "key": "embed_fwd",
+      "name": "embed_fwd",
+      "category": "forward",
+      "subops": [
+        {
+          "kind": "roofline",
+          "name": "gather",
+          "runtime_us": null,
+          "flops": 0,
+          "memory_bytes": 537133056,
+          "efficiency": "memory",
+          "count": 1,
+          "effective_flops": null,
+          "compute_eff": null,
+          "mem_eff": null,
+          "terms": []
+        }
+      ],
+      "metadata": {}
+    },
+    {
+      "key": "mladense_fwd",
+      "name": "mladense_fwd",
+      "category": "forward",
+      "subops": [
+        {
+          "kind": "roofline",
+          "name": "mladense_matmuls",
+          "runtime_us": null,
+          "flops": 7258494730240,
+          "memory_bytes": 1184507392,
+          "efficiency": "matmul",
+          "count": 1,
+          "effective_flops": null,
+          "compute_eff": null,
+          "mem_eff": null,
+          "terms": []
+        },
+        {
+          "kind": "roofline",
+          "name": "attention",
+          "runtime_us": null,
+          "flops": 824633720832,
+          "memory_bytes": 805306368,
+          "efficiency": "attention",
+          "count": 1,
+          "effective_flops": null,
+          "compute_eff": null,
+          "mem_eff": null,
+          "terms": []
+        }
+      ],
+      "metadata": {}
+    },
+    {
+      "key": "mlamoe_fwd",
+      "name": "mlamoe_fwd",
+      "category": "forward",
+      "subops": [
+        {
+          "kind": "roofline",
+          "name": "mlamoe_matmuls",
+          "runtime_us": null,
+          "flops": 8117488189440,
+          "memory_bytes": 10223757056,
+          "efficiency": "matmul",
+          "count": 1,
+          "effective_flops": null,
+          "compute_eff": null,
+          "mem_eff": null,
+          "terms": []
+        },
+        {
+          "kind": "roofline",
+          "name": "attention",
+          "runtime_us": null,
+          "flops": 824633720832,
+          "memory_bytes": 805306368,
+          "efficiency": "attention",
+          "count": 1,
+          "effective_flops": null,
+          "compute_eff": null,
+          "mem_eff": null,
+          "terms": []
+        }
+      ],
+      "metadata": {}
+    },
+    {
+      "key": "head_loss",
+      "name": "head_loss",
+      "category": "backward",
+      "subops": [
+        {
+          "kind": "roofline",
+          "name": "lm_head",
+          "runtime_us": null,
+          "flops": 34703335751680,
+          "memory_bytes": 17742954496,
+          "efficiency": "matmul",
+          "count": 1,
+          "effective_flops": null,
+          "compute_eff": null,
+          "mem_eff": null,
+          "terms": []
+        },
+        {
+          "kind": "roofline",
+          "name": "ce_loss",
+          "runtime_us": null,
+          "flops": 0,
+          "memory_bytes": 33889976320,
+          "efficiency": "memory",
+          "count": 1,
+          "effective_flops": null,
+          "compute_eff": null,
+          "mem_eff": null,
+          "terms": []
+        },
+        {
+          "kind": "roofline",
+          "name": "lm_head_bwd",
+          "runtime_us": null,
+          "flops": 69406671503360,
+          "memory_bytes": 35485908992,
+          "efficiency": "matmul",
+          "count": 1,
+          "effective_flops": null,
+          "compute_eff": null,
+          "mem_eff": null,
+          "terms": []
+        }
+      ],
+      "metadata": {}
+    },
+    {
+      "key": "optimizer_head",
+      "name": "optimizer_head",
+      "category": "optimizer",
+      "subops": [
+        {
+          "kind": "roofline",
+          "name": "adamw",
+          "runtime_us": null,
+          "flops": 0,
+          "memory_bytes": 3706716160,
+          "efficiency": "memory",
+          "count": 1,
+          "effective_flops": null,
+          "compute_eff": null,
+          "mem_eff": null,
+          "terms": []
+        }
+      ],
+      "metadata": {}
+    },
+    {
+      "key": "mlamoe_bwd",
+      "name": "mlamoe_bwd",
+      "category": "backward",
+      "subops": [
+        {
+          "kind": "roofline",
+          "name": "mlamoe_matmuls_bwd",
+          "runtime_us": null,
+          "flops": 16234976378880,
+          "memory_bytes": 20447514112,
+          "efficiency": "matmul",
+          "count": 1,
+          "effective_flops": null,
+          "compute_eff": null,
+          "mem_eff": null,
+          "terms": []
+        },
+        {
+          "kind": "roofline",
+          "name": "attention_bwd",
+          "runtime_us": null,
+          "flops": 2061584302080,
+          "memory_bytes": 1610612736,
+          "efficiency": "attention",
+          "count": 1,
+          "effective_flops": null,
+          "compute_eff": null,
+          "mem_eff": null,
+          "terms": []
+        }
+      ],
+      "metadata": {}
+    },
+    {
+      "key": "optimizer_block",
+      "name": "optimizer_block",
+      "category": "optimizer",
+      "subops": [
+        {
+          "kind": "roofline",
+          "name": "adamw",
+          "runtime_us": null,
+          "flops": 0,
+          "memory_bytes": 11436757248,
+          "efficiency": "memory",
+          "count": 1,
+          "effective_flops": null,
+          "compute_eff": null,
+          "mem_eff": null,
+          "terms": []
+        }
+      ],
+      "metadata": {}
+    },
+    {
+      "key": "mladense_bwd",
+      "name": "mladense_bwd",
+      "category": "backward",
+      "subops": [
+        {
+          "kind": "roofline",
+          "name": "mladense_matmuls_bwd",
+          "runtime_us": null,
+          "flops": 14516989460480,
+          "memory_bytes": 2369014784,
+          "efficiency": "matmul",
+          "count": 1,
+          "effective_flops": null,
+          "compute_eff": null,
+          "mem_eff": null,
+          "terms": []
+        },
+        {
+          "kind": "roofline",
+          "name": "attention_bwd",
+          "runtime_us": null,
+          "flops": 2061584302080,
+          "memory_bytes": 1610612736,
+          "efficiency": "attention",
+          "count": 1,
+          "effective_flops": null,
+          "compute_eff": null,
+          "mem_eff": null,
+          "terms": []
+        }
+      ],
+      "metadata": {}
+    },
+    {
+      "key": "embed_bwd",
+      "name": "embed_bwd",
+      "category": "backward",
+      "subops": [
+        {
+          "kind": "roofline",
+          "name": "scatter_accum",
+          "runtime_us": null,
+          "flops": 0,
+          "memory_bytes": 1074266112,
+          "efficiency": "memory",
+          "count": 1,
+          "effective_flops": null,
+          "compute_eff": null,
+          "mem_eff": null,
+          "terms": []
+        }
+      ],
+      "metadata": {}
+    },
+    {
+      "key": "optimizer_embed",
+      "name": "optimizer_embed",
+      "category": "optimizer",
+      "subops": [
+        {
+          "kind": "roofline",
+          "name": "adamw",
+          "runtime_us": null,
+          "flops": 0,
+          "memory_bytes": 3706716160,
+          "efficiency": "memory",
+          "count": 1,
+          "effective_flops": null,
+          "compute_eff": null,
+          "mem_eff": null,
+          "terms": []
+        }
+      ],
+      "metadata": {}
+    }
+  ],
+  "tasks": [
+    {
+      "id": "embed_fwd_0_0",
+      "label": null,
+      "group": "forward",
+      "compute_block_key": "embed_fwd",
+      "inputs": [
+        "tokens_0_0",
+        "W_embed"
+      ],
+      "outputs": [
+        {
+          "id": "y_embed_0_0",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        }
+      ],
+      "mutates": [],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "block_fwd_0_0_0",
+      "label": null,
+      "group": "forward",
+      "compute_block_key": "mladense_fwd",
+      "inputs": [
+        "y_embed_0_0",
+        "W_0"
+      ],
+      "outputs": [
+        {
+          "id": "y_0_0_0",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        },
+        {
+          "id": "A_0_0_0",
+          "size_bytes": 2660237312,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        }
+      ],
+      "mutates": [],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "block_fwd_0_0_1",
+      "label": null,
+      "group": "forward",
+      "compute_block_key": "mladense_fwd",
+      "inputs": [
+        "y_0_0_0",
+        "W_1"
+      ],
+      "outputs": [
+        {
+          "id": "y_0_0_1",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        },
+        {
+          "id": "A_0_0_1",
+          "size_bytes": 2660237312,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        }
+      ],
+      "mutates": [],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "block_fwd_0_0_2",
+      "label": null,
+      "group": "forward",
+      "compute_block_key": "mlamoe_fwd",
+      "inputs": [
+        "y_0_0_1",
+        "W_2"
+      ],
+      "outputs": [
+        {
+          "id": "y_0_0_2",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        },
+        {
+          "id": "A_0_0_2",
+          "size_bytes": 2945449984,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        },
+        {
+          "id": "M_0_0_2",
+          "size_bytes": 5243648,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        }
+      ],
+      "mutates": [],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "block_fwd_0_0_3",
+      "label": null,
+      "group": "forward",
+      "compute_block_key": "mlamoe_fwd",
+      "inputs": [
+        "y_0_0_2",
+        "W_3"
+      ],
+      "outputs": [
+        {
+          "id": "y_0_0_3",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        },
+        {
+          "id": "A_0_0_3",
+          "size_bytes": 2945449984,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        },
+        {
+          "id": "M_0_0_3",
+          "size_bytes": 5243648,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        }
+      ],
+      "mutates": [],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "block_fwd_0_0_4",
+      "label": null,
+      "group": "forward",
+      "compute_block_key": "mlamoe_fwd",
+      "inputs": [
+        "y_0_0_3",
+        "W_4"
+      ],
+      "outputs": [
+        {
+          "id": "y_0_0_4",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        },
+        {
+          "id": "A_0_0_4",
+          "size_bytes": 2945449984,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        },
+        {
+          "id": "M_0_0_4",
+          "size_bytes": 5243648,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        }
+      ],
+      "mutates": [],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "block_fwd_0_0_5",
+      "label": null,
+      "group": "forward",
+      "compute_block_key": "mlamoe_fwd",
+      "inputs": [
+        "y_0_0_4",
+        "W_5"
+      ],
+      "outputs": [
+        {
+          "id": "y_0_0_5",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        },
+        {
+          "id": "A_0_0_5",
+          "size_bytes": 2945449984,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        },
+        {
+          "id": "M_0_0_5",
+          "size_bytes": 5243648,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        }
+      ],
+      "mutates": [],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "block_fwd_0_0_6",
+      "label": null,
+      "group": "forward",
+      "compute_block_key": "mlamoe_fwd",
+      "inputs": [
+        "y_0_0_5",
+        "W_6"
+      ],
+      "outputs": [
+        {
+          "id": "y_0_0_6",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        },
+        {
+          "id": "A_0_0_6",
+          "size_bytes": 2945449984,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        },
+        {
+          "id": "M_0_0_6",
+          "size_bytes": 5243648,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        }
+      ],
+      "mutates": [],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "block_fwd_0_0_7",
+      "label": null,
+      "group": "forward",
+      "compute_block_key": "mlamoe_fwd",
+      "inputs": [
+        "y_0_0_6",
+        "W_7"
+      ],
+      "outputs": [
+        {
+          "id": "y_0_0_7",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        },
+        {
+          "id": "A_0_0_7",
+          "size_bytes": 2945449984,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        },
+        {
+          "id": "M_0_0_7",
+          "size_bytes": 5243648,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        }
+      ],
+      "mutates": [],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "block_fwd_0_0_8",
+      "label": null,
+      "group": "forward",
+      "compute_block_key": "mlamoe_fwd",
+      "inputs": [
+        "y_0_0_7",
+        "W_8"
+      ],
+      "outputs": [
+        {
+          "id": "y_0_0_8",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        },
+        {
+          "id": "A_0_0_8",
+          "size_bytes": 2945449984,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        },
+        {
+          "id": "M_0_0_8",
+          "size_bytes": 5243648,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        }
+      ],
+      "mutates": [],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "block_fwd_0_0_9",
+      "label": null,
+      "group": "forward",
+      "compute_block_key": "mlamoe_fwd",
+      "inputs": [
+        "y_0_0_8",
+        "W_9"
+      ],
+      "outputs": [
+        {
+          "id": "y_0_0_9",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        },
+        {
+          "id": "A_0_0_9",
+          "size_bytes": 2945449984,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        },
+        {
+          "id": "M_0_0_9",
+          "size_bytes": 5243648,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        }
+      ],
+      "mutates": [],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "block_fwd_0_0_10",
+      "label": null,
+      "group": "forward",
+      "compute_block_key": "mlamoe_fwd",
+      "inputs": [
+        "y_0_0_9",
+        "W_10"
+      ],
+      "outputs": [
+        {
+          "id": "y_0_0_10",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        },
+        {
+          "id": "A_0_0_10",
+          "size_bytes": 2945449984,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        },
+        {
+          "id": "M_0_0_10",
+          "size_bytes": 5243648,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        }
+      ],
+      "mutates": [],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "block_fwd_0_0_11",
+      "label": null,
+      "group": "forward",
+      "compute_block_key": "mlamoe_fwd",
+      "inputs": [
+        "y_0_0_10",
+        "W_11"
+      ],
+      "outputs": [
+        {
+          "id": "y_0_0_11",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        },
+        {
+          "id": "A_0_0_11",
+          "size_bytes": 2945449984,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        },
+        {
+          "id": "M_0_0_11",
+          "size_bytes": 5243648,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        }
+      ],
+      "mutates": [],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "block_fwd_0_0_12",
+      "label": null,
+      "group": "forward",
+      "compute_block_key": "mlamoe_fwd",
+      "inputs": [
+        "y_0_0_11",
+        "W_12"
+      ],
+      "outputs": [
+        {
+          "id": "y_0_0_12",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        },
+        {
+          "id": "A_0_0_12",
+          "size_bytes": 2945449984,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        },
+        {
+          "id": "M_0_0_12",
+          "size_bytes": 5243648,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        }
+      ],
+      "mutates": [],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "block_fwd_0_0_13",
+      "label": null,
+      "group": "forward",
+      "compute_block_key": "mlamoe_fwd",
+      "inputs": [
+        "y_0_0_12",
+        "W_13"
+      ],
+      "outputs": [
+        {
+          "id": "y_0_0_13",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        },
+        {
+          "id": "A_0_0_13",
+          "size_bytes": 2945449984,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        },
+        {
+          "id": "M_0_0_13",
+          "size_bytes": 5243648,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        }
+      ],
+      "mutates": [],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "block_fwd_0_0_14",
+      "label": null,
+      "group": "forward",
+      "compute_block_key": "mlamoe_fwd",
+      "inputs": [
+        "y_0_0_13",
+        "W_14"
+      ],
+      "outputs": [
+        {
+          "id": "y_0_0_14",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        },
+        {
+          "id": "A_0_0_14",
+          "size_bytes": 2945449984,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        },
+        {
+          "id": "M_0_0_14",
+          "size_bytes": 5243648,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        }
+      ],
+      "mutates": [],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "block_fwd_0_0_15",
+      "label": null,
+      "group": "forward",
+      "compute_block_key": "mlamoe_fwd",
+      "inputs": [
+        "y_0_0_14",
+        "W_15"
+      ],
+      "outputs": [
+        {
+          "id": "y_0_0_15",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        },
+        {
+          "id": "A_0_0_15",
+          "size_bytes": 2945449984,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        },
+        {
+          "id": "M_0_0_15",
+          "size_bytes": 5243648,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        }
+      ],
+      "mutates": [],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "block_fwd_0_0_16",
+      "label": null,
+      "group": "forward",
+      "compute_block_key": "mlamoe_fwd",
+      "inputs": [
+        "y_0_0_15",
+        "W_16"
+      ],
+      "outputs": [
+        {
+          "id": "y_0_0_16",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        },
+        {
+          "id": "A_0_0_16",
+          "size_bytes": 2945449984,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        },
+        {
+          "id": "M_0_0_16",
+          "size_bytes": 5243648,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        }
+      ],
+      "mutates": [],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "block_fwd_0_0_17",
+      "label": null,
+      "group": "forward",
+      "compute_block_key": "mlamoe_fwd",
+      "inputs": [
+        "y_0_0_16",
+        "W_17"
+      ],
+      "outputs": [
+        {
+          "id": "y_0_0_17",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        },
+        {
+          "id": "A_0_0_17",
+          "size_bytes": 2945449984,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        },
+        {
+          "id": "M_0_0_17",
+          "size_bytes": 5243648,
+          "location": "fast",
+          "role": "activation",
+          "metadata": {}
+        }
+      ],
+      "mutates": [],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "head_loss_0_0",
+      "label": null,
+      "group": "backward",
+      "compute_block_key": "head_loss",
+      "inputs": [
+        "y_0_0_17",
+        "targets_0_0",
+        "W_head"
+      ],
+      "outputs": [
+        {
+          "id": "dy_0_0_17",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "gradient",
+          "metadata": {}
+        },
+        {
+          "id": "loss_0_0",
+          "size_bytes": 4,
+          "location": "fast",
+          "role": "output",
+          "metadata": {}
+        },
+        {
+          "id": "dW_head_0",
+          "size_bytes": 529534976,
+          "location": "fast",
+          "role": "gradient",
+          "metadata": {}
+        }
+      ],
+      "mutates": [],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "optimizer_head_0",
+      "label": null,
+      "group": "optimizer",
+      "compute_block_key": "optimizer_head",
+      "inputs": [
+        "W_head",
+        "dW_head_0",
+        "O_head"
+      ],
+      "outputs": [],
+      "mutates": [
+        "W_head",
+        "O_head"
+      ],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "block_bwd_0_0_17",
+      "label": null,
+      "group": "backward",
+      "compute_block_key": "mlamoe_bwd",
+      "inputs": [
+        "dy_0_0_17",
+        "A_0_0_17",
+        "y_0_0_16",
+        "W_17",
+        "M_0_0_17"
+      ],
+      "outputs": [
+        {
+          "id": "dy_0_0_16",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "gradient",
+          "metadata": {}
+        },
+        {
+          "id": "dW_0_17",
+          "size_bytes": 1633822720,
+          "location": "fast",
+          "role": "gradient",
+          "metadata": {}
+        }
+      ],
+      "mutates": [],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "optimizer_0_17",
+      "label": null,
+      "group": "optimizer",
+      "compute_block_key": "optimizer_block",
+      "inputs": [
+        "W_17",
+        "dW_0_17",
+        "O_17"
+      ],
+      "outputs": [],
+      "mutates": [
+        "W_17",
+        "O_17"
+      ],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "block_bwd_0_0_16",
+      "label": null,
+      "group": "backward",
+      "compute_block_key": "mlamoe_bwd",
+      "inputs": [
+        "dy_0_0_16",
+        "A_0_0_16",
+        "y_0_0_15",
+        "W_16",
+        "M_0_0_16"
+      ],
+      "outputs": [
+        {
+          "id": "dy_0_0_15",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "gradient",
+          "metadata": {}
+        },
+        {
+          "id": "dW_0_16",
+          "size_bytes": 1633822720,
+          "location": "fast",
+          "role": "gradient",
+          "metadata": {}
+        }
+      ],
+      "mutates": [],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "optimizer_0_16",
+      "label": null,
+      "group": "optimizer",
+      "compute_block_key": "optimizer_block",
+      "inputs": [
+        "W_16",
+        "dW_0_16",
+        "O_16"
+      ],
+      "outputs": [],
+      "mutates": [
+        "W_16",
+        "O_16"
+      ],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "block_bwd_0_0_15",
+      "label": null,
+      "group": "backward",
+      "compute_block_key": "mlamoe_bwd",
+      "inputs": [
+        "dy_0_0_15",
+        "A_0_0_15",
+        "y_0_0_14",
+        "W_15",
+        "M_0_0_15"
+      ],
+      "outputs": [
+        {
+          "id": "dy_0_0_14",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "gradient",
+          "metadata": {}
+        },
+        {
+          "id": "dW_0_15",
+          "size_bytes": 1633822720,
+          "location": "fast",
+          "role": "gradient",
+          "metadata": {}
+        }
+      ],
+      "mutates": [],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "optimizer_0_15",
+      "label": null,
+      "group": "optimizer",
+      "compute_block_key": "optimizer_block",
+      "inputs": [
+        "W_15",
+        "dW_0_15",
+        "O_15"
+      ],
+      "outputs": [],
+      "mutates": [
+        "W_15",
+        "O_15"
+      ],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "block_bwd_0_0_14",
+      "label": null,
+      "group": "backward",
+      "compute_block_key": "mlamoe_bwd",
+      "inputs": [
+        "dy_0_0_14",
+        "A_0_0_14",
+        "y_0_0_13",
+        "W_14",
+        "M_0_0_14"
+      ],
+      "outputs": [
+        {
+          "id": "dy_0_0_13",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "gradient",
+          "metadata": {}
+        },
+        {
+          "id": "dW_0_14",
+          "size_bytes": 1633822720,
+          "location": "fast",
+          "role": "gradient",
+          "metadata": {}
+        }
+      ],
+      "mutates": [],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "optimizer_0_14",
+      "label": null,
+      "group": "optimizer",
+      "compute_block_key": "optimizer_block",
+      "inputs": [
+        "W_14",
+        "dW_0_14",
+        "O_14"
+      ],
+      "outputs": [],
+      "mutates": [
+        "W_14",
+        "O_14"
+      ],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "block_bwd_0_0_13",
+      "label": null,
+      "group": "backward",
+      "compute_block_key": "mlamoe_bwd",
+      "inputs": [
+        "dy_0_0_13",
+        "A_0_0_13",
+        "y_0_0_12",
+        "W_13",
+        "M_0_0_13"
+      ],
+      "outputs": [
+        {
+          "id": "dy_0_0_12",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "gradient",
+          "metadata": {}
+        },
+        {
+          "id": "dW_0_13",
+          "size_bytes": 1633822720,
+          "location": "fast",
+          "role": "gradient",
+          "metadata": {}
+        }
+      ],
+      "mutates": [],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "optimizer_0_13",
+      "label": null,
+      "group": "optimizer",
+      "compute_block_key": "optimizer_block",
+      "inputs": [
+        "W_13",
+        "dW_0_13",
+        "O_13"
+      ],
+      "outputs": [],
+      "mutates": [
+        "W_13",
+        "O_13"
+      ],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "block_bwd_0_0_12",
+      "label": null,
+      "group": "backward",
+      "compute_block_key": "mlamoe_bwd",
+      "inputs": [
+        "dy_0_0_12",
+        "A_0_0_12",
+        "y_0_0_11",
+        "W_12",
+        "M_0_0_12"
+      ],
+      "outputs": [
+        {
+          "id": "dy_0_0_11",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "gradient",
+          "metadata": {}
+        },
+        {
+          "id": "dW_0_12",
+          "size_bytes": 1633822720,
+          "location": "fast",
+          "role": "gradient",
+          "metadata": {}
+        }
+      ],
+      "mutates": [],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "optimizer_0_12",
+      "label": null,
+      "group": "optimizer",
+      "compute_block_key": "optimizer_block",
+      "inputs": [
+        "W_12",
+        "dW_0_12",
+        "O_12"
+      ],
+      "outputs": [],
+      "mutates": [
+        "W_12",
+        "O_12"
+      ],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "block_bwd_0_0_11",
+      "label": null,
+      "group": "backward",
+      "compute_block_key": "mlamoe_bwd",
+      "inputs": [
+        "dy_0_0_11",
+        "A_0_0_11",
+        "y_0_0_10",
+        "W_11",
+        "M_0_0_11"
+      ],
+      "outputs": [
+        {
+          "id": "dy_0_0_10",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "gradient",
+          "metadata": {}
+        },
+        {
+          "id": "dW_0_11",
+          "size_bytes": 1633822720,
+          "location": "fast",
+          "role": "gradient",
+          "metadata": {}
+        }
+      ],
+      "mutates": [],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "optimizer_0_11",
+      "label": null,
+      "group": "optimizer",
+      "compute_block_key": "optimizer_block",
+      "inputs": [
+        "W_11",
+        "dW_0_11",
+        "O_11"
+      ],
+      "outputs": [],
+      "mutates": [
+        "W_11",
+        "O_11"
+      ],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "block_bwd_0_0_10",
+      "label": null,
+      "group": "backward",
+      "compute_block_key": "mlamoe_bwd",
+      "inputs": [
+        "dy_0_0_10",
+        "A_0_0_10",
+        "y_0_0_9",
+        "W_10",
+        "M_0_0_10"
+      ],
+      "outputs": [
+        {
+          "id": "dy_0_0_9",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "gradient",
+          "metadata": {}
+        },
+        {
+          "id": "dW_0_10",
+          "size_bytes": 1633822720,
+          "location": "fast",
+          "role": "gradient",
+          "metadata": {}
+        }
+      ],
+      "mutates": [],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "optimizer_0_10",
+      "label": null,
+      "group": "optimizer",
+      "compute_block_key": "optimizer_block",
+      "inputs": [
+        "W_10",
+        "dW_0_10",
+        "O_10"
+      ],
+      "outputs": [],
+      "mutates": [
+        "W_10",
+        "O_10"
+      ],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "block_bwd_0_0_9",
+      "label": null,
+      "group": "backward",
+      "compute_block_key": "mlamoe_bwd",
+      "inputs": [
+        "dy_0_0_9",
+        "A_0_0_9",
+        "y_0_0_8",
+        "W_9",
+        "M_0_0_9"
+      ],
+      "outputs": [
+        {
+          "id": "dy_0_0_8",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "gradient",
+          "metadata": {}
+        },
+        {
+          "id": "dW_0_9",
+          "size_bytes": 1633822720,
+          "location": "fast",
+          "role": "gradient",
+          "metadata": {}
+        }
+      ],
+      "mutates": [],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "optimizer_0_9",
+      "label": null,
+      "group": "optimizer",
+      "compute_block_key": "optimizer_block",
+      "inputs": [
+        "W_9",
+        "dW_0_9",
+        "O_9"
+      ],
+      "outputs": [],
+      "mutates": [
+        "W_9",
+        "O_9"
+      ],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "block_bwd_0_0_8",
+      "label": null,
+      "group": "backward",
+      "compute_block_key": "mlamoe_bwd",
+      "inputs": [
+        "dy_0_0_8",
+        "A_0_0_8",
+        "y_0_0_7",
+        "W_8",
+        "M_0_0_8"
+      ],
+      "outputs": [
+        {
+          "id": "dy_0_0_7",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "gradient",
+          "metadata": {}
+        },
+        {
+          "id": "dW_0_8",
+          "size_bytes": 1633822720,
+          "location": "fast",
+          "role": "gradient",
+          "metadata": {}
+        }
+      ],
+      "mutates": [],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "optimizer_0_8",
+      "label": null,
+      "group": "optimizer",
+      "compute_block_key": "optimizer_block",
+      "inputs": [
+        "W_8",
+        "dW_0_8",
+        "O_8"
+      ],
+      "outputs": [],
+      "mutates": [
+        "W_8",
+        "O_8"
+      ],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "block_bwd_0_0_7",
+      "label": null,
+      "group": "backward",
+      "compute_block_key": "mlamoe_bwd",
+      "inputs": [
+        "dy_0_0_7",
+        "A_0_0_7",
+        "y_0_0_6",
+        "W_7",
+        "M_0_0_7"
+      ],
+      "outputs": [
+        {
+          "id": "dy_0_0_6",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "gradient",
+          "metadata": {}
+        },
+        {
+          "id": "dW_0_7",
+          "size_bytes": 1633822720,
+          "location": "fast",
+          "role": "gradient",
+          "metadata": {}
+        }
+      ],
+      "mutates": [],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "optimizer_0_7",
+      "label": null,
+      "group": "optimizer",
+      "compute_block_key": "optimizer_block",
+      "inputs": [
+        "W_7",
+        "dW_0_7",
+        "O_7"
+      ],
+      "outputs": [],
+      "mutates": [
+        "W_7",
+        "O_7"
+      ],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "block_bwd_0_0_6",
+      "label": null,
+      "group": "backward",
+      "compute_block_key": "mlamoe_bwd",
+      "inputs": [
+        "dy_0_0_6",
+        "A_0_0_6",
+        "y_0_0_5",
+        "W_6",
+        "M_0_0_6"
+      ],
+      "outputs": [
+        {
+          "id": "dy_0_0_5",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "gradient",
+          "metadata": {}
+        },
+        {
+          "id": "dW_0_6",
+          "size_bytes": 1633822720,
+          "location": "fast",
+          "role": "gradient",
+          "metadata": {}
+        }
+      ],
+      "mutates": [],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "optimizer_0_6",
+      "label": null,
+      "group": "optimizer",
+      "compute_block_key": "optimizer_block",
+      "inputs": [
+        "W_6",
+        "dW_0_6",
+        "O_6"
+      ],
+      "outputs": [],
+      "mutates": [
+        "W_6",
+        "O_6"
+      ],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "block_bwd_0_0_5",
+      "label": null,
+      "group": "backward",
+      "compute_block_key": "mlamoe_bwd",
+      "inputs": [
+        "dy_0_0_5",
+        "A_0_0_5",
+        "y_0_0_4",
+        "W_5",
+        "M_0_0_5"
+      ],
+      "outputs": [
+        {
+          "id": "dy_0_0_4",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "gradient",
+          "metadata": {}
+        },
+        {
+          "id": "dW_0_5",
+          "size_bytes": 1633822720,
+          "location": "fast",
+          "role": "gradient",
+          "metadata": {}
+        }
+      ],
+      "mutates": [],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "optimizer_0_5",
+      "label": null,
+      "group": "optimizer",
+      "compute_block_key": "optimizer_block",
+      "inputs": [
+        "W_5",
+        "dW_0_5",
+        "O_5"
+      ],
+      "outputs": [],
+      "mutates": [
+        "W_5",
+        "O_5"
+      ],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "block_bwd_0_0_4",
+      "label": null,
+      "group": "backward",
+      "compute_block_key": "mlamoe_bwd",
+      "inputs": [
+        "dy_0_0_4",
+        "A_0_0_4",
+        "y_0_0_3",
+        "W_4",
+        "M_0_0_4"
+      ],
+      "outputs": [
+        {
+          "id": "dy_0_0_3",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "gradient",
+          "metadata": {}
+        },
+        {
+          "id": "dW_0_4",
+          "size_bytes": 1633822720,
+          "location": "fast",
+          "role": "gradient",
+          "metadata": {}
+        }
+      ],
+      "mutates": [],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "optimizer_0_4",
+      "label": null,
+      "group": "optimizer",
+      "compute_block_key": "optimizer_block",
+      "inputs": [
+        "W_4",
+        "dW_0_4",
+        "O_4"
+      ],
+      "outputs": [],
+      "mutates": [
+        "W_4",
+        "O_4"
+      ],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "block_bwd_0_0_3",
+      "label": null,
+      "group": "backward",
+      "compute_block_key": "mlamoe_bwd",
+      "inputs": [
+        "dy_0_0_3",
+        "A_0_0_3",
+        "y_0_0_2",
+        "W_3",
+        "M_0_0_3"
+      ],
+      "outputs": [
+        {
+          "id": "dy_0_0_2",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "gradient",
+          "metadata": {}
+        },
+        {
+          "id": "dW_0_3",
+          "size_bytes": 1633822720,
+          "location": "fast",
+          "role": "gradient",
+          "metadata": {}
+        }
+      ],
+      "mutates": [],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "optimizer_0_3",
+      "label": null,
+      "group": "optimizer",
+      "compute_block_key": "optimizer_block",
+      "inputs": [
+        "W_3",
+        "dW_0_3",
+        "O_3"
+      ],
+      "outputs": [],
+      "mutates": [
+        "W_3",
+        "O_3"
+      ],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "block_bwd_0_0_2",
+      "label": null,
+      "group": "backward",
+      "compute_block_key": "mlamoe_bwd",
+      "inputs": [
+        "dy_0_0_2",
+        "A_0_0_2",
+        "y_0_0_1",
+        "W_2",
+        "M_0_0_2"
+      ],
+      "outputs": [
+        {
+          "id": "dy_0_0_1",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "gradient",
+          "metadata": {}
+        },
+        {
+          "id": "dW_0_2",
+          "size_bytes": 1633822720,
+          "location": "fast",
+          "role": "gradient",
+          "metadata": {}
+        }
+      ],
+      "mutates": [],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "optimizer_0_2",
+      "label": null,
+      "group": "optimizer",
+      "compute_block_key": "optimizer_block",
+      "inputs": [
+        "W_2",
+        "dW_0_2",
+        "O_2"
+      ],
+      "outputs": [],
+      "mutates": [
+        "W_2",
+        "O_2"
+      ],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "block_bwd_0_0_1",
+      "label": null,
+      "group": "backward",
+      "compute_block_key": "mladense_bwd",
+      "inputs": [
+        "dy_0_0_1",
+        "A_0_0_1",
+        "y_0_0_0",
+        "W_1"
+      ],
+      "outputs": [
+        {
+          "id": "dy_0_0_0",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "gradient",
+          "metadata": {}
+        },
+        {
+          "id": "dW_0_1",
+          "size_bytes": 110765568,
+          "location": "fast",
+          "role": "gradient",
+          "metadata": {}
+        }
+      ],
+      "mutates": [],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "optimizer_0_1",
+      "label": null,
+      "group": "optimizer",
+      "compute_block_key": "optimizer_block",
+      "inputs": [
+        "W_1",
+        "dW_0_1",
+        "O_1"
+      ],
+      "outputs": [],
+      "mutates": [
+        "W_1",
+        "O_1"
+      ],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "block_bwd_0_0_0",
+      "label": null,
+      "group": "backward",
+      "compute_block_key": "mladense_bwd",
+      "inputs": [
+        "dy_0_0_0",
+        "A_0_0_0",
+        "y_embed_0_0",
+        "W_0"
+      ],
+      "outputs": [
+        {
+          "id": "dy_embed_0_0",
+          "size_bytes": 268435456,
+          "location": "fast",
+          "role": "gradient",
+          "metadata": {}
+        },
+        {
+          "id": "dW_0_0",
+          "size_bytes": 110765568,
+          "location": "fast",
+          "role": "gradient",
+          "metadata": {}
+        }
+      ],
+      "mutates": [],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "optimizer_0_0",
+      "label": null,
+      "group": "optimizer",
+      "compute_block_key": "optimizer_block",
+      "inputs": [
+        "W_0",
+        "dW_0_0",
+        "O_0"
+      ],
+      "outputs": [],
+      "mutates": [
+        "W_0",
+        "O_0"
+      ],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "embed_bwd_0_0",
+      "label": null,
+      "group": "backward",
+      "compute_block_key": "embed_bwd",
+      "inputs": [
+        "dy_embed_0_0",
+        "tokens_0_0"
+      ],
+      "outputs": [
+        {
+          "id": "dW_embed_0",
+          "size_bytes": 529530880,
+          "location": "fast",
+          "role": "gradient",
+          "metadata": {}
+        }
+      ],
+      "mutates": [],
+      "cost": null,
+      "metadata": {}
+    },
+    {
+      "id": "optimizer_embed_0",
+      "label": null,
+      "group": "optimizer",
+      "compute_block_key": "optimizer_embed",
+      "inputs": [
+        "W_embed",
+        "dW_embed_0",
+        "O_embed"
+      ],
+      "outputs": [],
+      "mutates": [
+        "W_embed",
+        "O_embed"
+      ],
+      "cost": null,
+      "metadata": {}
+    }
+  ],
+  "final_locations": {
+    "W_embed": "backing",
+    "O_embed": "backing",
+    "W_0": "backing",
+    "O_0": "backing",
+    "W_1": "backing",
+    "O_1": "backing",
+    "W_2": "backing",
+    "O_2": "backing",
+    "W_3": "backing",
+    "O_3": "backing",
+    "W_4": "backing",
+    "O_4": "backing",
+    "W_5": "backing",
+    "O_5": "backing",
+    "W_6": "backing",
+    "O_6": "backing",
+    "W_7": "backing",
+    "O_7": "backing",
+    "W_8": "backing",
+    "O_8": "backing",
+    "W_9": "backing",
+    "O_9": "backing",
+    "W_10": "backing",
+    "O_10": "backing",
+    "W_11": "backing",
+    "O_11": "backing",
+    "W_12": "backing",
+    "O_12": "backing",
+    "W_13": "backing",
+    "O_13": "backing",
+    "W_14": "backing",
+    "O_14": "backing",
+    "W_15": "backing",
+    "O_15": "backing",
+    "W_16": "backing",
+    "O_16": "backing",
+    "W_17": "backing",
+    "O_17": "backing",
+    "W_head": "backing",
+    "O_head": "backing",
+    "loss_0_0": "backing"
+  }
+}

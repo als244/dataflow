@@ -714,6 +714,7 @@ def main() -> None:
         stem = f"{planned.program.name}-{gib:g}gib"
         save_program(planned.program, args.out / f"{stem}.annotated.json")
         row["plan_path"] = str(args.out / f"{stem}.annotated.json")
+        row["webapp_path"] = str(args.out / f"{stem}.webapp.json")
         (args.out / f"{stem}.webapp.json").write_text(
             json.dumps(to_webapp_program(measured), indent=2) + "\n"
         )
