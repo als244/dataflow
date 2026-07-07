@@ -36,6 +36,7 @@ from .registry import (  # noqa: F401
 # resolution).
 from . import (  # noqa: F401,E402
     adamw,
+    muon,
     causal_conv,
     cross_entropy,
     dsa,

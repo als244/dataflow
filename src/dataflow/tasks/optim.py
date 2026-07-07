@@ -43,25 +43,14 @@ from typing import Callable
 
 import torch
 
-# NS5 coefficients (Jordan et al. Muon; quintic Newton-Schulz)
-_NS_A, _NS_B, _NS_C = 3.4445, -4.7750, 2.0315
-_NS_ITERS = 5
 
 
 def _ns_orthogonalize_batched(m: torch.Tensor) -> torch.Tensor:
-    """Approximate UV^T per slice of a (B, r, c) stack via quintic
-    Newton-Schulz (fp32; deterministic; transpose trick keeps iterates
-    wide; per-slice Frobenius normalization)."""
-    x = m.float()
-    transposed = x.shape[-2] > x.shape[-1]
-    if transposed:
-        x = x.mT
-    x = x / (x.flatten(1).norm(dim=1).clamp_min(1e-7).view(-1, 1, 1))
-    for _ in range(_NS_ITERS):
-        a = x @ x.mT
-        b = _NS_B * a + _NS_C * a @ a
-        x = _NS_A * x + b @ x
-    return (x.mT if transposed else x).to(m.dtype)
+    """Back-compat alias — the math lives in kernels/muon.py (the
+    flextrain port; single source of truth)."""
+    from .kernels.muon import ns_orthogonalize_batched
+
+    return ns_orthogonalize_batched(m.float()).to(m.dtype)
 
 
 def _ns_orthogonalize(m: torch.Tensor) -> torch.Tensor:
@@ -103,24 +92,25 @@ def _sgdm_step(kctx, kernels, hp, step_i, w, g, states, shape):
 
 
 def _muon_step(kctx, kernels, hp, step_i, w, g, states, shape):
-    """Nesterov momentum + Newton-Schulz (flextrain-aligned: same NS5
-    coefficients, nesterov update, per-expert-slice NS on 3D stacks —
-    batched here). ``hp.muon_lr`` overrides ``hp.lr`` when set (the two
-    rules want very different learning rates)."""
+    """Matrix fields (rank 2/3) run the REGISTRY ``muon_step`` kernel —
+    the flextrain port (bf16 momentum arithmetic, nesterov, fused NS5,
+    Moonshot 0.2*sqrt(max(r,c)) scaling; kernels/muon.py). Non-matrix
+    fields (only reachable via raw OptPolicy(default="muon"); the
+    recipe routes them to adamw) take a nesterov momentum step here.
+    ``hp.muon_lr`` overrides ``hp.lr`` when set."""
     lr = hp.muon_lr if getattr(hp, "muon_lr", None) else hp.lr
     m = states["m"]
-    m32 = m.float().mul_(hp.momentum).add_(g.float())
-    m.copy_(m32.to(m.dtype))
-    eff = g.float() + hp.momentum * m32          # nesterov
+    if len(shape) in (2, 3) and min(shape[-2:]) > 1:
+        kernels.muon_step(kctx, w, g, m, shape=shape, lr=lr,
+                          beta=hp.momentum, eps=hp.eps,
+                          weight_decay=hp.weight_decay)
+        return
+    gm = g.to(m.dtype)
+    m.mul_(hp.momentum).add_(gm)
+    eff = gm.add(m, alpha=hp.momentum).float()
     w32 = w.float()
     w32.mul_(1.0 - lr * hp.weight_decay)
-    if len(shape) in (2, 3) and min(shape[-2:]) > 1:
-        eff3 = eff.view(shape if len(shape) == 3 else (1, *shape))
-        o = _ns_orthogonalize_batched(eff3)
-        scale = max(1.0, shape[-2] / shape[-1]) ** 0.5
-        w32.add_(o.reshape(-1).float(), alpha=-lr * scale)
-    else:
-        w32.add_(eff, alpha=-lr)
+    w32.add_(eff, alpha=-lr)
     w.copy_(w32.to(w.dtype))
 
 

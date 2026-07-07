@@ -283,7 +283,12 @@ through `tasks/optim.py`:
   (flextrain-aligned coefficients; singular values land in a band near
   ~0.9 by design), and `AdamWHyper.muon_lr` sets its learning rate
   separately from the adamw fields' `lr` (the two rules want very
-  different values).
+  different values). Muon's step math is a REGISTRY kernel
+  (`muon_step`, kernels/muon.py — ported from flextrain's
+  `flextrain_muon_step`: bf16 momentum arithmetic, fused NS,
+  Moonshot `0.2*sqrt(max(r,c))` scaling), same as `adamw_step`
+  (eager + triton); `register(...)` new implementations without
+  touching the optimizer layer.
 
   O-object sizes follow the policy automatically (lowering asks the
   same layout fn the executable views through), so plans, transfers,
@@ -291,7 +296,14 @@ through `tasks/optim.py`:
 - `update_specials` (noaux router bias, frozen fields) remain the
   HIGHEST-priority per-field override on top of the policy.
 - All step math is fp32 with storage-dtype round-trips (the AdamW
-  kernel's convention).
+  kernel's convention), except muon's momentum which follows the
+  flextrain port (momentum-dtype arithmetic).
+- Granularity invariant: ONE optimizer task per layer (plus embed/
+  head) COMPOSES every field's step inside it, whatever mix of rules
+  the policy assigns, and all of the layer's state slots pack into its
+  single `O_{i}` object — task count and object grammar never depend
+  on the policy (only sizes do; a fully stateless layer drops its O
+  entirely).
 - Gates: `tests/tasks/test_optim.py` — per-step math vs inline
   formulas, NS properties, slot layouts, and a mixed-policy model
   step through the REAL engine vs a hand replica. The all-adamw

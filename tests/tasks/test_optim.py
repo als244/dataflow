@@ -69,21 +69,25 @@ def test_muon_orthogonalizes_2d_and_falls_back_1d():
     assert 0.5 < sv.min() and sv.max() < 1.3, (sv.min(), sv.max())
     # and it preserves direction: positive alignment with the input
     assert (o * m).sum() > 0
-    # 1D field: muon = NESTEROV momentum step (no NS): from zero state
-    # m = g, eff = g + mu*m = (1+mu)*g
+    # 1D field: muon = NESTEROV momentum step (no NS), momentum-dtype
+    # arithmetic (the flextrain convention)
     w1, g1 = _mk(seed=3)
     m1 = torch.zeros_like(w1)
     w0 = w1.clone()
     OPTIMIZERS["muon"].step(None, None, _Hyper, 1, w1, g1,
                             {"m": m1}, (w1.numel(),))
-    eff = (1 + _Hyper.momentum) * g1.float()
+    gm = g1.to(torch.bfloat16)
+    eff = gm.add(gm, alpha=_Hyper.momentum).float()
     expect = (w0.float() * (1 - _Hyper.lr * _Hyper.weight_decay)
               - _Hyper.lr * eff).to(w1.dtype)
-    assert torch.equal(w1, expect)
+    assert torch.equal(m1, gm) and torch.equal(w1, expect)
 
 
 def test_muon_recipe_classification_and_3d():
-    from dataflow.tasks.optim import _ns_orthogonalize_batched, resolve_opt_policy
+    from dataflow.tasks.kernels.muon import (
+        ns_orthogonalize_batched as _ns_orthogonalize_batched,
+    )
+    from dataflow.tasks.optim import resolve_opt_policy
 
     r = resolve_opt_policy("muon")
     assert r.for_field("wq", None, (256, 256)) == "muon"
@@ -197,11 +201,12 @@ def test_mixed_policy_model_step_vs_hand_replica():
             out = w32 * (1 - hp.lr * hp.weight_decay) - hp.lr * g32
         elif kind == "sgdm":
             out = w32 * (1 - hp.lr * hp.weight_decay) - hp.lr * g32
-        else:  # muon, step 1 from zero state: m = g, eff = (1+mu)*g
+        else:  # muon (flextrain port), step 1 from zero state
+            gm = g.detach().to(torch.bfloat16)
+            eff = gm.add(gm, alpha=hp.momentum).float()
             out = w32 * (1 - hp.lr * hp.weight_decay)
-            eff = (1 + hp.momentum) * g32
             if w.dim() == 2 and min(w.shape) > 1:
-                scale = max(1.0, w.shape[0] / w.shape[1]) ** 0.5
+                scale = 0.2 * max(w.shape) ** 0.5
                 out = out - hp.lr * scale * _ns_orthogonalize(eff).float()
             else:
                 out = out - hp.lr * eff
@@ -291,10 +296,11 @@ def test_muon_recipe_string_model_step_vs_hand_replica():
             out = (w32 * (1 - hp.lr * hp.weight_decay)
                    - hp.lr * (m / (1 - hp.beta1))
                    / ((v / (1 - hp.beta2)).sqrt() + hp.eps))
-        else:
-            eff = (1 + hp.momentum) * g32
+        else:  # muon (flextrain port), step 1 from zero state
+            gm = g.detach().to(torch.bfloat16)
+            eff = gm.add(gm, alpha=hp.momentum).float()
             out = w32 * (1 - hp.lr * hp.weight_decay)
-            scale = max(1.0, w.shape[0] / w.shape[1]) ** 0.5
+            scale = 0.2 * max(w.shape) ** 0.5
             out = out - hp.lr * scale * _ns_orthogonalize(eff).float()
         return out.to(w.dtype)
 
