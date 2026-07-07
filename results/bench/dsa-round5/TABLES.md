@@ -29,4 +29,4 @@
 | 24 | 11,988 (vmm) | 9,931 (vmm) | 9,856 (vmm) |
 | 28 | 12,177 | 10,427 | 11,270 |
 
-Per-cell artifacts (measured.json + plan.json): `results/bench/dsa-round5/cells/{family}-{dev}gib-{mode}/`
+Per-cell artifacts: `cells/{preset}-{dev}gib-{mode}/` — measured.json (full row), plan.json (replayable via bench_train --annotated), program.json (webapp-simulator upload). Raw bench_train output (summaries, plans, logs): `raw/`.

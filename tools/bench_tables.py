@@ -65,9 +65,24 @@ def compare(dir_a: Path, dir_b: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dir", type=Path, default=Path("results/m4"))
+    parser.add_argument("--out", type=Path, default=None,
+                        help="write the markdown here instead of stdout")
     parser.add_argument("--compare", nargs=2, type=Path, metavar=("DIR_A", "DIR_B"))
     args = parser.parse_args()
 
+    if args.out is not None:
+        import contextlib, io, sys
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            _run(args)
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(buf.getvalue())
+        print(f"wrote {args.out}", file=sys.stderr)
+        return
+    _run(args)
+
+
+def _run(args) -> None:
     if args.compare:
         compare(*args.compare)
         return

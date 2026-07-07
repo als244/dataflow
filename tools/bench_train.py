@@ -374,6 +374,23 @@ def main() -> None:
     print(f"profiled {len(profiles)} unique task signatures in {time.perf_counter()-t0:.1f}s")
 
     args.out.mkdir(parents=True, exist_ok=True)
+    # every invocation leaves its full console log under the output dir
+    (args.out / "logs").mkdir(exist_ok=True)
+    _log_name = (f"{args.config}-{args.device_gib.replace(',', '_')}dev"
+                 f"-{args.placement}.log")
+
+    class _Tee:
+        def __init__(self, stream, path):
+            self._s, self._f = stream, open(path, "w")
+        def write(self, x):
+            self._s.write(x)
+            self._f.write(x)
+            self._f.flush()
+        def flush(self):
+            self._s.flush()
+    import sys as _sys
+    _sys.stdout = _Tee(_sys.stdout, args.out / "logs" / _log_name)
+    _sys.stderr = _Tee(_sys.stderr, args.out / "logs" / ("err-" + _log_name))
 
     def _plan(budget: int):
         if args.force_recompute == "all":
@@ -758,7 +775,7 @@ def main() -> None:
         + ("dev" if device_meta else "") + ("-rc" if args.recompute else "") \
         + (f"-{args.placement}" if args.placement != "static" else "")
     (args.out / f"bench-{args.config}-{tag}.summary.json").write_text(json.dumps(result, indent=2) + "\n")
-    print(f"\nwrote {args.out}/m4-{args.config}-{tag}.summary.json")
+    print(f"\nwrote {args.out}/bench-{args.config}-{tag}.summary.json")
 
 
 if __name__ == "__main__":

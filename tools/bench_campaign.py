@@ -34,11 +34,12 @@ Usage (reproduce the dsa-round5 campaign):
         --placements static,vmm --steps 3 \
         --shapes 12:bs4ga4,16:bs8ga2,20:bs8ga2,24:bs16ga1,28:bs16ga1 \
         --run --pace-seconds 40 \
-        --out results/bench/dsa-round5/TABLES.md
+        --out-dir results/bench/dsa-round5
 
 Render-only (rebuild tables from existing artifacts, no GPU):
     python tools/bench_campaign.py --presets ... --device-gib ... \
-        --placements static,vmm --render-only --out -
+        --placements static,vmm --render-only          # tables to stdout
+    (add --out-dir DIR to also write TABLES.md + cells/ there)
 
 Cells are run in SUBPROCESSES (one bench_train invocation per family x
 shape x mode, envelopes sharing a shape batched into one invocation to
@@ -59,7 +60,8 @@ from collections import defaultdict
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-SUMMARY_DIRS = [REPO / "artifacts/bench", REPO / "artifacts/m4"]
+LEGACY_SUMMARY_DIRS = [REPO / "artifacts/bench", REPO / "artifacts/m4"]
+SUMMARY_DIRS = list(LEGACY_SUMMARY_DIRS)  # extended with {out_dir}/raw at runtime
 
 
 def load_cells(presets: list[str], allow_illegal: bool) -> dict:
@@ -135,7 +137,7 @@ def shapes_oracle(presets: list[str], devs: list[int], seq_tag: str,
 
 
 def run_cells(presets, devs, modes, shapes, seq_tag, steps, pace,
-              rerun, cells, dry_run):
+              rerun, cells, dry_run, raw_dir=None):
     """One bench_train subprocess per (family, shape, mode); envelopes
     sharing a shape batched into a single invocation."""
     for fam in presets:
@@ -154,6 +156,8 @@ def run_cells(presets, devs, modes, shapes, seq_tag, steps, pace,
                        "--config", f"{fam}-{seq_tag}-{shape}",
                        "--device-gib", ",".join(map(str, ds)),
                        "--steps", str(steps)]
+                if raw_dir is not None:
+                    cmd += ["--out", str(raw_dir)]
                 if mode != "static":
                     cmd += ["--placement", mode]
                 print("[run]" if not dry_run else "[dry]", " ".join(cmd),
@@ -263,9 +267,11 @@ def main() -> None:
                     help="sleep between invocations (oomd pressure decay)")
     ap.add_argument("--allow-illegal", action="store_true",
                     help="render envelope-busting rows (flagged) instead of dropping")
-    ap.add_argument("--out", default="-", help="output markdown path, - = stdout")
-    ap.add_argument("--cells-dir", default=None,
-                    help="emit per-cell measured.json + plan.json under this dir")
+    ap.add_argument("--out-dir", default=None,
+                    help="campaign output directory: TABLES.md, cells/ "
+                         "(measured/plan/program json per cell), raw/ (all "
+                         "bench_train output: summaries, plans, webapp "
+                         "programs, logs). Omit for stdout tables only.")
     args = ap.parse_args()
 
     presets = args.presets.split(",")
@@ -283,23 +289,34 @@ def main() -> None:
         per_dev = dict(kv.split(":") for kv in args.shapes.split(","))
         shapes = {(f, int(d)): s for f in presets for d, s in per_dev.items()}
 
+    out_dir = Path(args.out_dir) if args.out_dir else None
+    raw_dir = None
+    if out_dir is not None:
+        raw_dir = out_dir / "raw"
+        raw_dir.mkdir(parents=True, exist_ok=True)
+        if raw_dir not in SUMMARY_DIRS:
+            SUMMARY_DIRS.insert(0, raw_dir)
+        cells = load_cells(presets, args.allow_illegal)
+
     if (args.run or args.rerun or args.dry_run) and not args.render_only:
         run_cells(presets, devs, modes, shapes, args.seq_tag, args.steps,
-                  args.pace_seconds, args.rerun, cells, args.dry_run)
+                  args.pace_seconds, args.rerun, cells, args.dry_run,
+                  raw_dir=raw_dir)
         if not args.dry_run:
             cells = load_cells(presets, args.allow_illegal)
 
     md = render(cells, presets, devs, modes, labels)
-    if args.cells_dir:
-        emit_cells(cells, presets, devs, modes, Path(args.cells_dir))
-        md += (f"\nPer-cell artifacts (measured.json + plan.json): "
-               f"`{args.cells_dir}/{{family}}-{{dev}}gib-{{mode}}/`\n")
-    if args.out == "-":
+    if out_dir is None:
         print(md)
-    else:
-        Path(args.out).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.out).write_text(md)
-        print(f"wrote {args.out}", file=sys.stderr)
+        return
+    emit_cells(cells, presets, devs, modes, out_dir / "cells")
+    md += ("\nPer-cell artifacts: `cells/{preset}-{dev}gib-{mode}/` — "
+           "measured.json (full row), plan.json (replayable via "
+           "bench_train --annotated), program.json (webapp-simulator "
+           "upload). Raw bench_train output (summaries, plans, logs): "
+           "`raw/`.\n")
+    (out_dir / "TABLES.md").write_text(md)
+    print(f"wrote {out_dir}/TABLES.md", file=sys.stderr)
 
 
 if __name__ == "__main__":
