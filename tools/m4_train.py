@@ -192,6 +192,12 @@ CONFIGS = {
     "dsv32-mini-s4k-dense-bs8ga2": ShapedDsv32Config.dsv32_mini(
         seq_len=4096, batch=8, grad_accum_rounds=2, sparse_mode=False,
     ),
+    # third-party shapes on our families (big-machine planning targets;
+    # HF-config-verified 2026-07-07; K2.5/2.6/2.7 shape-identical to K2,
+    # GLM-5.1 shape-identical to GLM-5)
+    "kimi-k2": ShapedDsv3Config.kimi_k2(),
+    "glm5": ShapedDsv32Config.glm5(),
+    "glm5-dense-warmup": ShapedDsv32Config.glm5(sparse_mode=False),
 }
 
 

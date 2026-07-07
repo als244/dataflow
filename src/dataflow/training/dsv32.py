@@ -173,6 +173,40 @@ class ShapedDsv32Config:
         return cls(seq_len=seq_len, batch=batch,
                    grad_accum_rounds=grad_accum_rounds, num_steps=num_steps)
 
+    @classmethod
+    def glm5(cls, *, seq_len: int = 4096, batch: int = 1,
+             grad_accum_rounds: int = 1, num_steps: int = 1,
+             sparse_mode: bool = True,
+             ) -> "ShapedDsv32Config":
+        """GLM-5 family (Zhipu): MLA + DeepSeek Sparse Attention — HF
+        model_type glm_moe_dsa. Verified against zai-org/GLM-5 AND
+        GLM-5.1 config.json (2026-07-07): the two are SHAPE-IDENTICAL.
+        Deltas vs dsv32_671b: 78L, d 6144, 64 heads, q_lora 2048,
+        nope 192 (qk=256), v_head 256 (== qk: NO pad asymmetry
+        anywhere), dense ff 12288, E=256 F=2048, first_k_dense=3,
+        groups 1/1, indexer 32x128 k=2048, vocab 154880, rope 1e6.
+        Absorbed dim = 512+64 = 576: FlashMLA-sparse compatible.
+        DEVIATION (documented): num_nextn_predict_layers=1 (MTP head)
+        is NOT modeled — same no-MTP scoping as the dsv3 family.
+        GLM-5.2's IndexShare (indexer reuse across 4 layers) is a
+        different architecture; not covered by this preset."""
+        return cls(
+            n_layers=78, d_model=6144, n_heads=64,
+            q_lora_rank=2048, kv_lora_rank=512,
+            qk_nope_dim=192, qk_rope_dim=64, v_head_dim=256,
+            d_ff_dense=12288, first_k_dense=3,
+            n_experts=256, top_k=8, d_ff_expert=2048,
+            n_group=1, topk_group=1, routed_scaling=2.5,
+            n_shared_experts=1, d_ff_shared=2048,
+            index_n_heads=32, index_head_dim=128, index_topk=2048,
+            vocab_size=154_880, rope_base=1_000_000.0,
+            seq_len=seq_len, batch=batch, sparse_mode=sparse_mode,
+            grad_accum_rounds=grad_accum_rounds, num_steps=num_steps,
+        )
+
+    # GLM-5.1: shape-identical to GLM-5 (both configs fetched + diffed)
+    glm51 = glm5
+
 
 def moe_spec_of(cfg: ShapedDsv32Config) -> MoESpec:
     return MoESpec(

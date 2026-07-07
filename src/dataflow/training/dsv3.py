@@ -166,6 +166,41 @@ class ShapedDsv3Config:
         return cls(seq_len=seq_len, batch=batch,
                    grad_accum_rounds=grad_accum_rounds, num_steps=num_steps)
 
+    @classmethod
+    def kimi_k2(cls, *, seq_len: int = 4096, batch: int = 1,
+                grad_accum_rounds: int = 1, num_steps: int = 1,
+                ) -> "ShapedDsv3Config":
+        """Kimi K2 family (Moonshot): a faithful DeepSeek-V3-arch model —
+        HF architectures=DeepseekV3ForCausalLM — at 1.03T/32B-active.
+        Verified against moonshotai/Kimi-K2-Instruct and Kimi-K2.6
+        config.json (2026-07-07): K2, K2.5, K2.6 and K2.7-Code are
+        SHAPE-IDENTICAL (the 2.5+ releases wrap the same LM core in a
+        multimodal shell; K2.7-Code's card: 'same DeepseekV3 backbone,
+        same MLA dimensions, same 384+1 MoE topology'). Deltas vs
+        dsv3_671b: 64 heads (not 128), E=384, first_k_dense=1, groups
+        1/1, scaling 2.827, vocab 163840, rope 50k. Trained upstream
+        with MuonClip; we train AdamW (shape preset, not optimizer
+        parity)."""
+        return cls(
+            n_layers=61, d_model=7168, n_heads=64,
+            q_lora_rank=1536, kv_lora_rank=512,
+            qk_nope_dim=128, qk_rope_dim=64, v_head_dim=128,
+            d_ff_dense=18432, first_k_dense=1,
+            n_experts=384, top_k=8, d_ff_expert=2048,
+            n_group=1, topk_group=1, routed_scaling=2.827,
+            n_shared_experts=1, d_ff_shared=2048,
+            vocab_size=163_840, rope_base=50_000.0,
+            seq_len=seq_len, batch=batch,
+            grad_accum_rounds=grad_accum_rounds, num_steps=num_steps,
+        )
+
+    # K2.5 / K2.6 / K2.7-Code: shape-identical to K2 (see kimi_k2
+    # docstring) — named aliases so CONFIGS and campaign notes can say
+    # which model a run models without implying a shape difference.
+    kimi_k25 = kimi_k2
+    kimi_k26 = kimi_k2
+    kimi_k27 = kimi_k2
+
 
 def moe_spec_of(cfg: ShapedDsv3Config) -> MoESpec:
     return MoESpec(

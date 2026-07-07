@@ -123,7 +123,8 @@ def test_dsv32_full_scale_presets_lower_and_validate():
     from dataflow.training.dsv32 import ShapedDsv32Config, lower_dsv32
 
     for ctor, layers in ((ShapedDsv32Config.dsv32_mini, 18),
-                         (ShapedDsv32Config.dsv32_671b, 61)):
+                         (ShapedDsv32Config.dsv32_671b, 61),
+                         (ShapedDsv32Config.glm5, 78)):
         cfg = ctor(seq_len=128)
         program = lower_dsv32(cfg)
         validate_program(program)

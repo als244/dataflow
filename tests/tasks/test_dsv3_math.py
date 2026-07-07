@@ -123,7 +123,8 @@ def test_dsv3_full_scale_presets_lower_and_validate():
     from dataflow.training.dsv3 import ShapedDsv3Config, lower_dsv3
 
     for ctor, layers in ((ShapedDsv3Config.dsv3_mini, 18),
-                         (ShapedDsv3Config.dsv3_671b, 61)):
+                         (ShapedDsv3Config.dsv3_671b, 61),
+                         (ShapedDsv3Config.kimi_k2, 61)):
         cfg = ctor(seq_len=128)
         program = lower_dsv3(cfg)
         validate_program(program)
