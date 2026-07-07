@@ -11,3 +11,4 @@ dist/
 *.sqlite
 artifacts/local/
 artifacts/
+rollout.pt

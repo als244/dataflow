@@ -47,9 +47,6 @@ class RlGlm52(GoldenGlm52):
         t = x.shape[0]
         h, qk, v = d.n_heads, d.qk_head_dim, d.v_head_dim
 
-        if self.capture:
-            self.captured["x"].append(x.detach().clone())
-
         h1 = ops.rmsnorm_reference(x, w["attn_norm_w"])
         q_lora, q_full, k_full, v_pad = mla_qkv_reference(h1, w, d)
 

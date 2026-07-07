@@ -1,0 +1,2004 @@
+{
+  "schema_version": "dataflow-rt/v1",
+  "name": "rl-dsv32-shaped-3L-d128-s128-b1-r1-steps3-s3",
+  "initial_objects": [
+    {
+      "id": "W_embed",
+      "size_bytes": 131072,
+      "location": "backing",
+      "role": "parameter"
+    },
+    {
+      "id": "O_embed",
+      "size_bytes": 262144,
+      "location": "backing",
+      "role": "optimizer_state"
+    },
+    {
+      "id": "W_0",
+      "size_bytes": 306688,
+      "location": "backing",
+      "role": "parameter"
+    },
+    {
+      "id": "O_0",
+      "size_bytes": 613376,
+      "location": "backing",
+      "role": "optimizer_state"
+    },
+    {
+      "id": "W_1",
+      "size_bytes": 333568,
+      "location": "backing",
+      "role": "parameter"
+    },
+    {
+      "id": "O_1",
+      "size_bytes": 667136,
+      "location": "backing",
+      "role": "optimizer_state"
+    },
+    {
+      "id": "W_2",
+      "size_bytes": 333568,
+      "location": "backing",
+      "role": "parameter"
+    },
+    {
+      "id": "O_2",
+      "size_bytes": 667136,
+      "location": "backing",
+      "role": "optimizer_state"
+    },
+    {
+      "id": "W_head",
+      "size_bytes": 131328,
+      "location": "backing",
+      "role": "parameter"
+    },
+    {
+      "id": "O_head",
+      "size_bytes": 262656,
+      "location": "backing",
+      "role": "optimizer_state"
+    },
+    {
+      "id": "tokens_0_0",
+      "size_bytes": 512,
+      "location": "fast",
+      "role": "input",
+      "tensor": {
+        "dtype": "int32",
+        "shape": [
+          128
+        ]
+      }
+    },
+    {
+      "id": "tokens_1_0",
+      "size_bytes": 512,
+      "location": "backing",
+      "role": "input",
+      "tensor": {
+        "dtype": "int32",
+        "shape": [
+          128
+        ]
+      }
+    },
+    {
+      "id": "tokens_2_0",
+      "size_bytes": 512,
+      "location": "backing",
+      "role": "input",
+      "tensor": {
+        "dtype": "int32",
+        "shape": [
+          128
+        ]
+      }
+    },
+    {
+      "id": "M_0_0_0",
+      "size_bytes": 12288,
+      "location": "backing",
+      "role": "activation"
+    },
+    {
+      "id": "M_0_0_1",
+      "size_bytes": 15104,
+      "location": "backing",
+      "role": "activation"
+    },
+    {
+      "id": "M_0_0_2",
+      "size_bytes": 15104,
+      "location": "backing",
+      "role": "activation"
+    },
+    {
+      "id": "M_1_0_0",
+      "size_bytes": 12288,
+      "location": "backing",
+      "role": "activation"
+    },
+    {
+      "id": "M_1_0_1",
+      "size_bytes": 15104,
+      "location": "backing",
+      "role": "activation"
+    },
+    {
+      "id": "M_1_0_2",
+      "size_bytes": 15104,
+      "location": "backing",
+      "role": "activation"
+    },
+    {
+      "id": "M_2_0_0",
+      "size_bytes": 12288,
+      "location": "backing",
+      "role": "activation"
+    },
+    {
+      "id": "M_2_0_1",
+      "size_bytes": 15104,
+      "location": "backing",
+      "role": "activation"
+    },
+    {
+      "id": "M_2_0_2",
+      "size_bytes": 15104,
+      "location": "backing",
+      "role": "activation"
+    },
+    {
+      "id": "y_0_0_0",
+      "size_bytes": 32768,
+      "location": "backing",
+      "role": "activation",
+      "tensor": {
+        "dtype": "bf16",
+        "shape": [
+          128,
+          128
+        ]
+      }
+    },
+    {
+      "id": "y_0_0_1",
+      "size_bytes": 32768,
+      "location": "backing",
+      "role": "activation",
+      "tensor": {
+        "dtype": "bf16",
+        "shape": [
+          128,
+          128
+        ]
+      }
+    },
+    {
+      "id": "y_0_0_2",
+      "size_bytes": 32768,
+      "location": "backing",
+      "role": "activation",
+      "tensor": {
+        "dtype": "bf16",
+        "shape": [
+          128,
+          128
+        ]
+      }
+    },
+    {
+      "id": "y_1_0_0",
+      "size_bytes": 32768,
+      "location": "backing",
+      "role": "activation",
+      "tensor": {
+        "dtype": "bf16",
+        "shape": [
+          128,
+          128
+        ]
+      }
+    },
+    {
+      "id": "y_1_0_1",
+      "size_bytes": 32768,
+      "location": "backing",
+      "role": "activation",
+      "tensor": {
+        "dtype": "bf16",
+        "shape": [
+          128,
+          128
+        ]
+      }
+    },
+    {
+      "id": "y_1_0_2",
+      "size_bytes": 32768,
+      "location": "backing",
+      "role": "activation",
+      "tensor": {
+        "dtype": "bf16",
+        "shape": [
+          128,
+          128
+        ]
+      }
+    },
+    {
+      "id": "y_2_0_0",
+      "size_bytes": 32768,
+      "location": "backing",
+      "role": "activation",
+      "tensor": {
+        "dtype": "bf16",
+        "shape": [
+          128,
+          128
+        ]
+      }
+    },
+    {
+      "id": "y_2_0_1",
+      "size_bytes": 32768,
+      "location": "backing",
+      "role": "activation",
+      "tensor": {
+        "dtype": "bf16",
+        "shape": [
+          128,
+          128
+        ]
+      }
+    },
+    {
+      "id": "y_2_0_2",
+      "size_bytes": 32768,
+      "location": "backing",
+      "role": "activation",
+      "tensor": {
+        "dtype": "bf16",
+        "shape": [
+          128,
+          128
+        ]
+      }
+    },
+    {
+      "id": "y_embed_0_0",
+      "size_bytes": 32768,
+      "location": "backing",
+      "role": "activation",
+      "tensor": {
+        "dtype": "bf16",
+        "shape": [
+          128,
+          128
+        ]
+      }
+    },
+    {
+      "id": "y_embed_1_0",
+      "size_bytes": 32768,
+      "location": "backing",
+      "role": "activation",
+      "tensor": {
+        "dtype": "bf16",
+        "shape": [
+          128,
+          128
+        ]
+      }
+    },
+    {
+      "id": "y_embed_2_0",
+      "size_bytes": 32768,
+      "location": "backing",
+      "role": "activation",
+      "tensor": {
+        "dtype": "bf16",
+        "shape": [
+          128,
+          128
+        ]
+      }
+    },
+    {
+      "id": "actions_0_0",
+      "size_bytes": 512,
+      "location": "backing",
+      "role": "input"
+    },
+    {
+      "id": "old_logprobs_0_0",
+      "size_bytes": 512,
+      "location": "backing",
+      "role": "input"
+    },
+    {
+      "id": "advantages_0_0",
+      "size_bytes": 512,
+      "location": "backing",
+      "role": "input"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "rl_head_loss_0_0",
+      "runtime_us": 3.0,
+      "inputs": [
+        "y_0_0_2",
+        "actions_0_0",
+        "old_logprobs_0_0",
+        "advantages_0_0",
+        "W_head"
+      ],
+      "outputs": [
+        {
+          "id": "dy_0_0_2",
+          "size_bytes": 32768,
+          "location": "fast",
+          "role": "gradient",
+          "tensor": {
+            "dtype": "bf16",
+            "shape": [
+              128,
+              128
+            ]
+          }
+        },
+        {
+          "id": "loss_0_0",
+          "size_bytes": 4,
+          "location": "fast",
+          "role": "output",
+          "tensor": {
+            "dtype": "fp32",
+            "shape": [
+              1
+            ]
+          }
+        },
+        {
+          "id": "dW_head_0",
+          "size_bytes": 131328,
+          "location": "fast",
+          "role": "gradient"
+        }
+      ],
+      "group": "backward",
+      "compute_block_key": "rl_head_loss",
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "lm_head",
+            "flops": 16777216,
+            "memory_bytes": 294912,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "ce_loss",
+            "flops": 0,
+            "memory_bytes": 262144,
+            "efficiency": "memory"
+          },
+          {
+            "kind": "roofline",
+            "name": "lm_head_bwd",
+            "flops": 33554432,
+            "memory_bytes": 589824,
+            "efficiency": "matmul"
+          }
+        ]
+      }
+    },
+    {
+      "id": "optimizer_head_0",
+      "runtime_us": 1.0,
+      "inputs": [
+        "W_head",
+        "dW_head_0",
+        "O_head"
+      ],
+      "mutates": [
+        "W_head",
+        "O_head"
+      ],
+      "group": "optimizer",
+      "compute_block_key": "optimizer_head",
+      "block_params": {
+        "step": 0
+      },
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "adamw",
+            "flops": 0,
+            "memory_bytes": 917504,
+            "efficiency": "memory"
+          }
+        ]
+      }
+    },
+    {
+      "id": "block_recompute_0_0_2",
+      "runtime_us": 2.0,
+      "inputs": [
+        "y_0_0_1",
+        "W_2",
+        "M_0_0_2"
+      ],
+      "outputs": [
+        {
+          "id": "A_0_0_2",
+          "size_bytes": 131072,
+          "location": "fast",
+          "role": "activation"
+        }
+      ],
+      "group": "recompute",
+      "compute_block_key": "dsamoe_recompute",
+      "block_params": {
+        "layer": 2
+      }
+    },
+    {
+      "id": "block_bwd_0_0_2",
+      "runtime_us": 2.0697866666666664,
+      "inputs": [
+        "dy_0_0_2",
+        "A_0_0_2",
+        "y_0_0_1",
+        "W_2",
+        "M_0_0_2"
+      ],
+      "outputs": [
+        {
+          "id": "dy_0_0_1",
+          "size_bytes": 32768,
+          "location": "fast",
+          "role": "gradient",
+          "tensor": {
+            "dtype": "bf16",
+            "shape": [
+              128,
+              128
+            ]
+          }
+        },
+        {
+          "id": "dW_0_2",
+          "size_bytes": 333568,
+          "location": "fast",
+          "role": "gradient"
+        }
+      ],
+      "group": "backward",
+      "compute_block_key": "dsamoe_bwd",
+      "block_params": {
+        "layer": 2
+      },
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "dsamoe_matmuls_bwd",
+            "flops": 46661632,
+            "memory_bytes": 1283744,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "dsa_attention_bwd",
+            "flops": 16121856,
+            "memory_bytes": 221184,
+            "efficiency": "attention"
+          }
+        ]
+      }
+    },
+    {
+      "id": "optimizer_0_2",
+      "runtime_us": 1.9283600000000003,
+      "inputs": [
+        "W_2",
+        "dW_0_2",
+        "O_2"
+      ],
+      "mutates": [
+        "W_2",
+        "O_2"
+      ],
+      "group": "optimizer",
+      "compute_block_key": "optimizer_block",
+      "block_params": {
+        "layer": 2,
+        "step": 0
+      },
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "adamw",
+            "flops": 0,
+            "memory_bytes": 2314032,
+            "efficiency": "memory"
+          }
+        ]
+      }
+    },
+    {
+      "id": "block_recompute_0_0_1",
+      "runtime_us": 2.0,
+      "inputs": [
+        "y_0_0_0",
+        "W_1",
+        "M_0_0_1"
+      ],
+      "outputs": [
+        {
+          "id": "A_0_0_1",
+          "size_bytes": 131072,
+          "location": "fast",
+          "role": "activation"
+        }
+      ],
+      "group": "recompute",
+      "compute_block_key": "dsamoe_recompute",
+      "block_params": {
+        "layer": 1
+      }
+    },
+    {
+      "id": "block_bwd_0_0_1",
+      "runtime_us": 2.0697866666666664,
+      "inputs": [
+        "dy_0_0_1",
+        "A_0_0_1",
+        "y_0_0_0",
+        "W_1",
+        "M_0_0_1"
+      ],
+      "outputs": [
+        {
+          "id": "dy_0_0_0",
+          "size_bytes": 32768,
+          "location": "fast",
+          "role": "gradient",
+          "tensor": {
+            "dtype": "bf16",
+            "shape": [
+              128,
+              128
+            ]
+          }
+        },
+        {
+          "id": "dW_0_1",
+          "size_bytes": 333568,
+          "location": "fast",
+          "role": "gradient"
+        }
+      ],
+      "group": "backward",
+      "compute_block_key": "dsamoe_bwd",
+      "block_params": {
+        "layer": 1
+      },
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "dsamoe_matmuls_bwd",
+            "flops": 46661632,
+            "memory_bytes": 1283744,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "dsa_attention_bwd",
+            "flops": 16121856,
+            "memory_bytes": 221184,
+            "efficiency": "attention"
+          }
+        ]
+      }
+    },
+    {
+      "id": "optimizer_0_1",
+      "runtime_us": 1.9283600000000003,
+      "inputs": [
+        "W_1",
+        "dW_0_1",
+        "O_1"
+      ],
+      "mutates": [
+        "W_1",
+        "O_1"
+      ],
+      "group": "optimizer",
+      "compute_block_key": "optimizer_block",
+      "block_params": {
+        "layer": 1,
+        "step": 0
+      },
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "adamw",
+            "flops": 0,
+            "memory_bytes": 2314032,
+            "efficiency": "memory"
+          }
+        ]
+      }
+    },
+    {
+      "id": "block_recompute_0_0_0",
+      "runtime_us": 2.0,
+      "inputs": [
+        "y_embed_0_0",
+        "W_0",
+        "M_0_0_0"
+      ],
+      "outputs": [
+        {
+          "id": "A_0_0_0",
+          "size_bytes": 210944,
+          "location": "fast",
+          "role": "activation"
+        }
+      ],
+      "group": "recompute",
+      "compute_block_key": "dsadense_recompute",
+      "block_params": {
+        "layer": 0
+      }
+    },
+    {
+      "id": "block_bwd_0_0_0",
+      "runtime_us": 2.0,
+      "inputs": [
+        "dy_0_0_0",
+        "A_0_0_0",
+        "y_embed_0_0",
+        "W_0",
+        "M_0_0_0"
+      ],
+      "outputs": [
+        {
+          "id": "dy_embed_0_0",
+          "size_bytes": 32768,
+          "location": "fast",
+          "role": "gradient",
+          "tensor": {
+            "dtype": "bf16",
+            "shape": [
+              128,
+              128
+            ]
+          }
+        },
+        {
+          "id": "dW_0_0",
+          "size_bytes": 306688,
+          "location": "fast",
+          "role": "gradient"
+        }
+      ],
+      "group": "backward",
+      "compute_block_key": "dsadense_bwd",
+      "block_params": {
+        "layer": 0
+      },
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "dsadense_matmuls_bwd",
+            "flops": 77594624,
+            "memory_bytes": 870016,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "dsa_attention_bwd",
+            "flops": 16121856,
+            "memory_bytes": 221184,
+            "efficiency": "attention"
+          }
+        ]
+      }
+    },
+    {
+      "id": "optimizer_0_0",
+      "runtime_us": 1.7729599999999999,
+      "inputs": [
+        "W_0",
+        "dW_0_0",
+        "O_0"
+      ],
+      "mutates": [
+        "W_0",
+        "O_0"
+      ],
+      "group": "optimizer",
+      "compute_block_key": "optimizer_block",
+      "block_params": {
+        "layer": 0,
+        "step": 0
+      },
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "adamw",
+            "flops": 0,
+            "memory_bytes": 2127552,
+            "efficiency": "memory"
+          }
+        ]
+      }
+    },
+    {
+      "id": "embed_bwd_0_0",
+      "runtime_us": 1.0,
+      "inputs": [
+        "dy_embed_0_0",
+        "tokens_0_0"
+      ],
+      "outputs": [
+        {
+          "id": "dW_embed_0",
+          "size_bytes": 131072,
+          "location": "fast",
+          "role": "gradient"
+        }
+      ],
+      "group": "backward",
+      "compute_block_key": "embed_bwd",
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "scatter_accum",
+            "flops": 0,
+            "memory_bytes": 132096,
+            "efficiency": "memory"
+          }
+        ]
+      }
+    },
+    {
+      "id": "optimizer_embed_0",
+      "runtime_us": 1.0,
+      "inputs": [
+        "W_embed",
+        "dW_embed_0",
+        "O_embed"
+      ],
+      "mutates": [
+        "W_embed",
+        "O_embed"
+      ],
+      "group": "optimizer",
+      "compute_block_key": "optimizer_embed",
+      "block_params": {
+        "step": 0
+      },
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "adamw",
+            "flops": 0,
+            "memory_bytes": 917504,
+            "efficiency": "memory"
+          }
+        ]
+      }
+    },
+    {
+      "id": "rl_head_loss_1_0",
+      "runtime_us": 3.0,
+      "inputs": [
+        "y_1_0_2",
+        "actions_0_0",
+        "old_logprobs_0_0",
+        "advantages_0_0",
+        "W_head"
+      ],
+      "outputs": [
+        {
+          "id": "dy_1_0_2",
+          "size_bytes": 32768,
+          "location": "fast",
+          "role": "gradient",
+          "tensor": {
+            "dtype": "bf16",
+            "shape": [
+              128,
+              128
+            ]
+          }
+        },
+        {
+          "id": "loss_1_0",
+          "size_bytes": 4,
+          "location": "fast",
+          "role": "output",
+          "tensor": {
+            "dtype": "fp32",
+            "shape": [
+              1
+            ]
+          }
+        },
+        {
+          "id": "dW_head_1",
+          "size_bytes": 131328,
+          "location": "fast",
+          "role": "gradient"
+        }
+      ],
+      "group": "backward",
+      "compute_block_key": "rl_head_loss",
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "lm_head",
+            "flops": 16777216,
+            "memory_bytes": 294912,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "ce_loss",
+            "flops": 0,
+            "memory_bytes": 262144,
+            "efficiency": "memory"
+          },
+          {
+            "kind": "roofline",
+            "name": "lm_head_bwd",
+            "flops": 33554432,
+            "memory_bytes": 589824,
+            "efficiency": "matmul"
+          }
+        ]
+      }
+    },
+    {
+      "id": "optimizer_head_1",
+      "runtime_us": 1.0,
+      "inputs": [
+        "W_head",
+        "dW_head_1",
+        "O_head"
+      ],
+      "mutates": [
+        "W_head",
+        "O_head"
+      ],
+      "group": "optimizer",
+      "compute_block_key": "optimizer_head",
+      "block_params": {
+        "step": 1
+      },
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "adamw",
+            "flops": 0,
+            "memory_bytes": 917504,
+            "efficiency": "memory"
+          }
+        ]
+      }
+    },
+    {
+      "id": "block_recompute_1_0_2",
+      "runtime_us": 2.0,
+      "inputs": [
+        "y_1_0_1",
+        "W_2",
+        "M_1_0_2"
+      ],
+      "outputs": [
+        {
+          "id": "A_1_0_2",
+          "size_bytes": 131072,
+          "location": "fast",
+          "role": "activation"
+        }
+      ],
+      "group": "recompute",
+      "compute_block_key": "dsamoe_recompute",
+      "block_params": {
+        "layer": 2
+      }
+    },
+    {
+      "id": "block_bwd_1_0_2",
+      "runtime_us": 2.0697866666666664,
+      "inputs": [
+        "dy_1_0_2",
+        "A_1_0_2",
+        "y_1_0_1",
+        "W_2",
+        "M_1_0_2"
+      ],
+      "outputs": [
+        {
+          "id": "dy_1_0_1",
+          "size_bytes": 32768,
+          "location": "fast",
+          "role": "gradient",
+          "tensor": {
+            "dtype": "bf16",
+            "shape": [
+              128,
+              128
+            ]
+          }
+        },
+        {
+          "id": "dW_1_2",
+          "size_bytes": 333568,
+          "location": "fast",
+          "role": "gradient"
+        }
+      ],
+      "group": "backward",
+      "compute_block_key": "dsamoe_bwd",
+      "block_params": {
+        "layer": 2
+      },
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "dsamoe_matmuls_bwd",
+            "flops": 46661632,
+            "memory_bytes": 1283744,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "dsa_attention_bwd",
+            "flops": 16121856,
+            "memory_bytes": 221184,
+            "efficiency": "attention"
+          }
+        ]
+      }
+    },
+    {
+      "id": "optimizer_1_2",
+      "runtime_us": 1.9283600000000003,
+      "inputs": [
+        "W_2",
+        "dW_1_2",
+        "O_2"
+      ],
+      "mutates": [
+        "W_2",
+        "O_2"
+      ],
+      "group": "optimizer",
+      "compute_block_key": "optimizer_block",
+      "block_params": {
+        "layer": 2,
+        "step": 1
+      },
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "adamw",
+            "flops": 0,
+            "memory_bytes": 2314032,
+            "efficiency": "memory"
+          }
+        ]
+      }
+    },
+    {
+      "id": "block_recompute_1_0_1",
+      "runtime_us": 2.0,
+      "inputs": [
+        "y_1_0_0",
+        "W_1",
+        "M_1_0_1"
+      ],
+      "outputs": [
+        {
+          "id": "A_1_0_1",
+          "size_bytes": 131072,
+          "location": "fast",
+          "role": "activation"
+        }
+      ],
+      "group": "recompute",
+      "compute_block_key": "dsamoe_recompute",
+      "block_params": {
+        "layer": 1
+      }
+    },
+    {
+      "id": "block_bwd_1_0_1",
+      "runtime_us": 2.0697866666666664,
+      "inputs": [
+        "dy_1_0_1",
+        "A_1_0_1",
+        "y_1_0_0",
+        "W_1",
+        "M_1_0_1"
+      ],
+      "outputs": [
+        {
+          "id": "dy_1_0_0",
+          "size_bytes": 32768,
+          "location": "fast",
+          "role": "gradient",
+          "tensor": {
+            "dtype": "bf16",
+            "shape": [
+              128,
+              128
+            ]
+          }
+        },
+        {
+          "id": "dW_1_1",
+          "size_bytes": 333568,
+          "location": "fast",
+          "role": "gradient"
+        }
+      ],
+      "group": "backward",
+      "compute_block_key": "dsamoe_bwd",
+      "block_params": {
+        "layer": 1
+      },
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "dsamoe_matmuls_bwd",
+            "flops": 46661632,
+            "memory_bytes": 1283744,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "dsa_attention_bwd",
+            "flops": 16121856,
+            "memory_bytes": 221184,
+            "efficiency": "attention"
+          }
+        ]
+      }
+    },
+    {
+      "id": "optimizer_1_1",
+      "runtime_us": 1.9283600000000003,
+      "inputs": [
+        "W_1",
+        "dW_1_1",
+        "O_1"
+      ],
+      "mutates": [
+        "W_1",
+        "O_1"
+      ],
+      "group": "optimizer",
+      "compute_block_key": "optimizer_block",
+      "block_params": {
+        "layer": 1,
+        "step": 1
+      },
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "adamw",
+            "flops": 0,
+            "memory_bytes": 2314032,
+            "efficiency": "memory"
+          }
+        ]
+      }
+    },
+    {
+      "id": "block_recompute_1_0_0",
+      "runtime_us": 2.0,
+      "inputs": [
+        "y_embed_1_0",
+        "W_0",
+        "M_1_0_0"
+      ],
+      "outputs": [
+        {
+          "id": "A_1_0_0",
+          "size_bytes": 210944,
+          "location": "fast",
+          "role": "activation"
+        }
+      ],
+      "group": "recompute",
+      "compute_block_key": "dsadense_recompute",
+      "block_params": {
+        "layer": 0
+      }
+    },
+    {
+      "id": "block_bwd_1_0_0",
+      "runtime_us": 2.0,
+      "inputs": [
+        "dy_1_0_0",
+        "A_1_0_0",
+        "y_embed_1_0",
+        "W_0",
+        "M_1_0_0"
+      ],
+      "outputs": [
+        {
+          "id": "dy_embed_1_0",
+          "size_bytes": 32768,
+          "location": "fast",
+          "role": "gradient",
+          "tensor": {
+            "dtype": "bf16",
+            "shape": [
+              128,
+              128
+            ]
+          }
+        },
+        {
+          "id": "dW_1_0",
+          "size_bytes": 306688,
+          "location": "fast",
+          "role": "gradient"
+        }
+      ],
+      "group": "backward",
+      "compute_block_key": "dsadense_bwd",
+      "block_params": {
+        "layer": 0
+      },
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "dsadense_matmuls_bwd",
+            "flops": 77594624,
+            "memory_bytes": 870016,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "dsa_attention_bwd",
+            "flops": 16121856,
+            "memory_bytes": 221184,
+            "efficiency": "attention"
+          }
+        ]
+      }
+    },
+    {
+      "id": "optimizer_1_0",
+      "runtime_us": 1.7729599999999999,
+      "inputs": [
+        "W_0",
+        "dW_1_0",
+        "O_0"
+      ],
+      "mutates": [
+        "W_0",
+        "O_0"
+      ],
+      "group": "optimizer",
+      "compute_block_key": "optimizer_block",
+      "block_params": {
+        "layer": 0,
+        "step": 1
+      },
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "adamw",
+            "flops": 0,
+            "memory_bytes": 2127552,
+            "efficiency": "memory"
+          }
+        ]
+      }
+    },
+    {
+      "id": "embed_bwd_1_0",
+      "runtime_us": 1.0,
+      "inputs": [
+        "dy_embed_1_0",
+        "tokens_1_0"
+      ],
+      "outputs": [
+        {
+          "id": "dW_embed_1",
+          "size_bytes": 131072,
+          "location": "fast",
+          "role": "gradient"
+        }
+      ],
+      "group": "backward",
+      "compute_block_key": "embed_bwd",
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "scatter_accum",
+            "flops": 0,
+            "memory_bytes": 132096,
+            "efficiency": "memory"
+          }
+        ]
+      }
+    },
+    {
+      "id": "optimizer_embed_1",
+      "runtime_us": 1.0,
+      "inputs": [
+        "W_embed",
+        "dW_embed_1",
+        "O_embed"
+      ],
+      "mutates": [
+        "W_embed",
+        "O_embed"
+      ],
+      "group": "optimizer",
+      "compute_block_key": "optimizer_embed",
+      "block_params": {
+        "step": 1
+      },
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "adamw",
+            "flops": 0,
+            "memory_bytes": 917504,
+            "efficiency": "memory"
+          }
+        ]
+      }
+    },
+    {
+      "id": "rl_head_loss_2_0",
+      "runtime_us": 3.0,
+      "inputs": [
+        "y_2_0_2",
+        "actions_0_0",
+        "old_logprobs_0_0",
+        "advantages_0_0",
+        "W_head"
+      ],
+      "outputs": [
+        {
+          "id": "dy_2_0_2",
+          "size_bytes": 32768,
+          "location": "fast",
+          "role": "gradient",
+          "tensor": {
+            "dtype": "bf16",
+            "shape": [
+              128,
+              128
+            ]
+          }
+        },
+        {
+          "id": "loss_2_0",
+          "size_bytes": 4,
+          "location": "fast",
+          "role": "output",
+          "tensor": {
+            "dtype": "fp32",
+            "shape": [
+              1
+            ]
+          }
+        },
+        {
+          "id": "dW_head_2",
+          "size_bytes": 131328,
+          "location": "fast",
+          "role": "gradient"
+        }
+      ],
+      "group": "backward",
+      "compute_block_key": "rl_head_loss",
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "lm_head",
+            "flops": 16777216,
+            "memory_bytes": 294912,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "ce_loss",
+            "flops": 0,
+            "memory_bytes": 262144,
+            "efficiency": "memory"
+          },
+          {
+            "kind": "roofline",
+            "name": "lm_head_bwd",
+            "flops": 33554432,
+            "memory_bytes": 589824,
+            "efficiency": "matmul"
+          }
+        ]
+      }
+    },
+    {
+      "id": "optimizer_head_2",
+      "runtime_us": 1.0,
+      "inputs": [
+        "W_head",
+        "dW_head_2",
+        "O_head"
+      ],
+      "mutates": [
+        "W_head",
+        "O_head"
+      ],
+      "group": "optimizer",
+      "compute_block_key": "optimizer_head",
+      "block_params": {
+        "step": 2
+      },
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "adamw",
+            "flops": 0,
+            "memory_bytes": 917504,
+            "efficiency": "memory"
+          }
+        ]
+      }
+    },
+    {
+      "id": "block_recompute_2_0_2",
+      "runtime_us": 2.0,
+      "inputs": [
+        "y_2_0_1",
+        "W_2",
+        "M_2_0_2"
+      ],
+      "outputs": [
+        {
+          "id": "A_2_0_2",
+          "size_bytes": 131072,
+          "location": "fast",
+          "role": "activation"
+        }
+      ],
+      "group": "recompute",
+      "compute_block_key": "dsamoe_recompute",
+      "block_params": {
+        "layer": 2
+      }
+    },
+    {
+      "id": "block_bwd_2_0_2",
+      "runtime_us": 2.0697866666666664,
+      "inputs": [
+        "dy_2_0_2",
+        "A_2_0_2",
+        "y_2_0_1",
+        "W_2",
+        "M_2_0_2"
+      ],
+      "outputs": [
+        {
+          "id": "dy_2_0_1",
+          "size_bytes": 32768,
+          "location": "fast",
+          "role": "gradient",
+          "tensor": {
+            "dtype": "bf16",
+            "shape": [
+              128,
+              128
+            ]
+          }
+        },
+        {
+          "id": "dW_2_2",
+          "size_bytes": 333568,
+          "location": "fast",
+          "role": "gradient"
+        }
+      ],
+      "group": "backward",
+      "compute_block_key": "dsamoe_bwd",
+      "block_params": {
+        "layer": 2
+      },
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "dsamoe_matmuls_bwd",
+            "flops": 46661632,
+            "memory_bytes": 1283744,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "dsa_attention_bwd",
+            "flops": 16121856,
+            "memory_bytes": 221184,
+            "efficiency": "attention"
+          }
+        ]
+      }
+    },
+    {
+      "id": "optimizer_2_2",
+      "runtime_us": 1.9283600000000003,
+      "inputs": [
+        "W_2",
+        "dW_2_2",
+        "O_2"
+      ],
+      "mutates": [
+        "W_2",
+        "O_2"
+      ],
+      "group": "optimizer",
+      "compute_block_key": "optimizer_block",
+      "block_params": {
+        "layer": 2,
+        "step": 2
+      },
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "adamw",
+            "flops": 0,
+            "memory_bytes": 2314032,
+            "efficiency": "memory"
+          }
+        ]
+      }
+    },
+    {
+      "id": "block_recompute_2_0_1",
+      "runtime_us": 2.0,
+      "inputs": [
+        "y_2_0_0",
+        "W_1",
+        "M_2_0_1"
+      ],
+      "outputs": [
+        {
+          "id": "A_2_0_1",
+          "size_bytes": 131072,
+          "location": "fast",
+          "role": "activation"
+        }
+      ],
+      "group": "recompute",
+      "compute_block_key": "dsamoe_recompute",
+      "block_params": {
+        "layer": 1
+      }
+    },
+    {
+      "id": "block_bwd_2_0_1",
+      "runtime_us": 2.0697866666666664,
+      "inputs": [
+        "dy_2_0_1",
+        "A_2_0_1",
+        "y_2_0_0",
+        "W_1",
+        "M_2_0_1"
+      ],
+      "outputs": [
+        {
+          "id": "dy_2_0_0",
+          "size_bytes": 32768,
+          "location": "fast",
+          "role": "gradient",
+          "tensor": {
+            "dtype": "bf16",
+            "shape": [
+              128,
+              128
+            ]
+          }
+        },
+        {
+          "id": "dW_2_1",
+          "size_bytes": 333568,
+          "location": "fast",
+          "role": "gradient"
+        }
+      ],
+      "group": "backward",
+      "compute_block_key": "dsamoe_bwd",
+      "block_params": {
+        "layer": 1
+      },
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "dsamoe_matmuls_bwd",
+            "flops": 46661632,
+            "memory_bytes": 1283744,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "dsa_attention_bwd",
+            "flops": 16121856,
+            "memory_bytes": 221184,
+            "efficiency": "attention"
+          }
+        ]
+      }
+    },
+    {
+      "id": "optimizer_2_1",
+      "runtime_us": 1.9283600000000003,
+      "inputs": [
+        "W_1",
+        "dW_2_1",
+        "O_1"
+      ],
+      "mutates": [
+        "W_1",
+        "O_1"
+      ],
+      "group": "optimizer",
+      "compute_block_key": "optimizer_block",
+      "block_params": {
+        "layer": 1,
+        "step": 2
+      },
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "adamw",
+            "flops": 0,
+            "memory_bytes": 2314032,
+            "efficiency": "memory"
+          }
+        ]
+      }
+    },
+    {
+      "id": "block_recompute_2_0_0",
+      "runtime_us": 2.0,
+      "inputs": [
+        "y_embed_2_0",
+        "W_0",
+        "M_2_0_0"
+      ],
+      "outputs": [
+        {
+          "id": "A_2_0_0",
+          "size_bytes": 210944,
+          "location": "fast",
+          "role": "activation"
+        }
+      ],
+      "group": "recompute",
+      "compute_block_key": "dsadense_recompute",
+      "block_params": {
+        "layer": 0
+      }
+    },
+    {
+      "id": "block_bwd_2_0_0",
+      "runtime_us": 2.0,
+      "inputs": [
+        "dy_2_0_0",
+        "A_2_0_0",
+        "y_embed_2_0",
+        "W_0",
+        "M_2_0_0"
+      ],
+      "outputs": [
+        {
+          "id": "dy_embed_2_0",
+          "size_bytes": 32768,
+          "location": "fast",
+          "role": "gradient",
+          "tensor": {
+            "dtype": "bf16",
+            "shape": [
+              128,
+              128
+            ]
+          }
+        },
+        {
+          "id": "dW_2_0",
+          "size_bytes": 306688,
+          "location": "fast",
+          "role": "gradient"
+        }
+      ],
+      "group": "backward",
+      "compute_block_key": "dsadense_bwd",
+      "block_params": {
+        "layer": 0
+      },
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "dsadense_matmuls_bwd",
+            "flops": 77594624,
+            "memory_bytes": 870016,
+            "efficiency": "matmul"
+          },
+          {
+            "kind": "roofline",
+            "name": "dsa_attention_bwd",
+            "flops": 16121856,
+            "memory_bytes": 221184,
+            "efficiency": "attention"
+          }
+        ]
+      }
+    },
+    {
+      "id": "optimizer_2_0",
+      "runtime_us": 1.7729599999999999,
+      "inputs": [
+        "W_0",
+        "dW_2_0",
+        "O_0"
+      ],
+      "mutates": [
+        "W_0",
+        "O_0"
+      ],
+      "group": "optimizer",
+      "compute_block_key": "optimizer_block",
+      "block_params": {
+        "layer": 0,
+        "step": 2
+      },
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "adamw",
+            "flops": 0,
+            "memory_bytes": 2127552,
+            "efficiency": "memory"
+          }
+        ]
+      }
+    },
+    {
+      "id": "embed_bwd_2_0",
+      "runtime_us": 1.0,
+      "inputs": [
+        "dy_embed_2_0",
+        "tokens_2_0"
+      ],
+      "outputs": [
+        {
+          "id": "dW_embed_2",
+          "size_bytes": 131072,
+          "location": "fast",
+          "role": "gradient"
+        }
+      ],
+      "group": "backward",
+      "compute_block_key": "embed_bwd",
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "scatter_accum",
+            "flops": 0,
+            "memory_bytes": 132096,
+            "efficiency": "memory"
+          }
+        ]
+      }
+    },
+    {
+      "id": "optimizer_embed_2",
+      "runtime_us": 1.0,
+      "inputs": [
+        "W_embed",
+        "dW_embed_2",
+        "O_embed"
+      ],
+      "mutates": [
+        "W_embed",
+        "O_embed"
+      ],
+      "group": "optimizer",
+      "compute_block_key": "optimizer_embed",
+      "block_params": {
+        "step": 2
+      },
+      "metadata": {
+        "cost_subops": [
+          {
+            "kind": "roofline",
+            "name": "adamw",
+            "flops": 0,
+            "memory_bytes": 917504,
+            "efficiency": "memory"
+          }
+        ]
+      }
+    }
+  ],
+  "final_locations": {
+    "W_embed": "backing",
+    "O_embed": "backing",
+    "W_0": "backing",
+    "O_0": "backing",
+    "W_1": "backing",
+    "O_1": "backing",
+    "W_2": "backing",
+    "O_2": "backing",
+    "W_head": "backing",
+    "O_head": "backing",
+    "loss_0_0": "backing",
+    "loss_1_0": "backing",
+    "loss_2_0": "backing"
+  },
+  "bandwidth_from_slow": 55000,
+  "bandwidth_to_slow": 55000,
+  "recompute_rewrites": [
+    {
+      "object_id": "A_0_0_0",
+      "f_task_id": "block_fwd_0_0_0",
+      "r_task_id": "block_recompute_0_0_0",
+      "options": [
+        {
+          "level": 0,
+          "saved_bytes": 210944,
+          "recompute_us": 0.0,
+          "label": "save"
+        },
+        {
+          "level": 1,
+          "saved_bytes": 0,
+          "recompute_us": 2.0,
+          "label": "recompute"
+        }
+      ],
+      "f_compute_block_key": "dsadense_fwd",
+      "r_compute_block_key": "dsadense_recompute",
+      "group_key": "layer_0"
+    },
+    {
+      "object_id": "A_0_0_1",
+      "f_task_id": "block_fwd_0_0_1",
+      "r_task_id": "block_recompute_0_0_1",
+      "options": [
+        {
+          "level": 0,
+          "saved_bytes": 131072,
+          "recompute_us": 0.0,
+          "label": "save"
+        },
+        {
+          "level": 1,
+          "saved_bytes": 0,
+          "recompute_us": 2.0,
+          "label": "recompute"
+        }
+      ],
+      "f_compute_block_key": "dsamoe_fwd",
+      "r_compute_block_key": "dsamoe_recompute",
+      "group_key": "layer_1"
+    },
+    {
+      "object_id": "A_0_0_2",
+      "f_task_id": "block_fwd_0_0_2",
+      "r_task_id": "block_recompute_0_0_2",
+      "options": [
+        {
+          "level": 0,
+          "saved_bytes": 131072,
+          "recompute_us": 0.0,
+          "label": "save"
+        },
+        {
+          "level": 1,
+          "saved_bytes": 0,
+          "recompute_us": 2.0,
+          "label": "recompute"
+        }
+      ],
+      "f_compute_block_key": "dsamoe_fwd",
+      "r_compute_block_key": "dsamoe_recompute",
+      "group_key": "layer_2"
+    },
+    {
+      "object_id": "A_1_0_0",
+      "f_task_id": "block_fwd_1_0_0",
+      "r_task_id": "block_recompute_1_0_0",
+      "options": [
+        {
+          "level": 0,
+          "saved_bytes": 210944,
+          "recompute_us": 0.0,
+          "label": "save"
+        },
+        {
+          "level": 1,
+          "saved_bytes": 0,
+          "recompute_us": 2.0,
+          "label": "recompute"
+        }
+      ],
+      "f_compute_block_key": "dsadense_fwd",
+      "r_compute_block_key": "dsadense_recompute",
+      "group_key": "layer_0"
+    },
+    {
+      "object_id": "A_1_0_1",
+      "f_task_id": "block_fwd_1_0_1",
+      "r_task_id": "block_recompute_1_0_1",
+      "options": [
+        {
+          "level": 0,
+          "saved_bytes": 131072,
+          "recompute_us": 0.0,
+          "label": "save"
+        },
+        {
+          "level": 1,
+          "saved_bytes": 0,
+          "recompute_us": 2.0,
+          "label": "recompute"
+        }
+      ],
+      "f_compute_block_key": "dsamoe_fwd",
+      "r_compute_block_key": "dsamoe_recompute",
+      "group_key": "layer_1"
+    },
+    {
+      "object_id": "A_1_0_2",
+      "f_task_id": "block_fwd_1_0_2",
+      "r_task_id": "block_recompute_1_0_2",
+      "options": [
+        {
+          "level": 0,
+          "saved_bytes": 131072,
+          "recompute_us": 0.0,
+          "label": "save"
+        },
+        {
+          "level": 1,
+          "saved_bytes": 0,
+          "recompute_us": 2.0,
+          "label": "recompute"
+        }
+      ],
+      "f_compute_block_key": "dsamoe_fwd",
+      "r_compute_block_key": "dsamoe_recompute",
+      "group_key": "layer_2"
+    },
+    {
+      "object_id": "A_2_0_0",
+      "f_task_id": "block_fwd_2_0_0",
+      "r_task_id": "block_recompute_2_0_0",
+      "options": [
+        {
+          "level": 0,
+          "saved_bytes": 210944,
+          "recompute_us": 0.0,
+          "label": "save"
+        },
+        {
+          "level": 1,
+          "saved_bytes": 0,
+          "recompute_us": 2.0,
+          "label": "recompute"
+        }
+      ],
+      "f_compute_block_key": "dsadense_fwd",
+      "r_compute_block_key": "dsadense_recompute",
+      "group_key": "layer_0"
+    },
+    {
+      "object_id": "A_2_0_1",
+      "f_task_id": "block_fwd_2_0_1",
+      "r_task_id": "block_recompute_2_0_1",
+      "options": [
+        {
+          "level": 0,
+          "saved_bytes": 131072,
+          "recompute_us": 0.0,
+          "label": "save"
+        },
+        {
+          "level": 1,
+          "saved_bytes": 0,
+          "recompute_us": 2.0,
+          "label": "recompute"
+        }
+      ],
+      "f_compute_block_key": "dsamoe_fwd",
+      "r_compute_block_key": "dsamoe_recompute",
+      "group_key": "layer_1"
+    },
+    {
+      "object_id": "A_2_0_2",
+      "f_task_id": "block_fwd_2_0_2",
+      "r_task_id": "block_recompute_2_0_2",
+      "options": [
+        {
+          "level": 0,
+          "saved_bytes": 131072,
+          "recompute_us": 0.0,
+          "label": "save"
+        },
+        {
+          "level": 1,
+          "saved_bytes": 0,
+          "recompute_us": 2.0,
+          "label": "recompute"
+        }
+      ],
+      "f_compute_block_key": "dsamoe_fwd",
+      "r_compute_block_key": "dsamoe_recompute",
+      "group_key": "layer_2"
+    }
+  ],
+  "metadata": {
+    "family": "dsv32-shaped",
+    "primary_unit": "tokens",
+    "primary_count": 384.0,
+    "config": {
+      "n_layers": 3,
+      "d_model": 128,
+      "n_heads": 4,
+      "n_kv_heads": 4,
+      "d_ff": 256,
+      "vocab_size": 512,
+      "seq_len": 128,
+      "batch": 1,
+      "grad_accum_rounds": 1,
+      "num_steps": 3
+    },
+    "lowering": "dsv32-exact"
+  }
+}
