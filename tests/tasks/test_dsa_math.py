@@ -547,3 +547,53 @@ def test_dsv32_block_ladder2(kind):
 
     bad = {k: round(v, 4) for k, v in errors.items() if v > 4e-2}
     assert not bad, bad
+
+
+def test_absorbed_op_matches_expanded_reference():
+    """The absorbed-layout op (FlashMLA seam) == the MHA-expanded mask
+    reference when heads share one K=V row: q per head absorbed to
+    d_qk, kv = the shared row, value = first d_v dims. Runs the EAGER
+    impl everywhere; on an sm90 box with flash_mla installed the
+    registry resolves the 'flashmla' impl and this same test pins the
+    vendor kernel (576/512 only — dims here stay tiny -> eager)."""
+    from dataflow.tasks.kernels import KernelCtx, resolve_kernels
+
+    torch.manual_seed(9)
+    t, h, d_qk, d_v, k_sel = 64, 4, 48, 32, 12
+    K = resolve_kernels()
+    kctx = KernelCtx(0, None)
+    q = (torch.randn(t, h * d_qk, device="cuda") * 0.3).to(torch.bfloat16)
+    kv = (torch.randn(t, d_qk, device="cuda") * 0.3).to(torch.bfloat16)
+    scores = torch.randn(t, t, device="cuda").tril_()
+    idx = torch.topk(scores + torch.where(
+        torch.ones(t, t, device="cuda").tril().bool(), 0.0, float("-inf")),
+        k_sel, dim=-1).indices.int()
+    out = torch.empty(t, h * d_v, dtype=torch.bfloat16, device="cuda")
+    lse = torch.empty(h, t, dtype=torch.float32, device="cuda")
+    K.dsa_sparse_attn_fwd_absorbed(
+        kctx, q, kv, idx, out, lse,
+        n_heads=h, d_qk=d_qk, d_v=d_v, seq_bounds=((0, t),),
+    )
+    # reference: expand kv per head and run the pinned expanded path
+    from dataflow.tasks.dsa_reference import dsa_mask_from_idx, dsa_sparse_attention_reference
+
+    class _D:
+        n_heads, qk_head_dim, v_head_dim = h, d_qk, d_v
+        tokens, seq_len, seq_lens = t, t, None
+        index_topk = k_sel
+
+        @property
+        def seq_spec(self):
+            return t
+
+    kf = kv.unsqueeze(1).expand(t, h, d_qk).reshape(t, h * d_qk).contiguous()
+    vp = kv[:, :d_v].unsqueeze(1).expand(t, h, d_v).reshape(t, h * d_v).contiguous()
+    mask = dsa_mask_from_idx(idx.long(), _D(), t)
+    # pad d_v up to d_qk for the equal-dims reference
+    vref = torch.zeros(t, h, d_qk, dtype=torch.bfloat16, device="cuda")
+    vref[..., :d_v] = vp.view(t, h, d_v)
+    ref = dsa_sparse_attention_reference(
+        q.float(), kf.float(), vref.reshape(t, h * d_qk).float(), mask, _D(),
+    )
+    ref_v = ref.view(t, h, d_qk)[..., :d_v].reshape(t, h * d_v)
+    assert rel_l2(out, ref_v) < 3e-2

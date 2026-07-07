@@ -285,7 +285,7 @@ if triton is not None:
                 kt = tl.load(k_ptr + rn[:, None] * skt + pid_h * skh + rd[None, :],
                              mask=nmask[:, None] & dmask[None, :], other=0.0)
                 s = tl.dot(q, tl.trans(kt)) * scale
-                bit = (word[:, None] >> (rn[None, :] - n0)) & 1
+                bit = (word[:, None] >> (rn[None, :] & 63)) & 1
                 s = tl.where((bit == 1) & nmask[None, :], s, float("-inf"))
                 m_new = tl.maximum(m_i, tl.max(s, 1))
                 alpha = tl.exp(m_i - m_new)
@@ -342,7 +342,7 @@ if triton is not None:
                 kt = tl.load(k_ptr + rn[:, None] * skt + pid_h * skh + rd[None, :],
                              mask=nmask[:, None] & dmask[None, :], other=0.0)
                 s = tl.dot(q, tl.trans(kt)) * scale
-                bit = (word[:, None] >> (rn[None, :] - n0)) & 1
+                bit = (word[:, None] >> (rn[None, :] & 63)) & 1
                 live = (bit == 1) & nmask[None, :]
                 p = tl.where(live, tl.exp(s - lse[:, None]), 0.0)
                 vt = tl.load(v_ptr + rn[:, None] * svt + pid_h * svh + rv[None, :],
@@ -393,7 +393,7 @@ if triton is not None:
                 lse = tl.load(lse_ptr + pid_h * slh + rm * slt, mask=mmask,
                               other=0.0)
                 s = tl.dot(q, tl.trans(kt)) * scale
-                bit = (word[:, None] >> (rn[None, :] - pid_n * BN)) & 1
+                bit = (word[:, None] >> (rn[None, :] & 63)) & 1
                 live = (bit == 1) & nmask[None, :] & mmask[:, None]
                 p = tl.where(live, tl.exp(s - lse[:, None]), 0.0)
                 dv_acc += tl.dot(tl.trans(p.to(vt.dtype)), do)
@@ -491,7 +491,7 @@ if triton is not None:
                 _pack_local_bits(idx[lo:hi], lo, length, bits)
             delta = torch.empty(n_heads, length, dtype=torch.float32,
                                 device=q.device)
-            grid_m = ((length + BM - 1) // BM, n_heads)
+            grid_m = ((length + 31) // 32, n_heads)
             _mf_bwd_dq_kernel[grid_m](
                 d_attn[lo:hi], q[lo:hi], kf[lo:hi], vp[lo:hi], out[lo:hi],
                 bits, lse[:, lo:hi], dq_out[lo:hi], delta,
@@ -501,8 +501,8 @@ if triton is not None:
                 lse.stride(0), 1,
                 H=n_heads, D=head_dim, DP=triton.next_power_of_2(head_dim),
                 DV=dv, DVP=triton.next_power_of_2(dv),
-                BM=BM, BN=BN,
-                num_warps=8, num_stages=3,
+                BM=32, BN=BN,
+                num_warps=4, num_stages=3,
             )
             grid_n = ((length + BN - 1) // BN, n_heads)
             _mf_bwd_dkv_kernel[grid_n](
@@ -655,22 +655,25 @@ if triton is not None:
             length = hi - lo
             ds = d_scores[lo:hi, lo:hi] if d_scores.shape[0] != length \
                 else d_scores
-            grid_m = ((length + BM - 1) // BM,)
+            # split-tuned per pass (2026-07-07: dq 32x64 0.31, dk 32x32
+            # 0.31 -> 0.62 combined vs 1.52 shared-config; small fp32-dI
+            # tiles pipeline far better than square ones)
+            grid_m = ((length + 31) // 32,)
             _idx_bwd_dq_kernel[grid_m](
                 ds, q_idx[lo:hi], k_idx[lo:hi], wts[lo:hi],
                 dq_out[lo:hi], dwts_out[lo:hi],
                 length, ds.stride(0),
                 HI=n_heads, DI=head_dim,
-                DIP=triton.next_power_of_2(head_dim), BM=BM, BN=BN,
+                DIP=triton.next_power_of_2(head_dim), BM=32, BN=64,
                 num_warps=4, num_stages=4,
             )
-            grid_n = ((length + BN - 1) // BN,)
+            grid_n = ((length + 31) // 32,)
             _idx_bwd_dk_kernel[grid_n](
                 ds, q_idx[lo:hi], k_idx[lo:hi], wts[lo:hi], dk_out[lo:hi],
                 length, ds.stride(0),
                 HI=n_heads, DI=head_dim,
-                DIP=triton.next_power_of_2(head_dim), BM=BM, BN=BN,
-                num_warps=4, num_stages=2,
+                DIP=triton.next_power_of_2(head_dim), BM=32, BN=32,
+                num_warps=4, num_stages=4,
             )
 
     @triton.jit
@@ -697,7 +700,7 @@ if triton is not None:
         alive = tl.sum((word != 0).to(tl.int32), 0) > 0
         if not alive:
             return  # p_out pre-zeroed by the launcher
-        bit = (word[:, None] >> (rn[None, :] - pid_n * BN)) & 1
+        bit = (word[:, None] >> (rn[None, :] & 63)) & 1
         live = (bit == 1) & mmask[:, None] & nmask[None, :]
         acc = tl.zeros((BM, BN), tl.float32)
         for h in range(H):

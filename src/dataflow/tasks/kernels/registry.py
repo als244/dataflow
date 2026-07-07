@@ -156,6 +156,14 @@ def device_caps() -> dict:
         caps["triton"] = True
     except Exception:
         pass
+    caps["flash_mla"] = False
+    if caps["cuda"] and caps.get("cc", (0, 0))[0] >= 9:
+        try:
+            import flash_mla  # noqa: F401
+
+            caps["flash_mla"] = True
+        except Exception:
+            pass
     return caps
 
 

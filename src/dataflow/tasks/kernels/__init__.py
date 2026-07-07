@@ -39,6 +39,7 @@ from . import (  # noqa: F401,E402
     causal_conv,
     cross_entropy,
     dsa,
+    dsa_flashmla,
     embed,
     gated_rmsnorm,
     moe_dispatch,
