@@ -140,15 +140,40 @@ def register_optimizer(d: OptimizerDef) -> None:
 
 @dataclass(frozen=True)
 class OptPolicy:
-    """Per-field optimizer assignment. ``overrides`` are (fnmatch
-    pattern, optimizer name) pairs over namespaced field keys; first
-    match wins; ``default`` covers the rest."""
+    """Per-field optimizer assignment.
+
+    ``overrides``: (fnmatch pattern, optimizer name) pairs over
+    namespaced field keys; first match wins; ``default`` covers the
+    rest. ``layer_overrides`` mirrors DTypePolicy's depth convention
+    EXACTLY: ((layers_tuple, sub_policy), ...) — the first layer-set
+    containing the layer wins and its SUB-POLICY (an OptPolicy, a
+    MuonRecipePolicy, or a string shorthand incl. "muon" = the recipe)
+    owns every field decision for that layer; unmatched layers fall
+    through to this policy's own rules. So (layer index, param name)
+    addressing is:
+
+        OptPolicy(default="adamw", layer_overrides=(
+            (tuple(range(4)), "sgd"),                  # layers 0-3
+            ((7,), OptPolicy(overrides=(("w?", "muon"),))),
+        ))
+    """
 
     default: str = "adamw"
     overrides: tuple = field(default_factory=tuple)
+    layer_overrides: tuple = ()
+
+    def for_layer(self, layer: int | None):
+        if layer is not None:
+            for layers, sub in self.layer_overrides:
+                if layer in layers:
+                    return resolve_opt_policy(sub)
+        return self
 
     def for_field(self, key: str, layer: int | None = None,
                   shape: tuple | None = None) -> str:
+        pol = self.for_layer(layer)
+        if pol is not self:
+            return pol.for_field(key, None, shape)
         for pat, name in self.overrides:
             if fnmatch(key, pat):
                 return name
@@ -159,6 +184,8 @@ class OptPolicy:
             if name not in OPTIMIZERS:
                 raise ValueError(f"unknown optimizer {name!r} "
                                  f"(have: {sorted(OPTIMIZERS)})")
+        for _, sub in self.layer_overrides:
+            resolve_opt_policy(sub)
         return self
 
 
@@ -184,9 +211,20 @@ class MuonRecipePolicy:
     """
 
     overrides: tuple = ()
+    layer_overrides: tuple = ()   # same depth convention as OptPolicy
+
+    def for_layer(self, layer: int | None):
+        if layer is not None:
+            for layers, sub in self.layer_overrides:
+                if layer in layers:
+                    return resolve_opt_policy(sub)
+        return self
 
     def for_field(self, key: str, layer: int | None = None,
                   shape: tuple | None = None) -> str:
+        pol = self.for_layer(layer)
+        if pol is not self:
+            return pol.for_field(key, None, shape)
         for pat, name in self.overrides:
             if fnmatch(key, pat):
                 return name
@@ -201,6 +239,8 @@ class MuonRecipePolicy:
         for name in [n for _, n in self.overrides]:
             if name not in OPTIMIZERS:
                 raise ValueError(f"unknown optimizer {name!r}")
+        for _, sub in self.layer_overrides:
+            resolve_opt_policy(sub)
         return self
 
 

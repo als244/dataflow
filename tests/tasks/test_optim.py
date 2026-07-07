@@ -324,3 +324,89 @@ def test_muon_recipe_string_model_step_vs_hand_replica():
             if r > worst[0]:
                 worst = (r, f"W_{i}.{name}")
     assert worst[0] <= 3e-2, worst
+
+
+def test_layer_indexed_policy_sizes_and_model_step():
+    """(layer index, param name) addressing: layer 0 -> sgd (O_0 sizes
+    to ZERO bytes), other layers -> adamw. Structural sizing through
+    lowering + the real-engine step vs a per-layer hand replica."""
+    from dataflow.runtime import Engine
+    from dataflow.runtime.device.cuda import CudaBackend
+    from dataflow.runtime.device.fake import FakeBackend
+    from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME, torch_view
+    from dataflow.tasks.llama3_blocks import AdamWHyper
+    from dataflow.training.families import resolve_family
+    from dataflow.training.llama3 import ShapedLlamaConfig
+    from dataflow.training.planning import plan_program
+    from dataflow.training.testing.gradcheck import rel_l2
+
+    policy = OptPolicy(default="adamw",
+                       layer_overrides=(((0,), "sgd"),))
+    cfg = replace(ShapedLlamaConfig.tiny(), opt_policy=policy)
+    fam = resolve_family(cfg)
+    dims = fam.dims_of(cfg)
+    prog = fam.lower(cfg)
+    o_sizes = {o.id: o.size_bytes for o in prog.initial_objects
+               if o.id.startswith("O_") and o.id[2:].isdigit()}
+    assert "O_0" not in o_sizes, o_sizes   # sgd: stateless -> O DROPPED
+    assert o_sizes["O_1"] > 0               # adamw: m+v
+
+    planned = plan_program(prog, fast_memory_capacity=64 * 1024 * 1024)
+    backend = CudaBackend()
+    values = fam.initial_values(planned.program, cfg, backend, seed=13)
+
+    def pinned(name):
+        buf = values[name]
+        return torch_view(buf, (buf.size_bytes,), torch.uint8).clone()
+
+    leaves = [pinned("W_embed"),
+              [pinned(f"W_{i}") for i in range(cfg.n_layers)],
+              pinned("W_head")]
+    golden = fam.golden().from_packed_bytes(dims, cfg.n_layers, *leaves)
+    tokens = torch_view(values["tokens_0_0"], (dims.tokens,),
+                        torch.int32).long().cuda()
+    targets = torch_view(values["targets_0_0"], (dims.tokens,),
+                         torch.int32).long().cuda()
+    for p_ in golden.parameters():
+        p_.grad = None
+    golden.loss(tokens, targets).backward()
+
+    hp = AdamWHyper()
+
+    def ref_step(layer, w, g):
+        w32, g32 = w.detach().float(), g.detach().float()
+        if policy.for_field("any", layer, tuple(w.shape)) == "sgd":
+            out = w32 * (1 - hp.lr * hp.weight_decay) - hp.lr * g32
+        else:
+            m = g32 * (1 - hp.beta1)
+            v = g32 * g32 * (1 - hp.beta2)
+            out = (w32 * (1 - hp.lr * hp.weight_decay)
+                   - hp.lr * (m / (1 - hp.beta1))
+                   / ((v / (1 - hp.beta2)).sqrt() + hp.eps))
+        return out.to(w.dtype)
+
+    dry = Engine(FakeBackend()).execute(planned.program,
+                                        initial_buffers=values)
+    result = Engine(backend).execute(
+        planned.program, resolver=fam.build_resolver(dims),
+        initial_buffers=values, pool_prewarm=dry.pool_demand)
+
+    worst = (0.0, "")
+    for i in range(cfg.n_layers):
+        layout, _ = golden.final_leaves(f"W_{i}")
+        rec = result.objects.get(f"W_{i}")
+        buf = (rec.backing or rec.fast).buffer
+        w0 = leaves[1][i]
+        for f, (name, param) in zip(layout.fields,
+                                    golden.w_blocks[i].items()):
+            dt = TORCH_DTYPE_BY_NAME[f.dtype]
+            nbytes = param.numel() * dt.itemsize
+            base = (w0[f.offset_bytes:f.offset_bytes + nbytes]
+                    .view(dt).view(*f.shape).cuda())
+            expect = ref_step(i, base.reshape(param.shape),
+                              param.grad).reshape(f.shape)
+            got = torch_view(buf, f.shape, dt, offset_bytes=f.offset_bytes)
+            r = rel_l2(got, expect)
+            if r > worst[0]:
+                worst = (r, f"W_{i}.{name}")
+    assert worst[0] <= 3e-2, worst

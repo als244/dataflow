@@ -612,7 +612,10 @@ class AdamWStep(_Base):  # name kept for resolver back-compat; see OptimizerStep
         with torch.cuda.stream(es):
             w_buf = ctx.mutates[ctx.task.mutates[0]]
             g_buf = ctx.inputs[ctx.task.inputs[1]]
-            o_buf = ctx.mutates[ctx.task.mutates[1]]
+            # a fully-stateless assignment (all-sgd layer) has NO O
+            # object — the lowering scrubbed it (apply_exact_sizes)
+            o_buf = (ctx.mutates[ctx.task.mutates[1]]
+                     if len(ctx.task.mutates) > 1 else None)
             wl_, gl_, ol_, ns = self._layouts(ctx.task, w_buf.size_bytes)
             step = int(ctx.task.block_params.get("step", 0)) + 1
             hp = self.hyper
@@ -630,6 +633,10 @@ class AdamWStep(_Base):  # name kept for resolver back-compat; see OptimizerStep
                     )
                     continue
                 opt = OPTIMIZERS[op.for_field(key(f.name), layer, f.shape)]
+                if opt.slots and o_buf is None:
+                    raise ValueError(
+                        f"{ctx.task.id}: field {f.name!r} wants "
+                        f"{opt.name!r} state but the task has no O object")
                 states = {slot: ol_.view(o_buf, f"{slot}_{f.name}").view(-1)
                           for slot in opt.slots}
                 opt.step(kctx, self.kernels, hp, step,

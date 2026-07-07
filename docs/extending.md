@@ -253,6 +253,25 @@ through `tasks/optim.py`:
       overrides=(("w_router", "muon"),)))          # recipe + exceptions
   ```
 
+  Both policy types also take **`layer_overrides`** — the SAME depth
+  convention as the dtype policy (§3): `((layers_tuple, sub_policy),
+  ...)`, first layer-set containing the layer wins, its sub-policy
+  (an `OptPolicy`, a recipe, or a string incl. `"muon"`) owns every
+  field decision for that layer. So (layer index, param name)
+  addressing is:
+
+  ```python
+  opt_policy = OptPolicy(default="adamw", layer_overrides=(
+      (tuple(range(4)), "sgd"),                     # layers 0-3: all sgd
+      ((7,), OptPolicy(overrides=(("w?", "muon"),))),  # layer 7: attn muon
+  ))
+  ```
+
+  A layer whose assignment is fully STATELESS (all-sgd) drops its O
+  object entirely — lowering scrubs the zero-byte object and its
+  optimizer-task reference, so plans, transfers, and pinning shrink
+  accordingly.
+
   **`opt_policy="muon"` means the hybrid recipe** (`MuonRecipePolicy`,
   flextrain's classification): muon for structurally-matrix weights —
   rank-2 projections and rank-3 stacked expert weights (Newton-Schulz

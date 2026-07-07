@@ -137,14 +137,36 @@ def apply_exact_sizes(
         )
         for rw in shaped.recompute_rewrites
     )
+    objs = tuple(fix_obj(o) for o in shaped.initial_objects)
+    # a fully-STATELESS optimizer assignment (e.g. sgd for every field
+    # of a layer) sizes that O object to zero — drop it and scrub it
+    # from its optimizer task rather than shipping a 0-byte object
+    dead = {o.id for o in objs
+            if o.id.startswith("O_") and o.size_bytes == 0}
+    if dead:
+        objs = tuple(o for o in objs if o.id not in dead)
+    final = {k: v for k, v in shaped.final_locations.items()
+             if k not in dead}
+
+    def scrub(t: TaskSpec) -> TaskSpec:
+        if not dead or not (set(t.inputs) | set(t.mutates)) & dead:
+            return t
+        return replace(
+            t,
+            inputs=tuple(i for i in t.inputs if i not in dead),
+            mutates=tuple(m for m in t.mutates if m not in dead),
+        )
+
     return replace(
         shaped,
-        initial_objects=tuple(fix_obj(o) for o in shaped.initial_objects),
+        initial_objects=objs,
         tasks=tuple(
-            fix_task(t, step_of(t.id)) if t.group == "optimizer" else fix_task(t, 0)
+            scrub(fix_task(t, step_of(t.id)) if t.group == "optimizer"
+                  else fix_task(t, 0))
             for t in shaped.tasks
         ),
         recompute_rewrites=new_rewrites,
+        final_locations=final,
         metadata={**shaped.metadata, "lowering": lowering_tag},
     )
 
