@@ -414,3 +414,38 @@ Reading:
 M-H2 next: triton dsa_index fwd/bwd + gather-absorbed sparse core
 (deterministic inversion bwd) + sm90 FlashMLA seam + tiny-scale
 stock-flash cross-validator; then THIS TABLE gets re-measured.
+
+
+## M-H2: dsv32-mini re-measured — triton DSA kernels (2026-07-07)
+
+Same protocol as the eager round; kernel set: triton masked-flash
+sparse core (bitmask selection, flash tiling, deterministic two-pass
+bwd), triton indexer fwd/bwd, fused KL-target probs_sum. Sparse-stage
+training remains PAPER-FAITHFUL (the indexer's KL is its only training
+signal — report: 'the training signal of the indexer is from only
+L_I'; its ~3 ms/seq bwd cost is DSA's legitimate training price).
+
+| dev GiB | TRITON wall (shape) | sim | r/s% | fid% | vs eager | vs dsv3-dense s4k |
+|---|---|---|---|---|---|---|
+| 12 | 4,971 (bs4ga4 rc-58) | 4,300 | +15.8 | 0.66 | 2.15x | 1.02x — FREE |
+| 16 | 5,765 (bs8ga2 rc-36) | 4,727 | +22.1 | 1.06 | 2.14x | 1.33x |
+| 20 | 7,514 (bs8ga2 rc-15) | 6,669 | +12.9 | 0.53 | 2.71x | 1.12x |
+| 24 | 7,558 (bs16ga1 rc-9) | 6,707 | +12.9 | 0.21 | 2.63x | 1.43x |
+| 28 | 8,308 (bs16ga1 rc-8) | 7,266 | +14.6 | 1.67 | 2.87x | 1.47x |
+
+- End-to-end 2.1-2.9x over the eager round; the DSA tax vs dense dsv3
+  collapsed from 2.2-4.2x to 1.02-1.47x. At dev-12 DSA is effectively
+  FREE: the sparse core's 4x flop savings pay for the indexer.
+- The curve has slope again (4,971 -> 8,308): attention left the
+  critical wall, memory economics returned, and stream-once bs16ga1
+  reclaimed the top envelopes exactly as the oracle predicted.
+- Fidelity back to 0.2-1.7% (the eager rows' 5.8-6.3% chunked-enqueue
+  looseness vanished with real kernels, as predicted); real runs
+  +13-22% ABOVE sim (the standard contended-profile conservatism).
+- Remaining vs-dense gap at 24/28 (~1.45x) decomposes as: indexer
+  compute + KL training tax (paper-faithful) + sparse-bwd headroom
+  (the dkv pass re-derives O internally; saving it via the ctx
+  attn_out is a filed micro-optimization) + selection/topk. The
+  long-context regime (128K, k<<L) flips the economics decisively
+  toward DSA; on this box at s4k the parity-at-low-memory result is
+  the headline.

@@ -1,0 +1,101 @@
+{
+  "config": "dsv32-mini-s4k-bs4ga4",
+  "steps": 3,
+  "pcie": {
+    "uni_h2d": 35338,
+    "uni_d2h": 56756,
+    "bidi_h2d": 25529,
+    "bidi_d2h": 25783
+  },
+  "optimizer_placement": "interleaved",
+  "preplace": "task0",
+  "kernel_set": {
+    "adamw_step": "triton",
+    "causal_conv1d_silu_bwd": "fla-triton",
+    "causal_conv1d_silu_fwd": "fla-triton",
+    "ce_loss_fwd_bwd": "triton",
+    "dsa_index_bwd": "triton",
+    "dsa_index_scores": "triton",
+    "dsa_pack_bits": "eager",
+    "dsa_probs_sum": "triton",
+    "dsa_sparse_attn_bwd": "triton",
+    "dsa_sparse_attn_fwd": "triton",
+    "dsa_topk": "eager",
+    "gated_rmsnorm_bwd": "fla-fused",
+    "gated_rmsnorm_fwd": "fla-fused",
+    "moe_aux_lb_grad": "triton",
+    "moe_combine_fwd": "triton",
+    "moe_dispatch_bwd": "triton",
+    "moe_dispatch_fwd": "aten",
+    "moe_grouped_mm_dgrad": "triton",
+    "moe_grouped_mm_fwd": "triton",
+    "moe_grouped_mm_wgrad": "triton",
+    "moe_router_bwd": "triton",
+    "moe_router_bwd_sigmoid": "eager",
+    "moe_rowdot": "triton",
+    "moe_scale_rows": "triton",
+    "moe_seq_aux_grad": "eager",
+    "moe_sort": "aten",
+    "moe_topk_sigmoid_noaux": "eager",
+    "moe_topk_softmax": "triton",
+    "rmsnorm_apply": "triton",
+    "rmsnorm_bwd": "triton",
+    "rmsnorm_fwd": "triton",
+    "rmsnorm_noweight": "triton",
+    "rope_bwd": "triton",
+    "rope_fwd": "triton",
+    "swiglu_bwd": "triton",
+    "swiglu_fwd_out": "triton",
+    "swiglu_packed_bwd": "triton",
+    "swiglu_packed_fwd": "triton"
+  },
+  "sweep": [
+    {
+      "budget_gib": 12.0,
+      "budget_semantics": "device",
+      "planned_budget_gib": 8.353298993781209,
+      "actual_device_peak_gib": 11.713625431060791,
+      "fixed_overhead_gib": 1.47125244140625,
+      "torch_scratch_peak_gib": 1.783203125,
+      "device_envelope_gib": 12.0,
+      "scratch_reserve_gib": 1.81494140625,
+      "placement_mode": "static",
+      "extent_budget": false,
+      "sim_ms_per_step": 15241.47525,
+      "real_ms_per_step_steady": 13167.16064453125,
+      "sim_tokens_per_s": 4299.846236997301,
+      "real_tokens_per_s": 4977.230989220081,
+      "wall_tokens_per_s": 4971.037825955152,
+      "real_vs_sim_pct": 15.753697106522946,
+      "replay_fidelity_gap_pct": 0.6613432006220202,
+      "losses": [
+        NaN,
+        NaN,
+        NaN
+      ],
+      "peak_fast_gib": 8.33183240890503,
+      "peak_backing_gib": 103.96093822270632,
+      "pinned_host_gib": 108.45312930643559,
+      "step_makespans_ms": [
+        13883.4482421875,
+        13160.0947265625,
+        13174.2265625
+      ],
+      "step_wall_s": [
+        19.804322788026184,
+        13.176528221927583,
+        13.19060165900737
+      ],
+      "step_slab_overflows": [
+        0,
+        0,
+        0
+      ],
+      "placement_extent_gib": 8.459169864654541,
+      "placement_escapes": 0,
+      "pressure_evictions": 0,
+      "placement_overhead": 1.0152832473698599,
+      "recompute_chosen": 58
+    }
+  ]
+}
