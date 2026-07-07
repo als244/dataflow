@@ -26,7 +26,7 @@ from .layouts import (
     qwen35moe_lin_weight_layout,
 )
 from .llama3_blocks import AdamWHyper, AdamWStep, EmbedBwd, EmbedFwd, HeadLoss
-from .moe.stages import MOE_SHARED_STAGES, MoEProfileFill, moe_mlp_tail_bwd
+from .moe.stages import MOE_SHARED_STAGES, MoEMetaState, MoEProfileFill, moe_mlp_tail_bwd
 from .qwen35_blocks import (
     Qwen35AttnBlockBwd,
     Qwen35AttnBlockFwd,
@@ -47,7 +47,7 @@ def _stage_prefix(stages, upto: str):
 
 
 @dataclass(frozen=True)
-class Qwen35MoeLinBlockFwd(MoEProfileFill, Qwen35LinBlockFwd):
+class Qwen35MoeLinBlockFwd(MoEMetaState, MoEProfileFill, Qwen35LinBlockFwd):
     dims: Qwen35MoeDims = None  # type: ignore[assignment]
 
     def _weight_layout(self, layer: int | None = None) -> PackedLayout:
@@ -66,7 +66,7 @@ class Qwen35MoeLinBlockRecompute(Qwen35MoeLinBlockFwd, Qwen35LinBlockRecompute):
 
 
 @dataclass(frozen=True)
-class Qwen35MoeLinBlockBwd(MoEProfileFill, Qwen35LinBlockBwd):
+class Qwen35MoeLinBlockBwd(MoEMetaState, MoEProfileFill, Qwen35LinBlockBwd):
     dims: Qwen35MoeDims = None  # type: ignore[assignment]
 
     def _weight_layout(self, layer: int | None = None) -> PackedLayout:
@@ -89,7 +89,7 @@ class Qwen35MoeLinBlockBwd(MoEProfileFill, Qwen35LinBlockBwd):
 
 
 @dataclass(frozen=True)
-class Qwen35MoeAttnBlockFwd(MoEProfileFill, Qwen35AttnBlockFwd):
+class Qwen35MoeAttnBlockFwd(MoEMetaState, MoEProfileFill, Qwen35AttnBlockFwd):
     dims: Qwen35MoeDims = None  # type: ignore[assignment]
 
     def _weight_layout(self, layer: int | None = None) -> PackedLayout:
@@ -108,7 +108,7 @@ class Qwen35MoeAttnBlockRecompute(Qwen35MoeAttnBlockFwd, Qwen35LinBlockRecompute
 
 
 @dataclass(frozen=True)
-class Qwen35MoeAttnBlockBwd(MoEProfileFill, Qwen35AttnBlockBwd):
+class Qwen35MoeAttnBlockBwd(MoEMetaState, MoEProfileFill, Qwen35AttnBlockBwd):
     dims: Qwen35MoeDims = None  # type: ignore[assignment]
 
     def _weight_layout(self, layer: int | None = None) -> PackedLayout:

@@ -355,6 +355,7 @@ def family_layouts(cfg: ShapedDsv32Config) -> tuple[Dsv32Dims, FamilyLayouts]:
             "idx_k_ln_w": lambda n, gen: torch.ones(n),
             "idx_k_ln_b": lambda n, gen: torch.zeros(n),
         },
+        block_meta_at=lambda i: dsv32_meta_layout(dims, dims.kind_of(i)),
     )
 
 
@@ -376,19 +377,8 @@ def lower_dsv32(
     shaped = build_shaped_dsv32(
         cfg, hw=hw, recompute_levels=recompute_levels, fast_memory_capacity=fast_memory_capacity,
     )
-    base_size = size_of_factory(dims, fl)
-    meta_total = {
-        "dense": dsv32_meta_layout(dims, "dense").total_bytes,
-        "moe": dsv32_meta_layout(dims, "moe").total_bytes,
-    }
-
-    def size_of(oid: str):
-        if oid.startswith("M_"):
-            layer = int(oid.split("_")[-1])
-            return meta_total[dims.kind_of(layer)]
-        return base_size(oid)
-
-    return apply_exact_sizes(shaped, "dsv32-exact-v2", size_of=size_of)
+    return apply_exact_sizes(shaped, "dsv32-exact-v2",
+                             size_of=size_of_factory(dims, fl))
 
 
 def initial_values_dsv32(program: Program, cfg: ShapedDsv32Config, backend, *, seed: int = 0):

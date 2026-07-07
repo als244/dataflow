@@ -158,13 +158,21 @@ def _ladder2(kind: str, tol: float = 4e-2):
         for f in cl.fields
     }
     y = torch.empty_like(x)
-    fwd._forward(kctx, x, w, y, a)
+    from dataflow.tasks.moe.spec import moe_meta_layout
+
+    m_l = moe_meta_layout(dims, dims.moe)
+    meta_views = {f.name: torch.empty(f.shape, dtype=TORCH_DTYPE_BY_NAME[f.dtype],
+                                      device="cuda") for f in m_l.fields}
+    fwd._forward(kctx, x, w, y, a, extras={"meta": dict(meta_views)})
 
     a2 = {
         f.name: torch.empty(f.shape, dtype=TORCH_DTYPE_BY_NAME[f.dtype], device="cuda")
         for f in cl.fields
     }
-    rc_cls(dims, kernels)._run_stages(kctx, x, w, a2, count=rc_cls.recompute_stage_count())
+    rc_cls(dims, kernels)._run_stages(
+        kctx, x, w, a2, count=rc_cls.recompute_stage_count(),
+        extras={"meta": dict(meta_views), "meta_ready": True},
+    )
     torch.cuda.synchronize()
     errors = {}
     for name in a:
@@ -179,7 +187,8 @@ def _ladder2(kind: str, tol: float = 4e-2):
         for f in gl.fields
     }
     dx = torch.empty_like(x)
-    bwd._backward(kctx, dy, a, x, w, dx, dwv, accum=False)
+    bwd._backward(kctx, dy, a, x, w, dx, dwv, accum=False,
+                  meta={"meta": meta_views})
 
     golden = GoldenQwen35Moe(dims=dims)
     leaves = {n: t.detach().clone().requires_grad_() for n, t in w.items()}
@@ -187,7 +196,7 @@ def _ladder2(kind: str, tol: float = 4e-2):
     fwd_ref = golden.lin_block_forward if kind == "lin" else golden.full_block_forward
     # selection pinned to the runtime's (see moe-design.md: comparison
     # methodology — flips are model sensitivity, not gradient error)
-    y_ref, aux_ref = fwd_ref(x_ref, leaves, route_ids=a["route_ids"])
+    y_ref, aux_ref = fwd_ref(x_ref, leaves, route_ids=meta_views["route_ids"])
     y_ref.backward(dy, retain_graph=True)
     aux_ref.backward()
 
@@ -196,7 +205,8 @@ def _ladder2(kind: str, tol: float = 4e-2):
     for name in dwv:
         errors[f"bwd:d{name}"] = rel_l2(dwv[name], leaves[name].grad)
 
-    bwd._backward(kctx, dy, a, x, w, dx, dwv, accum=True)
+    bwd._backward(kctx, dy, a, x, w, dx, dwv, accum=True,
+                  meta={"meta": meta_views})
     for name in dwv:
         errors[f"accum:2x:{name}"] = rel_l2(dwv[name], 2.0 * leaves[name].grad)
 

@@ -415,6 +415,7 @@ def family_layouts(cfg: ShapedGlm52Config) -> tuple[Glm52Dims, FamilyLayouts]:
             "idx_k_ln_w": lambda n, gen: torch.ones(n),
             "idx_k_ln_b": lambda n, gen: torch.zeros(n),
         },
+        block_meta_at=lambda i: glm52_meta_layout(dims, dims.kind_of(i)),
     )
 
 
@@ -436,15 +437,10 @@ def lower_glm52(
     )
     base_size = size_of_factory(dims, fl)
     t_tokens, k_sel = dims.tokens, dims.index_topk
-    meta_total = {k: glm52_meta_layout(dims, k).total_bytes
-                  for k in ("gdl", "gml", "gmf")}
 
     def size_of(oid: str):
         if oid.startswith("dM_"):
             return 4 * t_tokens * k_sel
-        if oid.startswith("M_"):
-            layer = int(oid.split("_")[-1])
-            return meta_total[dims.kind_of(layer)]
         return base_size(oid)
 
     return apply_exact_sizes(shaped, "glm52-exact-v1", size_of=size_of)

@@ -367,7 +367,7 @@ def olmoe_context_layout(dims: OlmoeDims) -> PackedLayout:
         ("attn_out", (t, q), "bf16"),
         ("h_mid", (t, d), "bf16"),
         ("rstd_ffn", (t,), "fp32"),
-    ] + moe_context_specs(dims, dims.moe))
+    ] + moe_context_specs(dims, dims.moe, meta=True))
 
 
 def qwen3_context_layout(dims: Qwen3Dims) -> PackedLayout:
@@ -442,7 +442,7 @@ def qwen3moe_context_layout(dims: Qwen3MoeDims) -> PackedLayout:
         ("attn_out", (t, q), "bf16"),
         ("h_mid", (t, d), "bf16"),
         ("rstd_ffn", (t,), "fp32"),
-    ] + moe_context_specs(dims, dims.moe))
+    ] + moe_context_specs(dims, dims.moe, meta=True))
 
 
 @dataclass(frozen=True)
@@ -563,7 +563,7 @@ def dsv3_moe_context_layout(dims: Dsv3Dims) -> PackedLayout:
     from .moe.spec import moe_context_specs
 
     return PackedLayout.build(
-        _dsv3_attn_ctx_specs(dims) + moe_context_specs(dims, dims.moe)
+        _dsv3_attn_ctx_specs(dims) + moe_context_specs(dims, dims.moe, meta=True)
     )
 
 
@@ -932,7 +932,8 @@ def qwen35moe_lin_weight_layout(dims: Qwen35MoeDims, layer: int | None = None) -
 def qwen35moe_lin_context_layout(dims: Qwen35MoeDims) -> PackedLayout:
     from .moe.spec import moe_context_specs
 
-    return PackedLayout.build(_qwen35_lin_attn_ctx(dims) + moe_context_specs(dims, dims.moe))
+    return PackedLayout.build(
+        _qwen35_lin_attn_ctx(dims) + moe_context_specs(dims, dims.moe, meta=True))
 
 
 def qwen35moe_attn_weight_layout(dims: Qwen35MoeDims, layer: int | None = None) -> PackedLayout:
@@ -947,7 +948,8 @@ def qwen35moe_attn_weight_layout(dims: Qwen35MoeDims, layer: int | None = None) 
 def qwen35moe_attn_context_layout(dims: Qwen35MoeDims) -> PackedLayout:
     from .moe.spec import moe_context_specs
 
-    return PackedLayout.build(_qwen35_attn_attn_ctx(dims) + moe_context_specs(dims, dims.moe))
+    return PackedLayout.build(
+        _qwen35_attn_attn_ctx(dims) + moe_context_specs(dims, dims.moe, meta=True))
 
 
 def embed_weight_layout(dims) -> PackedLayout:

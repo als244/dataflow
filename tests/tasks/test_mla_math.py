@@ -254,13 +254,24 @@ def test_dsv3_block_ladder2(kind):
         for f in cl.fields
     }
     y = torch.empty_like(x)
-    fwd._forward(kctx, x, w, y, a)
+    from dataflow.tasks.moe.spec import moe_meta_layout
+
+    meta_views = None
+    extras = None
+    if kind == "moe":
+        m_l = moe_meta_layout(dims, dims.moe)
+        meta_views = {f.name: torch.empty(f.shape, dtype=TORCH_DTYPE_BY_NAME[f.dtype],
+                                          device="cuda") for f in m_l.fields}
+        extras = {"meta": dict(meta_views)}
+    fwd._forward(kctx, x, w, y, a, extras=extras)
 
     a2 = {
         f.name: torch.empty(f.shape, dtype=TORCH_DTYPE_BY_NAME[f.dtype], device="cuda")
         for f in cl.fields
     }
-    rc._run_stages(kctx, x, w, a2, count=rc.recompute_stage_count())
+    rc._run_stages(kctx, x, w, a2, count=rc.recompute_stage_count(),
+                   extras=None if extras is None
+                   else {**extras, "meta_ready": True})
     torch.cuda.synchronize()
     errors = {}
     for name in a:
@@ -275,14 +286,18 @@ def test_dsv3_block_ladder2(kind):
         for f in gl.fields
     }
     dx = torch.empty_like(x)
-    bwd._backward(kctx, dy, a, x, w, dx, dwv, accum=False)
+    bwd_meta = None if meta_views is None else {"meta": meta_views}
+    if bwd_meta is None:
+        bwd._backward(kctx, dy, a, x, w, dx, dwv, accum=False)
+    else:
+        bwd._backward(kctx, dy, a, x, w, dx, dwv, accum=False, meta=bwd_meta)
 
     leaves = {n: t_.detach().clone().requires_grad_() for n, t_ in w.items()
               if n != "w_router_bias"}
     if "w_router_bias" in w:
         leaves["w_router_bias"] = w["w_router_bias"]  # non-gradient
     x_ref = x.clone().requires_grad_()
-    route_ids = a.get("route_ids")
+    route_ids = None if meta_views is None else meta_views["route_ids"]
     y_ref, aux_ref = _golden_block(x_ref, leaves, dims, kind, route_ids=route_ids)
     y_ref.backward(dy, retain_graph=True)
     if kind == "moe":
@@ -293,13 +308,16 @@ def test_dsv3_block_ladder2(kind):
     for name in dwv:
         if name == "w_router_bias":
             # counts, not a gradient: compare against the routing histogram
-            cnt = torch.bincount(a["route_ids"].reshape(-1).long(),
+            cnt = torch.bincount(meta_views["route_ids"].reshape(-1).long(),
                                  minlength=dims.moe.n_experts).float()
             assert torch.equal(dwv[name].float(), cnt)
             continue
         errors[f"bwd:d{name}"] = rel_l2(dwv[name], leaves[name].grad)
 
-    bwd._backward(kctx, dy, a, x, w, dx, dwv, accum=True)
+    if bwd_meta is None:
+        bwd._backward(kctx, dy, a, x, w, dx, dwv, accum=True)
+    else:
+        bwd._backward(kctx, dy, a, x, w, dx, dwv, accum=True, meta=bwd_meta)
     for name in dwv:
         if name == "w_router_bias":
             continue

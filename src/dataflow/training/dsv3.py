@@ -32,6 +32,7 @@ import torch
 
 from dataflow.core import Program
 from dataflow.tasks.layouts import (
+    PackedLayout,
     Dsv3Dims,
     DTypePolicy,
     ParamDTypes,
@@ -42,7 +43,7 @@ from dataflow.tasks.layouts import (
     embed_weight_layout,
     head_weight_layout,
 )
-from dataflow.tasks.moe.spec import MoESpec
+from dataflow.tasks.moe.spec import MoESpec, moe_meta_layout
 
 from .lowering import FamilyLayouts, apply_exact_sizes, initial_values_from_layouts, size_of_factory
 from .shaped_program import BF16, LayerKindSpec, ShapedHardware, build_shaped_program
@@ -243,7 +244,7 @@ def _kind_specs(cfg: ShapedDsv3Config, hw: ShapedHardware) -> dict[str, LayerKin
     attn_flops = 2.0 * t * seq * h * qk
     attn_bytes = BF16 * t * 4 * h * qk
 
-    def spec(prefix, wl, cl, ffn_active, extra_traffic):
+    def spec(prefix, wl, cl, ffn_active, extra_traffic, meta_bytes=0):
         total_params = sum(int(math.prod(fl.shape)) for fl in wl.fields)
         mm_flops = 2.0 * t * (mla_active + ffn_active)
         mm_bytes = BF16 * (total_params + 4 * t * d) + extra_traffic
@@ -266,6 +267,7 @@ def _kind_specs(cfg: ShapedDsv3Config, hw: ShapedHardware) -> dict[str, LayerKin
             key_prefix=prefix,
             w_bytes=wl.total_bytes,
             a_bytes=cl.total_bytes,
+            meta_bytes=meta_bytes,
             fwd_us=fwd, bwd_us=bwd, recompute_us=fwd,
             optimizer_us=hw.mem_us(BF16 * 7.0 * total_params),
             fwd_subops=sub_fwd, bwd_subops=sub_bwd, recompute_subops=list(sub_fwd),
@@ -287,6 +289,7 @@ def _kind_specs(cfg: ShapedDsv3Config, hw: ShapedHardware) -> dict[str, LayerKin
     moe = spec(
         "mlamoe", dsv3_moe_weight_layout(dims), dsv3_moe_context_layout(dims),
         moe_active, moe_traffic,
+        meta_bytes=moe_meta_layout(dims, dims.moe).total_bytes,
     )
     return {"dense": dense, "moe": moe}
 
@@ -328,6 +331,7 @@ def family_layouts(cfg: ShapedDsv3Config) -> tuple[Dsv3Dims, FamilyLayouts]:
             # the balance bias starts at ZERO (V3) — never randn
             "w_router_bias": lambda n, gen: torch.zeros(n),
         },
+        block_meta_at=lambda i: (moe_meta_layout(dims, dims.moe) if dims.kind_of(i) == "moe" else PackedLayout.build([])),
     )
 
 

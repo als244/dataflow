@@ -191,8 +191,10 @@ def stage_moe_experts2_combine(kctx, K, d, st):
 
 
 MOE_STAGES = (
-    ("moe_route", stage_moe_route, ("router_logits", "route_w", "route_ids")),
-    ("moe_dispatch", stage_moe_dispatch, ("route_order", "route_offsets")),
+    # the routing DECISION (route_w/ids/order/offsets) is M-object
+    # metadata, not ctx — only the recomputable logits are declared here
+    ("moe_route", stage_moe_route, ("router_logits",)),
+    ("moe_dispatch", stage_moe_dispatch, ()),
     ("moe_experts13", stage_moe_experts13, ("h13",)),
     ("moe_experts2_combine", stage_moe_experts2_combine, ()),
 )
@@ -387,24 +389,51 @@ def moe_bias_update(kctx, kernels, w_view, g_view, *, speed: float) -> None:
 # --- profiling support ------------------------------------------------------------
 
 
-class MoEProfileFill:
-    """Mixin for MoE block executables: deterministic buffer seeding for the
-    profiling harness (training/profiling.py calls ``profile_fill(ctx)``
-    once per signature, before the workspace/timing launches).
+class MoEMetaState:
+    """Metadata-object plumbing for pure-MoE families: the layer's M
+    holds the discrete routing pack (moe_meta_specs). Exposed to stages
+    as st["meta"]; recompute sets meta_ready (the moe stages then skip
+    topk + sort and consume the decision verbatim — METADATA IS NEVER
+    RECOMPUTED). Backward merges the M views into `a` so every
+    downstream read (a["route_*"]) is unchanged."""
 
-    Two jobs:
-      1. float inputs get small seeded pseudo-random values — routing
-         becomes near-balanced (multinomial, ~±1σ) and REPRODUCIBLE across
-         cache refreshes (garbage/zero logits route everything to K experts,
-         which is 4-30% faster per grouped op — an anti-conservative,
-         allocator-history-dependent cost bias);
-      2. saved-context int32 routing fields get VALID balanced routing
-         (identity-consistent ids/order/offsets) — garbage there is an
-         illegal memory access in the gathers, not a bias.
-    """
+    def _meta_state(self, ctx):
+        from .spec import moe_meta_layout
+
+        layout = moe_meta_layout(self.dims, _spec(self.dims))
+        key = ctx.task.compute_block_key
+        if key.endswith(("_recompute", "_bwd")):
+            for j, oid in enumerate(ctx.task.inputs):
+                if oid.startswith("M_"):
+                    st = {"meta": layout.views(self._in(ctx, j))}
+                    if key.endswith("_recompute"):
+                        st["meta_ready"] = True
+                    return st
+            raise RuntimeError(f"no M_ input on {ctx.task.id}")
+        for j, o in enumerate(ctx.task.outputs):
+            if o.id.startswith("M_"):
+                return {"meta": layout.views(self._out(ctx, j))}
+        raise RuntimeError(f"no M_ output on {ctx.task.id}")
+
+    def _backward(self, kctx, dy, a, x, w, dx_out, dw, accum, meta=None):
+        if meta:
+            a = {**a, **meta["meta"]}
+        super()._backward(kctx, dy, a, x, w, dx_out, dw, accum)
+
+
+class MoEProfileFill:
+    """Mixin for MoE block executables: deterministic buffer seeding for
+    the profiling harness (training/profiling.py calls
+    ``profile_fill(ctx)`` once per signature, before workspace/timing
+    launches). Float inputs get small seeded pseudo-random values
+    (routing near-balanced and REPRODUCIBLE); the M_ metadata INPUT
+    (bwd/recompute signatures) gets VALID balanced routing — garbage
+    there is an illegal memory access in the gathers, not a bias.
+    M-era: the routing pack lives in the M object, never the ctx."""
 
     def profile_fill(self, ctx) -> None:
         from ..interop import torch_view
+        from .spec import moe_meta_layout
 
         key = ctx.task.compute_block_key
         seed = int.from_bytes(hashlib.sha256(key.encode()).digest()[:4], "little")
@@ -412,6 +441,8 @@ class MoEProfileFill:
         gen.manual_seed(seed)
 
         for oid in ctx.task.inputs:
+            if oid.startswith("M_"):
+                continue
             b = ctx.inputs[oid]
             n = b.size_bytes // 2
             v = torch_view(b, (n,), torch.bfloat16)
@@ -420,24 +451,20 @@ class MoEProfileFill:
                 .sub_(0.5).mul_(0.05)
             )
 
-        if not ctx.task.compute_block_key.endswith("_bwd"):
-            return  # fwd/recompute derive routing live from the seeded floats
-
         moe = _spec(self.dims)
+        layout = moe_meta_layout(self.dims, moe)
         t, topk = self.dims.tokens, moe.top_k
-        a_buf = ctx.inputs[ctx.task.inputs[1]]  # (dy, A, x, W[, dW]) contract
-        cl = self.cl
-        ids = cl.view(a_buf, "route_ids")
-        order = cl.view(a_buf, "route_order")
-        offsets = cl.view(a_buf, "route_offsets")
-        rows = order.shape[0]
-
-        flat_ids = (
-            torch.arange(rows, dtype=torch.int64, device="cuda") % moe.n_experts
-        )
-        ids.copy_(flat_ids.view(t, topk).to(torch.int32))
-        order.copy_(torch.argsort(flat_ids, stable=True).to(torch.int32))
-        counts = torch.bincount(flat_ids, minlength=moe.n_experts)
-        offsets[:1].zero_()
-        offsets[1:].copy_(counts.cumsum(0).to(torch.int32))
-        cl.view(a_buf, "route_w").fill_(1.0 / topk)
+        for oid in ctx.task.inputs:
+            if not oid.startswith("M_"):
+                continue
+            m = layout.views(ctx.inputs[oid])
+            rows = m["route_order"].shape[0]
+            flat_ids = (
+                torch.arange(rows, dtype=torch.int64, device="cuda") % moe.n_experts
+            )
+            m["route_ids"].copy_(flat_ids.view(t, topk).to(torch.int32))
+            m["route_order"].copy_(torch.argsort(flat_ids, stable=True).to(torch.int32))
+            counts = torch.bincount(flat_ids, minlength=moe.n_experts)
+            m["route_offsets"][:1].zero_()
+            m["route_offsets"][1:].copy_(counts.cumsum(0).to(torch.int32))
+            m["route_w"].fill_(1.0 / topk)

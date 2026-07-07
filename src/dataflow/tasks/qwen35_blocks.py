@@ -221,7 +221,8 @@ class Qwen35LinBlockRecompute(Qwen35LinBlockFwd):
             x = self._x_view(ctx)
             w = self.wl_for(ctx.task).views(self._in(ctx, 1))
             a = self.cl.views(self._out(ctx, 0))
-            self._run_stages(kctx, x, w, a, count=self.recompute_stage_count())
+            self._run_stages(kctx, x, w, a, count=self.recompute_stage_count(),
+                             extras=self._meta_state(ctx))
 
     def _x_view(self, ctx):
         from .interop import torch_view

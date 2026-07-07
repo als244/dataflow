@@ -32,7 +32,7 @@ from dataflow.tasks.layouts import (
     qwen35moe_lin_context_layout,
     qwen35moe_lin_weight_layout,
 )
-from dataflow.tasks.moe.spec import MoESpec
+from dataflow.tasks.moe.spec import MoESpec, moe_meta_layout
 
 from .lowering import FamilyLayouts, apply_exact_sizes, initial_values_from_layouts, size_of_factory
 from .qwen35 import _a_log_init, _dt_bias_init
@@ -202,6 +202,7 @@ def _kind_specs(cfg: ShapedQwen35MoeConfig, hw: ShapedHardware) -> dict[str, Lay
             key_prefix=prefix,
             w_bytes=wl.total_bytes,
             a_bytes=cl.total_bytes,
+            meta_bytes=moe_meta_layout(dims, dims.moe).total_bytes,
             fwd_us=fwd, bwd_us=bwd, recompute_us=fwd,
             optimizer_us=hw.mem_us(BF16 * 7.0 * total_params),
             fwd_subops=sub_fwd, bwd_subops=sub_bwd, recompute_subops=sub_fwd,
@@ -263,6 +264,7 @@ def family_layouts(cfg: ShapedQwen35MoeConfig) -> tuple[Qwen35MoeDims, FamilyLay
         embed=embed_weight_layout(dims),
         head=head_weight_layout(dims),
         init_specials={"A_log": _a_log_init, "dt_bias": _dt_bias_init},
+        block_meta_at=lambda i: moe_meta_layout(dims, dims.moe),
     )
 
 

@@ -123,7 +123,12 @@ def test_qwen3moe_block_ladder2():
         for f in cl.fields
     }
     y = torch.empty_like(x)
-    fwd._forward(kctx, x, w, y, a)
+    from dataflow.tasks.moe.spec import moe_meta_layout
+
+    m_l = moe_meta_layout(dims, dims.moe)
+    meta_views = {f.name: torch.empty(f.shape, dtype=TORCH_DTYPE_BY_NAME[f.dtype],
+                                      device="cuda") for f in m_l.fields}
+    fwd._forward(kctx, x, w, y, a, extras={"meta": dict(meta_views)})
 
     # recompute equivalence: the ROUTING DECISION must reproduce bit-exactly
     a2 = {
@@ -131,7 +136,8 @@ def test_qwen3moe_block_ladder2():
         for f in cl.fields
     }
     Qwen3MoeBlockRecompute(dims, kernels)._run_stages(
-        kctx, x, w, a2, count=Qwen3MoeBlockRecompute.recompute_stage_count()
+        kctx, x, w, a2, count=Qwen3MoeBlockRecompute.recompute_stage_count(),
+        extras={"meta": dict(meta_views), "meta_ready": True},
     )
     torch.cuda.synchronize()
     errors = {}
@@ -147,12 +153,13 @@ def test_qwen3moe_block_ladder2():
         for f in gl.fields
     }
     dx = torch.empty_like(x)
-    bwd._backward(kctx, dy, a, x, w, dx, dwv, accum=False)
+    bwd._backward(kctx, dy, a, x, w, dx, dwv, accum=False,
+                  meta={"meta": meta_views})
 
     golden = GoldenQwen3Moe(dims=dims, n_layers=cfg.n_layers)
     leaves = {n: t.detach().clone().requires_grad_() for n, t in w.items()}
     x_ref = x.clone().requires_grad_()
-    y_ref, aux_ref = golden.block_forward(x_ref, leaves, route_ids=a["route_ids"])
+    y_ref, aux_ref = golden.block_forward(x_ref, leaves, route_ids=meta_views["route_ids"])
     y_ref.backward(dy, retain_graph=True)
     aux_ref.backward()
 
@@ -161,7 +168,8 @@ def test_qwen3moe_block_ladder2():
     for name in dwv:
         errors[f"bwd:d{name}"] = rel_l2(dwv[name], leaves[name].grad)
 
-    bwd._backward(kctx, dy, a, x, w, dx, dwv, accum=True)
+    bwd._backward(kctx, dy, a, x, w, dx, dwv, accum=True,
+                  meta={"meta": meta_views})
     for name in dwv:
         errors[f"accum:2x:{name}"] = rel_l2(dwv[name], 2.0 * leaves[name].grad)
 

@@ -235,6 +235,13 @@ def moe_meta_specs(dims, moe: MoESpec) -> list[tuple[str, tuple[int, ...], str]]
     ]
 
 
+def moe_meta_layout(dims, moe: MoESpec):
+    """The layer's M object for pure-MoE families: the routing pack."""
+    from ..layouts import PackedLayout
+
+    return PackedLayout.build(moe_meta_specs(dims, moe))
+
+
 def moe_context_specs(dims, moe: MoESpec, *, meta: bool = False,
                       ) -> list[tuple[str, tuple[int, ...], str]]:
     """(name, shape, dtype) triples for the MoE tail's saved-context fields.

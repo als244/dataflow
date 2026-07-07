@@ -30,16 +30,16 @@ EXPECTED = {
     "qwen35-tiny-ga2": "860de9f8f7b91d4a",
     "qwen35-tiny-tied": "ecd500539ee2e49d",
     # olmoe: first MoE family (moeattn kind, untied)
-    "olmoe-tiny": "27b16815cf642d0a",
-    "olmoe-tiny-ga2": "eef05ae0081b6dfc",
+    "olmoe-tiny": "42b716c25f66cf4c",
+    "olmoe-tiny-ga2": "e7af732a981b1d85",
     # qwen35moe: hybrid MoE (linmoe/gattnmoe kinds + shared expert, untied)
-    "qwen35moe-tiny-ga2": "a44e9cf9734a5da7",
+    "qwen35moe-tiny-ga2": "4239512405b90184",
     # qwen3moe: qwen3 attention verbatim + MoE FFN (no shared expert)
-    "qwen3moe-tiny": "886848980dd78436",
-    "qwen3moe-tiny-ga2": "be8b0be9821dc76c",
+    "qwen3moe-tiny": "19148465c1040226",
+    "qwen3moe-tiny-ga2": "501efdc785690637",
     # dsv3: MLA + hybrid dense/MoE depth + sigmoid_noaux_tc
-    "dsv3-tiny": "dbf9d95a46cc53a7",
-    "dsv3-tiny-ga2": "95af056e117d237a",
+    "dsv3-tiny": "39085ec90bd619b9",
+    "dsv3-tiny-ga2": "eb731486db58a64f",
     # dsv32/glm52: METADATA grammar (Shein naming iteration 2026-07-07):
     # each layer's never-recompute artifacts (routing pack, dsa
     # selection) live in ONE normal object M_{s}_{r}_{i}; IndexShare

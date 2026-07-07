@@ -31,12 +31,12 @@ from .llama3_blocks import (
     EmbedFwd,
     HeadLoss,
 )
-from .moe.stages import MOE_STAGES, MoEProfileFill, moe_mlp_tail_bwd
+from .moe.stages import MOE_STAGES, MoEMetaState, MoEProfileFill, moe_mlp_tail_bwd
 from .qwen3_blocks import Qwen3BlockBwd, Qwen3BlockFwd
 
 
 @dataclass(frozen=True)
-class Qwen3MoeBlockFwd(MoEProfileFill, Qwen3BlockFwd):
+class Qwen3MoeBlockFwd(MoEMetaState, MoEProfileFill, Qwen3BlockFwd):
     dims: Qwen3MoeDims = None  # type: ignore[assignment]
 
     def _weight_layout(self, layer: int | None = None) -> PackedLayout:
@@ -56,7 +56,7 @@ class Qwen3MoeBlockRecompute(Qwen3MoeBlockFwd, BlockRecompute):
 
 
 @dataclass(frozen=True)
-class Qwen3MoeBlockBwd(MoEProfileFill, Qwen3BlockBwd):
+class Qwen3MoeBlockBwd(MoEMetaState, MoEProfileFill, Qwen3BlockBwd):
     dims: Qwen3MoeDims = None  # type: ignore[assignment]
 
     def _weight_layout(self, layer: int | None = None) -> PackedLayout:

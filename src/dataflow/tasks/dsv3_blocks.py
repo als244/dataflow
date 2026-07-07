@@ -48,6 +48,7 @@ from .llama3_blocks import (
 )
 from .moe.stages import (
     MOE_SHARED_NOGATE_STAGES,
+    MoEMetaState,
     MoEProfileFill,
     moe_bias_update,
     moe_mlp_tail_bwd,
@@ -335,7 +336,7 @@ class Dsv3DenseBlockBwd(BlockBwd):
 
 
 @dataclass(frozen=True)
-class Dsv3MoeBlockFwd(MoEProfileFill, Dsv3DenseBlockFwd):
+class Dsv3MoeBlockFwd(MoEMetaState, MoEProfileFill, Dsv3DenseBlockFwd):
     def _weight_layout(self, layer: int | None = None) -> PackedLayout:
         return dsv3_moe_weight_layout(self.dims, layer=layer)
 
@@ -352,7 +353,7 @@ class Dsv3MoeBlockRecompute(Dsv3MoeBlockFwd, BlockRecompute):
 
 
 @dataclass(frozen=True)
-class Dsv3MoeBlockBwd(MoEProfileFill, Dsv3DenseBlockBwd):
+class Dsv3MoeBlockBwd(MoEMetaState, MoEProfileFill, Dsv3DenseBlockBwd):
     def _weight_layout(self, layer: int | None = None) -> PackedLayout:
         return dsv3_moe_weight_layout(self.dims, layer=layer)
 

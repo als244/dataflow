@@ -42,11 +42,11 @@ from .llama3_blocks import (
     EmbedFwd,
     HeadLoss,
 )
-from .moe.stages import MOE_STAGES, MoEProfileFill, moe_mlp_tail_bwd
+from .moe.stages import MOE_STAGES, MoEMetaState, MoEProfileFill, moe_mlp_tail_bwd
 
 
 @dataclass(frozen=True)
-class OlmoeBlockFwd(MoEProfileFill, BlockFwd):
+class OlmoeBlockFwd(MoEMetaState, MoEProfileFill, BlockFwd):
     dims: OlmoeDims = None  # type: ignore[assignment]
 
     def _weight_layout(self, layer: int | None = None) -> PackedLayout:
@@ -123,7 +123,7 @@ class OlmoeBlockRecompute(OlmoeBlockFwd, BlockRecompute):
 
 
 @dataclass(frozen=True)
-class OlmoeBlockBwd(MoEProfileFill, BlockBwd):
+class OlmoeBlockBwd(MoEMetaState, MoEProfileFill, BlockBwd):
     dims: OlmoeDims = None  # type: ignore[assignment]
 
     def _weight_layout(self, layer: int | None = None) -> PackedLayout:

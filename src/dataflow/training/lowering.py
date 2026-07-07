@@ -39,6 +39,10 @@ class FamilyLayouts:
     head: PackedLayout           # W_head (unused branches when tied)
     embed_ns: str = "embed"      # policy namespace: "head" when tied
     init_specials: Mapping[str, Callable] | None = None  # field -> (n, gen) -> tensor
+    # layer -> M_{s}_{r}_{i} layout (metadata objects: never-recompute
+    # forward artifacts — routing packs, selections). None/empty layout =
+    # the layer has no metadata.
+    block_meta_at: Callable[[int], PackedLayout] | None = None
 
 
 def size_of_factory(dims, fl: FamilyLayouts):
@@ -51,6 +55,8 @@ def size_of_factory(dims, fl: FamilyLayouts):
     wl_i = [fl.block_weight_at(i) for i in range(n)]
     a_i = [fl.block_context_at(i).total_bytes for i in range(n)]
     dw_i = [grad_layout(wl_i[i], p, layer=i).total_bytes for i in range(n)]
+    m_i = ([fl.block_meta_at(i).total_bytes for i in range(n)]
+           if fl.block_meta_at is not None else None)
     o_i = [opt_state_layout(wl_i[i], p, layer=i).total_bytes for i in range(n)]
     dw_e = grad_layout(fl.embed, p, ns=fl.embed_ns).total_bytes
     dw_h = grad_layout(fl.head, p, ns="head").total_bytes
@@ -60,6 +66,8 @@ def size_of_factory(dims, fl: FamilyLayouts):
     def size_of(oid: str) -> int | None:
         if oid.startswith("A_"):            # A_{s}_{r}_{i}
             return a_i[int(oid.rsplit("_", 1)[1])]
+        if oid.startswith("M_") and m_i is not None:  # M_{s}_{r}_{i}
+            return m_i[int(oid.rsplit("_", 1)[1])]
         if oid.startswith("dW_embed"):
             return dw_e
         if oid == "W_embed":
