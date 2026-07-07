@@ -572,11 +572,13 @@ Best LEGAL number per cell; mode noted where it is not plain static.
 | 16 | 8,204 | 7,618 | 7,991 (vmm) |
 | 20 | 8,341 (extent-b) | 8,175 | 8,220 (vmm) |
 | 24 | 10,335 | 9,931 (vmm) | 9,856 (vmm) |
-| 28 | 11,613 (extent-b)* | 10,427 | 11,270 |
+| 28 | 12,177 | 10,427 | 11,270 |
 
-*dsv3@28 extent-bounded row over-shaved (peak 25.20 on a 28 envelope);
-closing-loop re-run pending — plain static measured 12,357 at 28.31
-(0.31 over), so the honest value sits between.
+(dsv3@28: closing-loop row — measured peak EXACTLY 28.00 GiB, fid
+0.38; the loop landed the plan flush against the envelope. The earlier
+extent-bounded 11,613 over-shaved; the earlier plain 12,357 ran 0.31
+over. 12,177 is the honest number and matches the pre-round-5 12,176
+almost exactly — dsv3's throughput held while its peak got legal.)
 
 HEADLINES
 - glm52 >= dsv32 at EVERY envelope: IndexShare is a strict win over
