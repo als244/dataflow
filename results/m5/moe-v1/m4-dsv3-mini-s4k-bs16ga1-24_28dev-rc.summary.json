@@ -1,0 +1,146 @@
+{
+  "config": "dsv3-mini-s4k-bs16ga1",
+  "steps": 3,
+  "pcie": {
+    "uni_h2d": 35338,
+    "uni_d2h": 56756,
+    "bidi_h2d": 25529,
+    "bidi_d2h": 25783
+  },
+  "optimizer_placement": "interleaved",
+  "preplace": "task0",
+  "kernel_set": {
+    "adamw_step": "triton",
+    "causal_conv1d_silu_bwd": "fla-triton",
+    "causal_conv1d_silu_fwd": "fla-triton",
+    "ce_loss_fwd_bwd": "triton",
+    "dsa_index_bwd": "eager",
+    "dsa_index_scores": "eager",
+    "dsa_sparse_attn_bwd": "eager",
+    "dsa_sparse_attn_fwd": "eager",
+    "dsa_topk": "eager",
+    "gated_rmsnorm_bwd": "fla-fused",
+    "gated_rmsnorm_fwd": "fla-fused",
+    "moe_aux_lb_grad": "triton",
+    "moe_combine_fwd": "triton",
+    "moe_dispatch_bwd": "triton",
+    "moe_dispatch_fwd": "aten",
+    "moe_grouped_mm_dgrad": "triton",
+    "moe_grouped_mm_fwd": "triton",
+    "moe_grouped_mm_wgrad": "triton",
+    "moe_router_bwd": "triton",
+    "moe_router_bwd_sigmoid": "eager",
+    "moe_rowdot": "triton",
+    "moe_scale_rows": "triton",
+    "moe_seq_aux_grad": "eager",
+    "moe_sort": "aten",
+    "moe_topk_sigmoid_noaux": "eager",
+    "moe_topk_softmax": "triton",
+    "rmsnorm_apply": "triton",
+    "rmsnorm_bwd": "triton",
+    "rmsnorm_fwd": "triton",
+    "rmsnorm_noweight": "triton",
+    "rope_bwd": "triton",
+    "rope_fwd": "triton",
+    "swiglu_bwd": "triton",
+    "swiglu_fwd_out": "triton",
+    "swiglu_packed_bwd": "triton",
+    "swiglu_packed_fwd": "triton"
+  },
+  "sweep": [
+    {
+      "budget_gib": 24.0,
+      "budget_semantics": "device",
+      "planned_budget_gib": 13.947855234146118,
+      "actual_device_peak_gib": 23.632575035095215,
+      "fixed_overhead_gib": 1.47125244140625,
+      "torch_scratch_peak_gib": 6.76171875,
+      "device_envelope_gib": 24.0,
+      "scratch_reserve_gib": 6.509765625,
+      "placement_mode": "static",
+      "extent_budget": false,
+      "sim_ms_per_step": 6922.16834375,
+      "real_ms_per_step_steady": 6045.31884765625,
+      "sim_tokens_per_s": 9467.553625616778,
+      "real_tokens_per_s": 10840.784688372241,
+      "wall_tokens_per_s": 10812.102494825456,
+      "real_vs_sim_pct": 14.504602952972467,
+      "replay_fidelity_gap_pct": 0.30794310619747395,
+      "losses": [
+        12.178995132446289,
+        12.173462867736816,
+        12.181028366088867
+      ],
+      "peak_fast_gib": 13.877987623214722,
+      "peak_backing_gib": 76.6157579421997,
+      "pinned_host_gib": 76.61600208655,
+      "step_makespans_ms": [
+        6683.31005859375,
+        6049.60107421875,
+        6041.03662109375
+      ],
+      "step_wall_s": [
+        6.71682014898397,
+        6.065581989008933,
+        6.057129580061883
+      ],
+      "step_slab_overflows": [
+        0,
+        0,
+        0
+      ],
+      "placement_extent_gib": 15.399603843688965,
+      "placement_escapes": 0,
+      "pressure_evictions": 0,
+      "placement_overhead": 1.1096424252410289,
+      "recompute_chosen": 18
+    },
+    {
+      "budget_gib": 28.0,
+      "budget_semantics": "device",
+      "planned_budget_gib": 19.116151553578675,
+      "actual_device_peak_gib": 27.966822624206543,
+      "fixed_overhead_gib": 1.47125244140625,
+      "torch_scratch_peak_gib": 6.802734375,
+      "device_envelope_gib": 28.0,
+      "scratch_reserve_gib": 6.509765625,
+      "placement_mode": "static",
+      "extent_budget": false,
+      "sim_ms_per_step": 5534.183059570312,
+      "real_ms_per_step_steady": 5366.238525390625,
+      "sim_tokens_per_s": 11842.036899496485,
+      "real_tokens_per_s": 12212.651318034625,
+      "wall_tokens_per_s": 12176.138295136287,
+      "real_vs_sim_pct": 3.1296509349155732,
+      "replay_fidelity_gap_pct": 1.4793934234807153,
+      "losses": [
+        8.709787368774414,
+        9.246434211730957,
+        9.445185661315918
+      ],
+      "peak_fast_gib": 18.92121958732605,
+      "peak_backing_gib": 81.84134459495544,
+      "pinned_host_gib": 81.84158873930573,
+      "step_makespans_ms": [
+        5536.9619140625,
+        5377.419921875,
+        5355.05712890625
+      ],
+      "step_wall_s": [
+        6.539847375126556,
+        5.393576871836558,
+        5.371084043057635
+      ],
+      "step_slab_overflows": [
+        0,
+        0,
+        0
+      ],
+      "placement_extent_gib": 19.692835807800293,
+      "placement_escapes": 0,
+      "pressure_evictions": 0,
+      "placement_overhead": 1.040780469615769,
+      "recompute_chosen": 14
+    }
+  ]
+}

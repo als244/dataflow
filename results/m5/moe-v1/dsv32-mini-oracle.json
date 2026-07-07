@@ -1,0 +1,246 @@
+{
+ "family": "dsv32",
+ "preset": "dsv32_mini",
+ "model_overrides": null,
+ "seq_len": 4096,
+ "seqs_per_step": 16,
+ "tokens_per_step": 65536,
+ "calibrated": false,
+ "calibration": 1.0,
+ "note": "raw sim on contended profiles is conservative: measured wall ran +2.6..+6.6% above it on the validated frontier; margins <=2% are noise \u2014 verify top-2 with real runs",
+ "envelopes": [
+  {
+   "device_gib": 28.0,
+   "cells": [
+    {
+     "bs": 16,
+     "ga": 1,
+     "tok_s": 3095,
+     "ledger_gib": 17.25,
+     "recompute": 0,
+     "rewrites": 18
+    },
+    {
+     "bs": 8,
+     "ga": 2,
+     "tok_s": 3166,
+     "ledger_gib": 23.29,
+     "recompute": 0,
+     "rewrites": 36
+    },
+    {
+     "bs": 4,
+     "ga": 4,
+     "tok_s": 3070,
+     "ledger_gib": 24.64,
+     "recompute": 0,
+     "rewrites": 72,
+     "reduced_search": true
+    },
+    {
+     "bs": 2,
+     "ga": 8,
+     "tok_s": 2466,
+     "ledger_gib": 24.85,
+     "recompute": 0,
+     "rewrites": 144,
+     "reduced_search": true
+    },
+    {
+     "bs": 1,
+     "ga": 16,
+     "status": "skip:bounded",
+     "bound": 3084
+    }
+   ],
+   "best": {
+    "bs": 8,
+    "ga": 2,
+    "tok_s": 3166,
+    "margin_pct": 2.29
+   }
+  },
+  {
+   "device_gib": 24.0,
+   "cells": [
+    {
+     "bs": 16,
+     "ga": 1,
+     "tok_s": 2863,
+     "ledger_gib": 13.46,
+     "recompute": 0,
+     "rewrites": 18
+    },
+    {
+     "bs": 8,
+     "ga": 2,
+     "tok_s": 3166,
+     "ledger_gib": 18.92,
+     "recompute": 0,
+     "rewrites": 36
+    },
+    {
+     "bs": 4,
+     "ga": 4,
+     "status": "skip:bounded",
+     "bound": 3070
+    },
+    {
+     "bs": 2,
+     "ga": 8,
+     "status": "skip:bounded",
+     "bound": 2466
+    },
+    {
+     "bs": 1,
+     "ga": 16,
+     "status": "skip:bounded",
+     "bound": 3084
+    }
+   ],
+   "best": {
+    "bs": 8,
+    "ga": 2,
+    "tok_s": 3166,
+    "margin_pct": 10.58
+   }
+  },
+  {
+   "device_gib": 20.0,
+   "cells": [
+    {
+     "bs": 16,
+     "ga": 1,
+     "tok_s": 2798,
+     "ledger_gib": 10.84,
+     "recompute": 0,
+     "rewrites": 18
+    },
+    {
+     "bs": 8,
+     "ga": 2,
+     "tok_s": 2999,
+     "ledger_gib": 12.48,
+     "recompute": 0,
+     "rewrites": 36
+    },
+    {
+     "bs": 4,
+     "ga": 4,
+     "tok_s": 3002,
+     "ledger_gib": 14.54,
+     "recompute": 0,
+     "rewrites": 72
+    },
+    {
+     "bs": 2,
+     "ga": 8,
+     "status": "skip:bounded",
+     "bound": 2466
+    },
+    {
+     "bs": 1,
+     "ga": 16,
+     "tok_s": 1379,
+     "ledger_gib": 16.92,
+     "recompute": 288,
+     "rewrites": 288,
+     "reduced_search": true
+    }
+   ],
+   "best": {
+    "bs": 4,
+    "ga": 4,
+    "tok_s": 3002,
+    "margin_pct": 0.1
+   }
+  },
+  {
+   "device_gib": 16.0,
+   "cells": [
+    {
+     "bs": 16,
+     "ga": 1,
+     "status": "infeasible:ValueError"
+    },
+    {
+     "bs": 8,
+     "ga": 2,
+     "tok_s": 2916,
+     "ledger_gib": 11.29,
+     "recompute": 0,
+     "rewrites": 36
+    },
+    {
+     "bs": 4,
+     "ga": 4,
+     "tok_s": 2950,
+     "ledger_gib": 11.52,
+     "recompute": 0,
+     "rewrites": 72
+    },
+    {
+     "bs": 2,
+     "ga": 8,
+     "status": "skip:bounded",
+     "bound": 2466
+    },
+    {
+     "bs": 1,
+     "ga": 16,
+     "status": "skip:bounded",
+     "bound": 1379
+    }
+   ],
+   "best": {
+    "bs": 4,
+    "ga": 4,
+    "tok_s": 2950,
+    "margin_pct": 1.17
+   }
+  },
+  {
+   "device_gib": 12.0,
+   "cells": [
+    {
+     "bs": 16,
+     "ga": 1,
+     "status": "infeasible:ValueError"
+    },
+    {
+     "bs": 8,
+     "ga": 2,
+     "status": "infeasible:ValueError"
+    },
+    {
+     "bs": 4,
+     "ga": 4,
+     "tok_s": 2341,
+     "ledger_gib": 7.72,
+     "recompute": 72,
+     "rewrites": 72
+    },
+    {
+     "bs": 2,
+     "ga": 8,
+     "tok_s": 2097,
+     "ledger_gib": 8.33,
+     "recompute": 18,
+     "rewrites": 144
+    },
+    {
+     "bs": 1,
+     "ga": 16,
+     "status": "skip:bounded",
+     "bound": 1379
+    }
+   ],
+   "best": {
+    "bs": 4,
+    "ga": 4,
+    "tok_s": 2341,
+    "margin_pct": 11.64
+   }
+  }
+ ]
+}

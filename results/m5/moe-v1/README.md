@@ -377,3 +377,40 @@ dsv3 is the only heavyweight that stays feasible at 12 (MLA ctx) while
 every family pays 44-67% idle — the round-restreaming grammar work
 (round-resident weights / intra-round token chunking) is quantified per
 family by exactly these idle columns.
+
+
+## M-H1: dsv32-mini (DeepSeek-V3.2 DSA) FIRST curve — eager kernels (2026-07-07)
+
+12.8B dsv32-mini at s4k (65,536 tok/step = 16 seqs; k=1024 < 4096 so
+sparsity is ACTIVE), SPARSE mode, all-eager DSA ops (mask-form core +
+eager indexer) — the correctness-grade baseline M-H2's kernels are
+measured against. dsv3-mini at the SAME dims and s4k = the no-DSA
+baseline (padded-v flash attention).
+
+| dev GiB | dsv32 wall (shape) | dsv32 sim | r/s% | fid% | dsv3-s4k wall (shape) | DSA-eager tax |
+|---|---|---|---|---|---|---|
+| 12 | 2,310 (bs4ga4 rc-72) | 2,341 | -1.3 | 0.25 | 5,095 (bs4ga4 rc-72) | 2.2x |
+| 16 | 2,688 (bs4ga4 rc-0) | 2,950 | -8.8 | 6.26 | 7,671 (bs8ga2 rc-28) | 2.9x |
+| 20 | 2,772 (bs8ga2 rc-0) | 3,051 | -9.1 | 5.84 | 8,428 (bs8ga2 rc-22) | 3.0x |
+| 24 | 2,872 (bs8ga2 rc-0) | 3,166 | -9.2 | 6.16 | 10,812 (bs16ga1 rc-18) | 3.8x |
+| 28 | 2,890 (bs8ga2 rc-0) | 3,166 | -8.7 | 5.75 | 12,176 (bs16ga1 rc-14) | 4.2x |
+
+Reading:
+- dsv32-eager is COMPUTE-walled: the curve is nearly flat above 16 and
+  the planner picks rc-0 (save-all) — with attention this slow,
+  transfers hide completely. The flatness IS the M-H2 headroom: 2.2x at
+  12 GiB rising to 4.2x at 28.
+- The rc-0 rows carry fid 5.8-6.3% and r/s -9%: the eager core's
+  many-small-kernel chunked enqueue makes those tasks timing-loose (a
+  mild boundary-tax cousin). Expected to collapse with real kernels.
+- dsv3-s4k baselines behave like their s1k selves (real above sim,
+  monotone 5.1k -> 12.2k).
+- ENGINE NOTE (2nd sighting of the valve-fragility class): dsv3-s4k
+  bs16ga1@dev-20 deadlocked at runtime after 770 pressure evictions
+  (block_bwd_0_0_15, 1.9 GB unservable) — the qwen35moe ledger-14.1
+  signature on a new family; strengthens the valve-completion
+  (dirty-evict) engine follow-up. Row covered by bs8ga2@20.
+
+M-H2 next: triton dsa_index fwd/bwd + gather-absorbed sparse core
+(deterministic inversion bwd) + sm90 FlashMLA seam + tiny-scale
+stock-flash cross-validator; then THIS TABLE gets re-measured.
