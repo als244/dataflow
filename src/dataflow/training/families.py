@@ -225,6 +225,33 @@ def _dsv3() -> Family:
     )
 
 
+def _dsv32() -> Family:
+    from dataflow.tasks.dsv32_blocks import build_dsv32_resolver
+    from .dsv32 import (
+        ShapedDsv32Config,
+        dims_of_dsv32,
+        initial_values_dsv32,
+        lower_dsv32,
+    )
+
+    def golden():
+        from dataflow.models.dsv32_reference import GoldenDsv32
+
+        return GoldenDsv32
+
+    # dsv3 + DSA (lightning indexer, sparse mode) — ladders in
+    # tests/tasks/test_dsa_math.py + test_dsv32_math.py
+    return Family(
+        name="dsv32",
+        config_type=ShapedDsv32Config,
+        dims_of=dims_of_dsv32,
+        lower=lower_dsv32,
+        initial_values=initial_values_dsv32,
+        build_resolver=build_dsv32_resolver,
+        golden=golden,
+    )
+
+
 _FAMILIES: dict[str, Callable[[], Family]] = {
     "llama3": _llama3,
     "qwen3": _qwen3,
@@ -233,6 +260,7 @@ _FAMILIES: dict[str, Callable[[], Family]] = {
     "qwen35moe": _qwen35moe,
     "qwen3moe": _qwen3moe,
     "dsv3": _dsv3,
+    "dsv32": _dsv32,
 }
 _cache: dict[str, Family] = {}
 

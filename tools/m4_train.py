@@ -45,6 +45,7 @@ from dataflow.training.qwen35 import ShapedQwen35Config
 from dataflow.training.qwen35moe import ShapedQwen35MoeConfig
 from dataflow.training.qwen3moe import ShapedQwen3MoeConfig
 from dataflow.training.dsv3 import ShapedDsv3Config
+from dataflow.training.dsv32 import ShapedDsv32Config
 from dataflow.training.train_loop import train
 
 GIB = 1024**3
@@ -161,6 +162,28 @@ CONFIGS = {
     ),
     "dsv3-mini-s1k-bs64ga1": ShapedDsv3Config.dsv3_mini(
         seq_len=1024, batch=64, grad_accum_rounds=1,
+    ),
+    # s4k shapes (65,536 tok/step = 16 seqs): the dsv32 sparsity regime
+    # (k=1024 < 4096) + dsv3 baselines for the DSA-overhead comparison
+    "dsv3-mini-s4k-bs16ga1": ShapedDsv3Config.dsv3_mini(
+        seq_len=4096, batch=16, grad_accum_rounds=1,
+    ),
+    "dsv3-mini-s4k-bs8ga2": ShapedDsv3Config.dsv3_mini(
+        seq_len=4096, batch=8, grad_accum_rounds=2,
+    ),
+    "dsv3-mini-s4k-bs4ga4": ShapedDsv3Config.dsv3_mini(
+        seq_len=4096, batch=4, grad_accum_rounds=4,
+    ),
+    "dsv32-671b": ShapedDsv32Config.dsv32_671b(),
+    "dsv32-mini": ShapedDsv32Config.dsv32_mini(),
+    "dsv32-mini-s4k-bs16ga1": ShapedDsv32Config.dsv32_mini(
+        seq_len=4096, batch=16, grad_accum_rounds=1,
+    ),
+    "dsv32-mini-s4k-bs8ga2": ShapedDsv32Config.dsv32_mini(
+        seq_len=4096, batch=8, grad_accum_rounds=2,
+    ),
+    "dsv32-mini-s4k-bs4ga4": ShapedDsv32Config.dsv32_mini(
+        seq_len=4096, batch=4, grad_accum_rounds=4,
     ),
 }
 

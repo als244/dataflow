@@ -15,6 +15,7 @@ from dataflow.training.qwen35 import ShapedQwen35Config, lower_qwen35
 from dataflow.training.qwen35moe import ShapedQwen35MoeConfig, lower_qwen35moe
 from dataflow.training.qwen3moe import ShapedQwen3MoeConfig, lower_qwen3moe
 from dataflow.training.dsv3 import ShapedDsv3Config, lower_dsv3
+from dataflow.training.dsv32 import ShapedDsv32Config, lower_dsv32
 
 # Constants last updated DELIBERATELY for the fused head_loss lowering
 # (head_fwd/loss_bwd/head_bwd -> ONE token-chunked task; logits/dlogits
@@ -38,6 +39,9 @@ EXPECTED = {
     # dsv3: MLA + hybrid dense/MoE depth + sigmoid_noaux_tc
     "dsv3-tiny": "dbf9d95a46cc53a7",
     "dsv3-tiny-ga2": "95af056e117d237a",
+    # dsv32: dsv3 + DSA (lightning indexer, sparse mode)
+    "dsv32-tiny": "5a8b067ab9ba917c",
+    "dsv32-tiny-ga2": "3011582ba1b32080",
 }
 
 
@@ -76,6 +80,10 @@ def test_lowered_programs_bit_identical():
         "dsv3-tiny": _hash(lower_dsv3(ShapedDsv3Config.tiny())),
         "dsv3-tiny-ga2": _hash(
             lower_dsv3(replace(ShapedDsv3Config.tiny(), grad_accum_rounds=2))
+        ),
+        "dsv32-tiny": _hash(lower_dsv32(ShapedDsv32Config.tiny())),
+        "dsv32-tiny-ga2": _hash(
+            lower_dsv32(replace(ShapedDsv32Config.tiny(), grad_accum_rounds=2))
         ),
     }
     assert got == EXPECTED, {k: (got[k], EXPECTED[k]) for k in got if got[k] != EXPECTED[k]}
