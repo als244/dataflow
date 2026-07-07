@@ -1,4 +1,9 @@
-"""Multi-head Latent Attention (MLA, DeepSeek-V3) — reference forms.
+"""Multi-head Latent Attention (MLA, DeepSeek-V3) — REFERENCE forms only.
+
+NOT a task/executable: this is the pure-autograd correctness anchor
+(parallel to tasks/moe/reference.py) that goldens and ladders compose.
+The runtime executables live in dsv3_blocks.py as staged BlockFwd/
+BlockBwd classes like every other family.
 
 Semantics pinned here (no flextrain reference exists for DeepSeek; the
 anchor is HF ``modeling_deepseek`` + these autograd forms, tested against

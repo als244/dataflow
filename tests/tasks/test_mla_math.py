@@ -95,7 +95,7 @@ def test_padded_v_attention_is_exact():
 
 
 def test_mla_reference_shapes_and_grads_flow():
-    from dataflow.tasks.mla import mla_block_reference
+    from dataflow.tasks.mla_reference import mla_block_reference
 
     d = _Dims()
     w = _weights(d)
@@ -116,7 +116,7 @@ def test_mla_shared_k_rope_broadcast_gradient():
     Verified by comparing against a variant with independent per-head
     copies whose grads are summed."""
     from dataflow.tasks import ops
-    from dataflow.tasks.mla import mla_attention_reference
+    from dataflow.tasks.mla_reference import mla_attention_reference
 
     d = _Dims()
     w = _weights(d, seed=3)
@@ -138,7 +138,7 @@ def test_mla_shared_k_rope_broadcast_gradient():
 def test_mla_reference_ragged_packing_matches_per_sequence():
     from dataclasses import replace
 
-    from dataflow.tasks.mla import mla_block_reference
+    from dataflow.tasks.mla_reference import mla_block_reference
 
     d_packed = _Dims(tokens=96, seq_len=None, seq_lens=(64, 32))
     w = _weights(d_packed, seed=5)
