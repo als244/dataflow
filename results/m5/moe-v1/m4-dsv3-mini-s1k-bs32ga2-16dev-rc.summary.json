@@ -1,0 +1,94 @@
+{
+  "config": "dsv3-mini-s1k-bs32ga2",
+  "steps": 3,
+  "pcie": {
+    "uni_h2d": 35338,
+    "uni_d2h": 56756,
+    "bidi_h2d": 25529,
+    "bidi_d2h": 25783
+  },
+  "optimizer_placement": "interleaved",
+  "preplace": "task0",
+  "kernel_set": {
+    "adamw_step": "triton",
+    "causal_conv1d_silu_bwd": "fla-triton",
+    "causal_conv1d_silu_fwd": "fla-triton",
+    "ce_loss_fwd_bwd": "triton",
+    "gated_rmsnorm_bwd": "fla-fused",
+    "gated_rmsnorm_fwd": "fla-fused",
+    "moe_aux_lb_grad": "triton",
+    "moe_combine_fwd": "triton",
+    "moe_dispatch_bwd": "triton",
+    "moe_dispatch_fwd": "aten",
+    "moe_grouped_mm_dgrad": "triton",
+    "moe_grouped_mm_fwd": "triton",
+    "moe_grouped_mm_wgrad": "triton",
+    "moe_router_bwd": "triton",
+    "moe_router_bwd_sigmoid": "eager",
+    "moe_rowdot": "triton",
+    "moe_scale_rows": "triton",
+    "moe_seq_aux_grad": "eager",
+    "moe_sort": "aten",
+    "moe_topk_sigmoid_noaux": "eager",
+    "moe_topk_softmax": "triton",
+    "rmsnorm_apply": "triton",
+    "rmsnorm_bwd": "triton",
+    "rmsnorm_fwd": "triton",
+    "rmsnorm_noweight": "triton",
+    "rope_bwd": "triton",
+    "rope_fwd": "triton",
+    "swiglu_bwd": "triton",
+    "swiglu_fwd_out": "triton",
+    "swiglu_packed_bwd": "triton",
+    "swiglu_packed_fwd": "triton"
+  },
+  "sweep": [
+    {
+      "budget_gib": 16.0,
+      "budget_semantics": "device",
+      "planned_budget_gib": 9.66237329505384,
+      "actual_device_peak_gib": 15.091470718383789,
+      "fixed_overhead_gib": 1.4169921875,
+      "torch_scratch_peak_gib": 3.46484375,
+      "device_envelope_gib": 16.0,
+      "scratch_reserve_gib": 3.3798828125,
+      "placement_mode": "static",
+      "extent_budget": false,
+      "sim_ms_per_step": 8978.46603125,
+      "real_ms_per_step_steady": 8070.88623046875,
+      "sim_tokens_per_s": 7299.242406430973,
+      "real_tokens_per_s": 8120.050032745131,
+      "wall_tokens_per_s": 8103.710594889203,
+      "real_vs_sim_pct": 11.245107103046603,
+      "replay_fidelity_gap_pct": 0.3918664132820069,
+      "losses": [
+        12.175392150878906,
+        12.17577075958252,
+        12.17648983001709
+      ],
+      "peak_fast_gib": 9.629695892333984,
+      "peak_backing_gib": 106.01705623045564,
+      "pinned_host_gib": 114.12619066983461,
+      "step_makespans_ms": [
+        8678.9892578125,
+        8074.30859375,
+        8067.4638671875
+      ],
+      "step_wall_s": [
+        15.575737521983683,
+        8.090480028884485,
+        8.083838940830901
+      ],
+      "step_slab_overflows": [
+        0,
+        0,
+        0
+      ],
+      "placement_extent_gib": 10.209634780883789,
+      "placement_escapes": 0,
+      "pressure_evictions": 0,
+      "placement_overhead": 1.060224008632659,
+      "recompute_chosen": 24
+    }
+  ]
+}

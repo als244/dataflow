@@ -1,0 +1,300 @@
+{
+ "family": "dsv3",
+ "preset": "dsv3_mini",
+ "model_overrides": null,
+ "seq_len": 1024,
+ "seqs_per_step": 64,
+ "tokens_per_step": 65536,
+ "calibrated": false,
+ "calibration": 1.0,
+ "note": "raw sim on contended profiles is conservative: measured wall ran +2.6..+6.6% above it on the validated frontier; margins <=2% are noise \u2014 verify top-2 with real runs",
+ "envelopes": [
+  {
+   "device_gib": 28.0,
+   "cells": [
+    {
+     "bs": 64,
+     "ga": 1,
+     "tok_s": 11922,
+     "ledger_gib": 17.6,
+     "recompute": 14,
+     "rewrites": 18
+    },
+    {
+     "bs": 32,
+     "ga": 2,
+     "tok_s": 8061,
+     "ledger_gib": 22.36,
+     "recompute": 16,
+     "rewrites": 36
+    },
+    {
+     "bs": 16,
+     "ga": 4,
+     "tok_s": 5160,
+     "ledger_gib": 22.51,
+     "recompute": 72,
+     "rewrites": 72
+    },
+    {
+     "bs": 8,
+     "ga": 8,
+     "tok_s": 3040,
+     "ledger_gib": 22.79,
+     "recompute": 144,
+     "rewrites": 144
+    },
+    {
+     "bs": 4,
+     "ga": 16,
+     "tok_s": 1629,
+     "ledger_gib": 22.28,
+     "recompute": 288,
+     "rewrites": 288
+    },
+    {
+     "bs": 2,
+     "ga": 32,
+     "status": "skip:bounded",
+     "bound": 9338
+    },
+    {
+     "bs": 1,
+     "ga": 64,
+     "status": "skip:bounded",
+     "bound": 6482
+    }
+   ],
+   "best": {
+    "bs": 64,
+    "ga": 1,
+    "tok_s": 11922,
+    "margin_pct": 47.9
+   }
+  },
+  {
+   "device_gib": 24.0,
+   "cells": [
+    {
+     "bs": 64,
+     "ga": 1,
+     "tok_s": 9337,
+     "ledger_gib": 12.93,
+     "recompute": 18,
+     "rewrites": 18
+    },
+    {
+     "bs": 32,
+     "ga": 2,
+     "status": "skip:bounded",
+     "bound": 8061
+    },
+    {
+     "bs": 16,
+     "ga": 4,
+     "status": "skip:bounded",
+     "bound": 5160
+    },
+    {
+     "bs": 8,
+     "ga": 8,
+     "status": "skip:bounded",
+     "bound": 3040
+    },
+    {
+     "bs": 4,
+     "ga": 16,
+     "status": "skip:bounded",
+     "bound": 1629
+    },
+    {
+     "bs": 2,
+     "ga": 32,
+     "tok_s": 818,
+     "ledger_gib": 18.07,
+     "recompute": 576,
+     "rewrites": 576
+    },
+    {
+     "bs": 1,
+     "ga": 64,
+     "status": "skip:bounded",
+     "bound": 6482
+    }
+   ],
+   "best": {
+    "bs": 64,
+    "ga": 1,
+    "tok_s": 9337,
+    "margin_pct": 1041.44
+   }
+  },
+  {
+   "device_gib": 20.0,
+   "cells": [
+    {
+     "bs": 64,
+     "ga": 1,
+     "tok_s": 8751,
+     "ledger_gib": 10.81,
+     "recompute": 15,
+     "rewrites": 18
+    },
+    {
+     "bs": 32,
+     "ga": 2,
+     "status": "skip:bounded",
+     "bound": 8061
+    },
+    {
+     "bs": 16,
+     "ga": 4,
+     "status": "skip:bounded",
+     "bound": 5160
+    },
+    {
+     "bs": 8,
+     "ga": 8,
+     "status": "skip:bounded",
+     "bound": 3040
+    },
+    {
+     "bs": 4,
+     "ga": 16,
+     "status": "skip:bounded",
+     "bound": 1629
+    },
+    {
+     "bs": 2,
+     "ga": 32,
+     "status": "skip:bounded",
+     "bound": 818
+    },
+    {
+     "bs": 1,
+     "ga": 64,
+     "status": "skip:bounded",
+     "bound": 6482
+    }
+   ],
+   "best": {
+    "bs": 64,
+    "ga": 1,
+    "tok_s": 8751,
+    "margin_pct": null
+   }
+  },
+  {
+   "device_gib": 16.0,
+   "cells": [
+    {
+     "bs": 64,
+     "ga": 1,
+     "tok_s": 6803,
+     "ledger_gib": 7.64,
+     "recompute": 18,
+     "rewrites": 18
+    },
+    {
+     "bs": 32,
+     "ga": 2,
+     "tok_s": 7345,
+     "ledger_gib": 10.08,
+     "recompute": 21,
+     "rewrites": 36
+    },
+    {
+     "bs": 16,
+     "ga": 4,
+     "status": "skip:bounded",
+     "bound": 5160
+    },
+    {
+     "bs": 8,
+     "ga": 8,
+     "status": "skip:bounded",
+     "bound": 3040
+    },
+    {
+     "bs": 4,
+     "ga": 16,
+     "status": "skip:bounded",
+     "bound": 1629
+    },
+    {
+     "bs": 2,
+     "ga": 32,
+     "status": "skip:bounded",
+     "bound": 818
+    },
+    {
+     "bs": 1,
+     "ga": 64,
+     "status": "skip:bounded",
+     "bound": 6482
+    }
+   ],
+   "best": {
+    "bs": 32,
+    "ga": 2,
+    "tok_s": 7345,
+    "margin_pct": 7.97
+   }
+  },
+  {
+   "device_gib": 12.0,
+   "cells": [
+    {
+     "bs": 64,
+     "ga": 1,
+     "status": "infeasible:ValueError"
+    },
+    {
+     "bs": 32,
+     "ga": 2,
+     "status": "infeasible:ValueError"
+    },
+    {
+     "bs": 16,
+     "ga": 4,
+     "tok_s": 4574,
+     "ledger_gib": 8.22,
+     "recompute": 62,
+     "rewrites": 72
+    },
+    {
+     "bs": 8,
+     "ga": 8,
+     "status": "skip:bounded",
+     "bound": 3040
+    },
+    {
+     "bs": 4,
+     "ga": 16,
+     "status": "skip:bounded",
+     "bound": 1629
+    },
+    {
+     "bs": 2,
+     "ga": 32,
+     "status": "skip:bounded",
+     "bound": 818
+    },
+    {
+     "bs": 1,
+     "ga": 64,
+     "tok_s": 353,
+     "ledger_gib": 7.78,
+     "recompute": 1152,
+     "rewrites": 1152
+    }
+   ],
+   "best": {
+    "bs": 16,
+    "ga": 4,
+    "tok_s": 4574,
+    "margin_pct": 1195.75
+   }
+  }
+ ]
+}

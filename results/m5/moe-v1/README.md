@@ -327,3 +327,53 @@ would need a config hack. olmoe remains the cross-system comparison.
 - real-vs-sim -2.7..-5.8% = host tax + the known aten grouped_mm
   out-copy tax (~5% of expert time; moe-design.md par 3 has the followup).
 - 0 escapes, 0 evictions, every envelope verified.
+
+
+## M-G: qwen3moe-24l + dsv3-mini curves (2026-07-07) — the family capstone
+
+### qwen3moe-30b-24l (15.6B, E=128 K=8 F=768, GQA per-head qk-norm)
+
+| dev GiB | wall tok/s (shape) | sim | real-vs-sim | fid% | rc | peak |
+|---|---|---|---|---|---|---|
+| 12 | infeasible (PressureFit boundary, loud; floor in (12,16]) | | | | | |
+| 16 | 6,686 (bs32ga2) | 6,162 | +8.7% | 1.35 | 41/48 | 15.76 |
+| 20 | 8,563 (bs64ga1) | 7,312 | +17.4% | 0.30 | 23/24 | 19.17 |
+| 24 | 9,684 (bs64ga1) | 8,606 | +12.9% | 0.33 | 24/24 | 23.69 |
+| 28 | 10,014 (bs64ga1) | 9,639 | +4.2% | 0.37 | 20/24 | 27.21 |
+
+### dsv3-mini (12.7B DeepSeek-V3 shape: MLA + sigmoid_noaux_tc + first-2-dense)
+
+| dev GiB | wall tok/s (shape) | sim | real-vs-sim | fid% | rc | peak |
+|---|---|---|---|---|---|---|
+| 12 | 5,037 (bs16ga4) | 4,018 | +25.5% | 0.55 | 72/72 | 11.68 |
+| 16 | 8,104 (bs32ga2) | 7,299 | +11.3% | 0.39 | 24/36 | 15.09 |
+| 20 | 9,876 (bs64ga1) | 8,760 | +13.0% | 0.38 | 15/18 | 19.36 |
+| 24 | 10,531 (bs64ga1) | 9,463 | +11.6% | 2.88 | 15/18 | 22.94 |
+| 28 | **12,137 (bs64ga1)** | 12,305 | -1.0% | 5.65 | 14/18 | 27.99 |
+
+Sim decomposition (best plan per envelope, % of sim step): dsv3 idle
+67/44/32/27/**5.4** at 12/16/20/24/28 with recompute only 4.5-11% —
+idle COLLAPSES at 28 (the MLA compressed-ctx effect: rc-14/18 keeps
+recomputing because MLA ctx is nearly free to rebuild, so stream-once
+weights + tiny ctx leaves almost nothing to wait for).
+
+### Cross-family: best real tok/s per envelope + fraction of compute ceiling @28
+
+| dev GiB | olmoe-7B (6.9B) | qwen35moe-20l (17.8B) | qwen3moe-24l (15.6B) | dsv3-mini (12.7B) |
+|---|---|---|---|---|
+| 12 | 13,351 | infeasible | infeasible | 5,037 |
+| 16 | 14,337 | 3,967 | 6,686 | 8,104 |
+| 20 | 14,766 | 5,472 | 8,563 | 9,876 |
+| 24 | 15,492 | 5,899 | 9,684 | 10,531 |
+| 28 | 15,948 | 7,380 | 10,014 | 12,137 |
+| % of compute ceiling @28 | 80% | 68% | **87%** | 83% |
+
+Reading: post-sync-fix the sim is CONSERVATIVE everywhere (+4..+26%,
+worst where plans are recompute-heaviest — the contended-profile bound
+overprices under light real traffic) and ranking-correct in every
+family. h2d-boundedness @28 ranks qwen35moe (68%, heaviest weights/
+layer) < olmoe (80%) < dsv3 (83%) < qwen3moe (87%); at LOW envelopes
+dsv3 is the only heavyweight that stays feasible at 12 (MLA ctx) while
+every family pays 44-67% idle — the round-restreaming grammar work
+(round-resident weights / intra-round token chunking) is quantified per
+family by exactly these idle columns.
