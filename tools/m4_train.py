@@ -44,6 +44,7 @@ from dataflow.training.qwen3 import ShapedQwen3Config
 from dataflow.training.qwen35 import ShapedQwen35Config
 from dataflow.training.qwen35moe import ShapedQwen35MoeConfig
 from dataflow.training.qwen3moe import ShapedQwen3MoeConfig
+from dataflow.training.dsv3 import ShapedDsv3Config
 from dataflow.training.train_loop import train
 
 GIB = 1024**3
@@ -145,6 +146,20 @@ CONFIGS = {
         seq_len=1024, batch=32, grad_accum_rounds=2,
     ),
     "qwen3moe-30b-24l-s1k-bs64ga1": ShapedQwen3MoeConfig.qwen3moe_30b_24l(
+        seq_len=1024, batch=64, grad_accum_rounds=1,
+    ),
+    # dsv3 (DeepSeek-V3): 671b is the big-machine target (1.22 TiB W —
+    # lowering/planning only anywhere); dsv3-mini (12.7B, ~77 GiB pinned)
+    # is THIS box's perf config.
+    "dsv3-671b": ShapedDsv3Config.dsv3_671b(),
+    "dsv3-mini": ShapedDsv3Config.dsv3_mini(),
+    "dsv3-mini-s1k-bs16ga4": ShapedDsv3Config.dsv3_mini(
+        seq_len=1024, batch=16, grad_accum_rounds=4,
+    ),
+    "dsv3-mini-s1k-bs32ga2": ShapedDsv3Config.dsv3_mini(
+        seq_len=1024, batch=32, grad_accum_rounds=2,
+    ),
+    "dsv3-mini-s1k-bs64ga1": ShapedDsv3Config.dsv3_mini(
         seq_len=1024, batch=64, grad_accum_rounds=1,
     ),
 }

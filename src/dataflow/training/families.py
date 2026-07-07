@@ -198,6 +198,33 @@ def _qwen3moe() -> Family:
     )
 
 
+def _dsv3() -> Family:
+    from dataflow.tasks.dsv3_blocks import build_dsv3_resolver
+    from .dsv3 import (
+        ShapedDsv3Config,
+        dims_of_dsv3,
+        initial_values_dsv3,
+        lower_dsv3,
+    )
+
+    def golden():
+        from dataflow.models.dsv3_reference import GoldenDsv3
+
+        return GoldenDsv3
+
+    # MLA + hybrid dense/MoE depth + sigmoid_noaux_tc — block ladder lives
+    # in tests/tasks/test_mla_math.py, family ladder in test_dsv3_math.py
+    return Family(
+        name="dsv3",
+        config_type=ShapedDsv3Config,
+        dims_of=dims_of_dsv3,
+        lower=lower_dsv3,
+        initial_values=initial_values_dsv3,
+        build_resolver=build_dsv3_resolver,
+        golden=golden,
+    )
+
+
 _FAMILIES: dict[str, Callable[[], Family]] = {
     "llama3": _llama3,
     "qwen3": _qwen3,
@@ -205,6 +232,7 @@ _FAMILIES: dict[str, Callable[[], Family]] = {
     "olmoe": _olmoe,
     "qwen35moe": _qwen35moe,
     "qwen3moe": _qwen3moe,
+    "dsv3": _dsv3,
 }
 _cache: dict[str, Family] = {}
 
