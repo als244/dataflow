@@ -199,6 +199,13 @@ def main() -> None:
             profiles = load_or_profile(build(), fam.build_resolver(dims), backend)
             base = build()
             rc_all = {rw.object_id: 1 for rw in base.recompute_rewrites}
+            # ...and BETWEEN the base and rc-variant passes of one shape:
+            # the base pass's cached segments (peak-signature sized) stack
+            # under the rc pass's new size classes (qwen35moe bs64 OOM'd
+            # here while its base pass succeeded)
+            import torch as _torch
+
+            _torch.cuda.empty_cache()
             profiles.update(
                 load_or_profile(build(rc_all), fam.build_resolver(dims), backend))
         except Exception as e:

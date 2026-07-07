@@ -272,6 +272,30 @@ weights), and with E=256 the per-expert segments are ~4x smaller than
 olmoe's — the regime where a cublasLt-per-expert backend (flextrain's
 matmul_dispatcher) becomes interesting once host-visible counts exist.
 
+### bs64ga1 correction + final row (the stream-once ending)
+
+The oracle's original "bs64 can't profile" was a PROFILER ARTIFACT:
+torch's allocator held the base pass's cached segments while the
+rc-variant pass profiled new size classes in the same process
+(best_config now empty_cache's between the two passes as well as
+between shapes). Re-oracled: bs64 profiles fine (scratch 10.79 GiB) and
+is planning-verified INFEASIBLE at dev-20/24 (single-round working set
++ scratch reserve) but WINS dev-28. Verified real:
+
+| dev-28 | wall 7,380 tok/s | fid 0.17% | rc 20/20 | peak 27.43 | backing 102.2 |
+
++17.5% over bs32@28 (6,283); 68% of the 10.9k compute ceiling vs bs32's
+54%. The sim's own decomposition of the bs32 rows (useful/recompute/
+idle = 54/8/38% at dev-28; h2d 80-92% busy at every envelope; recompute
+overhead only 5.5-7.6% everywhere) said the degradation is transfer-
+exposed idle, not recompute cost — bs64ga1 confirms it by construction:
+W streams ONCE, ctx saves ZERO (rc-20/20), fidelity collapses to 0.17%,
+and throughput jumps 17.5%. Same lesson as olmoe, sharper: this family
+is the round-restreaming grammar's clearest customer below 28 GiB.
+
+FINAL qwen35moe-20l curve: 3,967 / 5,472 / 5,899 / **7,380** @ dev
+16/20/24/28 (bs16ga4 / bs32ga2 / bs32ga2 / bs64ga1).
+
 **dev-12 is structurally below this model's floor** — two independent
 failure signatures across attempts (derivation timing deadlock streaming
 1.9 GiB weight layers through an 8.4 GiB ledger; PressureFit boundary
