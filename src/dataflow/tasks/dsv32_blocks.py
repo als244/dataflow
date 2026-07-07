@@ -123,9 +123,12 @@ class Dsv32MetaState:
 
     META_KIND = "dense"  # overridden by moe classes
 
+    def _meta_layout(self):
+        # hook: glm52 overrides with its per-kind layouts
+        return dsv32_meta_layout(self.dims, self.META_KIND)
+
     def _meta_state(self, ctx):
-        d = self.dims
-        layout = dsv32_meta_layout(d, self.META_KIND)
+        layout = self._meta_layout()
         if not layout.fields:
             return None
         key = ctx.task.compute_block_key
@@ -144,6 +147,9 @@ class Dsv32MetaState:
 
 
 class Dsv32ProfileFill(MoEProfileFill):
+    def _meta_layout(self):
+        return dsv32_meta_layout(self.dims, self.META_KIND)
+
     """Profiling fill: float inputs seeded deterministically (skipping the
     int-heavy M_ metadata inputs), then every M_ INPUT seeded validly per
     field — dsa_idx gets a sliding window, the routing pack balanced
@@ -167,7 +173,7 @@ class Dsv32ProfileFill(MoEProfileFill):
                 torch.rand(n, generator=gen, dtype=torch.bfloat16,
                            device="cuda").sub_(0.5).mul_(0.05)
             )
-        layout = dsv32_meta_layout(d, self.META_KIND)
+        layout = self._meta_layout()
         for oid in ctx.task.inputs:
             if not oid.startswith("M_"):
                 continue
@@ -285,7 +291,8 @@ class Dsv32DenseBlockFwd(Dsv32MetaState, Dsv32ProfileFill, Dsv3DenseBlockFwd):
         lse = torch.empty(h, t, dtype=torch.float32, device=attn_out.device)
         K.dsa_sparse_attn_fwd(
             kctx, st.pop("q_full"), st.pop("k_full"), vals,
-            st["meta"]["dsa_idx"], attn_out, lse,
+            st.get("shared_idx", None) if "shared_idx" in st
+            else st["meta"]["dsa_idx"], attn_out, lse,
             n_heads=h, head_dim=qk, seq_bounds=_seq_bounds(d), v_head_dim=v,
         )
         del vals

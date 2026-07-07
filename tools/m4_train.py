@@ -46,6 +46,7 @@ from dataflow.training.qwen35moe import ShapedQwen35MoeConfig
 from dataflow.training.qwen3moe import ShapedQwen3MoeConfig
 from dataflow.training.dsv3 import ShapedDsv3Config
 from dataflow.training.dsv32 import ShapedDsv32Config
+from dataflow.training.glm52 import ShapedGlm52Config
 from dataflow.training.train_loop import train
 
 GIB = 1024**3
@@ -195,6 +196,17 @@ CONFIGS = {
     # third-party shapes on our families (big-machine planning targets;
     # HF-config-verified 2026-07-07; K2.5/2.6/2.7 shape-identical to K2,
     # GLM-5.1 shape-identical to GLM-5)
+    # glm52-mini: dsv32-mini backbone + IndexShare (6 of 18 indexers) —
+    # dsv32-mini at the same shapes is the IndexShare-ablation control
+    "glm52-mini-s4k-bs16ga1": ShapedGlm52Config.glm52_mini(
+        seq_len=4096, batch=16, grad_accum_rounds=1,
+    ),
+    "glm52-mini-s4k-bs8ga2": ShapedGlm52Config.glm52_mini(
+        seq_len=4096, batch=8, grad_accum_rounds=2,
+    ),
+    "glm52-mini-s4k-bs4ga4": ShapedGlm52Config.glm52_mini(
+        seq_len=4096, batch=4, grad_accum_rounds=4,
+    ),
     "kimi-k2": ShapedDsv3Config.kimi_k2(),
     "glm5": ShapedDsv32Config.glm5(),
     "glm5-dense-warmup": ShapedDsv32Config.glm5(sparse_mode=False),

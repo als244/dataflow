@@ -260,21 +260,23 @@ def _glm52() -> Family:
         lower_glm52,
     )
 
-    def _resolver_stub(dims):
-        raise NotImplementedError("glm52 block executables land in M-I2")
+    from dataflow.tasks.glm52_blocks import build_glm52_resolver
 
-    def _golden_stub():
-        raise NotImplementedError("glm52 golden lands in M-I2")
+    def golden():
+        from dataflow.models.glm52_reference import GoldenGlm52
 
-    # IndexShare: lowering/planning complete (S/P grammar); runtime M-I2
+        return GoldenGlm52
+
+    # IndexShare: cross-layer selection via M/dM objects — ladder in
+    # tests/tasks/test_glm52_math.py + tests/training/test_glm52_lowering.py
     return Family(
         name="glm52",
         config_type=ShapedGlm52Config,
         dims_of=dims_of_glm52,
         lower=lower_glm52,
         initial_values=initial_values_glm52,
-        build_resolver=_resolver_stub,
-        golden=_golden_stub,
+        build_resolver=build_glm52_resolver,
+        golden=golden,
     )
 
 
