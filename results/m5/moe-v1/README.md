@@ -490,3 +490,30 @@ fwd 0.40 ms/seq = dense flash parity; DSA total 10.75 -> 5.6 ms/seq/L.
 - Sim rows stale-conservative (+11..+18%): profile cache did not
   re-key on the round-3 kernel changes; refreshed on next natural
   re-profile. fid 3.1/4.3 on the bs16 rows tracks the same staleness.
+
+
+## M-H FINAL: dsv32-mini three-way table — fresh profiles, all kernel rounds (2026-07-07)
+
+PROFILE_CACHE_REV 3 (round-3.5/4 kernels re-profiled; the stale-sim era
+ends). Sparse rows = the M-H2 final; DENSE WARM-UP = M-H3 (paper stage:
+dense attention, MAIN MODEL FROZEN — bit-verified — indexer trains from
+full-prefix KL only).
+
+| dev GiB | dsv3 dense | dsv32 WARM-UP | dsv32 SPARSE | sparse vs dsv3 |
+|---|---|---|---|---|
+| 12 | 5,095 | — | 5,289 (rc-56, fid 0.93) | 0.96x |
+| 16 | 7,671 | 7,847 (0.98x) | 7,680 (rc-20, fid 0.32) | 1.00x |
+| 20 | 8,428 | — | 8,796 (rc-14, fid 0.44) | 0.96x |
+| 24 | 10,812 | — | 9,947 (rc-14, fid 0.30) | 1.09x |
+| 28 | 12,176 | 11,392 (1.07x) | 10,093 (rc-14, fid 1.46) | 1.21x |
+
+- SPARSE AT PARITY OR BETTER through dev-20 (sparsity's flop savings +
+  our kernels beat dense flash + the planner exploits the smaller ctx);
+  1.21x at 28 = the indexer + selection + KL ops on equal model FLOPs.
+  Eager era -> now: 2,890 -> 10,093 @ 28 = 3.5x.
+- WARM-UP sits exactly where the math says: flash attention + KL-only
+  backward = ~7% over dsv3 at 28 (11,392 vs 12,176). fid 0.35 @ 28.
+- Fidelity 0.30-1.46 everywhere (profile staleness cleaned up); sim
+  conservative +2..+21% (contended-profile convention, ranking-correct).
+- bs16ga1 claims 20-28 under round-4 kernels (attention cheap enough
+  that stream-once wins from dev-20 now).

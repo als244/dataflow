@@ -1,5 +1,5 @@
 {
-  "config": "dsv32-mini-s4k-bs4ga4",
+  "config": "dsv32-mini-s4k-dense-bs16ga1",
   "steps": 3,
   "pcie": {
     "uni_h2d": 35338,
@@ -53,51 +53,51 @@
   },
   "sweep": [
     {
-      "budget_gib": 12.0,
+      "budget_gib": 28.0,
       "budget_semantics": "device",
-      "planned_budget_gib": 8.170378345064819,
-      "actual_device_peak_gib": 11.571484565734863,
-      "fixed_overhead_gib": 1.41656494140625,
-      "torch_scratch_peak_gib": 1.705078125,
-      "device_envelope_gib": 12.0,
-      "scratch_reserve_gib": 1.81494140625,
+      "planned_budget_gib": 18.776990363374352,
+      "actual_device_peak_gib": 28.066853523254395,
+      "fixed_overhead_gib": 1.5279541015625,
+      "torch_scratch_peak_gib": 6.861328125,
+      "device_envelope_gib": 28.0,
+      "scratch_reserve_gib": 6.509765625,
       "placement_mode": "static",
       "extent_budget": false,
-      "sim_ms_per_step": 14597.90375,
-      "real_ms_per_step_steady": 12374.65625,
-      "sim_tokens_per_s": 4489.41170748574,
-      "real_tokens_per_s": 5295.985494546566,
-      "wall_tokens_per_s": 5288.920182602366,
-      "real_vs_sim_pct": 17.966135422953688,
-      "replay_fidelity_gap_pct": 0.9321375788383726,
+      "sim_ms_per_step": 5875.764893066406,
+      "real_ms_per_step_steady": 5736.645751953125,
+      "sim_tokens_per_s": 11153.61169017069,
+      "real_tokens_per_s": 11424.097431445425,
+      "wall_tokens_per_s": 11392.206346379618,
+      "real_vs_sim_pct": 2.425095554591561,
+      "replay_fidelity_gap_pct": 0.34523182695428534,
       "losses": [
-        NaN,
-        NaN,
-        NaN
+        12.17348861694336,
+        12.177508354187012,
+        12.175697326660156
       ],
-      "peak_fast_gib": 8.144819978624582,
-      "peak_backing_gib": 107.76550722494721,
-      "pinned_host_gib": 109.13507510721684,
+      "peak_fast_gib": 18.155161142349243,
+      "peak_backing_gib": 79.13616943359375,
+      "pinned_host_gib": 79.13641357794404,
       "step_makespans_ms": [
-        13209.259765625,
-        12376.26171875,
-        12373.05078125
+        5777.18212890625,
+        5741.9150390625,
+        5731.37646484375
       ],
       "step_wall_s": [
-        19.21426729601808,
-        12.392578094964847,
-        12.389796279137954
+        6.269153536995873,
+        5.757999671855941,
+        5.747409905074164
       ],
       "step_slab_overflows": [
         0,
         0,
         0
       ],
-      "placement_extent_gib": 8.449841499328613,
+      "placement_extent_gib": 19.677571296691895,
       "placement_escapes": 0,
       "pressure_evictions": 0,
-      "placement_overhead": 1.0374497559804312,
-      "recompute_chosen": 56
+      "placement_overhead": 1.0838555021575345,
+      "recompute_chosen": 15
     }
   ]
 }
