@@ -76,6 +76,7 @@ class ShapedDsv32Config:
     index_head_dim: int = 128
     index_topk: int = 2048
     sparse_mode: bool = True
+    train_indexer: bool = True
     vocab_size: int = 129_280
     seq_len: int = 4096
     batch: int = 1
@@ -198,6 +199,7 @@ def dims_of_dsv32(cfg: ShapedDsv32Config) -> Dsv32Dims:
         moe=moe_spec_of(cfg),
         index_n_heads=cfg.index_n_heads, index_head_dim=cfg.index_head_dim,
         index_topk=cfg.index_topk, sparse_mode=cfg.sparse_mode,
+        train_indexer=cfg.train_indexer,
     )
 
 

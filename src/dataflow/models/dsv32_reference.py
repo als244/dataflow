@@ -35,9 +35,20 @@ from dataflow.tasks.mla_reference import mla_qkv_reference
 from dataflow.tasks.moe.reference import moe_mlp_reference, moe_topk_reference
 
 
+_IDX_FIELDS = ("w_idx_q", "w_idx_k", "idx_k_ln_w", "idx_k_ln_b", "w_idx_w")
+
+
 @dataclass
 class GoldenDsv32(GoldenDsv3):
     dims: Dsv32Dims  # re-typed
+
+    def _adamw_obj(self, obj: str, leaves) -> None:
+        if not getattr(self.dims, "train_indexer", True) and any(
+                n in leaves for n in _IDX_FIELDS):
+            rest = {k: v for k, v in leaves.items() if k not in _IDX_FIELDS}
+            super()._adamw_obj(obj, rest)
+            return
+        super()._adamw_obj(obj, leaves)
 
     def block_layout(self, layer: int | None = None) -> PackedLayout:
         if layer is not None and self.dims.kind_of(layer) == "dense":
@@ -57,6 +68,7 @@ class GoldenDsv32(GoldenDsv3):
         scores = dsa_index_scores_reference(h1.detach(), q_lora.detach(), w, d)
         sel = dsa_topk_reference(scores.detach(), d.index_topk)
         mask = dsa_mask_from_idx(sel, d, t)
+        train_idx = getattr(d, "train_indexer", True)
 
         qf = q_full.reshape(t, h * qk)
         kf = k_full.reshape(t, h * qk)
@@ -66,19 +78,25 @@ class GoldenDsv32(GoldenDsv3):
         h_mid = x + attn @ w["wo"]
 
         with torch.no_grad():
-            p = torch.zeros(t, t, device=x.device)
+            if not train_idx:
+                p = None
+            else:
+                p = torch.zeros(t, t, device=x.device)
             scale = qk ** -0.5
             q3 = q_full.detach().float()
             k3 = k_full.detach().float()
             lo = 0
-            for L in ops.seq_lens_of(d.seq_spec, t):
+            for L in (ops.seq_lens_of(d.seq_spec, t) if train_idx else ()):
                 hi = lo + L
                 for hh in range(h):
                     lg = (q3[lo:hi, hh] @ k3[lo:hi, hh].T) * scale
                     p[lo:hi, lo:hi] += torch.softmax(
                         lg + mask[lo:hi, lo:hi], dim=-1)
                 lo = hi
-        kl = dsa_indexer_kl_reference(scores, mask, p)
+        if train_idx:
+            kl = dsa_indexer_kl_reference(scores, mask, p)
+        else:
+            kl = torch.zeros((), dtype=torch.float32, device=x.device)
 
         h2 = ops.rmsnorm_reference(h_mid, w["ffn_norm_w"])
         if "w13_experts" not in w:

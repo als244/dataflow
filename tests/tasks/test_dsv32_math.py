@@ -400,3 +400,59 @@ def test_dsv32_multistep_matches_golden_and_loss_decreases():
         assert abs(ours - ref) / max(abs(ref), 1e-9) < 3e-2, (report.losses, golden_losses)
     assert report.losses[-1] < report.losses[0]
     assert all(n == 0 for n in report.step_slab_overflows[1:]), report.step_slab_overflows
+
+
+def test_dsv32_frozen_indexer_ablation():
+    """train_indexer=False (Shein ablation knob): model-step still matches
+    golden AND the five indexer fields are BIT-FROZEN across the step
+    (no gradients, no AdamW, not even weight decay)."""
+    import dataclasses
+
+    from dataflow.models.dsv32_reference import GoldenDsv32
+    from dataflow.runtime import Engine
+    from dataflow.runtime.device.cuda import CudaBackend
+    from dataflow.runtime.device.fake import FakeBackend
+    from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME, torch_view
+    from dataflow.training.families import resolve_family
+    from dataflow.training.planning import plan_program
+
+    cfg = _tiny_cfg(train_indexer=False)
+    check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
+                     field_atol=_BIAS_ATOL).assert_ok()
+
+    fam = resolve_family(cfg)
+    dims = fam.dims_of(cfg)
+    planned = plan_program(fam.lower(cfg), fast_memory_capacity=64 * 1024 * 1024)
+    backend = CudaBackend()
+    values = fam.initial_values(planned.program, cfg, backend, seed=11)
+    before = {}
+    wl_of = {}
+    from dataflow.tasks.layouts import dsv32_dense_weight_layout, dsv32_moe_weight_layout
+    for i in range(cfg.n_layers):
+        wl = (dsv32_dense_weight_layout(dims) if dims.kind_of(i) == "dense"
+              else dsv32_moe_weight_layout(dims))
+        wl_of[i] = wl
+        buf = values[f"W_{i}"]
+        before[i] = {
+            f.name: torch_view(buf, f.shape, TORCH_DTYPE_BY_NAME[f.dtype],
+                               offset_bytes=f.offset_bytes).clone()
+            for f in wl.fields if f.name.startswith(("w_idx", "idx_k_ln"))
+        }
+    dry = Engine(FakeBackend()).execute(planned.program, initial_buffers=values)
+    result = Engine(backend).execute(
+        planned.program, resolver=fam.build_resolver(dims),
+        initial_buffers=values, pool_prewarm=dry.pool_demand,
+    )
+    for i in range(cfg.n_layers):
+        rec = result.objects.get(f"W_{i}")
+        slot = rec.backing or rec.fast
+        for f in wl_of[i].fields:
+            if not f.name.startswith(("w_idx", "idx_k_ln")):
+                continue
+            after = torch_view(slot.buffer, f.shape, TORCH_DTYPE_BY_NAME[f.dtype],
+                               offset_bytes=f.offset_bytes)
+            assert torch.equal(after, before[i][f.name]), (i, f.name)
+    result.close()
+    dry.close()
+    for buf in values.values():
+        backend.free(buf)

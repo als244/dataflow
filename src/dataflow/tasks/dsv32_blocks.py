@@ -245,41 +245,14 @@ class Dsv32DenseBlockBwd(Dsv32ProfileFill, Dsv3DenseBlockBwd):
     def cl(self) -> PackedLayout:
         return dsv32_dense_context_layout(self.dims)
 
-    def _attn_bwd(self, kctx, dh_mid, a, x, w, acc, norm_bwd, dx_out) -> None:
-        d = self.dims
+
+    def _indexer_kl_bwd(self, kctx, d, a, x, w, acc, h1, q_lora_n,
+                        q_full, k_full, idx, lse, bounds, pos):
+        """The indexer's KL training path (detached seam). Extracted so
+        the train_indexer=False ablation skips it wholesale."""
         K = self.kernels
         t = d.tokens
-        h, nope, rope, v = d.n_heads, d.qk_nope_dim, d.qk_rope_dim, d.v_head_dim
-        qk, kvl = d.qk_head_dim, d.kv_lora_rank
-        bounds = _seq_bounds(d)
-
-        d_attn_v = dh_mid @ w["wo"].T
-        acc("wo", a["attn_out"].T @ dh_mid)
-
-        pos = ops.positions_for(d.seq_spec, t, x.device)
-        q_lora_n, q_full = _mla_expand_q(kctx, K, d, a["q_a"], a["rstd_qa"], w, pos)
-        latent_n, k_full, vals = _mla_expand_kv(
-            kctx, K, d, a["kv_a"], a["rstd_kva"], w, pos,
-        )
-        v_pad = _pad_v(vals, qk)
-        del vals
-        d_attn_pad = _pad_v(d_attn_v.view(t, h, v), qk)
-        del d_attn_v
-
-        lse = a["lse"].reshape(h, t)
-        idx = a["dsa_idx"]
-        dq = torch.empty_like(q_full)
-        dk = torch.empty_like(k_full)
-        dv_pad = torch.empty_like(v_pad)
-        K.dsa_sparse_attn_bwd(
-            kctx, d_attn_pad, q_full, k_full, v_pad, idx, lse,
-            dq, dk, dv_pad, n_heads=h, head_dim=qk, seq_bounds=bounds,
-        )
-        del d_attn_pad
-
-        # ---- indexer KL injection (detached seam: touches ONLY idx weights)
-        h1 = torch.empty_like(x)
-        K.rmsnorm_apply(kctx, x, a["rstd_attn"], w["attn_norm_w"], h1)
+        h, qk, rope = d.n_heads, d.qk_head_dim, d.qk_rope_dim
         q_idx, k_idx, wts = _indexer_inputs(kctx, K, d, h1, q_lora_n, w, pos)
         dq_idx = torch.empty_like(q_idx)
         dk_idx = torch.empty_like(k_idx)
@@ -349,6 +322,53 @@ class Dsv32DenseBlockBwd(Dsv32ProfileFill, Dsv3DenseBlockBwd):
         del k_pre, mu, xc, var, rstd, xhat, g, dk_post_ln, dk_pre
         acc("w_idx_w", (h1.float().T @ (dwts * (hi_ ** -0.5) * (di ** -0.5))))
         del dwts, q_idx, k_idx, wts
+
+
+    def _attn_bwd(self, kctx, dh_mid, a, x, w, acc, norm_bwd, dx_out) -> None:
+        d = self.dims
+        K = self.kernels
+        t = d.tokens
+        h, nope, rope, v = d.n_heads, d.qk_nope_dim, d.qk_rope_dim, d.v_head_dim
+        qk, kvl = d.qk_head_dim, d.kv_lora_rank
+        bounds = _seq_bounds(d)
+
+        d_attn_v = dh_mid @ w["wo"].T
+        acc("wo", a["attn_out"].T @ dh_mid)
+
+        pos = ops.positions_for(d.seq_spec, t, x.device)
+        q_lora_n, q_full = _mla_expand_q(kctx, K, d, a["q_a"], a["rstd_qa"], w, pos)
+        latent_n, k_full, vals = _mla_expand_kv(
+            kctx, K, d, a["kv_a"], a["rstd_kva"], w, pos,
+        )
+        v_pad = _pad_v(vals, qk)
+        del vals
+        d_attn_pad = _pad_v(d_attn_v.view(t, h, v), qk)
+        del d_attn_v
+
+        lse = a["lse"].reshape(h, t)
+        idx = a["dsa_idx"]
+        dq = torch.empty_like(q_full)
+        dk = torch.empty_like(k_full)
+        dv_pad = torch.empty_like(v_pad)
+        K.dsa_sparse_attn_bwd(
+            kctx, d_attn_pad, q_full, k_full, v_pad, idx, lse,
+            dq, dk, dv_pad, n_heads=h, head_dim=qk, seq_bounds=bounds,
+        )
+        del d_attn_pad
+
+        # ---- indexer KL injection (detached seam: touches ONLY idx weights)
+        h1 = torch.empty_like(x)
+        K.rmsnorm_apply(kctx, x, a["rstd_attn"], w["attn_norm_w"], h1)
+        if not d.train_indexer:
+            # ablation knob (Shein): frozen indexer — no KL, deterministic
+            # ZERO grads (the optimizer additionally skips these fields
+            # entirely via update_specials, so not even weight decay runs)
+            for name in ("w_idx_q", "w_idx_k", "idx_k_ln_w", "idx_k_ln_b",
+                         "w_idx_w"):
+                acc(name, torch.zeros_like(w[name]))
+        if d.train_indexer:
+            self._indexer_kl_bwd(kctx, d, a, x, w, acc, h1, q_lora_n,
+                                 q_full, k_full, idx, lse, bounds, pos)
 
         # ---- main-path chains (identical to dsv3 from here) ---------------
         dk3 = dk.view(t, h, qk)
@@ -444,6 +464,14 @@ def build_dsv32_resolver(
         "w_router_bias": partial(moe_bias_update,
                                  speed=dims.moe.bias_update_speed),
     }
+    if not dims.train_indexer:
+        # frozen indexer: skip AdamW ENTIRELY for its fields (no decay)
+        def _frozen(kctx, kernels, w_view, g_view):
+            pass
+
+        for name in ("w_idx_q", "w_idx_k", "idx_k_ln_w", "idx_k_ln_b",
+                     "w_idx_w"):
+            bias_special[name] = _frozen
 
     def _opt_layout(d, task, size):
         layer = AdamWStep.layer_of(task)
