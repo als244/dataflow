@@ -435,6 +435,11 @@ def main() -> None:
                 env = os.environ.get("DATAFLOW_VMM_HEADROOM_GIB")
                 if env is not None:
                     headroom = int(float(env) * GIB)
+                # measured calibration (2026-07-07): every vmm row busts
+                # its envelope by a systematic +0.09..0.35 GiB (chunk-
+                # mapping granularity + scratch variance the arena
+                # headroom does not cover) — reserve the margin here
+                headroom += int(0.4 * GIB)
                 eff = avail - headroom
                 print(f"  envelope {env_gib:g}: ledger {eff / GIB:.2f} "
                       f"(vmm: avail {avail / GIB:.2f} - headroom)")
@@ -550,7 +555,17 @@ def main() -> None:
                 eff = int(eff * cap / placement.extent_bytes)
                 print(f"  extent {placement.extent_bytes / GIB:.2f} GiB > budget; "
                       f"re-planning at {eff / GIB:.2f} GiB")
-                planned = plan_at(eff)
+                try:
+                    planned = plan_at(eff)
+                except Exception as exc:
+                    # the shave squeezed the ledger past sim feasibility
+                    # (row-L class: simulator deadlock inside the re-plan)
+                    # — mark the cell infeasible instead of crashing the
+                    # whole invocation
+                    print(f"  extent-budget shave infeasible at "
+                          f"{eff / GIB:.2f} GiB — {str(exc)[:120]}")
+                    placement = None
+                    break
             else:
                 print(f"  extent-budget search did not converge at {gib:g} GiB — skipping")
                 continue
