@@ -7,13 +7,24 @@ name = "dataflow"
 version = "0.0.1"
 description = "CPU-GPU dataflow runtime: executes annotated dataflow programs with runtime-owned memory, streams, and transfers."
 requires-python = ">=3.12"
-dependencies = []
+# torch (with its bundled triton) is the one hard runtime dependency;
+# everything GPU-side resolves through it.
+dependencies = ["torch>=2.9"]
 
 [project.optional-dependencies]
 # Planning/verification/webapp-export integration (only dataflow.training imports it).
 sim = ["dataflow_sim"]
 # Real device backend (only dataflow.runtime.device.cuda imports it).
 cuda = ["cuda-python"]
+dev = ["pytest>=8", "httpx"]
+
+# `uv sync` resolves the sibling simulator checkout in editable mode;
+# a standalone install can drop the sources table and use a published
+# dataflow_sim instead.
+[tool.uv.sources]
+dataflow_sim = { path = "../dataflow_sim", editable = true }
+
+[dependency-groups]
 dev = ["pytest>=8", "httpx"]
 
 [tool.setuptools.packages.find]
