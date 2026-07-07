@@ -298,6 +298,25 @@ through `tasks/optim.py`:
 - All step math is fp32 with storage-dtype round-trips (the AdamW
   kernel's convention), except muon's momentum which follows the
   flextrain port (momentum-dtype arithmetic).
+- **Hyperparameters**: one baseline `AdamWHyper` per resolver
+  (`build_resolver(dims, hyper=...)`), refined per (layer, field) by
+  the SAME policy object — `hyper_overrides=((pattern, {field: value}),
+  ...)`, first match wins, routed through `layer_overrides` like
+  everything else:
+
+  ```python
+  OptPolicy(hyper_overrides=(("*norm*", {"weight_decay": 0.0}),
+                             ("embed.*", {"lr": 1e-5})))
+  ```
+
+- **LR schedules**: `AdamWHyper.schedule = LRSchedule(kind, ...)` —
+  a pure function of the optimizer step index (deterministic,
+  engine-safe). Kinds: `"wsd"` (the default: linear warmup, stable,
+  linear decay over the last `decay_frac` to `min_lr_frac`),
+  `"cosine"`, `"constant"`. The default DEGENERATES to constant until
+  `total_steps` declares the run horizon, so short bench runs are
+  unaffected. The scale multiplies `lr` and `muon_lr` AFTER per-field
+  hyper overrides.
 - Granularity invariant: ONE optimizer task per layer (plus embed/
   head) COMPOSES every field's step inside it, whatever mix of rules
   the policy assigns, and all of the layer's state slots pack into its

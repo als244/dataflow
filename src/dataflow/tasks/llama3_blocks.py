@@ -56,6 +56,10 @@ class AdamWHyper:
     weight_decay: float = 0.0
     momentum: float = 0.95      # sgdm/muon (tasks/optim.py); unused by adamw
     muon_lr: float | None = None  # muon fields use this when set (else lr)
+    # lr(step) schedule (tasks/optim.py LRSchedule): default WSD, which
+    # DEGENERATES to constant until total_steps is set — declare the
+    # run horizon to engage it. None = no scaling. Scales lr + muon_lr.
+    schedule: object = None
 
 
 @dataclass(frozen=True)
@@ -606,7 +610,9 @@ class AdamWStep(_Base):  # name kept for resolver back-compat; see OptimizerStep
                 ns)
 
     def launch(self, ctx: TaskContext) -> None:
-        from .optim import OPTIMIZERS, resolve_opt_policy
+        from dataclasses import replace as dc_replace
+
+        from .optim import OPTIMIZERS, hyper_for, resolve_opt_policy
 
         es, kctx = self._stream_ctx(ctx)
         with torch.cuda.stream(es):
@@ -618,10 +624,13 @@ class AdamWStep(_Base):  # name kept for resolver back-compat; see OptimizerStep
                      if len(ctx.task.mutates) > 1 else None)
             wl_, gl_, ol_, ns = self._layouts(ctx.task, w_buf.size_bytes)
             step = int(ctx.task.block_params.get("step", 0)) + 1
-            hp = self.hyper
             op = resolve_opt_policy(getattr(self.dims, "opt_policy", None))
             layer = self.layer_of(ctx.task)
             key = (lambda n: f"{ns}.{n}") if ns else (lambda n: n)
+            # lr schedule: pure function of the step index; scales lr
+            # AND muon_lr, applied AFTER per-field hyper overrides
+            sched = self.hyper.schedule
+            sched_scale = sched.scale(step) if sched is not None else 1.0
             for f in wl_.fields:
                 if self.update_specials is not None and f.name in self.update_specials:
                     # highest-priority per-field override (noaux bias
@@ -633,6 +642,12 @@ class AdamWStep(_Base):  # name kept for resolver back-compat; see OptimizerStep
                     )
                     continue
                 opt = OPTIMIZERS[op.for_field(key(f.name), layer, f.shape)]
+                hp = hyper_for(op, key(f.name), layer, self.hyper)
+                if sched_scale != 1.0:
+                    hp = dc_replace(
+                        hp, lr=hp.lr * sched_scale,
+                        muon_lr=(hp.muon_lr * sched_scale
+                                 if hp.muon_lr else hp.muon_lr))
                 if opt.slots and o_buf is None:
                     raise ValueError(
                         f"{ctx.task.id}: field {f.name!r} wants "

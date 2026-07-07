@@ -416,3 +416,110 @@ def test_layer_indexed_policy_sizes_and_model_step():
             if r > worst[0]:
                 worst = (r, f"W_{i}.{name}")
     assert worst[0] <= 3e-2, worst
+
+
+def test_lr_schedules_shapes():
+    from dataflow.tasks.optim import LRSchedule
+
+    w = LRSchedule("wsd", warmup_steps=10, total_steps=100,
+                   decay_frac=0.2, min_lr_frac=0.1)
+    assert abs(w.scale(5) - 0.5) < 1e-9          # warmup ramp
+    assert w.scale(10) == 1.0 and w.scale(80) == 1.0   # stable
+    assert abs(w.scale(90) - 0.55) < 1e-9        # mid-decay
+    assert abs(w.scale(100) - 0.1) < 1e-9        # floor
+    c = LRSchedule("cosine", total_steps=100, min_lr_frac=0.1)
+    assert abs(c.scale(50) - 0.55) < 1e-9
+    assert abs(c.scale(100) - 0.1) < 1e-9
+    assert LRSchedule("constant", total_steps=50).scale(30) == 1.0
+    # the DEFAULT degenerates to 1.0 until total_steps is declared
+    assert LRSchedule().scale(123) == 1.0
+
+
+def test_hyper_overrides_and_schedule_model_step():
+    """Baseline hyper + per-field overrides (norms: wd=0; embed: lr/10)
+    + a WSD warmup schedule (step 1 of warmup 2 => scale 0.5), through
+    the REAL engine vs a hand replica."""
+    from dataflow.runtime import Engine
+    from dataflow.runtime.device.cuda import CudaBackend
+    from dataflow.runtime.device.fake import FakeBackend
+    from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME, torch_view
+    from dataflow.tasks.llama3_blocks import AdamWHyper, build_resolver
+    from dataflow.tasks.optim import LRSchedule
+    from dataflow.training.families import resolve_family
+    from dataflow.training.llama3 import ShapedLlamaConfig
+    from dataflow.training.planning import plan_program
+    from dataflow.training.testing.gradcheck import rel_l2
+
+    base_lr, wd = 1e-2, 0.1
+    policy = OptPolicy(default="adamw", hyper_overrides=(
+        ("*norm*", {"weight_decay": 0.0}),
+        ("embed.*", {"lr": base_lr / 10}),
+    ))
+    hyper = AdamWHyper(lr=base_lr, weight_decay=wd,
+                       schedule=LRSchedule("wsd", warmup_steps=2,
+                                           total_steps=100))
+    cfg = replace(ShapedLlamaConfig.tiny(), opt_policy=policy)
+    fam = resolve_family(cfg)
+    dims = fam.dims_of(cfg)
+    planned = plan_program(fam.lower(cfg),
+                           fast_memory_capacity=64 * 1024 * 1024)
+    backend = CudaBackend()
+    values = fam.initial_values(planned.program, cfg, backend, seed=17)
+
+    def pinned(name):
+        buf = values[name]
+        return torch_view(buf, (buf.size_bytes,), torch.uint8).clone()
+
+    leaves = [pinned("W_embed"),
+              [pinned(f"W_{i}") for i in range(cfg.n_layers)],
+              pinned("W_head")]
+    golden = fam.golden().from_packed_bytes(dims, cfg.n_layers, *leaves)
+    tokens = torch_view(values["tokens_0_0"], (dims.tokens,),
+                        torch.int32).long().cuda()
+    targets = torch_view(values["targets_0_0"], (dims.tokens,),
+                         torch.int32).long().cuda()
+    for p_ in golden.parameters():
+        p_.grad = None
+    golden.loss(tokens, targets).backward()
+
+    sched_scale = 0.5     # step 1 of warmup 2
+
+    def ref_step(key, w, g):
+        lr = (base_lr / 10 if key.startswith("embed.") else base_lr)
+        w_decay = 0.0 if "norm" in key else wd
+        lr = lr * sched_scale
+        w32, g32 = w.detach().float(), g.detach().float()
+        m = g32 * (1 - 0.9)
+        v = g32 * g32 * (1 - 0.95)
+        return (w32 * (1 - lr * w_decay)
+                - lr * (m / (1 - 0.9))
+                / ((v / (1 - 0.95)).sqrt() + 1e-8)).to(w.dtype)
+
+    dry = Engine(FakeBackend()).execute(planned.program,
+                                        initial_buffers=values)
+    result = Engine(backend).execute(
+        planned.program,
+        resolver=build_resolver(dims, hyper=hyper),
+        initial_buffers=values, pool_prewarm=dry.pool_demand)
+
+    worst = (0.0, "")
+    checks = [("W_embed", "embed", golden.w_embed, leaves[0])] + [
+        (f"W_{i}", None, golden.w_blocks[i], leaves[1][i])
+        for i in range(cfg.n_layers)]
+    for oid, ns, gleaves, w0 in checks:
+        layout, _ = golden.final_leaves(oid)
+        rec = result.objects.get(oid)
+        buf = (rec.backing or rec.fast).buffer
+        for f, (name, param) in zip(layout.fields, gleaves.items()):
+            key = f"{ns}.{name}" if ns else name
+            dt = TORCH_DTYPE_BY_NAME[f.dtype]
+            nbytes = param.numel() * dt.itemsize
+            base = (w0[f.offset_bytes:f.offset_bytes + nbytes]
+                    .view(dt).view(*f.shape).cuda())
+            expect = ref_step(key, base.reshape(param.shape),
+                              param.grad).reshape(f.shape)
+            got = torch_view(buf, f.shape, dt, offset_bytes=f.offset_bytes)
+            r = rel_l2(got, expect)
+            if r > worst[0]:
+                worst = (r, key)
+    assert worst[0] <= 3e-2, worst

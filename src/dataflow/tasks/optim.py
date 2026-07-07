@@ -59,6 +59,55 @@ def _ns_orthogonalize(m: torch.Tensor) -> torch.Tensor:
 
 
 @dataclass(frozen=True)
+class LRSchedule:
+    """lr(step) as a pure function of the 1-indexed optimizer step —
+    deterministic, engine-safe (step rides task.block_params).
+
+    kinds:
+    - "wsd" (DEFAULT): linear warmup over ``warmup_steps``, stable at
+      1.0, then linear decay over the last ``decay_frac`` of
+      ``total_steps`` down to ``min_lr_frac``.
+    - "cosine": linear warmup, then cosine from 1.0 to ``min_lr_frac``
+      at ``total_steps``.
+    - "constant": linear warmup, then 1.0.
+
+    ``total_steps=None`` (the default) DEGENERATES to warmup-then-1.0
+    for every kind — so the default hyper changes nothing until a run
+    declares its horizon. ``scale(step)`` multiplies lr AND muon_lr,
+    after any per-field hyper overrides.
+    """
+
+    kind: str = "wsd"
+    warmup_steps: int = 0
+    total_steps: int | None = None
+    decay_frac: float = 0.1
+    min_lr_frac: float = 0.0
+
+    def scale(self, step: int) -> float:
+        import math
+
+        if self.warmup_steps and step <= self.warmup_steps:
+            return step / self.warmup_steps
+        if self.total_steps is None:
+            return 1.0
+        if self.kind == "constant":
+            return 1.0
+        if self.kind == "cosine":
+            span = max(1, self.total_steps - self.warmup_steps)
+            prog = min(1.0, (step - self.warmup_steps) / span)
+            lo = self.min_lr_frac
+            return lo + (1.0 - lo) * 0.5 * (1.0 + math.cos(math.pi * prog))
+        if self.kind == "wsd":
+            decay_steps = max(1, int(self.total_steps * self.decay_frac))
+            decay_start = self.total_steps - decay_steps
+            if step <= decay_start:
+                return 1.0
+            prog = min(1.0, (step - decay_start) / decay_steps)
+            return 1.0 + (self.min_lr_frac - 1.0) * prog
+        raise ValueError(f"unknown schedule kind {self.kind!r}")
+
+
+@dataclass(frozen=True)
 class OptimizerDef:
     name: str
     slots: tuple[str, ...]
@@ -151,6 +200,12 @@ class OptPolicy:
     default: str = "adamw"
     overrides: tuple = field(default_factory=tuple)
     layer_overrides: tuple = ()
+    # (fnmatch pattern, {hyper field: value}) — first match wins; the
+    # matched dict REPLACES those fields of the base hyper for that
+    # param (e.g. (("*norm*", {"weight_decay": 0.0}),
+    #             ("embed.*", {"lr": 1e-5}))). The lr schedule scales
+    # lr/muon_lr AFTER these overrides.
+    hyper_overrides: tuple = ()
 
     def for_layer(self, layer: int | None):
         if layer is not None:
@@ -202,6 +257,7 @@ class MuonRecipePolicy:
 
     overrides: tuple = ()
     layer_overrides: tuple = ()   # same depth convention as OptPolicy
+    hyper_overrides: tuple = ()   # same semantics as OptPolicy
 
     def for_layer(self, layer: int | None):
         if layer is not None:
@@ -235,6 +291,20 @@ class MuonRecipePolicy:
 
 
 MUON_RECIPE = MuonRecipePolicy()
+
+
+def hyper_for(policy, key: str, layer: int | None, base):
+    """Per-(layer, field) effective hyper: route through
+    layer_overrides to the owning sub-policy, apply its first-matching
+    hyper_overrides dict via dataclasses.replace. Schedule scaling is
+    applied by the caller AFTER this."""
+    from dataclasses import replace as _replace
+
+    pol = policy.for_layer(layer) if hasattr(policy, "for_layer") else policy
+    for pat, over in getattr(pol, "hyper_overrides", ()):
+        if fnmatch(key, pat):
+            return _replace(base, **over)
+    return base
 
 
 def resolve_opt_policy(p):
