@@ -618,6 +618,13 @@ FOLLOW-UPS (filed, with measured exhibits)
 
 ## FINAL TABLES: per-mode, per-cell (wall tok/s, sim tok/s, measured
 ## peak, chosen shape, recompute fraction) — 2026-07-07
+##
+## REPRODUCE / REGENERATE: tools/bench_campaign.py (general driver:
+## --families/--device-gib/--placements/--shapes cached|oracle|explicit,
+## --run for missing cells via bench_train subprocesses, --render-only
+## to rebuild tables from artifacts). Authoritative rendered copy:
+## results/bench/dsa-round5/TABLES.md (regenerated from summaries; its
+## best-legal table supersedes any hand-assembled one above).
 
 Protocol: REV-4 profiles, round-5 kernels, auto-headroom closing loop
 (every peak measured and <= envelope; no leeway constants). Shapes per
