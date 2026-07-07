@@ -446,6 +446,128 @@ def qwen3moe_context_layout(dims: Qwen3MoeDims) -> PackedLayout:
 
 
 @dataclass(frozen=True)
+class Dsv3Dims:
+    """DeepSeek-V3 dimensions: MLA attention + hybrid dense/MoE depth.
+
+    MLA: q through the low-rank stack (d -> q_lora_rank -> n_heads *
+    (qk_nope_dim + qk_rope_dim), RMSNorm mid-stack); kv through
+    d -> (kv_lora_rank + qk_rope_dim) where the LAST qk_rope_dim columns
+    are the ONE shared decoupled k_rope per token; latent RMSNorm then
+    -> n_heads * (qk_nope_dim + v_head_dim). Per-head attention dims:
+    qk = nope + rope, v = v_head_dim (flash runs at shared head_dim=qk
+    with zero-padded v — exact; see tasks/mla_reference.py). rope 1e4 on
+    rope dims only. First ``first_k_dense`` layers use a dense SwiGLU FFN
+    (d_ff aliases d_ff_dense for the shared dense stages); the rest are
+    MoE per ``moe`` (sigmoid_noaux_tc, ungated shared expert).
+    """
+
+    d_model: int
+    n_heads: int
+    q_lora_rank: int
+    kv_lora_rank: int
+    qk_nope_dim: int
+    qk_rope_dim: int
+    v_head_dim: int
+    d_ff: int                     # DENSE-kind FFN width (d_ff_dense)
+    first_k_dense: int
+    vocab_size: int
+    tokens: int
+    seq_len: int
+    rope_base: float = 10_000.0
+    dtypes: DTypePolicy = DTypePolicy()
+    seq_lens: tuple[int, ...] | None = None
+    moe: MoESpec | None = None
+
+    @property
+    def seq_spec(self):
+        return self.seq_lens if self.seq_lens is not None else self.seq_len
+
+    @property
+    def qk_head_dim(self) -> int:
+        return self.qk_nope_dim + self.qk_rope_dim
+
+    @property
+    def q_dim(self) -> int:       # full q width after w_q_b
+        return self.n_heads * self.qk_head_dim
+
+    @property
+    def v_dim(self) -> int:       # attention-output width fed to wo
+        return self.n_heads * self.v_head_dim
+
+    def kind_of(self, layer: int) -> str:
+        return "dense" if layer < self.first_k_dense else "moe"
+
+
+def _dsv3_attn_weight_specs(dims: Dsv3Dims) -> list[tuple[str, tuple[int, ...]]]:
+    d, h = dims.d_model, dims.n_heads
+    return [
+        ("attn_norm_w", (d,)),
+        ("w_q_a", (d, dims.q_lora_rank)),
+        ("q_a_norm_w", (dims.q_lora_rank,)),
+        ("w_q_b", (dims.q_lora_rank, h * dims.qk_head_dim)),
+        ("w_kv_a", (d, dims.kv_lora_rank + dims.qk_rope_dim)),
+        ("kv_a_norm_w", (dims.kv_lora_rank,)),
+        ("w_kv_b", (dims.kv_lora_rank, h * (dims.qk_nope_dim + dims.v_head_dim))),
+        ("wo", (h * dims.v_head_dim, d)),
+        ("ffn_norm_w", (d,)),
+    ]
+
+
+def _dsv3_attn_ctx_specs(dims: Dsv3Dims) -> list[tuple[str, tuple[int, ...], str]]:
+    """The MLA saved set — COMPRESSED latents, not expanded heads: bwd
+    re-expands through w_q_b/w_kv_b, so attention ctx is ~(q_lora +
+    kv_lora + rope) wide instead of h*(qk+v). Pre-norm/pre-rope saves
+    (the repo convention); attn_out at the TRUE (t, h*v) — the padded
+    form is reconstructed from known-zeros at bwd time."""
+    t = dims.tokens
+    return [
+        ("rstd_attn", (t,), "fp32"),
+        ("q_a", (t, dims.q_lora_rank), "bf16"),
+        ("rstd_qa", (t,), "fp32"),
+        ("kv_a", (t, dims.kv_lora_rank + dims.qk_rope_dim), "bf16"),
+        ("rstd_kva", (t,), "fp32"),
+        _lse_spec(dims, dims.n_heads),
+        ("attn_out", (t, dims.n_heads * dims.v_head_dim), "bf16"),
+        ("h_mid", (t, dims.d_model), "bf16"),
+        ("rstd_ffn", (t,), "fp32"),
+    ]
+
+
+def dsv3_dense_weight_layout(dims: Dsv3Dims, layer: int | None = None) -> PackedLayout:
+    d, ff = dims.d_model, dims.d_ff
+    return PackedLayout.build(_param_specs(dims, _dsv3_attn_weight_specs(dims) + [
+        ("w1", (d, ff)),
+        ("w3", (d, ff)),
+        ("w2", (ff, d)),
+    ], layer=layer))
+
+
+def dsv3_dense_context_layout(dims: Dsv3Dims) -> PackedLayout:
+    t, ff = dims.tokens, dims.d_ff
+    return PackedLayout.build(_dsv3_attn_ctx_specs(dims) + [
+        ("x1", (t, ff), "bf16"),
+        ("x3", (t, ff), "bf16"),
+    ])
+
+
+def dsv3_moe_weight_layout(dims: Dsv3Dims, layer: int | None = None) -> PackedLayout:
+    from .moe.spec import moe_weight_specs
+
+    return PackedLayout.build(_param_specs(
+        dims, _dsv3_attn_weight_specs(dims) + moe_weight_specs(dims, dims.moe),
+        layer=layer,
+    ))
+
+
+def dsv3_moe_context_layout(dims: Dsv3Dims) -> PackedLayout:
+    from .moe.spec import moe_context_specs
+
+    return PackedLayout.build(
+        _dsv3_attn_ctx_specs(dims) + moe_context_specs(dims, dims.moe)
+    )
+
+
+@dataclass(frozen=True)
 class Qwen35Dims:
     """Qwen3.5-dense dims: hybrid Gated-DeltaNet + gated-attention layers.
 
