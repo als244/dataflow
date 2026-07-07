@@ -56,9 +56,9 @@ class AdamWHyper:
     weight_decay: float = 0.0
     momentum: float = 0.95      # sgdm/muon (tasks/optim.py); unused by adamw
     muon_lr: float | None = None  # muon fields use this when set (else lr)
-    # lr(step) schedule (tasks/optim.py LRSchedule): default WSD, which
-    # DEGENERATES to constant until total_steps is set — declare the
-    # run horizon to engage it. None = no scaling. Scales lr + muon_lr.
+    # lr(step) schedule (tasks/optim.py LRSchedule). None (default) =
+    # no scaling; LRSchedule() = constant (debug-consistent); use
+    # LRSchedule("wsd", warmup_steps=W, total_steps=T) for training.
     schedule: object = None
 
 

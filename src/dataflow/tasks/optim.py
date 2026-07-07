@@ -64,20 +64,21 @@ class LRSchedule:
     deterministic, engine-safe (step rides task.block_params).
 
     kinds:
-    - "wsd" (DEFAULT): linear warmup over ``warmup_steps``, stable at
-      1.0, then linear decay over the last ``decay_frac`` of
-      ``total_steps`` down to ``min_lr_frac``.
+    - "constant" (DEFAULT — debugging consistency: identical lr every
+      step unless a warmup is declared): linear warmup, then 1.0.
+    - "wsd": linear warmup over ``warmup_steps``, stable at 1.0, then
+      linear decay over the last ``decay_frac`` of ``total_steps``
+      down to ``min_lr_frac`` — the recommended TRAINING schedule.
     - "cosine": linear warmup, then cosine from 1.0 to ``min_lr_frac``
       at ``total_steps``.
-    - "constant": linear warmup, then 1.0.
 
-    ``total_steps=None`` (the default) DEGENERATES to warmup-then-1.0
-    for every kind — so the default hyper changes nothing until a run
-    declares its horizon. ``scale(step)`` multiplies lr AND muon_lr,
-    after any per-field hyper overrides.
+    ``total_steps=None`` (the default) additionally DEGENERATES wsd
+    and cosine to warmup-then-1.0 — a decaying schedule cannot act
+    without knowing the run horizon. ``scale(step)`` multiplies lr AND
+    muon_lr, after any per-field hyper overrides.
     """
 
-    kind: str = "wsd"
+    kind: str = "constant"
     warmup_steps: int = 0
     total_steps: int | None = None
     decay_frac: float = 0.1

@@ -311,12 +311,13 @@ through `tasks/optim.py`:
 
 - **LR schedules**: `AdamWHyper.schedule = LRSchedule(kind, ...)` —
   a pure function of the optimizer step index (deterministic,
-  engine-safe). Kinds: `"wsd"` (the default: linear warmup, stable,
-  linear decay over the last `decay_frac` to `min_lr_frac`),
-  `"cosine"`, `"constant"`. The default DEGENERATES to constant until
-  `total_steps` declares the run horizon, so short bench runs are
-  unaffected. The scale multiplies `lr` and `muon_lr` AFTER per-field
-  hyper overrides.
+  engine-safe). Kinds: `"constant"` (the DEFAULT — debugging
+  consistency: identical lr every step), `"wsd"` (the recommended
+  training schedule: linear warmup, stable, linear decay over the
+  last `decay_frac` to `min_lr_frac`), `"cosine"`. Decaying kinds
+  additionally degenerate to warmup-then-constant until `total_steps`
+  declares the run horizon. The scale multiplies `lr` and `muon_lr`
+  AFTER per-field hyper overrides.
 - Granularity invariant: ONE optimizer task per layer (plus embed/
   head) COMPOSES every field's step inside it, whatever mix of rules
   the policy assigns, and all of the layer's state slots pack into its
