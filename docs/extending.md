@@ -76,9 +76,46 @@ The rest of the block contract:
 - Sizes come from layouts (`tasks/layouts.py`); never hand-compute bytes
   anywhere else. Lowering will ask the layout for `total_bytes`.
 
+**Metadata objects (`M_{s}_{r}_{i}`) — never-recompute artifacts.** Some
+stage outputs are cheap to store but expensive or ILLEGAL to recompute
+(top-k routing selections, DSA index selections: recomputing risks a
+different tie-break, and bwd must see the forward's exact choice). The
+grammar makes them first-class:
+
+- The family's kind spec sets `meta_bytes` and `FamilyLayouts.block_meta_at`
+  returns the M layout per layer (e.g. `moe_meta_layout`,
+  `dsv32_meta_layout` — routing pack `route_w/ids/order/offsets`, and/or
+  `dsa_idx` which is ALWAYS field 0 when present, the offset-0 ABI).
+- Stages that populate M are marked with a 4th tuple element `"meta"`;
+  they write into `st["meta"]` instead of the A-dict. On the derived
+  recompute path the runner SKIPS meta-marked stages (`meta_ready`) —
+  recompute repopulates ONLY the float ctx (A objects), never re-selects.
+- Blocks opt in via a `*MetaState` mixin (`_meta_state(ctx)`); launches
+  stay the base-class ones — locating A/dW/M by id PREFIX, not position.
+  The fleet invariant: NO family overrides `BlockFwd.launch` (custom
+  launches are how ctx-ABI drift starts).
+- The backward receives M through `meta=` and merges it into the a-dict.
+- `ProfileFill` mixins must seed VALID routing/index content INTO the M
+  buffers (garbage int fields = illegal memory access in profiled bwd;
+  concentrated routing = unreproducible costs).
+- Trade-off to know: recompute frees less memory per layer when selection
+  bytes are pinned in M (they offload but never drop), so tight-envelope
+  plans buy more recompute than a ctx-only family would.
+
+**Cross-layer shared metadata** (the IndexShare pattern): when several
+layers CONSUME one layer's M, declare `MetaShare(producer, consumers,
+grad_bytes)` and pass `meta_shared=` to `build_shaped_program` — consumers
+gain the producer's M as an input on fwd/rc/bwd, and a `dM_{s}_{r}_{prod}`
+accumulator is chained dW-style in reverse bwd order (last consumer
+creates, middles mutate, producer consumes). See `training/glm52.py` +
+`tasks/glm52_blocks.py` for the full worked example (leader/follower
+blocks, centroid gradient through dM).
+
 Gate — ladder level 2: `check_block_backward(dims)` verifies dx + every
 packed dW field vs autograd, recompute-equivalence (recompute+bwd ≡
-save+bwd), and 2x-accumulation semantics.
+save+bwd), and 2x-accumulation semantics. Families with M objects extend
+the harness with `meta_views` (fwd `extras={"meta": ...}`, rc
+`extras+meta_ready`, bwd `meta=`) and byte-compare the int fields.
 
 ## 3. Write the golden reference (`models/<family>_reference.py`)
 
@@ -167,11 +204,17 @@ Gates, in order:
    (different plans, identical math) is the highest-leverage async check;
 2. `tests/tasks/test_m3_gate.py` style poison-on-free + interleaving-stress
    runs;
-3. throughput: `tools/bench_train.py --config <yours> --device-gib ...` sweeps
-   real-vs-sim (report both `real_tokens_per_s` and `wall_tokens_per_s`;
-   wall is the honest number), `tools/gap_analysis.py` decomposes any gap,
-   `tools/window_plans.py` checks the step seam if the family's shape
-   differs materially from llama.
+3. throughput: add named configs to `tools/bench_train.py` `CONFIGS`, then
+   run a campaign (`tools/bench_campaign.py --presets <yours> --shapes
+   oracle --run --no-legacy --out-dir results/bench/<name>`) — shape
+   selection, envelope legality (auto-headroom), tables, and per-cell
+   provenance are the campaign's job, not yours. Full protocol:
+   `docs/benchmarking.md`. `tools/gap_analysis.py` decomposes any
+   real-vs-sim gap; `tools/window_plans.py` checks the step seam if the
+   family's shape differs materially from llama.
+4. if the family added or changed KERNELS, bump `PROFILE_CACHE_REV`
+   (`training/profiling.py`) — stale cached task costs silently skew both
+   sim and the planner's recompute choices.
 
 ## 6. New model family checklist
 
@@ -192,8 +235,14 @@ What adding a family (e.g. Qwen3) actually touches, in order:
    the `LayerKindSpec`(s) into `build_shaped_program`, the config->dims
    mapping, and the `FamilyLayouts` into the generic lowering (§4). The
    recompute `build_variant` is just the builder re-invoked with levels.
-5. `tools/bench_train.py` `CONFIGS` — add named configs.
-6. Ladder 3 + gates (§5).
+5. `training/families.py` — register the `Family` entry
+   (`resolve_family` dispatches on config type; configs must NOT subclass
+   another family's config).
+6. `tools/bench_train.py` `CONFIGS` — named presets: `tiny` (ladder
+   scale), a `mini` (single-GPU bench scale), and the real-scale preset
+   with dims verified against the published HF config (param-count match
+   is the acceptance test).
+7. Ladder 3 + gates (§5); campaign for quoted numbers.
 
 Variants the qwen35 family (hybrid DeltaNet + gated attention, tied
 embeddings) added to the machinery — reuse, don't reinvent:
@@ -250,6 +299,36 @@ embeddings) added to the machinery — reuse, don't reinvent:
   Roofline seeds for MoE kinds: FLOPs from ACTIVE params, weight bytes
   from the FULL expert stack. Sub-noise sign-lottery params (dt_bias)
   compare via `check_model_step(field_atol=...)`.
+
+- **DSA / sparse-attention variants (dsv32 / glm52)**: index selection is
+  an M-object (never recomputed — see §2); the indexer's KL loss is
+  gradient-injected like MoE aux (golden autograds it, runtime reports CE
+  only); dense warm-up and frozen-indexer ablations are config knobs
+  validated in `dims_of`; absorbed/MQA execution and FlashMLA live behind
+  registry capability flags (`caps["flash_mla"]`).
+
+The family test module's canonical ladder (copy the newest family's —
+`tests/tasks/test_glm52_math.py` — not the oldest):
+
+1. op-level pins (each new op: launch vs reference fwd, hand-bwd vs
+   autograd; constructed tie rows for any top-k).
+2. golden self-train (CE ≈ ln(vocab) at init, decreasing).
+3. per-kind block ladder-2 incl. meta_views if the family has M objects.
+4. stage completeness + derived-recompute truncation (structural).
+5. lowering validation + TRIPWIRE HASHES in
+   `tests/training/test_lowering_stability.py` (re-pin only with a
+   structural-change justification in the commit message).
+6. `check_model_step` (+ ga2 variant; `field_atol` envelopes ONLY for
+   sub-noise sign-lottery params — zero-init biases whose first-step sign
+   is decided by sub-tolerance grad noise, e.g. router bias / idx LN bias).
+7. plan-invariance (different budgets, forced recompute — identical math,
+   byte-compared int ctx/M fields).
+8. poison-on-free + interleave stress.
+9. measured-costs-replan (profiling E2E through every signature incl. the
+   family's ProfileFill).
+10. multistep loss-decreases + fixed-seed determinism twice (byte-compare;
+    view bf16 pairs as fp32 bit patterns — `torch.equal` treats equal-byte
+    NaNs as unequal).
 
 Known llama-couplings to check when the family's TASK/OBJECT NAMES differ
 (all fail loudly, none silently):
