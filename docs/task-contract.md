@@ -129,32 +129,49 @@ rising order of engine change:
   beyond cap — breaks dropless exactness/parity). `MoESpec`/
   `moe_local_rows` is the seam where this policy already lives; EP
   capacity policies may force it anyway.
-- **A. Planned host-readbacks (the principled dynamic option).** A plan-
-  level `readback_after` directive, symmetric with `offload_after`/
-  `prefetch_after`: after the producing task's done-token, the engine
-  copies a small device object (e.g. `route_offsets`, 260 B) into pinned
-  staging on a **side stream** and marks a host-value table entry when its
-  event completes — observed via the normal token loop, never by blocking.
-  Downstream tasks declare a host-value precondition the dispatcher checks
-  like input-liveness; their executables receive the host integers and may
-  legally drive cublasLt per-segment calls, kernel-launch geometry, etc.
-  The sim models it as a tiny transfer plus a host-availability edge; the
-  profiler measures phase costs as usual. Two notes: (1) a *secondary
-  stream* alone does not solve the problem — the issue is host knowledge,
-  not stream occupancy; the side stream is just what keeps the readback
-  from serializing behind the compute queue tail (aten's mistake). (2) In
-  bwd, offsets are already-saved ctx — a single fwd-time readback per
-  (layer, round) would cover all four bwd grouped calls with zero
-  bwd-time latency. **EP will force this decision regardless**: all-to-all
-  dispatch needs received-row counts host-side for most collective APIs,
-  so building A is the likely EP prerequisite — treat it as the sanctioned
-  extension point, and don't add ad-hoc syncs in the meantime.
+- **A. Host-visible outputs (the principled dynamic option).** Two design
+  corrections from Shein shaped this (2026-07-06), replacing an earlier
+  transfer-directive sketch: (1) the first-order mechanism separating a
+  benign readback from aten's pathology is **pinned vs. pageable** — a
+  kernel-write or memcpy into pinned host memory never blocks the calling
+  thread; pageable D2H blocks *at the call*, at a library-chosen stream
+  position, through the driver's staging slow path. Queue position only
+  sizes the wait you explicitly choose to take. (2) Small host-bound
+  values must **never ride the transfer engines** — the d2h engine is
+  single-inflight FIFO (sim parity), so 260 B of top-priority counts
+  queued behind a 3.4 GiB activation offload would arrive ~130 ms late.
 
-Costs of A worth stating up front: a new token/directive type in engine +
-sim + replay + profiler; a bounded new timing sensitivity (host-value
-availability = event completion + token-poll latency, tens of µs); and
-plans gain edges that only exist under dynamic routing — replay fidelity
-machinery must carry the host-value table across runs.
+  The design (flextrain's mechanism — `moe_copy_counts_kernel[(1,)]`
+  storing counts straight into a pinned CPU tensor from the compute
+  stream — lifted into our object model): a task declares a tiny
+  **host-location output** (e.g. `route_offsets_host (E+1,) i32`, pinned,
+  pool-managed). Its executable's producing step is a one-program store
+  kernel that writes the values directly to the pinned buffer, on the
+  compute stream, in program order — available at the earliest moment
+  the data exists, touching no copy engine and no queue. Consumers list
+  it as an ordinary input; the dispatcher's existing input-liveness wait
+  (done-token host-observed) is the availability gate, so `launch()`
+  reads plain host RAM with zero waiting — "never block" holds
+  everywhere, and the sim needs NO new vocabulary: it is an ordinary
+  object edge, and the store kernel is ordinary task compute. bwd
+  consumes the fwd-written object (versioned; recompute rewrites it;
+  replay carries it). Backends that want host counts inside what is
+  today one task (fwd sort→experts) get a task split at the counts
+  boundary, chosen by lowering per kernel-set (~one boundary of cost);
+  the device-offset triton backend keeps single-task shape.
+
+  One narrow contract amendment comes with it: **host-value-driven launch
+  geometry is legal** when the values come from a declared host input,
+  provided output shapes/bytes stay spec-static and the op is
+  deterministic given the values. (This is NOT "blocking allowed.")
+  Under dispatch-ahead, host-input edges simply pin those consumers to
+  paced dispatch while everything else runs ahead — graceful degradation
+  where a blocking idiom would poison the whole pipeline.
+
+  **EP will force this decision regardless**: all-to-all dispatch needs
+  received-row counts host-side for most collective APIs, so A is the
+  likely EP prerequisite — treat it as the sanctioned extension point,
+  and don't add ad-hoc syncs in the meantime.
 
 ### The rejected alternative, argued honestly: a sanctioned early block
 
