@@ -248,7 +248,50 @@ conflate sync drains with contention and are NOT calibration-grade).
 - nsys/flextrain-olmoe-dev12.nsys-rep — their steps 3-5 at max-gpu 12 /
   leeway 1.5 (cudaProfilerApi bounded)
 
-(qwen35moe-20l rows still pending)
+## qwen35moe-20l curve (17.8B hybrid, E=256+shared, ~107.7 GiB pinned W/dW/O)
+
+Oracle (qwen35moe-oracle.json, triton kernel set): bs32ga2 wins >=20,
+bs16ga4 at 16, everything h2d-bound (compute ceilings ~10.5-10.7k tok/s;
+35.6 GiB weights/round = 2x olmoe's restream burden at similar active
+FLOPs). bs64ga1 cannot even profile on 31.5 GiB (single-task working
+sets exceed the card) — structurally out for 20L.
+
+| dev GiB | wall tok/s (shape) | sim | real-vs-sim | fid% | rc | peak | backing peak |
+|---|---|---|---|---|---|---|---|
+| 16 | 3,967 (bs16ga4) | 3,482 | +14.1% | 2.37 | 73/80 | 15.07 | 134.1 |
+| 20 | 5,472 (bs32ga2) | 5,451 | +0.6% | 2.82 | 28/40 | 18.61 | 142.7 |
+| 24 | 5,899 (bs32ga2) | 5,521 | +7.1% | 3.22 | 26/40 | 23.37 | 138.7 |
+| 28 | 6,283 (bs32ga2) | 5,811 | +8.4% | 2.39 | 31/40 | 26.88 | 127.3 |
+
+Monotone; real ABOVE sim everywhere (conservative post-sync-fix
+calibration, like olmoe); fidelity 2.4-3.2% = the traffic thermometer
+reading warm on ga2/ga4 restreaming (olmoe bs64 runs at 0.3-0.6). At
+~55-59% of compute ceiling, this family is the round-restreaming
+grammar's clearest customer (intra-round token chunking / round-resident
+weights), and with E=256 the per-expert segments are ~4x smaller than
+olmoe's — the regime where a cublasLt-per-expert backend (flextrain's
+matmul_dispatcher) becomes interesting once host-visible counts exist.
+
+**dev-12 is structurally below this model's floor** — two independent
+failure signatures across attempts (derivation timing deadlock streaming
+1.9 GiB weight layers through an 8.4 GiB ledger; PressureFit boundary
+unpackable at the shaved 6.65): the designed loud failures, not bugs.
+Feasibility floor sits between 12 and 16.
+
+**Backing-cap finding (m4_train --backing-gib)**: the cap pre-pins the
+FULL capacity as one slab at startup, so near-RAM caps are unusable:
+cap 130 < plan need (134-143 measured) => derivation infeasible; cap 155
+> cudaHostAlloc lockable => startup crash. Plans genuinely need 127-143
+GiB backing here (measured peaks). FOLLOW-UP (small): decouple the
+planner's backing bound (sim-side plan rejection) from the runtime slab
+size — a plan-only cap. Until then this model runs uncapped and host
+safety rides on swap headroom + oomd (whose pressure-kills during
+pinning storms are exactly what interrupted this session's runs).
+
+No flextrain head-to-head for this family: their stock config is the
+40L/35B (out of host reach on this box); a 20L variant on their side
+would need a config hack. olmoe remains the cross-system comparison.
+
 
 ## Reading
 

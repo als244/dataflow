@@ -128,6 +128,10 @@ CONFIGS = {
     "qwen35moe-20l-s1k-bs64ga1": ShapedQwen35MoeConfig.qwen35moe_20l(
         seq_len=1024, batch=64, grad_accum_rounds=1,
     ),
+    # oracle's dev-12 pick (bs32/bs16 infeasible there; the curve's low end)
+    "qwen35moe-20l-s1k-bs4ga16": ShapedQwen35MoeConfig.qwen35moe_20l(
+        seq_len=1024, batch=4, grad_accum_rounds=16,
+    ),
 }
 
 
