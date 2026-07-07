@@ -293,7 +293,11 @@ def _run(engine_kwargs=None, program=None, seed=7):
     for obj_id in ["W_embed", "W_head"] + [f"W_{i}" for i in range(cfg.n_layers)]:
         rec = result.objects.get(obj_id)
         slot = rec.backing or rec.fast
-        out[obj_id] = torch_view(slot.buffer, (rec.size_bytes // 2,), torch.bfloat16).clone()
+        # BYTES, not bf16: fp32 fields (w_router_bias) reinterpreted as
+        # bf16 can alias NaN bit patterns and torch.equal fails NaN != NaN
+        # on identical bytes (this file passed by bit-pattern luck until
+        # the dsv32 harness fix; the luck ran out 2026-07-07)
+        out[obj_id] = torch_view(slot.buffer, (rec.size_bytes,), torch.uint8).clone()
     loss_rec = result.objects.get("loss_0_0")
     out["loss"] = float(torch_view((loss_rec.backing or loss_rec.fast).buffer, (1,), torch.float32)[0])
     result.close()
@@ -308,7 +312,11 @@ def _assert_same(a: dict, b: dict, tol: float = 1e-3):
     for k in a:
         if k == "loss":
             continue
-        err = rel_l2(a[k], b[k])
+        if torch.equal(a[k], b[k]):        # byte-identical fast path
+            continue
+        va = torch.nan_to_num(a[k].view(torch.bfloat16).float())
+        vb = torch.nan_to_num(b[k].view(torch.bfloat16).float())
+        err = rel_l2(va, vb)
         assert err < tol, f"{k}: rel_l2={err}"
 
 

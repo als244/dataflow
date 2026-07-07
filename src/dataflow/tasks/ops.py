@@ -383,9 +383,42 @@ def embed_fwd(tokens: torch.Tensor, w_embed: torch.Tensor, out: torch.Tensor) ->
 
 
 def embed_bwd_accum(tokens: torch.Tensor, dy: torch.Tensor, dw_embed: torch.Tensor, *, zero_first: bool) -> None:
+    """DETERMINISTIC embedding-gradient accumulation.
+
+    ``index_add_`` on CUDA is float atomicAdd: with duplicate tokens the
+    add ORDER varies run to run — a one-ulp W_embed lottery (measured
+    ~1-in-5 fixed-seed pairs differing by one element; every family's
+    bitwise-determinism gate was silently rolling these dice).
+
+    Fix, sync-free and fixed-shape (no nonzero()): stable-sort tokens,
+    fp32 cumsum over the sorted rows, per-position segment totals via
+    cumsum-diff against each segment's start (cummax-propagated), then a
+    single index_add_ where every position contributes — but non-
+    segment-end positions contribute EXACT ZEROS, so the atomic order is
+    irrelevant (x + 0.0 is exact regardless of order; each vocab row
+    receives exactly one nonzero add)."""
     if zero_first:
         dw_embed.zero_()
-    dw_embed.index_add_(0, tokens.int(), dy)
+    t = tokens.shape[0]
+    tok = tokens.long()
+    order = torch.argsort(tok, stable=True)
+    st = tok[order]
+    csum = dy[order].float().cumsum(0)                       # (t, d) fp32
+
+    idx = torch.arange(t, device=tok.device)
+    is_start = torch.ones(t, dtype=torch.bool, device=tok.device)
+    is_start[1:] = st[1:] != st[:-1]
+    is_end = torch.ones(t, dtype=torch.bool, device=tok.device)
+    is_end[:-1] = st[1:] != st[:-1]
+    seg_start = torch.cummax(torch.where(is_start, idx, idx.new_zeros(())), 0).values
+    before = torch.where(
+        (seg_start > 0).unsqueeze(1),
+        csum[(seg_start - 1).clamp_min(0)],
+        torch.zeros_like(csum[:1]),
+    )
+    totals = torch.where(is_end.unsqueeze(1), csum - before,
+                         torch.zeros_like(csum))
+    dw_embed.index_add_(0, st.int(), totals.to(dw_embed.dtype))
 
 
 # --- qwen3.5 reference forms (DeltaNet + gated attention) ---------------------
