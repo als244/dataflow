@@ -167,7 +167,7 @@ Gates, in order:
    (different plans, identical math) is the highest-leverage async check;
 2. `tests/tasks/test_m3_gate.py` style poison-on-free + interleaving-stress
    runs;
-3. throughput: `tools/bench_train.py --config <yours> --budgets ...` sweeps
+3. throughput: `tools/bench_train.py --config <yours> --device-gib ...` sweeps
    real-vs-sim (report both `real_tokens_per_s` and `wall_tokens_per_s`;
    wall is the honest number), `tools/gap_analysis.py` decomposes any gap,
    `tools/window_plans.py` checks the step seam if the family's shape

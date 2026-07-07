@@ -11,8 +11,8 @@ grounding absolute throughput. The 8B headline config is NOT plain-torch
 trainable on 32 GB (params+grads+Adam ≈ 60 GB): that's the thesis.
 
 Usage:
-    python tools/m4_train.py --config 8b --budgets 12,16,20 --steps 4
-    python tools/m4_train.py --config baseline1b --budgets 24 --steps 4 --baseline
+    python tools/bench_train.py --config 8b --device-gib 12,16,20 --steps 4
+    python tools/bench_train.py --config baseline1b --device-gib 24 --steps 4 --baseline
 """
 from __future__ import annotations
 
@@ -217,12 +217,8 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", choices=sorted(CONFIGS), default="8b")
     parser.add_argument("--budgets", type=str, default=None,
-                        help="LEDGER budgets in GiB (planned object bytes), e.g. 12,16,20. "
-                             "Physical usage exceeds this by the geometry tax + op "
-                             "scratch + CUDA context. QUOTING CONVENTION: headline "
-                             "sweeps use --device-gib instead, so a quoted 'N GiB' "
-                             "means verified device usage <= N GiB; --budgets remains "
-                             "for internal/ledger-space experiments.")
+                        help="RETIRED — use --device-gib (hard envelope; "
+                             "verified device usage <= N GiB)")
     parser.add_argument(
         "--device-gib", type=str, default=None,
         help="HARD device envelope(s) in GiB: everything — placed extent, "
@@ -301,6 +297,14 @@ def main() -> None:
              "the whole set as a synchronous upload before each step)",
     )
     args = parser.parse_args()
+    if args.budgets is not None:
+        parser.error(
+            "--budgets is retired: ledger-budget rows were not peak-verified "
+            "and the headline protocol is the hard device envelope. Use "
+            "--device-gib N[,N...] (verified device usage <= N GiB)."
+        )
+    if args.device_gib is None:
+        parser.error("--device-gib is required (e.g. --device-gib 12,16,20)")
 
     from dataflow.tasks.kernels import resolve_kernels
 
@@ -387,8 +391,6 @@ def main() -> None:
             preplace=args.preplace,
         )
 
-    if (args.budgets is None) == (args.device_gib is None):
-        parser.error("exactly one of --budgets / --device-gib is required")
 
     # fixed device overhead (CUDA context + resident pages) — measured for
     # EVERY mode so each row can report its true device peak:
@@ -398,8 +400,8 @@ def main() -> None:
     _free_b, _total_b = torch.cuda.mem_get_info()
     fixed = _total_b - _free_b
 
-    if args.device_gib is not None:
-        # device-envelope mode: derive the ledger budget so that
+    if True:  # device-envelope mode (the only mode):
+        # derive the ledger budget so that
         #   fixed (context etc.) + max task scratch + packed extent <= envelope
         from dataflow.runtime import Engine
         from dataflow.runtime.device.fake import FakeBackend
@@ -456,12 +458,7 @@ def main() -> None:
         device_meta = {r[1]: r for r in device_rows}
         print(f"device mode: fixed {fixed / GIB:.2f} GiB, scratch reserve "
               f"{scratch / GIB:.2f} GiB; ledger budgets {budget_list}")
-    else:
-        budget_list = [float(x) for x in args.budgets.split(",")]
-        device_meta = {}
-        print("NOTE: --budgets quotes LEDGER budgets (device usage runs higher "
-              "by geometry tax + scratch + context). Headline sweeps use "
-              "--device-gib so 'N GiB' means device usage <= N GiB.")
+
 
     if args.probe_max:
         from dataflow.runtime import Engine
