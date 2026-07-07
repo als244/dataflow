@@ -3,7 +3,11 @@
 The walkthrough we ourselves follow when adding builtin families. To add
 a family from OUTSIDE the package (your own repo, engine unmodified):
 [extending_external.md](extending_external.md) — same content, plugin
-registration instead of registry edits.
+registration instead of registry edits. For NON-STANDARD structures
+that the family grammar doesn't describe (RL post-training, partial
+pipelines, arbitrary DAGs): [extending_programs.md](extending_programs.md)
+— build the Program yourself, PressureFit it, drive Engine.execute
+directly.
 
 Verifying correctness at every level is one command:
 `python tools/verify_family.py --family <name>` — runs the family's

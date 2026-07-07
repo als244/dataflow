@@ -171,3 +171,7 @@ Small, cosmetic, and shrinking — none block a working external family:
 - `verify_family`'s canon audit scans shared builtin op-suite modules
   for coverage credit; external ops' pins should live in your one test
   module (simpler anyway).
+
+If your model's STRUCTURE doesn't fit the standard training chain at
+all (no forward pass, custom schedules, arbitrary DAGs):
+[extending_programs.md](extending_programs.md).
