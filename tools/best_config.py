@@ -113,6 +113,10 @@ def divisor_combos(seqs: int, cap: int | None) -> list[tuple[int, int]]:
 
 
 def main() -> None:
+    from dataflow.training.families import load_plugins
+
+    load_plugins()
+
     ap = argparse.ArgumentParser(
         description="simulate tok/s for every bs/ga combo per device budget")
     ap.add_argument("--family", required=True,

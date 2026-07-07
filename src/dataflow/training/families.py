@@ -294,6 +294,39 @@ _FAMILIES: dict[str, Callable[[], Family]] = {
 _cache: dict[str, Family] = {}
 
 
+def register_family(name: str, thunk: Callable[[], Family]) -> None:
+    """Register a model family from OUTSIDE the dataflow package.
+
+    ``thunk`` is a zero-arg callable returning a ``Family`` (lazy, so
+    registration is import-cheap). External families become visible to
+    ``family()`` / ``resolve_family()`` and thereby to every tool
+    (bench_train, best_config, bench_campaign, verify_family). See
+    docs/extending_external.md.
+    """
+    if name in _FAMILIES:
+        raise ValueError(f"family {name!r} already registered")
+    _FAMILIES[name] = thunk
+
+
+_plugins_loaded = False
+
+
+def load_plugins() -> None:
+    """Import plugin modules named in DATAFLOW_PLUGINS (comma-separated
+    import paths). Each module self-registers via ``register_family``
+    (and optionally ``training.presets.register_bench_config``) at
+    import time. Idempotent; called by every tool entrypoint."""
+    global _plugins_loaded
+    if _plugins_loaded:
+        return
+    _plugins_loaded = True
+    import importlib
+    import os
+
+    for name in filter(None, os.environ.get("DATAFLOW_PLUGINS", "").split(",")):
+        importlib.import_module(name.strip())
+
+
 def family(name: str) -> Family:
     if name not in _cache:
         _cache[name] = _FAMILIES[name]()
@@ -301,7 +334,14 @@ def family(name: str) -> Family:
 
 
 def resolve_family(cfg) -> Family:
-    """Dispatch on the shaped-config type."""
+    """Dispatch on the shaped-config type — EXACT type first, then
+    isinstance. Exact-first makes it safe for an external family to
+    subclass a builtin config (docs/extending_external.md); builtin
+    families all use distinct types, so their dispatch is unchanged."""
+    for name in _FAMILIES:
+        fam = family(name)
+        if type(cfg) is fam.config_type:
+            return fam
     for name in _FAMILIES:
         fam = family(name)
         if isinstance(cfg, fam.config_type):

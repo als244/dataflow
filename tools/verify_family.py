@@ -76,18 +76,25 @@ def main() -> None:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--family", help="family name (see --list)")
+    ap.add_argument("--module", default=None,
+                    help="path to the family's canonical test module "
+                         "(external families: your module lives in YOUR "
+                         "repo — pass it here; builtin default is "
+                         "tests/tasks/test_{family}_math.py)")
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--audit-only", action="store_true",
                     help="coverage audit without running the tests")
     args = ap.parse_args()
 
-    if args.list or not args.family:
-        from dataflow.training import families as F
+    from dataflow.training import families as F
 
+    F.load_plugins()
+    if args.list or not args.family:
         print("families:", ", ".join(sorted(F._FAMILIES)))
         return
 
-    mod = REPO / f"tests/tasks/test_{args.family}_math.py"
+    mod = (Path(args.module) if args.module
+           else REPO / f"tests/tasks/test_{args.family}_math.py")
     if not mod.exists():
         sys.exit(f"MISSING {mod} — a family without its canonical test "
                  f"module is unverified. Copy the NEWEST family's module "
@@ -109,6 +116,8 @@ def main() -> None:
             missing.append(label)
 
     trip = (REPO / "tests/training/test_lowering_stability.py").read_text()
+    if args.module:
+        trip += src  # external families pin tripwires in their own module
     pinned = args.family in trip
     print(f"  [{'x' if pinned else ' '}] lowering tripwire hash pinned "
           f"(test_lowering_stability.py)")

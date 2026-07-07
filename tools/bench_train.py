@@ -214,6 +214,11 @@ CONFIGS = {
 
 
 def main() -> None:
+    from dataflow.training.families import load_plugins
+    from dataflow.training.presets import EXTRA_CONFIGS
+
+    load_plugins()  # DATAFLOW_PLUGINS: external families + presets
+    CONFIGS.update(EXTRA_CONFIGS)
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", choices=sorted(CONFIGS), default="8b")
     parser.add_argument("--budgets", type=str, default=None,

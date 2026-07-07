@@ -1,6 +1,15 @@
 # Extending: custom ops, blocks, and model families
 
-The walkthrough we ourselves follow when adding builtin families. The chain
+The walkthrough we ourselves follow when adding builtin families. To add
+a family from OUTSIDE the package (your own repo, engine unmodified):
+[extending_external.md](extending_external.md) — same content, plugin
+registration instead of registry edits.
+
+Verifying correctness at every level is one command:
+`python tools/verify_family.py --family <name>` — runs the family's
+canonical test module (per-op pins, per-task fwd/recompute/bwd ladders
+vs golden autograd, per-model step vs golden params + optimizer state)
+and audits it for the 11-gate canon. Perf: docs/benchmarking.md. The chain
 of custody is always:
 
 ```

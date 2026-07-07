@@ -258,6 +258,10 @@ def render(cells, presets, devs, modes, labels) -> str:
 
 
 def main() -> None:
+    from dataflow.training.families import load_plugins
+
+    load_plugins()
+
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--presets", required=True,
