@@ -120,6 +120,13 @@ class _Base:
 
         return acc
 
+    def _sel_state(self, ctx) -> dict | None:
+        """Family hook: st entries for SELECTION objects (per-layer SEL
+        routing pack, per-group S index selection). None = family is not
+        on the selection-object grammar. Implementations inspect
+        ctx.task.compute_block_key to set sel_ready for recompute."""
+        return None
+
     def _norm_bwd_fn(self, kctx):
         K = self.kernels
 
@@ -153,14 +160,17 @@ class BlockFwd(_Base):
         with torch.cuda.stream(es):
             x = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
             w = self.wl_for(ctx.task).views(self._in(ctx, 1))
-            emit_ctx = len(ctx.task.outputs) > 1 and self.emit_context
-            if emit_ctx:
-                y = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
-                a = self.cl.views(self._out(ctx, 1))
-            else:
-                y = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
-                a = None
-            self._forward(kctx, x, w, y, a)
+            y = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
+            a = None
+            if self.emit_context:
+                # A located by id, not position: selection-object families
+                # append SEL_/S_ outputs after it (or drop A entirely
+                # under recompute planning while keeping the selections)
+                for j, o in enumerate(ctx.task.outputs[1:], start=1):
+                    if o.id.startswith("A_"):
+                        a = self.cl.views(self._out(ctx, j))
+                        break
+            self._forward(kctx, x, w, y, a, extras=self._sel_state(ctx))
 
     # --- staged forward -------------------------------------------------------
     #
@@ -271,24 +281,34 @@ class BlockFwd(_Base):
     @classmethod
     def recompute_stage_count(cls) -> int:
         """Derived recompute boundary: stages up to the LAST one that emits
-        a context field. Everything after it exists only to produce y."""
+        a context field. Everything after it exists only to produce y.
+        Stage entries may carry an optional 4th element "sel" marking a
+        SELECTION stage — skipped entirely when the selection object is
+        supplied (recompute repopulates ONLY the A objects)."""
         last = 0
-        for i, (_, _, emits) in enumerate(cls.STAGES):
-            if emits:
+        for i, entry in enumerate(cls.STAGES):
+            if entry[2]:
                 last = i
         return last + 1
 
     @classmethod
     def context_fields_emitted(cls) -> set:
-        return {f for _, _, emits in cls.STAGES for f in emits}
+        return {f for entry in cls.STAGES for f in entry[2]}
 
-    def _run_stages(self, kctx, x, w, a, *, count: int, y=None) -> None:
+    def _run_stages(self, kctx, x, w, a, *, count: int, y=None,
+                    extras=None) -> None:
         st = {"x": x, "w": w, "a": a, "y": y}
-        for name, fn, _ in self.STAGES[:count]:
-            fn(kctx, self.kernels, self.dims, st)
+        if extras:
+            st.update(extras)
+        skip_sel = bool(st.get("sel_ready"))
+        for entry in self.STAGES[:count]:
+            if skip_sel and len(entry) > 3 and entry[3] == "sel":
+                continue  # selection is supplied, never recomputed
+            entry[1](kctx, self.kernels, self.dims, st)
 
-    def _forward(self, kctx, x, w, y, a) -> None:
-        self._run_stages(kctx, x, w, a, count=len(self.STAGES), y=y)
+    def _forward(self, kctx, x, w, y, a, extras=None) -> None:
+        self._run_stages(kctx, x, w, a, count=len(self.STAGES), y=y,
+                         extras=extras)
 
 
 @dataclass(frozen=True)
@@ -300,14 +320,15 @@ class BlockRecompute(BlockFwd):
             x = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
             w = self.wl_for(ctx.task).views(self._in(ctx, 1))
             a = self.cl.views(self._out(ctx, 0))
-            self._forward_context(kctx, x, w, a)
+            self._forward_context(kctx, x, w, a, extras=self._sel_state(ctx))
 
-    def _forward_context(self, kctx, x, w, a) -> None:
+    def _forward_context(self, kctx, x, w, a, extras=None) -> None:
         """DERIVED from the stage list: run through the last context-emitting
         stage and stop. The block output y is never a backward dependency,
         so the trailing stages (swiglu, down-projection, residual) are
         skipped by construction — not by hand-maintained duplication."""
-        self._run_stages(kctx, x, w, a, count=self.recompute_stage_count())
+        self._run_stages(kctx, x, w, a, count=self.recompute_stage_count(),
+                         extras=extras)
 
 
 def dense_mlp_tail_bwd(kctx, K, dy, h_mid, rstd_ffn, x1, x3, w, acc, norm_bwd):
@@ -363,14 +384,22 @@ class BlockBwd(_Base):
             a = self.cl.views(self._in(ctx, 1))
             x = torch_view(self._in(ctx, 2), (d.tokens, d.d_model), torch.bfloat16)
             w = self.wl_for(ctx.task).views(self._in(ctx, 3))
-            accum = bool(ctx.task.mutates)
+            accum = bool(ctx.task.mutates) and ctx.task.mutates[0].startswith("dW_")
             if accum:
                 dw = self.gl_for(ctx.task).views(ctx.mutates[ctx.task.mutates[0]])
                 dx = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
             else:
+                dw = None
+                for j, o in enumerate(ctx.task.outputs[1:], start=1):
+                    if o.id.startswith("dW_"):
+                        dw = self.gl_for(ctx.task).views(self._out(ctx, j))
+                        break
                 dx = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
-                dw = self.gl_for(ctx.task).views(self._out(ctx, 1))
-            self._backward(kctx, dy, a, x, w, dx, dw, accum)
+            sel = self._sel_state(ctx)
+            if sel is None:
+                self._backward(kctx, dy, a, x, w, dx, dw, accum)
+            else:
+                self._backward(kctx, dy, a, x, w, dx, dw, accum, sel=sel)
 
     def _backward(self, kctx, dy, a, x, w, dx_out, dw, accum: bool) -> None:
         """Template: MLP tail (shared helper, swappable per family) then the

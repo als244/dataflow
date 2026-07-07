@@ -653,17 +653,10 @@ def _dsv32_attn_weight_specs(dims: Dsv32Dims) -> list[tuple[str, tuple[int, ...]
 
 
 def _dsv32_attn_ctx_specs(dims: Dsv32Dims) -> list[tuple[str, tuple[int, ...], str]]:
-    specs = _dsv3_attn_ctx_specs(dims)
-    if not dims.sparse_mode:
-        # dense warm-up: no selection — ctx is exactly dsv3's (the KL
-        # target rebuilds from lse + latents over the full causal prefix)
-        return specs
-    # the ONLY DSA ctx addition: the selection (indexer q/k/wts recompute
-    # from the latents already saved for the MLA backward); emitted
-    # before the attention stage, so it sits before lse in layout order
-    sel = ("dsa_idx", (dims.tokens, dims.index_topk), "int32")
-    i = next(j for j, s in enumerate(specs) if s[0] == "lse")
-    return specs[:i] + [sel] + specs[i:]
+    # SELECTION-OBJECT GRAMMAR: the dsa selection lives in the per-group
+    # S object (never recomputed), the routing pack in the per-layer SEL
+    # object — the ctx is exactly dsv3-shaped in both modes
+    return _dsv3_attn_ctx_specs(dims)
 
 
 def dsv32_dense_weight_layout(dims: Dsv32Dims, layer: int | None = None) -> PackedLayout:
@@ -696,8 +689,16 @@ def dsv32_moe_context_layout(dims: Dsv32Dims) -> PackedLayout:
     from .moe.spec import moe_context_specs
 
     return PackedLayout.build(
-        _dsv32_attn_ctx_specs(dims) + moe_context_specs(dims, dims.moe)
+        _dsv32_attn_ctx_specs(dims)
+        + moe_context_specs(dims, dims.moe, sel=True)
     )
+
+
+def dsv32_sel_layout(dims: Dsv32Dims) -> PackedLayout:
+    """Per-layer SEL object (moe kinds): the discrete routing pack."""
+    from .moe.spec import moe_sel_specs
+
+    return PackedLayout.build(moe_sel_specs(dims, dims.moe))
 
 
 @dataclass(frozen=True)

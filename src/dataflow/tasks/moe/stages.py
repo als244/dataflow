@@ -60,17 +60,29 @@ def _slot_of_from_order(order: torch.Tensor, t: int, top_k: int) -> torch.Tensor
 def stage_moe_route(kctx, K, d, st):
     moe, a, w = _spec(d), st["a"], st["w"]
     h2 = st["h2"]
+    # selection-object families write the discrete decision into the SEL
+    # views (st["sel"]); ctx families keep the historical a-destination.
+    # router_logits is NOT selection — it stays in the ctx either way.
+    sel = st.get("sel")
+    dst = sel if sel is not None else a
     if a is not None:
-        logits, route_w, route_ids = a["router_logits"], a["route_w"], a["route_ids"]
+        logits = a["router_logits"]
         torch.matmul(h2, w["w_router"], out=logits)
     else:
         logits = h2 @ w["w_router"]
+    if dst is not None:
+        route_w, route_ids = dst["route_w"], dst["route_ids"]
+    else:
         route_w = torch.empty(
             (d.tokens, moe.top_k), dtype=torch.bfloat16, device=h2.device
         )
         route_ids = torch.empty(
             (d.tokens, moe.top_k), dtype=torch.int32, device=h2.device
         )
+    if st.get("sel_ready"):
+        # recompute with the selection supplied: NEVER re-select
+        st.update(logits=logits, route_w=route_w, route_ids=route_ids)
+        return
     if moe.routing_mode == "sigmoid_noaux_tc":
         K.moe_topk_sigmoid_noaux(
             kctx, logits, w["w_router_bias"], route_w, route_ids,
@@ -88,14 +100,17 @@ def stage_moe_dispatch(kctx, K, d, st):
     moe, a = _spec(d), st["a"]
     h2 = st["h2"]
     rows = moe_local_rows(moe, d.tokens)
-    if a is not None:
-        order, offsets = a["route_order"], a["route_offsets"]
+    sel = st.get("sel")
+    dst = sel if sel is not None else a
+    if dst is not None:
+        order, offsets = dst["route_order"], dst["route_offsets"]
     else:
         order = torch.empty(rows, dtype=torch.int32, device=h2.device)
         offsets = torch.empty(
             moe.n_local_experts + 1, dtype=torch.int32, device=h2.device
         )
-    K.moe_sort(kctx, st["route_ids"], order, offsets, n_experts=moe.n_experts)
+    if not st.get("sel_ready"):
+        K.moe_sort(kctx, st["route_ids"], order, offsets, n_experts=moe.n_experts)
     xp = torch.empty((rows, d.d_model), dtype=torch.bfloat16, device=h2.device)
     K.moe_dispatch_fwd(kctx, h2, order, xp, top_k=moe.top_k)
     st.update(

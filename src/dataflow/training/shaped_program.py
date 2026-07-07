@@ -92,6 +92,11 @@ class LayerKindSpec:
     bwd_subops: list
     recompute_subops: list
     optimizer_subops: list
+    # per-layer SELECTION object bytes (routing pack: expert ids/weights/
+    # order/offsets). 0 = none. Selection objects are the never-recompute
+    # class: emitted by fwd, consumed by recompute AND bwd — recompute
+    # rewrites cover ONLY the A objects (Shein contract).
+    sel_bytes: int = 0
 
 
 class LooseCosts:
@@ -192,11 +197,21 @@ def build_shaped_program(
     fast_memory_capacity: int | None = None,
     recompute_levels: Mapping[str, int] | None = None,
     name: str | None = None,
+    index_groups=None,
+    index_sel_bytes: int = 0,
+    index_grad_bytes: int = 0,
 ) -> Program:
     """Build the (bare) shaped program for the given recompute levels.
 
     ``kinds`` is REQUIRED — every family declares its layer kinds
-    explicitly (uniform families pass one). ``recompute_levels`` maps
+    explicitly (uniform families pass one). ``index_groups`` (DSA
+    families) = [(leader_layer, member_layers)]: per (step, round,
+    group) the leader's fwd emits the shared selection ``S_{s}_{r}_{g}``
+    (``index_sel_bytes``), consumed by member fwds (followers), ALL
+    member recomputes and ALL member bwds — selection is NEVER
+    recomputed; multi-member groups additionally thread the KL-target
+    accumulator ``P_{s}_{r}_{g}`` (``index_grad_bytes``) through member
+    bwds in reverse order (create/mutate/consume). ``recompute_levels`` maps
     saved-context object id (``A_{s}_{r}_{i}``) to level 0 (save) or 1
     (recompute); missing ids default to 0. This function IS the
     ``build_variant`` for the recompute planner (wrap with
@@ -205,6 +220,15 @@ def build_shaped_program(
     """
     hw = hw or ShapedHardware()
     levels = dict(recompute_levels or {})
+    idx_leader_of = None
+    idx_members_of = None
+    if index_groups is not None:
+        idx_leader_of = {}
+        idx_members_of = {}
+        for ld, mem in index_groups:
+            idx_members_of[ld] = tuple(mem)
+            for m in mem:
+                idx_leader_of[m] = ld
     loose = LooseCosts(cfg, hw)
     t, d = cfg.tokens, cfg.d_model
 
@@ -325,11 +349,24 @@ def build_shaped_program(
                 a_id = f"A_{s}_{r}_{i}"
                 level = levels.get(a_id, 0)
                 x_id = f"y_embed_{s}_{r}" if i == 0 else f"y_{s}_{r}_{i - 1}"
+                fwd_ins = [x_id, f"W_{i}"]
                 outs = [OutputSpec(id=f"y_{s}_{r}_{i}", size_bytes=y_bytes, role="activation",
                                    tensor=TensorMeta(dtype="bf16", shape=(t, d)))]
                 if level == 0:
                     outs.append(OutputSpec(id=a_id, size_bytes=sp.a_bytes, role="activation"))
-                task(f"block_fwd_{s}_{r}_{i}", f"{sp.key_prefix}_fwd", [x_id, f"W_{i}"], outs,
+                if sp.sel_bytes:
+                    outs.append(OutputSpec(id=f"SEL_{s}_{r}_{i}",
+                                           size_bytes=sp.sel_bytes,
+                                           role="activation"))
+                if idx_leader_of is not None:
+                    ld = idx_leader_of[i]
+                    if i == ld:
+                        outs.append(OutputSpec(id=f"S_{s}_{r}_{ld}",
+                                               size_bytes=index_sel_bytes,
+                                               role="activation"))
+                    else:
+                        fwd_ins.append(f"S_{s}_{r}_{ld}")
+                task(f"block_fwd_{s}_{r}_{i}", f"{sp.key_prefix}_fwd", fwd_ins, outs,
                      sp.fwd_us, group="forward", params={"layer": i},
                      subops=sp.fwd_subops)
                 rewrites.append(RecomputeRewrite(
@@ -377,12 +414,18 @@ def build_shaped_program(
                 a_id = f"A_{s}_{r}_{i}"
                 x_id = f"y_embed_{s}_{r}" if i == 0 else f"y_{s}_{r}_{i - 1}"
                 sp = spec_of(i)
+                sel_ins = []
+                if sp.sel_bytes:
+                    sel_ins.append(f"SEL_{s}_{r}_{i}")
+                if idx_leader_of is not None:
+                    sel_ins.append(f"S_{s}_{r}_{idx_leader_of[i]}")
                 if levels.get(a_id, 0) == 1:
-                    task(f"block_recompute_{s}_{r}_{i}", f"{sp.key_prefix}_recompute", [x_id, f"W_{i}"],
+                    task(f"block_recompute_{s}_{r}_{i}", f"{sp.key_prefix}_recompute",
+                         [x_id, f"W_{i}"] + sel_ins,
                          [OutputSpec(id=a_id, size_bytes=sp.a_bytes, role="activation")],
                          sp.recompute_us, group="recompute", params={"layer": i},
                          subops=sp.recompute_subops)
-                bwd_inputs = [f"dy_{s}_{r}_{i}", a_id, x_id, f"W_{i}"]
+                bwd_inputs = [f"dy_{s}_{r}_{i}", a_id, x_id, f"W_{i}"] + sel_ins
                 outs = [OutputSpec(id=(f"dy_embed_{s}_{r}" if i == 0 else f"dy_{s}_{r}_{i - 1}"),
                                    size_bytes=y_bytes, role="gradient",
                                    tensor=TensorMeta(dtype="bf16", shape=(t, d)))]
@@ -392,6 +435,20 @@ def build_shaped_program(
                 else:
                     bwd_inputs.append(f"dW_{s}_{i}")
                     mutates = (f"dW_{s}_{i}",)
+                if idx_leader_of is not None:
+                    ld = idx_leader_of[i]
+                    mem = idx_members_of[ld]
+                    if len(mem) > 1:
+                        pid = f"P_{s}_{r}_{ld}"
+                        if i == mem[-1]:
+                            outs.append(OutputSpec(id=pid,
+                                                   size_bytes=index_grad_bytes,
+                                                   role="gradient"))
+                        elif i == ld:
+                            bwd_inputs.append(pid)
+                        else:
+                            bwd_inputs.append(pid)
+                            mutates = mutates + (pid,)
                 task(f"block_bwd_{s}_{r}_{i}", f"{sp.key_prefix}_bwd", bwd_inputs, outs,
                      sp.bwd_us, mutates=mutates, group="backward", params={"layer": i},
                      subops=sp.bwd_subops)

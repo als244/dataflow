@@ -16,6 +16,7 @@ from dataflow.training.qwen35moe import ShapedQwen35MoeConfig, lower_qwen35moe
 from dataflow.training.qwen3moe import ShapedQwen3MoeConfig, lower_qwen3moe
 from dataflow.training.dsv3 import ShapedDsv3Config, lower_dsv3
 from dataflow.training.dsv32 import ShapedDsv32Config, lower_dsv32
+from dataflow.training.glm52 import ShapedGlm52Config, lower_glm52
 
 # Constants last updated DELIBERATELY for the fused head_loss lowering
 # (head_fwd/loss_bwd/head_bwd -> ONE token-chunked task; logits/dlogits
@@ -39,11 +40,16 @@ EXPECTED = {
     # dsv3: MLA + hybrid dense/MoE depth + sigmoid_noaux_tc
     "dsv3-tiny": "dbf9d95a46cc53a7",
     "dsv3-tiny-ga2": "95af056e117d237a",
-    # dsv32: dsv3 + DSA (lightning indexer, sparse mode)
-    "dsv32-tiny": "5a8b067ab9ba917c",
-    "dsv32-tiny-ga2": "3011582ba1b32080",
-    # dsv32 dense warm-up (M-H3): dsv3-shaped ctx (no dsa_idx), frozen main
-    "dsv32-tiny-dense": "18b566d9b545b6ac",
+    # dsv32: dsv3 + DSA. Re-blessed 2026-07-07 for the SELECTION-OBJECT
+    # grammar (Shein): dsa selection = per-group S object, routing pack =
+    # per-layer SEL object, both emitted by fwd and consumed by recompute
+    # AND bwd — never recomputed; ctx is dsv3-shaped everywhere.
+    "dsv32-tiny": "626a461269d641d0",
+    "dsv32-tiny-ga2": "8e2d6357b6a9b406",
+    "dsv32-tiny-dense": "d29fb135d9ca349b",
+    # glm52: IndexShare (leaders emit shared S; P accumulator for groups)
+    "glm52-tiny": "74f731de5a8653c6",
+    "glm52-tiny-ga2": "b163147921f916f9",
 }
 
 
@@ -89,6 +95,10 @@ def test_lowered_programs_bit_identical():
         ),
         "dsv32-tiny-dense": _hash(
             lower_dsv32(replace(ShapedDsv32Config.tiny(), sparse_mode=False))
+        ),
+        "glm52-tiny": _hash(lower_glm52(ShapedGlm52Config.tiny())),
+        "glm52-tiny-ga2": _hash(
+            lower_glm52(replace(ShapedGlm52Config.tiny(), grad_accum_rounds=2))
         ),
     }
     assert got == EXPECTED, {k: (got[k], EXPECTED[k]) for k in got if got[k] != EXPECTED[k]}

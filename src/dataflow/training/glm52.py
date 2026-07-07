@@ -43,7 +43,7 @@ from typing import Mapping
 
 import torch
 
-from dataflow.core import OutputSpec, Program
+from dataflow.core import Program
 from dataflow.tasks.layouts import (
     DTypePolicy,
     Glm52Dims,
@@ -281,11 +281,16 @@ def _weight_layout_for(dims: Glm52Dims, kind: str):
 
 
 def _ctx_layout_for(dims: Glm52Dims, kind: str):
-    # glm52 ctx is dsv3-shaped for EVERY kind (no dsa_idx anywhere — the
-    # selection lives in the S object)
+    # selection-object grammar: no dsa_idx anywhere (S object) and the
+    # routing pack lives in the per-layer SEL object (moe kinds)
+    from dataflow.tasks.moe.spec import moe_context_specs
+    from dataflow.tasks.layouts import PackedLayout, _dsv3_attn_ctx_specs
+
     if kind == "gdl":
         return dsv3_dense_context_layout(dims)
-    return dsv3_moe_context_layout(dims)
+    return PackedLayout.build(
+        _dsv3_attn_ctx_specs(dims) + moe_context_specs(dims, dims.moe, sel=True)
+    )
 
 
 def _kind_specs(cfg: ShapedGlm52Config, hw: ShapedHardware) -> dict[str, LayerKindSpec]:
@@ -308,7 +313,8 @@ def _kind_specs(cfg: ShapedGlm52Config, hw: ShapedHardware) -> dict[str, LayerKi
     core_flops = 2.0 * t * k_eff * h * qk * 2.0
     s_bytes = 4.0 * t * cfg.index_topk
 
-    def spec(prefix, leader, wl, cl, ffn_active, extra_traffic):
+    def spec(prefix, leader, wl, cl, ffn_active, extra_traffic,
+             sel_bytes=0):
         total_params = sum(int(math.prod(fl.shape)) for fl in wl.fields)
         attn_flops = core_flops + (idx_flops if leader else 0.0)
         attn_bytes = BF16 * t * 4 * h * qk + s_bytes
@@ -337,6 +343,7 @@ def _kind_specs(cfg: ShapedGlm52Config, hw: ShapedHardware) -> dict[str, LayerKi
             key_prefix=prefix,
             w_bytes=wl.total_bytes,
             a_bytes=cl.total_bytes,
+            sel_bytes=sel_bytes,
             fwd_us=fwd, bwd_us=bwd, recompute_us=fwd,
             optimizer_us=hw.mem_us(BF16 * 7.0 * total_params),
             fwd_subops=sub_fwd, bwd_subops=sub_bwd, recompute_subops=list(sub_fwd),
@@ -350,72 +357,19 @@ def _kind_specs(cfg: ShapedGlm52Config, hw: ShapedHardware) -> dict[str, LayerKi
         d * cfg.n_experts + k * 3 * f * d + cfg.n_shared_experts * 3 * fs * d
     )
     moe_traffic = BF16 * t * k * (3 * f + 2 * d)
+    from dataflow.tasks.layouts import dsv32_sel_layout
+
+    route_sel = dsv32_sel_layout(dims).total_bytes
     return {
         "gdl": spec("gdl", True, _weight_layout_for(dims, "gdl"),
                     _ctx_layout_for(dims, "gdl"), 3 * cfg.d_ff_dense * d, 0.0),
         "gml": spec("gml", True, _weight_layout_for(dims, "gml"),
-                    _ctx_layout_for(dims, "gml"), moe_active, moe_traffic),
+                    _ctx_layout_for(dims, "gml"), moe_active, moe_traffic,
+                    sel_bytes=route_sel),
         "gmf": spec("gmf", False, _weight_layout_for(dims, "gmf"),
-                    _ctx_layout_for(dims, "gmf"), moe_active, moe_traffic),
+                    _ctx_layout_for(dims, "gmf"), moe_active, moe_traffic,
+                    sel_bytes=route_sel),
     }
-
-
-def _inject_index_share(program: Program, dims: Glm52Dims,
-                        cfg: ShapedGlm52Config) -> Program:
-    """The IndexShare grammar post-pass: add S (selection) and P (KL
-    target accumulator) objects + edges per (step, round, group). See the
-    module docstring for the full contract."""
-    t_tokens, k_sel = dims.tokens, dims.index_topk
-    groups = [(ld, dims.group_members(ld)) for ld in dims.leaders()]
-    s_bytes = 4 * t_tokens * k_sel
-    p_bytes = 4 * t_tokens * k_sel
-
-    def s_id(s, r, g):
-        return f"S_{s}_{r}_{g}"
-
-    def p_id(s, r, g):
-        return f"P_{s}_{r}_{g}"
-
-    new_tasks = []
-    for task in program.tasks:
-        parts = task.id.split("_")
-        if not (task.id.startswith(("block_fwd_", "block_bwd_"))
-                or task.id.startswith("block_recompute_")):
-            new_tasks.append(task)
-            continue
-        s, r, i = int(parts[-3]), int(parts[-2]), int(parts[-1])
-        leader = dims.leader_of(i)
-        members = dims.group_members(leader)
-        n = len(members)
-        sid = s_id(s, r, leader)
-        pid = p_id(s, r, leader)
-        inputs = list(task.inputs)
-        outputs = list(task.outputs)
-        mutates = list(task.mutates)
-        if task.id.startswith("block_fwd_"):
-            if i == leader:
-                outputs.append(OutputSpec(id=sid, size_bytes=s_bytes,
-                                          role="activation"))
-            else:
-                inputs.append(sid)
-        elif task.id.startswith("block_recompute_"):
-            inputs.append(sid)      # nobody re-selects — leaders included
-        else:  # block_bwd
-            inputs.append(sid)
-            if n > 1:
-                if i == members[-1]:
-                    # first group bwd to RUN (reverse layer order): creates P
-                    outputs.append(OutputSpec(id=pid, size_bytes=p_bytes,
-                                              role="gradient"))
-                elif i == leader:
-                    inputs.append(pid)   # consumed last; dies here
-                else:
-                    inputs.append(pid)
-                    mutates.append(pid)
-        new_tasks.append(replace(task, inputs=tuple(inputs),
-                                 outputs=tuple(outputs),
-                                 mutates=tuple(mutates)))
-    return replace(program, tasks=tuple(new_tasks))
 
 
 def build_shaped_glm52(
@@ -433,6 +387,9 @@ def build_shaped_glm52(
         kinds=_kind_specs(cfg, hw), kind_of=dims.kind_of,
         fast_memory_capacity=fast_memory_capacity,
         recompute_levels=recompute_levels, name=name,
+        index_groups=[(ld, dims.group_members(ld)) for ld in dims.leaders()],
+        index_sel_bytes=4 * dims.tokens * dims.index_topk,
+        index_grad_bytes=4 * dims.tokens * dims.index_topk,
     )
 
 
@@ -468,11 +425,15 @@ def lower_glm52(
         cfg, hw=hw, recompute_levels=recompute_levels,
         fast_memory_capacity=fast_memory_capacity,
     )
-    shaped = _inject_index_share(shaped, dims, cfg)
+    from dataflow.tasks.layouts import dsv32_sel_layout
+
     base_size = size_of_factory(dims, fl)
     t_tokens, k_sel = dims.tokens, dims.index_topk
+    route_sel = dsv32_sel_layout(dims).total_bytes
 
     def size_of(oid: str):
+        if oid.startswith("SEL_"):
+            return route_sel
         if oid.startswith(("S_", "P_")):
             return 4 * t_tokens * k_sel
         return base_size(oid)
