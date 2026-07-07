@@ -54,6 +54,7 @@ from .llama3_blocks import (
     AdamWStep,
     BlockBwd,
     BlockFwd,
+    BlockRecompute,
     EmbedBwd,
     EmbedFwd,
     HeadLoss,
@@ -213,22 +214,10 @@ class Qwen35LinBlockFwd(BlockFwd):
 
 
 @dataclass(frozen=True)
-class Qwen35LinBlockRecompute(Qwen35LinBlockFwd):
-    def launch(self, ctx) -> None:
-        d = self.dims
-        es, kctx = self._stream_ctx(ctx)
-        with torch.cuda.stream(es):
-            x = self._x_view(ctx)
-            w = self.wl_for(ctx.task).views(self._in(ctx, 1))
-            a = self.cl.views(self._out(ctx, 0))
-            self._run_stages(kctx, x, w, a, count=self.recompute_stage_count(),
-                             extras=self._meta_state(ctx))
-
-    def _x_view(self, ctx):
-        from .interop import torch_view
-
-        d = self.dims
-        return torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
+class Qwen35LinBlockRecompute(Qwen35LinBlockFwd, BlockRecompute):
+    # standard derived-recompute pattern (the historical hand-rolled
+    # launch predated BlockRecompute and was the fleet's only custom one)
+    pass
 
 
 @dataclass(frozen=True)
