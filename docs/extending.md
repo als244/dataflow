@@ -265,3 +265,6 @@ Known llama-couplings to check when the family's TASK/OBJECT NAMES differ
 Keeping the `family-prefix_{step}_{round}_{layer}` shape (new prefixes are
 fine) means only the regex alternations grow; changing the shape means
 generalizing those three spots first.
+
+
+See also: [The task contract](task-contract.md) — what task executables/kernels may and may not do in the launch path (no host syncs, no D2H readbacks, determinism), why each rule exists (measured incidents), the spin-audit enforcement recipe, and the sanctioned relaxation paths (capacity mode, planned host-readbacks) for host-shape vendor APIs like cublasLt.
