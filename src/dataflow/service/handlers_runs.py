@@ -47,6 +47,7 @@ class RunRecord:
     pressure_evictions: int = 0
     placement_escapes: int = 0
     error: dict | None = None
+    torch_reserved_peak: int = 0        # device-scratch component of peak
     fetched: dict = field(default_factory=dict)
     trace_tail: list = field(default_factory=list)
 
@@ -63,6 +64,7 @@ class RunRecord:
             "slab_overflows": self.slab_overflows,
             "pressure_evictions": self.pressure_evictions,
             "placement_escapes": self.placement_escapes,
+            "torch_reserved_peak": self.torch_reserved_peak,
             "error": self.error,
         }
 
@@ -241,6 +243,12 @@ def install(server) -> None:
 
             rec.makespan_us = result.makespan_us
             rec.peak_fast_bytes = result.peak_fast_bytes
+            try:
+                import torch
+
+                rec.torch_reserved_peak = torch.cuda.max_memory_reserved()
+            except Exception:
+                rec.torch_reserved_peak = 0
             rec.slab_overflows = result.slab_overflows
             rec.pressure_evictions = result.pressure_evictions
             rec.placement_escapes = result.placement_escapes
