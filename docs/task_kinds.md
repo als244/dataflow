@@ -1,0 +1,112 @@
+# Task kinds: compute keys and executables
+
+GENERATED — regenerate with `python tools/list_tasks.py >
+docs/task_kinds.md` after adding a family or layer kind. Dispatch is
+the resolver ABI (`resolver(task) -> executable.launch(ctx)`, keyed on
+`task.compute_block_key`) — family-scoped by design; this table is the
+fleet inventory. Buffer contracts (positional input/output order per
+key) are documented next to each executable class; recompute keys are
+derived from the forward stage lists, never hand-written
+(docs/extending.md §2).
+
+| family | compute key | group | executable | description |
+|---|---|---|---|---|
+| llama3 | `block_bwd` | backward | `BlockBwd` | The base class of the class hierarchy |
+| llama3 | `block_fwd` | forward | `BlockFwd` | The base class of the class hierarchy |
+| llama3 | `block_recompute` | recompute (planner/derived) | `BlockRecompute` | The base class of the class hierarchy |
+| llama3 | `embed_bwd` | backward | `EmbedBwd` | The base class of the class hierarchy |
+| llama3 | `embed_fwd` | forward | `EmbedFwd` | The base class of the class hierarchy |
+| llama3 | `head_loss` | backward | `HeadLoss` | Fused final-norm + LM head + CE loss + head backward, micro-chunked |
+| llama3 | `optimizer_block` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
+| llama3 | `optimizer_embed` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
+| llama3 | `optimizer_head` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
+| qwen3 | `block_bwd` | backward | `Qwen3BlockBwd` | The base class of the class hierarchy |
+| qwen3 | `block_fwd` | forward | `Qwen3BlockFwd` | The base class of the class hierarchy |
+| qwen3 | `block_recompute` | recompute (planner/derived) | `Qwen3BlockRecompute` | The base class of the class hierarchy |
+| qwen3 | `embed_bwd` | backward | `EmbedBwd` | The base class of the class hierarchy |
+| qwen3 | `embed_fwd` | forward | `EmbedFwd` | The base class of the class hierarchy |
+| qwen3 | `head_loss` | backward | `HeadLoss` | Fused final-norm + LM head + CE loss + head backward, micro-chunked |
+| qwen3 | `optimizer_block` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
+| qwen3 | `optimizer_embed` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
+| qwen3 | `optimizer_head` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
+| qwen35 | `embed_bwd` | backward | `EmbedBwd` | The base class of the class hierarchy |
+| qwen35 | `embed_fwd` | forward | `EmbedFwd` | The base class of the class hierarchy |
+| qwen35 | `gattn_bwd` | backward | `Qwen35AttnBlockBwd` | The base class of the class hierarchy |
+| qwen35 | `gattn_fwd` | forward | `Qwen35AttnBlockFwd` | The base class of the class hierarchy |
+| qwen35 | `gattn_recompute` | recompute (planner/derived) | `Qwen35AttnBlockRecompute` | The base class of the class hierarchy |
+| qwen35 | `head_loss` | backward | `HeadLoss` | Fused final-norm + LM head + CE loss + head backward, micro-chunked |
+| qwen35 | `linattn_bwd` | backward | `Qwen35LinBlockBwd` | The base class of the class hierarchy |
+| qwen35 | `linattn_fwd` | forward | `Qwen35LinBlockFwd` | The base class of the class hierarchy |
+| qwen35 | `linattn_recompute` | recompute (planner/derived) | `Qwen35LinBlockRecompute` | The base class of the class hierarchy |
+| qwen35 | `optimizer_block` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
+| qwen35 | `optimizer_embed` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
+| qwen35 | `optimizer_head` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
+| olmoe | `embed_bwd` | backward | `EmbedBwd` | The base class of the class hierarchy |
+| olmoe | `embed_fwd` | forward | `EmbedFwd` | The base class of the class hierarchy |
+| olmoe | `head_loss` | backward | `HeadLoss` | Fused final-norm + LM head + CE loss + head backward, micro-chunked |
+| olmoe | `moeattn_bwd` | backward | `OlmoeBlockBwd` | Metadata-object plumbing for pure-MoE families: the layer's M |
+| olmoe | `moeattn_fwd` | forward | `OlmoeBlockFwd` | Metadata-object plumbing for pure-MoE families: the layer's M |
+| olmoe | `moeattn_recompute` | recompute (planner/derived) | `OlmoeBlockRecompute` | Metadata-object plumbing for pure-MoE families: the layer's M |
+| olmoe | `optimizer_block` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
+| olmoe | `optimizer_embed` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
+| olmoe | `optimizer_head` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
+| qwen35moe | `embed_bwd` | backward | `EmbedBwd` | The base class of the class hierarchy |
+| qwen35moe | `embed_fwd` | forward | `EmbedFwd` | The base class of the class hierarchy |
+| qwen35moe | `gattnmoe_bwd` | backward | `Qwen35MoeAttnBlockBwd` | Metadata-object plumbing for pure-MoE families: the layer's M |
+| qwen35moe | `gattnmoe_fwd` | forward | `Qwen35MoeAttnBlockFwd` | Metadata-object plumbing for pure-MoE families: the layer's M |
+| qwen35moe | `gattnmoe_recompute` | recompute (planner/derived) | `Qwen35MoeAttnBlockRecompute` | Metadata-object plumbing for pure-MoE families: the layer's M |
+| qwen35moe | `head_loss` | backward | `HeadLoss` | Fused final-norm + LM head + CE loss + head backward, micro-chunked |
+| qwen35moe | `linmoe_bwd` | backward | `Qwen35MoeLinBlockBwd` | Metadata-object plumbing for pure-MoE families: the layer's M |
+| qwen35moe | `linmoe_fwd` | forward | `Qwen35MoeLinBlockFwd` | Metadata-object plumbing for pure-MoE families: the layer's M |
+| qwen35moe | `linmoe_recompute` | recompute (planner/derived) | `Qwen35MoeLinBlockRecompute` | Metadata-object plumbing for pure-MoE families: the layer's M |
+| qwen35moe | `optimizer_block` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
+| qwen35moe | `optimizer_embed` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
+| qwen35moe | `optimizer_head` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
+| qwen3moe | `embed_bwd` | backward | `EmbedBwd` | The base class of the class hierarchy |
+| qwen3moe | `embed_fwd` | forward | `EmbedFwd` | The base class of the class hierarchy |
+| qwen3moe | `head_loss` | backward | `HeadLoss` | Fused final-norm + LM head + CE loss + head backward, micro-chunked |
+| qwen3moe | `optimizer_block` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
+| qwen3moe | `optimizer_embed` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
+| qwen3moe | `optimizer_head` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
+| qwen3moe | `q3moeattn_bwd` | backward | `Qwen3MoeBlockBwd` | Metadata-object plumbing for pure-MoE families: the layer's M |
+| qwen3moe | `q3moeattn_fwd` | forward | `Qwen3MoeBlockFwd` | Metadata-object plumbing for pure-MoE families: the layer's M |
+| qwen3moe | `q3moeattn_recompute` | recompute (planner/derived) | `Qwen3MoeBlockRecompute` | Metadata-object plumbing for pure-MoE families: the layer's M |
+| dsv3 | `embed_bwd` | backward | `EmbedBwd` | The base class of the class hierarchy |
+| dsv3 | `embed_fwd` | forward | `EmbedFwd` | The base class of the class hierarchy |
+| dsv3 | `head_loss` | backward | `HeadLoss` | Fused final-norm + LM head + CE loss + head backward, micro-chunked |
+| dsv3 | `mladense_bwd` | backward | `Dsv3DenseBlockBwd` | The base class of the class hierarchy |
+| dsv3 | `mladense_fwd` | forward | `Dsv3DenseBlockFwd` | The base class of the class hierarchy |
+| dsv3 | `mladense_recompute` | recompute (planner/derived) | `Dsv3DenseBlockRecompute` | The base class of the class hierarchy |
+| dsv3 | `mlamoe_bwd` | backward | `Dsv3MoeBlockBwd` | Metadata-object plumbing for pure-MoE families: the layer's M |
+| dsv3 | `mlamoe_fwd` | forward | `Dsv3MoeBlockFwd` | Metadata-object plumbing for pure-MoE families: the layer's M |
+| dsv3 | `mlamoe_recompute` | recompute (planner/derived) | `Dsv3MoeBlockRecompute` | Metadata-object plumbing for pure-MoE families: the layer's M |
+| dsv3 | `optimizer_block` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
+| dsv3 | `optimizer_embed` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
+| dsv3 | `optimizer_head` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
+| dsv32 | `dsadense_bwd` | backward | `Dsv32DenseBlockBwd` | Metadata-object plumbing (one implementation for fwd/rc/bwd): the |
+| dsv32 | `dsadense_fwd` | forward | `Dsv32DenseBlockFwd` | Metadata-object plumbing (one implementation for fwd/rc/bwd): the |
+| dsv32 | `dsadense_recompute` | recompute (planner/derived) | `Dsv32DenseBlockRecompute` | Metadata-object plumbing (one implementation for fwd/rc/bwd): the |
+| dsv32 | `dsamoe_bwd` | backward | `Dsv32MoeBlockBwd` | Metadata-object plumbing (one implementation for fwd/rc/bwd): the |
+| dsv32 | `dsamoe_fwd` | forward | `Dsv32MoeBlockFwd` | Metadata-object plumbing (one implementation for fwd/rc/bwd): the |
+| dsv32 | `dsamoe_recompute` | recompute (planner/derived) | `Dsv32MoeBlockRecompute` | Metadata-object plumbing (one implementation for fwd/rc/bwd): the |
+| dsv32 | `embed_bwd` | backward | `EmbedBwd` | The base class of the class hierarchy |
+| dsv32 | `embed_fwd` | forward | `EmbedFwd` | The base class of the class hierarchy |
+| dsv32 | `head_loss` | backward | `HeadLoss` | Fused final-norm + LM head + CE loss + head backward, micro-chunked |
+| dsv32 | `optimizer_block` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
+| dsv32 | `optimizer_embed` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
+| dsv32 | `optimizer_head` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
+| glm52 | `embed_bwd` | backward | `EmbedBwd` | The base class of the class hierarchy |
+| glm52 | `embed_fwd` | forward | `EmbedFwd` | The base class of the class hierarchy |
+| glm52 | `gdl_bwd` | backward | `Glm52DlBlockBwd` | Leader backward KL: dI = sigma - (p_own + dM)/N when followers |
+| glm52 | `gdl_fwd` | forward | `Glm52DlBlockFwd` | Own M + (followers) producer's M + (grouped bwds) dM |
+| glm52 | `gdl_recompute` | recompute (planner/derived) | `Glm52DlBlockRecompute` | Own M + (followers) producer's M + (grouped bwds) dM |
+| glm52 | `gmf_bwd` | backward | `Glm52MfBlockBwd` | Follower backward: sparse core bwd on the shared selection + the |
+| glm52 | `gmf_fwd` | forward | `Glm52MfBlockFwd` | Follower forward: PLAIN dsv3 MLA stages (no indexer tap, no |
+| glm52 | `gmf_recompute` | recompute (planner/derived) | `Glm52MfBlockRecompute` | Follower forward: PLAIN dsv3 MLA stages (no indexer tap, no |
+| glm52 | `gml_bwd` | backward | `Glm52MlBlockBwd` | Leader backward KL: dI = sigma - (p_own + dM)/N when followers |
+| glm52 | `gml_fwd` | forward | `Glm52MlBlockFwd` | Own M + (followers) producer's M + (grouped bwds) dM |
+| glm52 | `gml_recompute` | recompute (planner/derived) | `Glm52MlBlockRecompute` | Own M + (followers) producer's M + (grouped bwds) dM |
+| glm52 | `head_loss` | backward | `HeadLoss` | Fused final-norm + LM head + CE loss + head backward, micro-chunked |
+| glm52 | `optimizer_block` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
+| glm52 | `optimizer_embed` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
+| glm52 | `optimizer_head` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |

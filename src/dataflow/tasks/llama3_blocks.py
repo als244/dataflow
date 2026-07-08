@@ -564,7 +564,10 @@ class EmbedBwd(_Base):
 
 @dataclass(frozen=True)
 class AdamWStep(_Base):  # name kept for resolver back-compat; see OptimizerStep alias
-    """Per-FIELD AdamW over one packed weight object.
+    """Per-FIELD optimizer step over one packed weight object —
+    dispatches each field's rule (adamw/sgd/sgdm/muon/custom) and
+    hyperparameters through the config's optimizer policy
+    (tasks/optim.py); AdamW remains the all-fields default.
 
     Each field updates through its own w/g/m/v views at the dtype policy's
     storage dtypes (fp32 in registers regardless — the kernels are

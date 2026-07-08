@@ -47,7 +47,9 @@ GEMMs, attention, and gather/scatter. The registry gives you: per-impl A/B
 (`DATAFLOW_KERNELS=eager`), kernel-set stamping into profiles (measured
 costs are measurements of a SPECIFIC kernel set), and a place for future
 toolchains (CuTe, TileLang, raw cubins) without touching callers. Contract
-details: `tasks/README.md`.
+details: `tasks/README.md`; the generated fleet inventory of every
+registered op (impls, priorities, signatures):
+[kernel_registry.md](kernel_registry.md).
 
 Gate — ladder level 1 (see `tests/tasks/test_llama3_math.py`): launch
 output vs reference forward; hand-written backward vs autograd on the
@@ -74,7 +76,9 @@ that one description:
   least one stage (the waste tripwire).
 
 Ordering rule: emit context fields as early as their values are final — the
-recompute boundary is only as tight as your last emission.
+recompute boundary is only as tight as your last emission. The
+generated inventory of every family's compute keys and executables:
+[task_kinds.md](task_kinds.md).
 
 The rest of the block contract:
 
