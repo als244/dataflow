@@ -33,6 +33,7 @@ Flat directory; every tool runs from the repo root as
 | `export_measured_run.py` | package a traced run for webapp upload |
 | `nsys_profile.py` | wrap a run in Nsight Systems capture |
 | `window_plans.py` | window-oracle planning analysis for a config |
+| `trace_program.py` | event-timeline trace of ANY program on the fake backend (reserves, transfer charges, evictions/escapes) — plan debugging without a GPU |
 
 ## Generated docs
 | tool | purpose |
