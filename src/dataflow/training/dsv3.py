@@ -43,7 +43,7 @@ from dataflow.tasks.layouts import (
     embed_weight_layout,
     head_weight_layout,
 )
-from dataflow.tasks.moe.spec import MoESpec, moe_meta_layout
+from dataflow.tasks.modules.moe.spec import MoESpec, moe_meta_layout
 
 from .lowering import FamilyLayouts, apply_exact_sizes, initial_values_from_layouts, size_of_factory
 from .shaped_program import BF16, LayerKindSpec, ShapedHardware, build_shaped_program

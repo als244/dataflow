@@ -20,14 +20,14 @@ import torch
 
 from dataflow.models.glm52_reference import GoldenGlm52
 from dataflow.tasks import ops
-from dataflow.tasks.dsa_reference import (
+from dataflow.tasks.modules.dsa_reference import (
     dsa_index_scores_reference,
     dsa_mask_from_idx,
     dsa_sparse_attention_reference,
     dsa_topk_reference,
 )
-from dataflow.tasks.mla_reference import mla_qkv_reference
-from dataflow.tasks.moe.reference import moe_mlp_reference, moe_topk_reference
+from dataflow.tasks.modules.mla_reference import mla_qkv_reference
+from dataflow.tasks.modules.moe.reference import moe_mlp_reference, moe_topk_reference
 
 
 @dataclass

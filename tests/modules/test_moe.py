@@ -1,5 +1,5 @@
 """Ladder 1 for the pluggable MoE module: every op fwd AND bwd pinned
-against dataflow.tasks.moe.reference + autograd, then the full tail
+against dataflow.tasks.modules.moe.reference + autograd, then the full tail
 (stages + moe_mlp_tail_bwd) against moe_mlp_reference — family-independent.
 
 Pinned contracts:
@@ -33,7 +33,7 @@ pytestmark = pytest.mark.gpu
 
 from dataflow.tasks import ops
 from dataflow.tasks.kernels import KernelCtx, resolve_kernels
-from dataflow.tasks.moe import (
+from dataflow.tasks.modules.moe import (
     MOE_SHARED_STAGES,
     MOE_STAGES,
     MoESpec,
@@ -549,7 +549,7 @@ def test_spec_validation():
 
 def test_topk_sigmoid_noaux_kernel_vs_reference_and_semantics():
     from dataflow.tasks.kernels import KernelCtx, resolve_kernels
-    from dataflow.tasks.moe.reference import moe_topk_reference
+    from dataflow.tasks.modules.moe.reference import moe_topk_reference
 
     K = resolve_kernels()
     kctx = KernelCtx()
@@ -614,7 +614,7 @@ def test_topk_sigmoid_noaux_kernel_vs_reference_and_semantics():
 
 def test_router_bwd_sigmoid_vs_autograd():
     from dataflow.tasks.kernels import KernelCtx, resolve_kernels
-    from dataflow.tasks.moe.reference import moe_topk_reference
+    from dataflow.tasks.modules.moe.reference import moe_topk_reference
 
     K = resolve_kernels()
     kctx = KernelCtx()
@@ -646,7 +646,7 @@ def test_router_bwd_sigmoid_vs_autograd():
 
 def test_seq_aux_grad_vs_autograd():
     from dataflow.tasks.kernels import KernelCtx, resolve_kernels
-    from dataflow.tasks.moe.reference import (
+    from dataflow.tasks.modules.moe.reference import (
         moe_seq_aux_loss_reference,
         moe_topk_reference,
     )
@@ -693,7 +693,7 @@ def test_seq_aux_grad_vs_autograd():
 
 def test_bias_update_rule():
     from dataflow.tasks.kernels import KernelCtx, resolve_kernels
-    from dataflow.tasks.moe.stages import moe_bias_update
+    from dataflow.tasks.modules.moe.stages import moe_bias_update
 
     K = resolve_kernels()
     bias = torch.zeros(4, dtype=torch.float32, device="cuda")
@@ -710,8 +710,8 @@ def test_bias_update_rule():
 
 
 def test_moe_mlp_reference_ungated_shared_and_noaux_mode():
-    from dataflow.tasks.moe.reference import moe_mlp_reference
-    from dataflow.tasks.moe.spec import MoESpec
+    from dataflow.tasks.modules.moe.reference import moe_mlp_reference
+    from dataflow.tasks.modules.moe.spec import MoESpec
 
     torch.manual_seed(7)
     t, d, e, k, f, fs = 24, 32, 8, 2, 16, 16

@@ -5,7 +5,7 @@ from dataclasses import replace
 
 import torch
 
-from dataflow.tasks.dsa_reference import dsa_mask_from_idx
+from dataflow.tasks.modules.dsa_reference import dsa_mask_from_idx
 from dataflow.tasks.layouts import glm52_meta_layout
 from dataflow.training.glm52 import ShapedGlm52Config
 

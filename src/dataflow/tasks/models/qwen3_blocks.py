@@ -1,20 +1,16 @@
-"""OLMoE block executables: qwen3-shaped attention + the pluggable MoE tail.
+"""Qwen3-dense block executables.
 
-Same buffer-order contract, staged authoring, and kernel registry as
-llama3/qwen3 (embed/head/loss/optimizer executables reused verbatim). Two
-differences from qwen3's block:
+Same buffer-order contract, staged-forward authoring, and kernel registry as
+llama3 (`llama3_blocks.py` — embed/head/loss/optimizer executables are reused
+verbatim); the transformer block differs by **qk-norm**: a per-head RMSNorm
+(one shared ``(head_dim,)`` weight for q, one for k) between the q/k
+projections and rope. No new kernels — the rmsnorm family runs at
+``head_dim``-wide rows (``tokens * heads`` of them) through reshaped views.
 
-- **FULL-ROW qk-norm** (`qk_norm_per_head=False`): one RMSNorm over the
-  whole (t, q_dim)/(t, kv_dim) rows — weights `(q_dim,)`/`(kv_dim,)`, ONE
-  rstd per token. Same rmsnorm registry kernels at different row widths;
-  backward re-applies norm+rope from the saved pre-norm projections
-  exactly like qwen3, minus the per-head reshapes.
-- **MoE FFN**: the dense SwiGLU tail is replaced by the spliced
-  ``MOE_STAGES`` (route -> dispatch -> experts -> combine) and
-  ``moe_mlp_tail_bwd`` — see tasks/moe/ for the module contract. The
-  ``MoEProfileFill`` mixin seeds valid balanced routing for the profiler.
-
-Rope is full-rotary at theta 1e4 (rebuilt in backward, not saved).
+Saved-context choice: instead of post-rope q/k we save the PRE-norm
+projections (``qm``/``km``) + per-head rstds; backward re-applies norm+rope
+(cheap elementwise) to rebuild flash-bwd's q/k and feeds ``rmsnorm_bwd``
+exactly the tensors it needs for dW_qnorm/dW_knorm and the projection grads.
 """
 from __future__ import annotations
 
@@ -24,29 +20,23 @@ import torch
 
 from dataflow.core import TaskSpec
 
-from . import ops
-from .kernels import KernelSet, resolve_kernels
-from .layouts import (
-    OlmoeDims,
-    PackedLayout,
-    olmoe_context_layout,
-    olmoe_weight_layout,
-)
-from .base_blocks import AdamWHyper, AdamWStep, EmbedBwd, EmbedFwd, HeadLoss
+from .. import ops
+from ..kernels import KernelSet, resolve_kernels
+from ..layouts import PackedLayout, Qwen3Dims, qwen3_context_layout, qwen3_weight_layout
+from ..base_blocks import AdamWHyper, AdamWStep, EmbedBwd, EmbedFwd, HeadLoss
 from .llama3_blocks import BlockBwd, BlockFwd, BlockRecompute
-from .moe.stages import MOE_STAGES, MoEMetaState, MoEProfileFill, moe_mlp_tail_bwd
 
 
 @dataclass(frozen=True)
-class OlmoeBlockFwd(MoEMetaState, MoEProfileFill, BlockFwd):
-    dims: OlmoeDims = None  # type: ignore[assignment]
+class Qwen3BlockFwd(BlockFwd):
+    dims: Qwen3Dims = None  # type: ignore[assignment]
 
     def _weight_layout(self, layer: int | None = None) -> PackedLayout:
-        return olmoe_weight_layout(self.dims, layer=layer)
+        return qwen3_weight_layout(self.dims, layer=layer)
 
     @property
     def cl(self) -> PackedLayout:
-        return olmoe_context_layout(self.dims)
+        return qwen3_context_layout(self.dims)
 
     # --- stages (see BlockFwd for the authoring contract) ---------------------
 
@@ -56,11 +46,10 @@ class OlmoeBlockFwd(MoEMetaState, MoEProfileFill, BlockFwd):
 
     @staticmethod
     def _stage_qkv_qknorm(kctx, K, d, st):
-        # FULL-ROW qk-norm: rmsnorm over (t, q_dim)/(t, kv_dim) rows —
-        # no per-head reshape, one rstd per token. Projections write
-        # through to ctx (bwd reads PRE-norm qm/km).
         h1, w, a = st["h1"], st["w"], st["a"]
-        t = d.tokens
+        t, h, kvh, hd = d.tokens, d.n_heads, d.n_kv_heads, d.head_dim
+        # write-through: projections land directly in the ctx views when a
+        # context is attached (bwd reads PRE-norm qm/km from ctx)
         if a is not None:
             qm, km, v = a["qm"], a["km"], a["v"]
             torch.matmul(h1, w["wq"], out=qm)
@@ -71,11 +60,11 @@ class OlmoeBlockFwd(MoEMetaState, MoEProfileFill, BlockFwd):
             km = h1 @ w["wk"]
             v = h1 @ w["wv"]
         qn = torch.empty_like(qm)
-        rstd_q = torch.empty(t, dtype=torch.float32, device=qm.device)
-        K.rmsnorm_fwd(kctx, qm, w["q_norm_w"], qn, rstd_q)
+        rstd_q = torch.empty(t * h, dtype=torch.float32, device=qm.device)
+        K.rmsnorm_fwd(kctx, qm.view(t * h, hd), w["q_norm_w"], qn.view(t * h, hd), rstd_q)
         kn = torch.empty_like(km)
-        rstd_k = torch.empty(t, dtype=torch.float32, device=km.device)
-        K.rmsnorm_fwd(kctx, km, w["k_norm_w"], kn, rstd_k)
+        rstd_k = torch.empty(t * kvh, dtype=torch.float32, device=km.device)
+        K.rmsnorm_fwd(kctx, km.view(t * kvh, hd), w["k_norm_w"], kn.view(t * kvh, hd), rstd_k)
         st.pop("h1")
         st.update(qn=qn, kn=kn, v=v)
         if a is not None:
@@ -100,76 +89,89 @@ class OlmoeBlockFwd(MoEMetaState, MoEProfileFill, BlockFwd):
     def _stage_resid1_norm2(kctx, K, d, st):
         BlockFwd._stage_resid1_norm2(kctx, K, d, st)
 
+    @staticmethod
+    def _stage_up_proj(kctx, K, d, st):
+        BlockFwd._stage_up_proj(kctx, K, d, st)
+
+    @staticmethod
+    def _stage_swiglu(kctx, K, d, st):
+        BlockFwd._stage_swiglu(kctx, K, d, st)
+
+    @staticmethod
+    def _stage_down_resid(kctx, K, d, st):
+        BlockFwd._stage_down_resid(kctx, K, d, st)
+
     STAGES = (
         ("attn_norm", _stage_attn_norm.__func__, ("rstd_attn",)),
         ("qkv_qknorm", _stage_qkv_qknorm.__func__, ("qm", "km", "rstd_q", "rstd_k", "v")),
         ("rope", _stage_rope.__func__, ()),
         ("attn", _stage_attn.__func__, ("lse", "attn_out")),
         ("resid1_norm2", _stage_resid1_norm2.__func__, ("h_mid", "rstd_ffn")),
-    ) + MOE_STAGES
+        ("up_proj", _stage_up_proj.__func__, ("x1", "x3")),
+        ("swiglu", _stage_swiglu.__func__, ()),
+        ("down_resid", _stage_down_resid.__func__, ()),
+    )
 
 
 @dataclass(frozen=True)
-class OlmoeBlockRecompute(OlmoeBlockFwd, BlockRecompute):
+class Qwen3BlockRecompute(Qwen3BlockFwd, BlockRecompute):
     pass
 
 
 @dataclass(frozen=True)
-class OlmoeBlockBwd(MoEMetaState, MoEProfileFill, BlockBwd):
-    dims: OlmoeDims = None  # type: ignore[assignment]
+class Qwen3BlockBwd(BlockBwd):
+    dims: Qwen3Dims = None  # type: ignore[assignment]
 
     def _weight_layout(self, layer: int | None = None) -> PackedLayout:
-        return olmoe_weight_layout(self.dims, layer=layer)
+        return qwen3_weight_layout(self.dims, layer=layer)
 
     @property
     def cl(self) -> PackedLayout:
-        return olmoe_context_layout(self.dims)
-
-    def _mlp_bwd(self, kctx, dy, a, w, dw, accum, acc, norm_bwd):
-        return moe_mlp_tail_bwd(
-            kctx, self.kernels, self.dims, dy, a, w, dw, accum, acc, norm_bwd,
-            resid_field=self.MLP_RESID_FIELD,
-        )
+        return qwen3_context_layout(self.dims)
 
     def _attn_bwd(self, kctx, dh_mid, a, x, w, acc, norm_bwd, dx_out) -> None:
-        # qwen3-shaped attention backward with FULL-ROW norm re-apply:
-        # rebuild flash-bwd's q/k from saved pre-norm qm/km + rstds.
+        # attention part (qk-norm variant); the shared dense MLP tail runs
+        # first via BlockBwd._backward's template (_mlp_bwd)
         d = self.dims
         K = self.kernels
+        t, h, kvh, hd = d.tokens, d.n_heads, d.n_kv_heads, d.head_dim
 
         d_attn = dh_mid @ w["wo"].T
         acc("wo", a["attn_out"].T @ dh_mid)
 
+        # rebuild flash-bwd's q/k from saved qm/km + rstds: norm re-apply + rope
+        qm2, km2 = a["qm"].view(t * h, hd), a["km"].view(t * kvh, hd)
         qn = torch.empty_like(a["qm"])
-        K.rmsnorm_apply(kctx, a["qm"], a["rstd_q"], w["q_norm_w"], qn)
+        K.rmsnorm_apply(kctx, qm2, a["rstd_q"], w["q_norm_w"], qn.view(t * h, hd))
         kn = torch.empty_like(a["km"])
-        K.rmsnorm_apply(kctx, a["km"], a["rstd_k"], w["k_norm_w"], kn)
+        K.rmsnorm_apply(kctx, km2, a["rstd_k"], w["k_norm_w"], kn.view(t * kvh, hd))
         q = torch.empty_like(qn)
         pos = ops.positions_for(d.seq_spec, qn.shape[0], qn.device)
-        K.rope_fwd(kctx, qn, q, pos, d.n_heads, d.head_dim, d.rope_base)
+        K.rope_fwd(kctx, qn, q, pos, h, hd, d.rope_base)
         del qn
         k = torch.empty_like(kn)
-        K.rope_fwd(kctx, kn, k, pos, d.n_kv_heads, d.head_dim, d.rope_base)
+        K.rope_fwd(kctx, kn, k, pos, kvh, hd, d.rope_base)
         del kn
 
         dq, dk, dv = ops.flash_bwd(
-            d_attn, q, k, a["v"], a["attn_out"], a["lse"],
-            d.n_heads, d.n_kv_heads, d.head_dim, d.seq_spec,
+            d_attn, q, k, a["v"], a["attn_out"], a["lse"], h, kvh, hd, d.seq_spec,
         )
         del d_attn, q, k
         dqn = torch.empty_like(dq)
-        K.rope_bwd(kctx, dq, dqn, pos, d.n_heads, d.head_dim, d.rope_base)
+        K.rope_bwd(kctx, dq, dqn, pos, h, hd, d.rope_base)
         del dq
         dkn = torch.empty_like(dk)
-        K.rope_bwd(kctx, dk, dkn, pos, d.n_kv_heads, d.head_dim, d.rope_base)
+        K.rope_bwd(kctx, dk, dkn, pos, kvh, hd, d.rope_base)
         del dk
 
-        dqm, dq_norm = norm_bwd(dqn, a["qm"], a["rstd_q"], w["q_norm_w"])
+        dqm, dq_norm = norm_bwd(dqn.view(t * h, hd), qm2, a["rstd_q"], w["q_norm_w"])
         del dqn
         acc("q_norm_w", dq_norm)
-        dkm, dk_norm = norm_bwd(dkn, a["km"], a["rstd_k"], w["k_norm_w"])
+        dkm, dk_norm = norm_bwd(dkn.view(t * kvh, hd), km2, a["rstd_k"], w["k_norm_w"])
         del dkn
         acc("k_norm_w", dk_norm)
+        dqm = dqm.view(t, d.q_dim)
+        dkm = dkm.view(t, d.kv_dim)
 
         h1 = torch.empty_like(x)
         K.rmsnorm_apply(kctx, x, a["rstd_attn"], w["attn_norm_w"], h1)
@@ -187,23 +189,25 @@ class OlmoeBlockBwd(MoEMetaState, MoEProfileFill, BlockBwd):
         torch.add(dh_mid, dx_n, out=dx_out)
 
 
-def build_olmoe_resolver(
-    dims: OlmoeDims,
+def build_qwen3_resolver(
+    dims: Qwen3Dims,
     hyper: AdamWHyper = AdamWHyper(),
     kernels: KernelSet | None = None,
 ):
+    """Executable resolver for the qwen3 family (same block keys as llama —
+    the resolver is built per config, so families never collide)."""
     kernels = kernels if kernels is not None else resolve_kernels()
     table = {
         "embed_fwd": EmbedFwd(dims, kernels),
-        "moeattn_fwd": OlmoeBlockFwd(dims, kernels),
-        "moeattn_recompute": OlmoeBlockRecompute(dims, kernels),
-        "moeattn_bwd": OlmoeBlockBwd(dims, kernels),
+        "block_fwd": Qwen3BlockFwd(dims, kernels),
+        "block_recompute": Qwen3BlockRecompute(dims, kernels),
+        "block_bwd": Qwen3BlockBwd(dims, kernels),
         "head_loss": HeadLoss(dims, kernels),
         "embed_bwd": EmbedBwd(dims, kernels),
         "optimizer_block": AdamWStep(
             dims, kernels, hyper,
             layout_for=lambda d, task, size: (
-                olmoe_weight_layout(d, layer=AdamWStep.layer_of(task)), None,
+                qwen3_weight_layout(d, layer=AdamWStep.layer_of(task)), None,
             ),
         ),
         "optimizer_embed": AdamWStep(dims, kernels, hyper, kind="embed"),

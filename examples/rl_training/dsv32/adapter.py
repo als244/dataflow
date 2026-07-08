@@ -24,7 +24,7 @@ def make_golden(dims, n_layers, leaves):
 
 def _refs():
     import dataflow.models.dsv32_reference as dref
-    import dataflow.tasks.moe.reference as mref
+    import dataflow.tasks.modules.moe.reference as mref
 
     return dref, mref
 

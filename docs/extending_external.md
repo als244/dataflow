@@ -134,7 +134,7 @@ move into your package:
 |---|---|---|
 | `tasks/ops.py` additions | `mypkg/mymodel_ops.py` | plain torch; reference forms for the golden |
 | `tasks/kernels/<op>.py` | `mypkg/mymodel_kernels.py` | `from dataflow.tasks.kernels.registry import register, none, internal` — the decorator ABI is public; your fused impls join the same kernel-set stamp |
-| `tasks/<family>_blocks.py` | `mypkg/mymodel_blocks.py` | subclass `BlockFwd`/`BlockRecompute`/`BlockBwd` from `dataflow.tasks.llama3_blocks` (or a closer builtin family); STAGES grammar, MetaState mixins, ProfileFill — all inherited machinery |
+| `tasks/models/<family>_blocks.py` | `mypkg/mymodel_blocks.py` | subclass `BlockFwd`/`BlockRecompute`/`BlockBwd` from `dataflow.tasks.models.llama3_blocks` (or a closer builtin family); STAGES grammar, MetaState mixins, ProfileFill — all inherited machinery |
 | `models/<family>_reference.py` | `mypkg/mymodel_reference.py` | subclass a builtin golden or compose `dataflow.tasks.ops.*_reference` |
 | `training/<family>.py` | `mypkg/mymodel_training.py` | `build_shaped_program`, `LayerKindSpec`, `MetaShare`, `FamilyLayouts`, `size_of_factory`, `initial_values_from_layouts` — the whole lowering toolkit is importable |
 | `training/families.py` entry | the plugin module above | `register_family` |

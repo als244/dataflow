@@ -30,10 +30,10 @@ import torch.nn.functional as F
 
 from dataflow.core import TaskSpec
 
-from . import ops
-from .kernels import KernelSet, resolve_kernels
-from .interop import torch_view
-from .layouts import (
+from .. import ops
+from ..kernels import KernelSet, resolve_kernels
+from ..interop import torch_view
+from ..layouts import (
     Dsv32Dims,
     PackedLayout,
     dsv32_dense_context_layout,
@@ -42,7 +42,7 @@ from .layouts import (
     dsv32_moe_weight_layout,
     dsv32_meta_layout,
 )
-from .base_blocks import (AdamWHyper, AdamWStep, EmbedBwd, EmbedFwd,
+from ..base_blocks import (AdamWHyper, AdamWStep, EmbedBwd, EmbedFwd,
                           FrozenHeadLoss, HeadLoss)
 from .llama3_blocks import BlockRecompute
 from .dsv3_blocks import (
@@ -54,7 +54,7 @@ from .dsv3_blocks import (
     _mla_expand_kv,
     _mla_expand_q,
 )
-from .moe.stages import MOE_SHARED_NOGATE_STAGES, MoEProfileFill, moe_bias_update, moe_mlp_tail_bwd
+from ..modules.moe.stages import MOE_SHARED_NOGATE_STAGES, MoEProfileFill, moe_bias_update, moe_mlp_tail_bwd
 
 _LN_EPS = 1e-5
 
@@ -80,7 +80,7 @@ def _bits_for_bounds(idx, bounds, device):
     # per-sequence selection bitmasks (int64 words), packed once and
     # shared across sparse-bwd + KL kernels (eager impls ignore them)
     try:
-        from .kernels.dsa import _pack_local_bits
+        from ..kernels.dsa import _pack_local_bits
     except ImportError:
         return None
     out = []

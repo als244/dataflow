@@ -18,7 +18,7 @@ import torch
 
 from dataflow.models.dsv3_reference import GoldenDsv3
 from dataflow.tasks import ops
-from dataflow.tasks.dsa_reference import (
+from dataflow.tasks.modules.dsa_reference import (
     dsa_index_scores_reference,
     dsa_indexer_kl_reference,
     dsa_mask_from_idx,
@@ -31,8 +31,8 @@ from dataflow.tasks.layouts import (
     dsv32_dense_weight_layout,
     dsv32_moe_weight_layout,
 )
-from dataflow.tasks.mla_reference import mla_qkv_reference
-from dataflow.tasks.moe.reference import moe_mlp_reference, moe_topk_reference
+from dataflow.tasks.modules.mla_reference import mla_qkv_reference
+from dataflow.tasks.modules.moe.reference import moe_mlp_reference, moe_topk_reference
 
 
 _IDX_FIELDS = ("w_idx_q", "w_idx_k", "idx_k_ln_w", "idx_k_ln_b", "w_idx_w")
@@ -94,7 +94,7 @@ class GoldenDsv32(GoldenDsv3):
         else:
             # dense warm-up: attention over the FULL causal prefix; the
             # KL target likewise (report formula 3)
-            from dataflow.tasks.dsa_reference import _causal_mask
+            from dataflow.tasks.modules.dsa_reference import _causal_mask
 
             mask = _causal_mask(d, t, x.device)
         train_idx = getattr(d, "train_indexer", True)

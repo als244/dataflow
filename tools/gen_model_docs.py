@@ -79,7 +79,7 @@ def _meta_layout(family: str, dims, layer: int):
 
             return glm52_meta_layout(dims, dims.kind_of(layer))
         if family in ("olmoe", "qwen3moe", "qwen35moe", "dsv3"):
-            from dataflow.tasks.moe.spec import moe_meta_layout
+            from dataflow.tasks.modules.moe.spec import moe_meta_layout
 
             kind_of = getattr(dims, "kind_of", lambda i: "moe")
             kind = kind_of(layer)

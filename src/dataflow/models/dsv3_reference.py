@@ -23,8 +23,8 @@ from dataflow.tasks.layouts import (
     dsv3_dense_weight_layout,
     dsv3_moe_weight_layout,
 )
-from dataflow.tasks.mla_reference import mla_attention_reference
-from dataflow.tasks.moe.reference import moe_mlp_reference
+from dataflow.tasks.modules.mla_reference import mla_attention_reference
+from dataflow.tasks.modules.moe.reference import moe_mlp_reference
 
 
 @dataclass
@@ -61,7 +61,7 @@ class GoldenDsv3(GoldenOlmoe):
         # capture the step's discrete assignment counts for the bias rule
         # (mirrors the runtime's counts-through-the-dW-slot aggregation)
         if route_ids is None:
-            from dataflow.tasks.moe.reference import moe_topk_reference
+            from dataflow.tasks.modules.moe.reference import moe_topk_reference
 
             with torch.no_grad():
                 logits = h2 @ w["w_router"]

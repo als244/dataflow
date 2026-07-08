@@ -4,7 +4,7 @@ Same contract as GoldenOlmoe (whose CE+aux objective / CE-only reported
 loss and AdamW replica are inherited unchanged). The block differs only in
 attention: qwen3's PER-HEAD qk-norm (one shared ``(head_dim,)`` weight for
 q and one for k, applied over head_dim-wide rows) with GQA and rope 1e6.
-The MoE tail is composed from ``dataflow.tasks.moe.reference`` with
+The MoE tail is composed from ``dataflow.tasks.modules.moe.reference`` with
 ``topk_then_softmax`` (norm_topk_prob=true) and NO shared expert.
 """
 from __future__ import annotations
@@ -16,7 +16,7 @@ import torch
 from dataflow.models.olmoe_reference import GoldenOlmoe
 from dataflow.tasks import ops
 from dataflow.tasks.layouts import PackedLayout, Qwen3MoeDims, qwen3moe_weight_layout
-from dataflow.tasks.moe.reference import moe_mlp_reference
+from dataflow.tasks.modules.moe.reference import moe_mlp_reference
 
 
 @dataclass

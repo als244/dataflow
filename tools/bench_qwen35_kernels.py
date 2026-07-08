@@ -13,7 +13,7 @@ candidate explanations for our lin-attn tasks costing more than flextrain's:
    fill SMs during the inter-chunk recurrent stages.
 
 This times fwd+bwd for both kernels at matched per-token work across
-launch shapes, mirroring src/dataflow/tasks/qwen35_blocks.py invocations
+launch shapes, mirroring src/dataflow/tasks/models/qwen35_blocks.py invocations
 exactly (contiguity contract included). Run in the `dataflow` env with the
 GPU otherwise idle:
 

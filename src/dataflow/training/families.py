@@ -78,7 +78,7 @@ class Family:
 
 def _llama3() -> Family:
     from dataflow.tasks.layouts import context_layout, weight_layout
-    from dataflow.tasks.llama3_blocks import BlockBwd, BlockFwd, BlockRecompute, build_resolver
+    from dataflow.tasks.models.llama3_blocks import BlockBwd, BlockFwd, BlockRecompute, build_resolver
     from .llama3 import dims_of, initial_values, lower_llama3
     from .llama3 import ShapedLlamaConfig
 
@@ -105,7 +105,7 @@ def _llama3() -> Family:
 
 def _qwen3() -> Family:
     from dataflow.tasks.layouts import qwen3_context_layout, qwen3_weight_layout
-    from dataflow.tasks.qwen3_blocks import (
+    from dataflow.tasks.models.qwen3_blocks import (
         Qwen3BlockBwd,
         Qwen3BlockFwd,
         Qwen3BlockRecompute,
@@ -136,7 +136,7 @@ def _qwen3() -> Family:
 
 
 def _qwen35() -> Family:
-    from dataflow.tasks.qwen35_blocks import build_qwen35_resolver
+    from dataflow.tasks.models.qwen35_blocks import build_qwen35_resolver
     from .qwen35 import initial_values_qwen35, lower_qwen35
     from .qwen35 import ShapedQwen35Config, dims_of_qwen35
 
@@ -159,7 +159,7 @@ def _qwen35() -> Family:
 
 
 def _olmoe() -> Family:
-    from dataflow.tasks.olmoe_blocks import build_olmoe_resolver
+    from dataflow.tasks.models.olmoe_blocks import build_olmoe_resolver
     from .olmoe import ShapedOlmoeConfig, dims_of_olmoe, initial_values_olmoe, lower_olmoe
 
     def golden():
@@ -182,7 +182,7 @@ def _olmoe() -> Family:
 
 
 def _qwen35moe() -> Family:
-    from dataflow.tasks.qwen35moe_blocks import build_qwen35moe_resolver
+    from dataflow.tasks.models.qwen35moe_blocks import build_qwen35moe_resolver
     from .qwen35moe import (
         ShapedQwen35MoeConfig,
         dims_of_qwen35moe,
@@ -209,7 +209,7 @@ def _qwen35moe() -> Family:
 
 
 def _qwen3moe() -> Family:
-    from dataflow.tasks.qwen3moe_blocks import build_qwen3moe_resolver
+    from dataflow.tasks.models.qwen3moe_blocks import build_qwen3moe_resolver
     from .qwen3moe import (
         ShapedQwen3MoeConfig,
         dims_of_qwen3moe,
@@ -236,7 +236,7 @@ def _qwen3moe() -> Family:
 
 
 def _dsv3() -> Family:
-    from dataflow.tasks.dsv3_blocks import build_dsv3_resolver
+    from dataflow.tasks.models.dsv3_blocks import build_dsv3_resolver
     from .dsv3 import (
         ShapedDsv3Config,
         dims_of_dsv3,
@@ -263,7 +263,7 @@ def _dsv3() -> Family:
 
 
 def _dsv32() -> Family:
-    from dataflow.tasks.dsv32_blocks import build_dsv32_resolver
+    from dataflow.tasks.models.dsv32_blocks import build_dsv32_resolver
     from .dsv32 import (
         ShapedDsv32Config,
         dims_of_dsv32,
@@ -297,7 +297,7 @@ def _glm52() -> Family:
         lower_glm52,
     )
 
-    from dataflow.tasks.glm52_blocks import build_glm52_resolver
+    from dataflow.tasks.models.glm52_blocks import build_glm52_resolver
 
     def golden():
         from dataflow.models.glm52_reference import GoldenGlm52

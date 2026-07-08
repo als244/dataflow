@@ -37,9 +37,9 @@ import torch
 
 from dataflow.core import TaskSpec
 
-from . import ops
-from .kernels import KernelSet, resolve_kernels
-from .layouts import (
+from .. import ops
+from ..kernels import KernelSet, resolve_kernels
+from ..layouts import (
     PackedLayout,
     Qwen35Dims,
     embed_weight_layout,
@@ -49,7 +49,7 @@ from .layouts import (
     qwen35_lin_context_layout,
     qwen35_lin_weight_layout,
 )
-from .base_blocks import AdamWHyper, AdamWStep, EmbedBwd, EmbedFwd, HeadLoss
+from ..base_blocks import AdamWHyper, AdamWStep, EmbedBwd, EmbedFwd, HeadLoss
 from .llama3_blocks import BlockBwd, BlockFwd, BlockRecompute
 
 

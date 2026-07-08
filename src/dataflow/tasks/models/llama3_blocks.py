@@ -32,10 +32,10 @@ import torch
 from dataflow.core import TaskSpec
 from dataflow.runtime.executable import TaskContext
 
-from . import ops
-from .interop import external_stream, torch_view
-from .kernels import KernelCtx, KernelSet, resolve_kernels
-from .layouts import (
+from .. import ops
+from ..interop import external_stream, torch_view
+from ..kernels import KernelCtx, KernelSet, resolve_kernels
+from ..layouts import (
     LlamaDims,
     PackedLayout,
     context_layout,

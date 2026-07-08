@@ -7,7 +7,7 @@ budget, as exercised by `tools/bench_train.py`.
 import torch
 from dataclasses import replace
 from dataflow.runtime.device.cuda import CudaBackend
-from dataflow.tasks.llama3_blocks import build_resolver
+from dataflow.tasks.models.llama3_blocks import build_resolver
 from dataflow.training.llama3_lowering import dims_of, lower_llama3
 from dataflow.training.planning import plan_program
 from dataflow.training.profiling import apply_measured_costs, cached_pcie, load_or_profile

@@ -3,7 +3,7 @@
 Same contract as GoldenLlama3 (reused for packed-leaf handling and the
 exact AdamW replica). Block = qwen3-shaped attention with FULL-ROW qk-norm
 (one RMSNorm over the whole q/k rows) + the MoE SwiGLU tail composed from
-``dataflow.tasks.moe.reference`` (routing modes, smallest-index tie-break,
+``dataflow.tasks.modules.moe.reference`` (routing modes, smallest-index tie-break,
 fp32 combine, shared-expert and aux-loss semantics all pinned there).
 
 Aux load-balance loss: the AUTOGRAD OBJECTIVE is CE + sum of per-layer aux
@@ -19,7 +19,7 @@ import torch
 
 from dataflow.tasks import ops
 from dataflow.tasks.layouts import OlmoeDims, PackedLayout, olmoe_weight_layout
-from dataflow.tasks.moe.reference import moe_mlp_reference
+from dataflow.tasks.modules.moe.reference import moe_mlp_reference
 from dataflow.models.llama3_reference import GoldenLlama3
 
 

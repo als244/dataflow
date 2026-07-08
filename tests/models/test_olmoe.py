@@ -103,7 +103,7 @@ def test_olmoe_block_ladder2():
     from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME
     from dataflow.tasks.kernels import KernelCtx, resolve_kernels
     from dataflow.tasks.layouts import grad_layout
-    from dataflow.tasks.olmoe_blocks import OlmoeBlockBwd, OlmoeBlockFwd, OlmoeBlockRecompute
+    from dataflow.tasks.models.olmoe_blocks import OlmoeBlockBwd, OlmoeBlockFwd, OlmoeBlockRecompute
 
     cfg = _tiny_cfg()
     dims = _tiny_dims(cfg)
@@ -119,7 +119,7 @@ def test_olmoe_block_ladder2():
         for f in cl.fields
     }
     y = torch.empty_like(x)
-    from dataflow.tasks.moe.spec import moe_meta_layout
+    from dataflow.tasks.modules.moe.spec import moe_meta_layout
 
     m_l = moe_meta_layout(dims, dims.moe)
     meta_views = {f.name: torch.empty(f.shape, dtype=TORCH_DTYPE_BY_NAME[f.dtype],
@@ -182,7 +182,7 @@ def test_olmoe_block_ladder2():
 
 def test_olmoe_stage_context_completeness():
     from dataflow.tasks.layouts import olmoe_context_layout
-    from dataflow.tasks.olmoe_blocks import OlmoeBlockFwd
+    from dataflow.tasks.models.olmoe_blocks import OlmoeBlockFwd
 
     cl = olmoe_context_layout(_tiny_dims())
     declared = {f.name for f in cl.fields}

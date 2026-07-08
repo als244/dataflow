@@ -26,9 +26,9 @@ import torch
 
 from dataflow.core import TaskSpec
 
-from . import ops
-from .kernels import KernelSet, resolve_kernels
-from .layouts import (
+from .. import ops
+from ..kernels import KernelSet, resolve_kernels
+from ..layouts import (
     Dsv3Dims,
     PackedLayout,
     dsv3_dense_context_layout,
@@ -36,9 +36,9 @@ from .layouts import (
     dsv3_moe_context_layout,
     dsv3_moe_weight_layout,
 )
-from .base_blocks import AdamWHyper, AdamWStep, EmbedBwd, EmbedFwd, HeadLoss
+from ..base_blocks import AdamWHyper, AdamWStep, EmbedBwd, EmbedFwd, HeadLoss
 from .llama3_blocks import BlockBwd, BlockFwd, BlockRecompute
-from .moe.stages import (
+from ..modules.moe.stages import (
     MOE_SHARED_NOGATE_STAGES,
     MoEMetaState,
     MoEProfileFill,

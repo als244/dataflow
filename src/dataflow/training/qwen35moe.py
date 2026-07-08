@@ -32,7 +32,7 @@ from dataflow.tasks.layouts import (
     qwen35moe_lin_context_layout,
     qwen35moe_lin_weight_layout,
 )
-from dataflow.tasks.moe.spec import MoESpec, moe_meta_layout
+from dataflow.tasks.modules.moe.spec import MoESpec, moe_meta_layout
 
 from .lowering import FamilyLayouts, apply_exact_sizes, initial_values_from_layouts, size_of_factory
 from .qwen35 import _a_log_init, _dt_bias_init

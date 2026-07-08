@@ -56,7 +56,7 @@ output vs reference forward; hand-written backward vs autograd on the
 reference; `rel_l2` with bf16-honest tolerances (2–3e-2). Every registry
 impl passes the same test.
 
-## 2. Compose a block (`tasks/<family>_blocks.py`)
+## 2. Compose a block (`tasks/models/<family>_blocks.py`)
 
 **Author the forward as stages.** A block's forward is an ordered `STAGES`
 tuple of `(name, fn(kctx, kernels, dims, state), emitted_context_fields)` —
@@ -128,7 +128,7 @@ grad_bytes)` and pass `meta_shared=` to `build_shaped_program` — consumers
 gain the producer's M as an input on fwd/rc/bwd, and a `dM_{s}_{r}_{prod}`
 accumulator is chained dW-style in reverse bwd order (last consumer
 creates, middles mutate, producer consumes). See `training/glm52.py` +
-`tasks/glm52_blocks.py` for the full worked example (leader/follower
+`tasks/models/glm52_blocks.py` for the full worked example (leader/follower
 blocks, centroid gradient through dM).
 
 Gate — ladder level 2: `check_block_backward(dims)` verifies dx + every
@@ -376,7 +376,7 @@ What adding a family (e.g. Qwen3) actually touches, in order:
 
 1. `tasks/ops.py` + `tasks/kernels/` — any op the family adds (QK-norm,
    different activation, MoE dispatch). Ladder 1 per op.
-2. `tasks/<family>_blocks.py` — `STAGES` forward, derived recompute,
+2. `tasks/models/<family>_blocks.py` — `STAGES` forward, derived recompute,
    bwd, layouts. Ladder 2 + structural stage tests.
 3. `models/<family>_reference.py` — golden autograd model,
    `from_packed_bytes`.
@@ -436,7 +436,7 @@ embeddings) added to the machinery — reuse, don't reinvent:
   out of a packed context is read with the wrong stride and corrupts
   results SILENTLY (the qwen35 gate-gradient hunt).
 - **MoE variants (olmoe / qwen35moe — the pluggable module)**: the MoE
-  SwiGLU tail is a self-contained module (`tasks/moe/`); a family opts
+  SwiGLU tail is a self-contained module (`tasks/modules/moe/`); a family opts
   in through FIVE points and
   writes no MoE math of its own:
   1. layout builders append `moe_weight_specs(dims, moe)` /

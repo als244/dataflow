@@ -21,7 +21,7 @@ from dataflow.core import DTYPE_BITS
 from dataflow.runtime.device.base import Buffer
 
 if TYPE_CHECKING:  # torch-free at runtime: moe.spec imports lazily below
-    from .moe.spec import MoESpec
+    from .modules.moe.spec import MoESpec
 
 _ALIGN = 256
 
@@ -361,7 +361,7 @@ class OlmoeDims(Qwen3Dims):
 
 
 def olmoe_weight_layout(dims: OlmoeDims, layer: int | None = None) -> PackedLayout:
-    from .moe.spec import moe_weight_specs
+    from .modules.moe.spec import moe_weight_specs
 
     d, q, kv = dims.d_model, dims.q_dim, dims.kv_dim
     return PackedLayout.build(_param_specs(dims, [
@@ -380,7 +380,7 @@ def olmoe_context_layout(dims: OlmoeDims) -> PackedLayout:
     """Saved backward context for one OLMoE block: qwen3's save-pre-norm
     convention with FULL-ROW rstds (one per token), plus the MoE tail's
     routing decision + pre-activations (tasks/moe/spec.py)."""
-    from .moe.spec import moe_context_specs
+    from .modules.moe.spec import moe_context_specs
 
     t, d, q, kv, h = dims.tokens, dims.d_model, dims.q_dim, dims.kv_dim, dims.n_heads
     return PackedLayout.build([
@@ -436,7 +436,7 @@ class Qwen3MoeDims(Qwen3Dims):
 
 
 def qwen3moe_weight_layout(dims: Qwen3MoeDims, layer: int | None = None) -> PackedLayout:
-    from .moe.spec import moe_weight_specs
+    from .modules.moe.spec import moe_weight_specs
 
     d, q, kv, hd = dims.d_model, dims.q_dim, dims.kv_dim, dims.head_dim
     return PackedLayout.build(_param_specs(dims, [
@@ -454,7 +454,7 @@ def qwen3moe_weight_layout(dims: Qwen3MoeDims, layer: int | None = None) -> Pack
 def qwen3moe_context_layout(dims: Qwen3MoeDims) -> PackedLayout:
     """qwen3's save-pre-norm convention with PER-HEAD rstds, plus the MoE
     tail's routing decision + pre-activations (tasks/moe/spec.py)."""
-    from .moe.spec import moe_context_specs
+    from .modules.moe.spec import moe_context_specs
 
     t, d, q, kv = dims.tokens, dims.d_model, dims.q_dim, dims.kv_dim
     h, kvh = dims.n_heads, dims.n_kv_heads
@@ -583,7 +583,7 @@ def dsv3_dense_context_layout(dims: Dsv3Dims) -> PackedLayout:
 
 
 def dsv3_moe_weight_layout(dims: Dsv3Dims, layer: int | None = None) -> PackedLayout:
-    from .moe.spec import moe_weight_specs
+    from .modules.moe.spec import moe_weight_specs
 
     return PackedLayout.build(_param_specs(
         dims, _dsv3_attn_weight_specs(dims) + moe_weight_specs(dims, dims.moe),
@@ -592,7 +592,7 @@ def dsv3_moe_weight_layout(dims: Dsv3Dims, layer: int | None = None) -> PackedLa
 
 
 def dsv3_moe_context_layout(dims: Dsv3Dims) -> PackedLayout:
-    from .moe.spec import moe_context_specs
+    from .modules.moe.spec import moe_context_specs
 
     return PackedLayout.build(
         _dsv3_attn_ctx_specs(dims) + moe_context_specs(dims, dims.moe, meta=True)
@@ -709,7 +709,7 @@ def dsv32_dense_context_layout(dims: Dsv32Dims) -> PackedLayout:
 
 
 def dsv32_moe_weight_layout(dims: Dsv32Dims, layer: int | None = None) -> PackedLayout:
-    from .moe.spec import moe_weight_specs
+    from .modules.moe.spec import moe_weight_specs
 
     return PackedLayout.build(_param_specs(
         dims, _dsv32_attn_weight_specs(dims) + moe_weight_specs(dims, dims.moe),
@@ -718,7 +718,7 @@ def dsv32_moe_weight_layout(dims: Dsv32Dims, layer: int | None = None) -> Packed
 
 
 def dsv32_moe_context_layout(dims: Dsv32Dims) -> PackedLayout:
-    from .moe.spec import moe_context_specs
+    from .modules.moe.spec import moe_context_specs
 
     return PackedLayout.build(
         _dsv32_attn_ctx_specs(dims)
@@ -730,7 +730,7 @@ def glm52_meta_layout(dims: "Glm52Dims", kind: str) -> PackedLayout:
     """glm52 M objects: leaders (gdl/gml) carry the dsa selection their
     group shares; moe kinds (gml/gmf) carry their own routing pack.
     Followers never carry a selection — they consume the producer's M."""
-    from .moe.spec import moe_meta_specs
+    from .modules.moe.spec import moe_meta_specs
 
     specs: list[tuple[str, tuple[int, ...], str]] = []
     if kind in ("gdl", "gml") and getattr(dims, "sparse_mode", True):
@@ -744,7 +744,7 @@ def dsv32_meta_layout(dims: Dsv32Dims, kind: str) -> PackedLayout:
     """The layer's M object: ALL its never-recompute metadata in one
     packed layout — the dsa selection (sparse mode) and the discrete
     routing pack (moe kinds)."""
-    from .moe.spec import moe_meta_specs
+    from .modules.moe.spec import moe_meta_specs
 
     specs: list[tuple[str, tuple[int, ...], str]] = []
     if dims.sparse_mode:
@@ -958,7 +958,7 @@ class Qwen35MoeDims(Qwen35Dims):
 
 
 def qwen35moe_lin_weight_layout(dims: Qwen35MoeDims, layer: int | None = None) -> PackedLayout:
-    from .moe.spec import moe_weight_specs
+    from .modules.moe.spec import moe_weight_specs
 
     return PackedLayout.build(_param_specs(
         dims, _qwen35_lin_attn_specs(dims) + moe_weight_specs(dims, dims.moe),
@@ -967,14 +967,14 @@ def qwen35moe_lin_weight_layout(dims: Qwen35MoeDims, layer: int | None = None) -
 
 
 def qwen35moe_lin_context_layout(dims: Qwen35MoeDims) -> PackedLayout:
-    from .moe.spec import moe_context_specs
+    from .modules.moe.spec import moe_context_specs
 
     return PackedLayout.build(
         _qwen35_lin_attn_ctx(dims) + moe_context_specs(dims, dims.moe, meta=True))
 
 
 def qwen35moe_attn_weight_layout(dims: Qwen35MoeDims, layer: int | None = None) -> PackedLayout:
-    from .moe.spec import moe_weight_specs
+    from .modules.moe.spec import moe_weight_specs
 
     return PackedLayout.build(_param_specs(
         dims, _qwen35_attn_attn_specs(dims) + moe_weight_specs(dims, dims.moe),
@@ -983,7 +983,7 @@ def qwen35moe_attn_weight_layout(dims: Qwen35MoeDims, layer: int | None = None) 
 
 
 def qwen35moe_attn_context_layout(dims: Qwen35MoeDims) -> PackedLayout:
-    from .moe.spec import moe_context_specs
+    from .modules.moe.spec import moe_context_specs
 
     return PackedLayout.build(
         _qwen35_attn_attn_ctx(dims) + moe_context_specs(dims, dims.moe, meta=True))

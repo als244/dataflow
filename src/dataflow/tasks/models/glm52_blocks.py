@@ -33,10 +33,10 @@ import torch
 
 from dataflow.core import TaskSpec
 
-from . import ops
-from .interop import torch_view
-from .kernels import KernelSet, resolve_kernels
-from .layouts import (
+from .. import ops
+from ..interop import torch_view
+from ..kernels import KernelSet, resolve_kernels
+from ..layouts import (
     Glm52Dims,
     PackedLayout,
     dsv3_dense_context_layout,
@@ -45,7 +45,7 @@ from .layouts import (
     dsv32_moe_weight_layout,
     glm52_meta_layout,
 )
-from .base_blocks import (AdamWHyper, AdamWStep, EmbedBwd, EmbedFwd,
+from ..base_blocks import (AdamWHyper, AdamWStep, EmbedBwd, EmbedFwd,
                           FrozenHeadLoss, HeadLoss)
 from .llama3_blocks import BlockRecompute
 from .dsv3_blocks import Dsv3DenseBlockFwd, Dsv3MoeBlockBwd, Dsv3MoeBlockFwd
@@ -65,12 +65,12 @@ from .dsv32_blocks import (
     _causal_bits,
     _seq_bounds,
 )
-from .moe.stages import MOE_SHARED_NOGATE_STAGES, moe_bias_update, moe_mlp_tail_bwd
+from ..modules.moe.stages import MOE_SHARED_NOGATE_STAGES, moe_bias_update, moe_mlp_tail_bwd
 
 
 def _glm52_moe_context_layout(dims: Glm52Dims) -> PackedLayout:
-    from .layouts import _dsv3_attn_ctx_specs
-    from .moe.spec import moe_context_specs
+    from ..layouts import _dsv3_attn_ctx_specs
+    from ..modules.moe.spec import moe_context_specs
 
     return PackedLayout.build(
         _dsv3_attn_ctx_specs(dims) + moe_context_specs(dims, dims.moe, meta=True)

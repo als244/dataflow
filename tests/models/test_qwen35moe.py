@@ -127,7 +127,7 @@ def _ladder2(kind: str, tol: float = 4e-2):
     from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME
     from dataflow.tasks.kernels import KernelCtx, resolve_kernels
     from dataflow.tasks.layouts import grad_layout
-    from dataflow.tasks.qwen35moe_blocks import (
+    from dataflow.tasks.models.qwen35moe_blocks import (
         Qwen35MoeAttnBlockBwd,
         Qwen35MoeAttnBlockFwd,
         Qwen35MoeAttnBlockRecompute,
@@ -158,7 +158,7 @@ def _ladder2(kind: str, tol: float = 4e-2):
         for f in cl.fields
     }
     y = torch.empty_like(x)
-    from dataflow.tasks.moe.spec import moe_meta_layout
+    from dataflow.tasks.modules.moe.spec import moe_meta_layout
 
     m_l = moe_meta_layout(dims, dims.moe)
     meta_views = {f.name: torch.empty(f.shape, dtype=TORCH_DTYPE_BY_NAME[f.dtype],
@@ -230,7 +230,7 @@ def test_qwen35moe_stage_context_completeness():
         qwen35moe_attn_context_layout,
         qwen35moe_lin_context_layout,
     )
-    from dataflow.tasks.qwen35moe_blocks import Qwen35MoeAttnBlockFwd, Qwen35MoeLinBlockFwd
+    from dataflow.tasks.models.qwen35moe_blocks import Qwen35MoeAttnBlockFwd, Qwen35MoeLinBlockFwd
 
     dims = _tiny_dims()
     for cls, cl in (

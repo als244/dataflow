@@ -297,7 +297,7 @@ def moe_mlp_tail_bwd(kctx, K, d, dy, a, w, dw, accum, acc, norm_bwd, *, resid_fi
         else:
             dw["w_router_bias"].copy_(cnt)
         if moe.aux_coef > 0:
-            from .. import ops as _ops
+            from ... import ops as _ops
 
             lens = _ops.seq_lens_of(d.seq_spec, t)
             K.moe_seq_aux_grad(
@@ -432,7 +432,7 @@ class MoEProfileFill:
     M-era: the routing pack lives in the M object, never the ctx."""
 
     def profile_fill(self, ctx) -> None:
-        from ..interop import torch_view
+        from ...interop import torch_view
         from .spec import moe_meta_layout
 
         key = ctx.task.compute_block_key

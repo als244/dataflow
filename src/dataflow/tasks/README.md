@@ -5,6 +5,16 @@ program task. Ops (math + reference + costs) compose into block executables
 resolved by `compute_block_key`. The only layer that imports torch/triton;
 never imports the simulator.
 
+## Layout
+
+| where | what |
+|---|---|
+| `base_blocks.py` | family-NEUTRAL executables: `_Base`, embed fwd/bwd, `HeadLoss`/`FrozenHeadLoss`, the per-field-policy optimizer step |
+| `models/` | one module per model family (`<family>_blocks.py`): stages, backwards, resolver. `models/llama3_blocks.py` also hosts the `Block*` templates every family subclasses (their default STAGES are llama's) |
+| `modules/` | shared building-block modules: the pluggable `moe/` package, `dsa_reference.py`, `mla_reference.py` |
+| `kernels/` | the registry op implementations (eager/triton/aten/fla) |
+| `layouts.py`, `ops.py`, `optim.py`, `interop.py` | packed layouts + dims, eager op library, optimizer defs/policies, torch-buffer interop |
+
 ## Contracts
 
 - **Executable**: `launch(TaskContext)` — enqueue device work on

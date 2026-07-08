@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import torch
 
-from . import ops
+from .. import ops
 
 
 def mla_head_dims(dims) -> tuple[int, int]:

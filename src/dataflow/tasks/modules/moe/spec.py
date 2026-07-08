@@ -1,7 +1,7 @@
 """MoE layer spec + byte-level layout helpers (torch-free).
 
 This module is the torch-free half of the pluggable MoE-MLP module
-(`dataflow.tasks.moe`): the `MoESpec` configuration knob set and the
+(`dataflow.tasks.modules.moe`): the `MoESpec` configuration knob set and the
 weight/context field-spec builders that family layout builders compose.
 
 Global-vs-local accounting rule (the expert-parallelism seam):
@@ -237,7 +237,7 @@ def moe_meta_specs(dims, moe: MoESpec) -> list[tuple[str, tuple[int, ...], str]]
 
 def moe_meta_layout(dims, moe: MoESpec):
     """The layer's M object for pure-MoE families: the routing pack."""
-    from ..layouts import PackedLayout
+    from ...layouts import PackedLayout
 
     return PackedLayout.build(moe_meta_specs(dims, moe))
 

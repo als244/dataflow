@@ -253,7 +253,7 @@ def _ladder2(kind: str, tol: float = 4e-2):
     from dataflow.models.qwen35_reference import GoldenQwen35
     from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME
     from dataflow.tasks.kernels import KernelCtx, resolve_kernels
-    from dataflow.tasks.qwen35_blocks import (
+    from dataflow.tasks.models.qwen35_blocks import (
         Qwen35AttnBlockBwd,
         Qwen35AttnBlockFwd,
         Qwen35AttnBlockRecompute,
@@ -348,7 +348,7 @@ def test_qwen35_stage_context_completeness():
         qwen35_attn_context_layout,
         qwen35_lin_context_layout,
     )
-    from dataflow.tasks.qwen35_blocks import Qwen35AttnBlockFwd, Qwen35LinBlockFwd
+    from dataflow.tasks.models.qwen35_blocks import Qwen35AttnBlockFwd, Qwen35LinBlockFwd
 
     dims = _tiny_dims()
     for cls, cl in (

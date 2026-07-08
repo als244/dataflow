@@ -2,7 +2,7 @@
 
 Subclasses GoldenQwen35 (leaf handling, exact AdamW, per-kind attention
 math) and swaps the dense SwiGLU tail for
-``dataflow.tasks.moe.reference.moe_mlp_reference`` — routed top-k
+``dataflow.tasks.modules.moe.reference.moe_mlp_reference`` — routed top-k
 (topk_then_softmax at 35B-A3B) + ONE sigmoid-gated shared expert + the
 gradient-injected load-balance aux. The autograd objective is CE + the
 per-layer aux terms (f detached); the RETURNED/reported loss stays
@@ -21,7 +21,7 @@ from dataflow.tasks.layouts import (
     qwen35moe_attn_weight_layout,
     qwen35moe_lin_weight_layout,
 )
-from dataflow.tasks.moe.reference import moe_mlp_reference
+from dataflow.tasks.modules.moe.reference import moe_mlp_reference
 from dataflow.models.llama3_reference import Leaves
 from dataflow.models.qwen35_reference import GoldenQwen35
 

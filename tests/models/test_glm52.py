@@ -416,8 +416,8 @@ def test_glm52_leader_follower_pair_ladder():
     leader consumes and chains sigma - (p_own + dM)/2 through its indexer
     weights) and compares EVERY gradient."""
     from dataflow.models.glm52_reference import GoldenGlm52
-    from dataflow.tasks.dsa_reference import dsa_mask_from_idx
-    from dataflow.tasks.glm52_blocks import (
+    from dataflow.tasks.modules.dsa_reference import dsa_mask_from_idx
+    from dataflow.tasks.models.glm52_blocks import (
         Glm52MfBlockBwd,
         Glm52MfBlockFwd,
         Glm52MlBlockBwd,
@@ -505,8 +505,8 @@ def test_glm52_leader_follower_pair_ladder():
     golden._group_scores = None
     golden._group_mask = None
     # pin the runtime's selections/routings
-    from dataflow.tasks.dsa_reference import dsa_index_scores_reference
-    from dataflow.tasks.mla_reference import mla_qkv_reference
+    from dataflow.tasks.modules.dsa_reference import dsa_index_scores_reference
+    from dataflow.tasks.modules.mla_reference import mla_qkv_reference
     from dataflow.tasks import ops as _ops
 
     h1_ref = _ops.rmsnorm_reference(x_ref, leaves_ld["attn_norm_w"])

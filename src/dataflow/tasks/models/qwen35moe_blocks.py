@@ -14,8 +14,8 @@ from dataclasses import dataclass
 
 from dataflow.core import TaskSpec
 
-from .kernels import KernelSet, resolve_kernels
-from .layouts import (
+from ..kernels import KernelSet, resolve_kernels
+from ..layouts import (
     PackedLayout,
     Qwen35MoeDims,
     embed_weight_layout,
@@ -25,8 +25,8 @@ from .layouts import (
     qwen35moe_lin_context_layout,
     qwen35moe_lin_weight_layout,
 )
-from .base_blocks import AdamWHyper, AdamWStep, EmbedBwd, EmbedFwd, HeadLoss
-from .moe.stages import MOE_SHARED_STAGES, MoEMetaState, MoEProfileFill, moe_mlp_tail_bwd
+from ..base_blocks import AdamWHyper, AdamWStep, EmbedBwd, EmbedFwd, HeadLoss
+from ..modules.moe.stages import MOE_SHARED_STAGES, MoEMetaState, MoEProfileFill, moe_mlp_tail_bwd
 from .qwen35_blocks import (
     Qwen35AttnBlockBwd,
     Qwen35AttnBlockFwd,

@@ -69,7 +69,7 @@ def test_index_scores_vs_hand_loop():
     """The einsum'd reference against a literal per-(t,s,j) loop of the
     paper's formula (1) at tiny size — rope-first, LN, scale chain."""
     from dataflow.tasks import ops
-    from dataflow.tasks.dsa_reference import _LN_EPS, dsa_index_scores_reference
+    from dataflow.tasks.modules.dsa_reference import _LN_EPS, dsa_index_scores_reference
 
     d = _Dims(tokens=32, seq_len=32)
     w = _idx_weights(d, seed=1)
@@ -113,7 +113,7 @@ def test_topk_padding_is_mask_safe_and_tie_rule_consistent():
     prefixes stay mask-suppressed to exactly the causal prefix), the
     LIVE-set correctness under total ties, and runtime-kernel vs
     reference AGREEMENT (both sides one rule)."""
-    from dataflow.tasks.dsa_reference import (
+    from dataflow.tasks.modules.dsa_reference import (
         _causal_mask,
         dsa_mask_from_idx,
         dsa_topk_reference,
@@ -144,7 +144,7 @@ def test_mask_form_equals_gather_form_fwd_and_bwd():
     optimized gather kernels rely on)."""
     torch.manual_seed(3)
     t, h, qk, k_sel = 64, 2, 24, 16
-    from dataflow.tasks.dsa_reference import (
+    from dataflow.tasks.modules.dsa_reference import (
         _causal_mask,
         dsa_mask_from_idx,
         dsa_topk_reference,
@@ -182,7 +182,7 @@ def test_mask_form_equals_gather_form_fwd_and_bwd():
 
 
 def test_indexer_kl_grad_is_softmax_minus_p_and_inputs_detached():
-    from dataflow.tasks.dsa_reference import (
+    from dataflow.tasks.modules.dsa_reference import (
         _causal_mask,
         dsa_index_scores_reference,
         dsa_indexer_kl_reference,
@@ -231,7 +231,7 @@ def test_indexer_kl_grad_is_softmax_minus_p_and_inputs_detached():
 def test_index_scores_ragged_packing_matches_per_sequence():
     from dataclasses import replace
 
-    from dataflow.tasks.dsa_reference import dsa_index_scores_reference
+    from dataflow.tasks.modules.dsa_reference import dsa_index_scores_reference
 
     d = _Dims(tokens=96, seq_len=None, seq_lens=(64, 32))
     w = _idx_weights(d, seed=7)
@@ -267,7 +267,7 @@ def _mla_pad_tensors(d, seed):
 
 def test_dsa_kernels_vs_references_and_autograd():
     from dataflow.tasks import ops
-    from dataflow.tasks.dsa_reference import (
+    from dataflow.tasks.modules.dsa_reference import (
         _causal_mask,
         dsa_mask_from_idx,
         dsa_sparse_attention_reference,
@@ -378,7 +378,7 @@ def test_dsa_index_bwd_vs_autograd():
 
 def _dsv32_dims(**over):
     from dataflow.tasks.layouts import Dsv32Dims, DTypePolicy, ParamDTypes
-    from dataflow.tasks.moe.spec import MoESpec
+    from dataflow.tasks.modules.moe.spec import MoESpec
 
     moe = MoESpec(
         n_experts=8, top_k=2, d_ff_expert=32,
@@ -403,15 +403,15 @@ def _dsv32_dims(**over):
 
 def _golden_dsv32_block(x_ref, leaves, dims, kind, sel_idx=None, route_ids=None):
     from dataflow.tasks import ops
-    from dataflow.tasks.dsa_reference import (
+    from dataflow.tasks.modules.dsa_reference import (
         dsa_index_scores_reference,
         dsa_indexer_kl_reference,
         dsa_mask_from_idx,
         dsa_sparse_attention_reference,
         dsa_topk_reference,
     )
-    from dataflow.tasks.mla_reference import mla_qkv_reference
-    from dataflow.tasks.moe.reference import moe_mlp_reference
+    from dataflow.tasks.modules.mla_reference import mla_qkv_reference
+    from dataflow.tasks.modules.moe.reference import moe_mlp_reference
 
     d = dims
     t = x_ref.shape[0]
@@ -461,7 +461,7 @@ def _golden_dsv32_block(x_ref, leaves, dims, kind, sel_idx=None, route_ids=None)
 
 @pytest.mark.parametrize("kind", ["dense", "moe"])
 def test_dsv32_block_ladder2(kind):
-    from dataflow.tasks.dsv32_blocks import (
+    from dataflow.tasks.models.dsv32_blocks import (
         Dsv32DenseBlockBwd,
         Dsv32DenseBlockFwd,
         Dsv32DenseBlockRecompute,
@@ -584,7 +584,7 @@ def test_absorbed_op_matches_expanded_reference():
         n_heads=h, d_qk=d_qk, d_v=d_v, seq_bounds=((0, t),),
     )
     # reference: expand kv per head and run the pinned expanded path
-    from dataflow.tasks.dsa_reference import dsa_mask_from_idx, dsa_sparse_attention_reference
+    from dataflow.tasks.modules.dsa_reference import dsa_mask_from_idx, dsa_sparse_attention_reference
 
     class _D:
         n_heads, qk_head_dim, v_head_dim = h, d_qk, d_v

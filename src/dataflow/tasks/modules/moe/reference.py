@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import torch
 
-from .. import ops
+from ... import ops
 from .spec import MoESpec
 
 

@@ -95,7 +95,7 @@ def test_padded_v_attention_is_exact():
 
 
 def test_mla_reference_shapes_and_grads_flow():
-    from dataflow.tasks.mla_reference import mla_block_reference
+    from dataflow.tasks.modules.mla_reference import mla_block_reference
 
     d = _Dims()
     w = _weights(d)
@@ -116,7 +116,7 @@ def test_mla_shared_k_rope_broadcast_gradient():
     Verified by comparing against a variant with independent per-head
     copies whose grads are summed."""
     from dataflow.tasks import ops
-    from dataflow.tasks.mla_reference import mla_attention_reference
+    from dataflow.tasks.modules.mla_reference import mla_attention_reference
 
     d = _Dims()
     w = _weights(d, seed=3)
@@ -138,7 +138,7 @@ def test_mla_shared_k_rope_broadcast_gradient():
 def test_mla_reference_ragged_packing_matches_per_sequence():
     from dataclasses import replace
 
-    from dataflow.tasks.mla_reference import mla_block_reference
+    from dataflow.tasks.modules.mla_reference import mla_block_reference
 
     d_packed = _Dims(tokens=96, seq_len=None, seq_lens=(64, 32))
     w = _weights(d_packed, seed=5)
@@ -157,7 +157,7 @@ def test_mla_reference_ragged_packing_matches_per_sequence():
 
 def _dsv3_dims(kind="moe", **over):
     from dataflow.tasks.layouts import Dsv3Dims, DTypePolicy, ParamDTypes
-    from dataflow.tasks.moe.spec import MoESpec
+    from dataflow.tasks.modules.moe.spec import MoESpec
 
     moe = MoESpec(
         n_experts=8, top_k=2, d_ff_expert=32,
@@ -202,8 +202,8 @@ def _block_state(dims, wl, seed):
 def _golden_block(x_ref, leaves, dims, kind, route_ids=None):
     """Autograd block: MLA attention (reference) + dense-or-moe tail."""
     from dataflow.tasks import ops
-    from dataflow.tasks.mla_reference import mla_attention_reference
-    from dataflow.tasks.moe.reference import moe_mlp_reference
+    from dataflow.tasks.modules.mla_reference import mla_attention_reference
+    from dataflow.tasks.modules.moe.reference import moe_mlp_reference
 
     h1 = ops.rmsnorm_reference(x_ref, leaves["attn_norm_w"])
     attn = mla_attention_reference(h1, leaves, dims)
@@ -222,7 +222,7 @@ def _golden_block(x_ref, leaves, dims, kind, route_ids=None):
 
 @pytest.mark.parametrize("kind", ["dense", "moe"])
 def test_dsv3_block_ladder2(kind):
-    from dataflow.tasks.dsv3_blocks import (
+    from dataflow.tasks.models.dsv3_blocks import (
         Dsv3DenseBlockBwd,
         Dsv3DenseBlockFwd,
         Dsv3DenseBlockRecompute,
@@ -254,7 +254,7 @@ def test_dsv3_block_ladder2(kind):
         for f in cl.fields
     }
     y = torch.empty_like(x)
-    from dataflow.tasks.moe.spec import moe_meta_layout
+    from dataflow.tasks.modules.moe.spec import moe_meta_layout
 
     meta_views = None
     extras = None
@@ -328,7 +328,7 @@ def test_dsv3_block_ladder2(kind):
 
 
 def test_dsv3_stage_context_completeness():
-    from dataflow.tasks.dsv3_blocks import Dsv3DenseBlockFwd, Dsv3MoeBlockFwd
+    from dataflow.tasks.models.dsv3_blocks import Dsv3DenseBlockFwd, Dsv3MoeBlockFwd
     from dataflow.tasks.layouts import (
         dsv3_dense_context_layout,
         dsv3_moe_context_layout,

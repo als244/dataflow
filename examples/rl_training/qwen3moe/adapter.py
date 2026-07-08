@@ -6,7 +6,7 @@ from unittest.mock import patch
 import torch
 
 from dataflow.models.qwen3moe_reference import GoldenQwen3Moe
-from dataflow.tasks.moe.spec import moe_meta_layout
+from dataflow.tasks.modules.moe.spec import moe_meta_layout
 from dataflow.training.qwen3moe import ShapedQwen3MoeConfig
 
 name = "qwen3moe"
@@ -23,7 +23,7 @@ def make_golden(dims, n_layers, leaves):
 def capture(golden, tokens):
     # qwen3moe delegates routing to moe_mlp_reference; intercept the
     # topk INSIDE the moe reference module
-    import dataflow.tasks.moe.reference as ref
+    import dataflow.tasks.modules.moe.reference as ref
     real = ref.moe_topk_reference
     rec = []
 

@@ -39,7 +39,7 @@ from __future__ import annotations
 import torch
 import torch.nn.functional as F
 
-from . import ops
+from .. import ops
 
 _LN_EPS = 1e-5  # repo-global norm eps (their 1e-6; standing delta note)
 
