@@ -273,7 +273,9 @@ def main() -> None:
     ap.add_argument("--device-gib", required=True, help="comma list, e.g. 12,16,20")
     ap.add_argument("--placements", default="static",
                     help="comma list; static is the default mode")
-    ap.add_argument("--steps", type=int, default=3)
+    ap.add_argument("--num-steps", type=int, default=3, dest="num_steps",
+                    help="training steps per cell (step 1 is warm-up; "
+                         "steady-state tok/s averages the rest)")
     ap.add_argument("--shapes", default="cached",
                     help='"cached" | "oracle" | explicit "12:bs4ga4,16:bs8ga2,..."')
     ap.add_argument("--seqs-per-step", type=int, default=16,
@@ -348,7 +350,7 @@ def main() -> None:
         pass                          # no out-dir: pool scan is the default
 
     if (args.run or args.rerun or args.dry_run) and not args.render_only:
-        run_cells(presets, devs, modes, shapes, seq_tag, args.steps,
+        run_cells(presets, devs, modes, shapes, seq_tag, args.num_steps,
                   args.pace_seconds, args.rerun, cells, args.dry_run,
                   raw_dir=raw_dir)
         if not args.dry_run:

@@ -24,7 +24,7 @@ python tools/bench_frontier.py \
     --presets olmoe-7b --seq-len 1024 --seqs-per-step 64 \
     --device-gib 12,16,20,24,28 \
     --shapes oracle --run --rerun \
-    --steps 3 --out-dir results/bench/<sweep-name>
+    --num-steps 3 --out-dir results/bench/<sweep-name>
 ```
 
 - `--shapes oracle` runs `best_config` first (fresh profiling of every
@@ -52,7 +52,7 @@ python tools/bench_frontier.py \
 | `--device-gib` | comma list of device-memory envelopes to sweep |
 | `--placements` | comma list of placement modes (default `static`) |
 | `--shapes` | `oracle` (fresh best_config sweep) / `cached` (best legal on disk) / explicit `12:bs4ga4,...` map |
-| `--steps` | training steps per cell (default 3; step 1 is warm-up, the rest steady-state) |
+| `--num-steps` | training steps per cell (default 3; step 1 is warm-up, the rest steady-state) |
 | `--run` | execute missing cells (paced bench_train subprocesses) |
 | `--rerun` | re-execute cells even if rows already exist |
 | `--reuse-shared` | also scan the shared `artifacts/bench` pool (default: isolated to `{out-dir}/raw`) |

@@ -31,17 +31,30 @@ results table with per-cell provenance:
 ```bash
 python tools/bench_frontier.py \
     --presets dsv32-mini,glm52-mini --seq-len 4096 --seqs-per-step 16 \
-    --device-gib 12,16,20,24,28 --shapes oracle --run \
+    --device-gib 12,16,20,24,28 --num-steps 3 --shapes oracle --run \
     --out-dir results/bench/quickstart
 ```
 
-Swap in any builtin presets (`olmoe-7b --seq-len 1024 --seqs-per-step
-64` reproduces the OLMoE column). Output: `TABLES.md` (throughput / sim
-prediction / measured peak / chosen shape / recompute fraction per
-cell) plus, per cell, the exact dataflow program, its annotated plan,
-and the measured row. Full protocol — legality contract, placement
-modes, tool matrix, complete flag reference:
-[docs/benchmarking.md](docs/benchmarking.md) (or `--help`).
+Output: 
+- `TABLES.md` 
+    - Per Cell: real tok/s throughput; sim tok/s prediction, measured memory peak, chosen micro batch/grad accum shape, recompute task fraction plus
+- Per-Cell Files:
+    - The exact dataflow program (`program.json`)
+    - Its annotated plan (`plan.json`)
+    - The measured summary row (`measured.json`)
+
+Everything is inspectable in the
+[webapp simulator](https://dataflowsim.sunshein.net/): upload a cell's
+`program.json` to see the SIMULATOR's expectations for that plan
+(predicted task/transfer timeline and memory trace from the measured
+task costs). To see the TRUE timeline, capture a real run and export
+it (`tools/gap_analysis.py` then `tools/export_measured_run.py`
+produce a `.measured.json` containing both the measured event log and
+the sim's prediction) — the webapp renders the real run in the same
+panels and diffs the two, which is exactly how the sim-vs-real
+fidelity gap is inspected.
+
+For benchmarking reference see: [docs/benchmarking.md](docs/benchmarking.md) (or `--help`).
 
 ---
 
