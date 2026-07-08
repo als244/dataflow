@@ -42,19 +42,15 @@ _IDX_FIELDS = ("w_idx_q", "w_idx_k", "idx_k_ln_w", "idx_k_ln_b", "w_idx_w")
 class GoldenDsv32(GoldenDsv3):
     dims: Dsv32Dims  # re-typed
 
-    def _adamw_obj(self, obj: str, leaves) -> None:
-        if not getattr(self.dims, "sparse_mode", True):
-            # dense warm-up: main model FROZEN — only indexer fields step
-            only = {k: v for k, v in leaves.items() if k in _IDX_FIELDS}
-            if only:
-                super()._adamw_obj(obj, only)
-            return
+    def _opt_obj(self, obj: str, leaves) -> None:
+        # dense warm-up freezing now lives in dims.opt_policy (default
+        # "frozen", idx -> adamw) — the base policy dispatch handles it.
         if not getattr(self.dims, "train_indexer", True) and any(
                 n in leaves for n in _IDX_FIELDS):
             rest = {k: v for k, v in leaves.items() if k not in _IDX_FIELDS}
-            super()._adamw_obj(obj, rest)
+            super()._opt_obj(obj, rest)
             return
-        super()._adamw_obj(obj, leaves)
+        super()._opt_obj(obj, leaves)
 
     def train_step(self, tokens, targets) -> float:
         if getattr(self.dims, "sparse_mode", True):
@@ -69,7 +65,7 @@ class GoldenDsv32(GoldenDsv3):
         (ce + aux_total).backward()
         self.step_count += 1
         for i, leaves in enumerate(self.w_blocks):
-            self._adamw_obj(f"block_{i}", leaves)
+            self._opt_obj(f"block_{i}", leaves)
         return float(ce.detach())
 
     def block_layout(self, layer: int | None = None) -> PackedLayout:

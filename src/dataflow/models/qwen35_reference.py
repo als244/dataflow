@@ -150,7 +150,7 @@ class GoldenQwen35:
     def _field_dtypes(self, ns: str | None, name: str, layer: int | None = None):
         return self.dims.dtypes.for_field(f"{ns}.{name}" if ns else name, layer)
 
-    def _adamw_obj(self, obj: str, ns: str | None, leaves: Leaves) -> None:
+    def _opt_obj(self, obj: str, ns: str | None, leaves: Leaves) -> None:
         from dataflow.tasks.optim import reference_field_step
 
         layer = int(obj.split("_")[1]) if obj.startswith("block_") else None
@@ -171,11 +171,11 @@ class GoldenQwen35:
         loss.backward()
         self.step_count += 1
         # tied W_embed IS the head layout — policy-addressed as head.*
-        self._adamw_obj("embed", "head" if self.tied else "embed", self.w_embed)
+        self._opt_obj("embed", "head" if self.tied else "embed", self.w_embed)
         if self.w_head is not None:
-            self._adamw_obj("head", "head", self.w_head)
+            self._opt_obj("head", "head", self.w_head)
         for i, leaves in enumerate(self.w_blocks):
-            self._adamw_obj(f"block_{i}", None, leaves)
+            self._opt_obj(f"block_{i}", None, leaves)
         return float(loss.detach())
 
     def parameters(self) -> list[torch.Tensor]:

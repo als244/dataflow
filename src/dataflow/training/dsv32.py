@@ -174,6 +174,18 @@ class ShapedDsv32Config:
         )
 
     @classmethod
+    def dsv32_mini_warmup(cls, *, seq_len: int = 4096, batch: int = 4,
+                          grad_accum_rounds: int = 4, num_steps: int = 1,
+                          ) -> "ShapedDsv32Config":
+        """Dense warm-up as a first-class preset: full causal attention,
+        main model frozen (per-layer dW/O collapse to the indexer
+        fields), FULL-PREFIX KL. Unique task graph vs the sparse preset:
+        FrozenHeadLoss, no embed_bwd, embed/head optimizers pruned."""
+        return cls.dsv32_mini(seq_len=seq_len, batch=batch,
+                              grad_accum_rounds=grad_accum_rounds,
+                              num_steps=num_steps, sparse_mode=False)
+
+    @classmethod
     def dsv32_671b(cls, *, seq_len: int = 4096, batch: int = 1,
                    grad_accum_rounds: int = 1, num_steps: int = 1,
                    ) -> "ShapedDsv32Config":

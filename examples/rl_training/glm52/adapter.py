@@ -82,12 +82,12 @@ def block(golden, i, x):
 def adamw(golden, counts_of):
     d = golden.dims
     golden.step_count += 1
-    golden._adamw_obj("embed", golden.w_embed)
+    golden._opt_obj("embed", golden.w_embed)
     speed = d.moe.bias_update_speed
     for i, leaves in enumerate(golden.w_blocks):
-        golden._adamw_obj(f"block_{i}", leaves)
+        golden._opt_obj(f"block_{i}", leaves)
         if "w_router_bias" in leaves and speed and i in counts_of:
             c = counts_of[i]
             b = leaves["w_router_bias"]
             b.data.add_(torch.sign(c.mean() - c).to(b.dtype), alpha=speed)
-    golden._adamw_obj("head", golden.w_head)
+    golden._opt_obj("head", golden.w_head)

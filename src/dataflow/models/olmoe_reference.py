@@ -73,8 +73,8 @@ class GoldenOlmoe(GoldenLlama3):
         ce, aux_total = self.loss_terms(tokens, targets)
         (ce + aux_total).backward()
         self.step_count += 1
-        self._adamw_obj("embed", self.w_embed)
+        self._opt_obj("embed", self.w_embed)
         for i, leaves in enumerate(self.w_blocks):
-            self._adamw_obj(f"block_{i}", leaves)
-        self._adamw_obj("head", self.w_head)
+            self._opt_obj(f"block_{i}", leaves)
+        self._opt_obj("head", self.w_head)
         return float(ce.detach())

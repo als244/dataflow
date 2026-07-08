@@ -123,8 +123,8 @@ class GoldenQwen35Moe(GoldenQwen35):
         ce, aux_total = self.loss_terms(tokens, targets)
         (ce + aux_total).backward()
         self.step_count += 1
-        self._adamw_obj("embed", "embed", self.w_embed)
-        self._adamw_obj("head", "head", self.w_head)
+        self._opt_obj("embed", "embed", self.w_embed)
+        self._opt_obj("head", "head", self.w_head)
         for i, leaves in enumerate(self.w_blocks):
-            self._adamw_obj(f"block_{i}", None, leaves)
+            self._opt_obj(f"block_{i}", None, leaves)
         return float(ce.detach())

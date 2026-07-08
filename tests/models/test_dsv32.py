@@ -226,7 +226,7 @@ def test_dsv32_ga2_matches_golden():
         total = term if total is None else total + term
     total.backward()
     golden.step_count = 1
-    golden._adamw_obj("embed", golden.w_embed)
+    golden._opt_obj("embed", golden.w_embed)
     # bias rule on the STEP AGGREGATE counts (both rounds), mirroring the
     # runtime's dW accumulation; counts were captured per round in order
     n_moe = sum(1 for b in golden.w_blocks if "w_router_bias" in b)
@@ -234,14 +234,14 @@ def test_dsv32_ga2_matches_golden():
         if n_moe else []
     moe_i = 0
     for i, leaves in enumerate(golden.w_blocks):
-        golden._adamw_obj(f"block_{i}", leaves)
+        golden._opt_obj(f"block_{i}", leaves)
         if "w_router_bias" in leaves:
             agg = sum(per_round[moe_i])
             b = leaves["w_router_bias"]
             b.data.add_(torch.sign(agg.mean() - agg).to(b.dtype),
                         alpha=cfg.bias_update_speed)
             moe_i += 1
-    golden._adamw_obj("head", golden.w_head)
+    golden._opt_obj("head", golden.w_head)
 
     dry = Engine(FakeBackend()).execute(planned.program, initial_buffers=values)
     result = Engine(backend).execute(

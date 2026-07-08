@@ -56,9 +56,9 @@ def block(golden, i, x):
 
 def adamw(golden, counts_of):
     golden.step_count += 1
-    golden._adamw_obj("embed", "head" if golden.tied else "embed",
+    golden._opt_obj("embed", "head" if golden.tied else "embed",
                       golden.w_embed)
     if golden.w_head is not None:
-        golden._adamw_obj("head", "head", golden.w_head)
+        golden._opt_obj("head", "head", golden.w_head)
     for i, leaves in enumerate(golden.w_blocks):
-        golden._adamw_obj(f"block_{i}", None, leaves)
+        golden._opt_obj(f"block_{i}", None, leaves)

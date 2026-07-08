@@ -78,12 +78,12 @@ class GoldenDsv3(GoldenOlmoe):
             self._pending_counts.append(cnt)
         return y, aux
 
-    def _adamw_obj(self, obj: str, leaves) -> None:
+    def _opt_obj(self, obj: str, leaves) -> None:
         if "w_router_bias" in leaves:
             rest = {k: v for k, v in leaves.items() if k != "w_router_bias"}
-            super()._adamw_obj(obj, rest)
+            super()._opt_obj(obj, rest)
         else:
-            super()._adamw_obj(obj, leaves)
+            super()._opt_obj(obj, leaves)
 
     def train_step(self, tokens: torch.Tensor, targets: torch.Tensor) -> float:
         self._pending_counts = []
@@ -92,14 +92,14 @@ class GoldenDsv3(GoldenOlmoe):
         ce, aux_total = self.loss_terms(tokens, targets)
         (ce + aux_total).backward()
         self.step_count += 1
-        self._adamw_obj("embed", self.w_embed)
+        self._opt_obj("embed", self.w_embed)
         speed = self.dims.moe.bias_update_speed
         counts_iter = iter(self._pending_counts)
         for i, leaves in enumerate(self.w_blocks):
-            self._adamw_obj(f"block_{i}", leaves)
+            self._opt_obj(f"block_{i}", leaves)
             if "w_router_bias" in leaves and speed:
                 c = next(counts_iter)
                 b = leaves["w_router_bias"]
                 b.data.add_(torch.sign(c.mean() - c).to(b.dtype), alpha=speed)
-        self._adamw_obj("head", self.w_head)
+        self._opt_obj("head", self.w_head)
         return float(ce.detach())

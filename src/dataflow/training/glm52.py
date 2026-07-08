@@ -223,6 +223,19 @@ class ShapedGlm52Config:
         )
 
     @classmethod
+    def glm52_mini_warmup(cls, *, seq_len: int = 4096, batch: int = 4,
+                          grad_accum_rounds: int = 4, num_steps: int = 1,
+                          ) -> "ShapedGlm52Config":
+        """The paper's dense warm-up stage as a first-class preset: full
+        causal attention, main model frozen (no dW/O beyond the leaders'
+        indexer fields), leaders train on group-averaged FULL-PREFIX
+        targets. Unique task graph vs the sparse preset: FrozenHeadLoss,
+        no embed_bwd, follower/embed/head optimizer tasks pruned."""
+        return cls.glm52_mini(seq_len=seq_len, batch=batch,
+                              grad_accum_rounds=grad_accum_rounds,
+                              num_steps=num_steps, sparse_mode=False)
+
+    @classmethod
     def glm52(cls, *, seq_len: int = 4096, batch: int = 1,
               grad_accum_rounds: int = 1, num_steps: int = 1,
               ) -> "ShapedGlm52Config":

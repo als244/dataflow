@@ -120,7 +120,7 @@ class GoldenLlama3:
         layer = int(obj.split("_")[1]) if obj.startswith("block_") else None
         return self.dims.dtypes.for_field(f"{ns}.{name}" if ns else name, layer)
 
-    def _adamw_obj(self, obj: str, leaves: Leaves) -> None:
+    def _opt_obj(self, obj: str, leaves: Leaves) -> None:
         """Per-field optimizer step mirroring the runtime executor's
         POLICY DISPATCH (name kept for subclass back-compat): each field
         resolves through dims.opt_policy exactly as AdamWStep.launch does
@@ -149,10 +149,10 @@ class GoldenLlama3:
         loss = self.loss(tokens, targets)
         loss.backward()
         self.step_count += 1
-        self._adamw_obj("embed", self.w_embed)
+        self._opt_obj("embed", self.w_embed)
         for i, leaves in enumerate(self.w_blocks):
-            self._adamw_obj(f"block_{i}", leaves)
-        self._adamw_obj("head", self.w_head)
+            self._opt_obj(f"block_{i}", leaves)
+        self._opt_obj("head", self.w_head)
         return float(loss.detach())
 
     def parameters(self) -> list[torch.Tensor]:

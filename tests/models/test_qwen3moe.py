@@ -304,10 +304,10 @@ def test_qwen3moe_ga2_matches_golden():
         total = term if total is None else total + term
     total.backward()
     golden.step_count = 1
-    golden._adamw_obj("embed", golden.w_embed)
+    golden._opt_obj("embed", golden.w_embed)
     for i, leaves in enumerate(golden.w_blocks):
-        golden._adamw_obj(f"block_{i}", leaves)
-    golden._adamw_obj("head", golden.w_head)
+        golden._opt_obj(f"block_{i}", leaves)
+    golden._opt_obj("head", golden.w_head)
 
     dry = Engine(FakeBackend()).execute(planned.program, initial_buffers=values)
     result = Engine(backend).execute(
