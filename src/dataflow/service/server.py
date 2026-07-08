@@ -307,6 +307,14 @@ class Server:
     """Boot, accept loop, handler registration."""
 
     def __init__(self, config: EngineConfig):
+        import os as _os
+
+        # match the bench tooling's allocator policy (reserved tracks
+        # allocated; segment slack was the twin study's phantom
+        # +1.7 GiB device offset). Must be set before torch's first
+        # CUDA allocation in this process.
+        _os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF",
+                               "expandable_segments:True")
         self.config = config
         self.state = EngineState(config)
         self.dispatcher = Dispatcher(self.state)
