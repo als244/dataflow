@@ -38,6 +38,13 @@ class EngineClient:
         self._next_id = 0
         self._replies: dict[int, queue.Queue] = {}
         self._tickets: dict[str, Ticket] = {}
+        # call_done frames can arrive BEFORE _call registers its Ticket
+        # (the dispatcher can finish a queued op inside the window
+        # between the server's acceptance reply and our registration).
+        # Unmatched completions park here and are claimed on
+        # registration — dropping them wedges the client forever
+        # (found via faulthandler stack dump, S1.1).
+        self._orphan_done: dict[str, tuple] = {}
         self._events: queue.Queue = queue.Queue()
         self._lock = threading.Lock()
         self._closed = False
@@ -93,6 +100,8 @@ class EngineClient:
             elif msg.get("event") == "call_done":
                 with self._lock:
                     t = self._tickets.pop(msg["ticket"], None)
+                    if t is None:
+                        self._orphan_done[msg["ticket"]] = (msg, payload)
                 if t is not None:
                     if msg.get("ok"):
                         t.result = msg.get("result")
@@ -124,7 +133,17 @@ class EngineClient:
             return (msg["result"], pay) if pay is not None else msg["result"]
         ticket = Ticket(msg["ticket"])
         with self._lock:
-            self._tickets[ticket.id] = ticket
+            orphan = self._orphan_done.pop(ticket.id, None)
+            if orphan is None:
+                self._tickets[ticket.id] = ticket
+        if orphan is not None:                # completed before registration
+            done_msg, done_payload = orphan
+            if done_msg.get("ok"):
+                ticket.result = done_msg.get("result")
+                ticket.payload = done_payload
+            else:
+                ticket.error = done_msg.get("error")
+            ticket.done.set()
         if not wait:
             return ticket
         return self.wait(ticket, timeout=timeout)
@@ -181,6 +200,88 @@ class EngineClient:
     # ---- critical ----
     def shutdown(self, *, force: bool = False) -> dict:
         return self._call("shutdown", {"force": force})
+
+    # ---- object plane ----
+    def put_object(self, oid: str, data=None, *, path: str | None = None,
+                   meta: dict | None = None, wait: bool = True):
+        if (data is None) == (path is None):
+            raise ValueError("put_object: exactly one of data|path")
+        if path is not None:
+            return self._call("put_object",
+                              {"id": oid, "path": str(path), "meta": meta},
+                              wait=wait)
+        if hasattr(data, "tobytes"):
+            data = data.tobytes()
+        return self._call("put_object", {"id": oid, "meta": meta},
+                          payload=data, wait=wait)
+
+    def get_object(self, oid: str, dest=None, *, wait: bool = True):
+        if dest is not None:
+            return self._call("get_object",
+                              {"id": oid, "dest": str(dest)}, wait=wait)
+        got = self._call("get_object", {"id": oid}, wait=wait)
+        if isinstance(got, tuple):          # (info, payload)
+            return got[1]
+        return got
+
+    def materialize_object(self, oid: str, fill: dict, *, wait=True):
+        return self._call("materialize_object",
+                          {"id": oid, "fill": fill}, wait=wait)
+
+    def materialize_group(self, fill: dict, *, wait=True):
+        return self._call("materialize_group", {"fill": fill}, wait=wait)
+
+    def release_object(self, oid: str, *, force=False, wait=True):
+        return self._call("release_object",
+                          {"id": oid, "force": force}, wait=wait)
+
+    def protect_object(self, oid: str, *, wait=True):
+        return self._call("protect_object", {"id": oid}, wait=wait)
+
+    def unprotect_object(self, oid: str, *, wait=True):
+        return self._call("unprotect_object", {"id": oid}, wait=wait)
+
+    def duplicate_object(self, src: str, dst: str, *, wait=True):
+        return self._call("duplicate_object",
+                          {"src": src, "dst": dst}, wait=wait)
+
+    def duplicate_object_group(self, ogid: str, *, tag: str,
+                               rename: str = "{id}@{tag}",
+                               new_ogid: str | None = None, wait=True):
+        return self._call("duplicate_object_group",
+                          {"ogid": ogid, "tag": tag, "rename": rename,
+                           "new_ogid": new_ogid}, wait=wait)
+
+    def create_object_group(self, ogid: str, members=(), *,
+                            pattern: str | None = None,
+                            object_groups=(), wait=True):
+        return self._call("create_object_group",
+                          {"ogid": ogid, "members": list(members),
+                           "pattern": pattern,
+                           "object_groups": list(object_groups)}, wait=wait)
+
+    def delete_object_group(self, ogid: str, *, wait=True):
+        return self._call("delete_object_group", {"ogid": ogid}, wait=wait)
+
+    def wipe(self, scope: str, *, force=False, wait=True):
+        return self._call("wipe", {"scope": scope, "force": force},
+                          wait=wait)
+
+    def query_object(self, oid: str):
+        return self._call("query_object", {"id": oid})
+
+    def list_objects(self, pattern: str = "*", *, limit: int = 1000):
+        return self._call("list_objects",
+                          {"pattern": pattern, "limit": limit})
+
+    def query_object_group(self, ogid: str):
+        return self._call("query_object_group", {"ogid": ogid})
+
+    def query_backing(self):
+        return self._call("query_backing", {})
+
+    def query_fast(self):
+        return self._call("query_fast", {})
 
     # ---- S1.0 diagnostic ----
     def _debug_hold(self, seconds: float, *, wait: bool = True,

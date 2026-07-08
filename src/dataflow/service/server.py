@@ -314,6 +314,10 @@ class Server:
         self.critical_handlers: dict[str, callable] = {}
         self._register_core()
         self._sock: socket.socket | None = None
+        from . import handlers_store
+
+        self.store = handlers_store.boot_store(self)
+        handlers_store.install(self)
 
     # ---- core handlers (S1.0) ----
     def _register_core(self) -> None:
@@ -328,7 +332,10 @@ class Server:
                 return {
                     "uptime_s": time.time() - st.boot_t,
                     "boot_config": st.config.public(),
-                    "pools": {"backing": None, "fast": None},  # store (S1.1)
+                    "pools": {
+                        "backing": self.server_pools_backing(),
+                        "fast": None,          # fast residency: S2
+                    },
                     "counters": dict(st.counters),
                     "current_run": st.current_run,
                     "queue_depth": st.queue_depth,
@@ -375,9 +382,16 @@ class Server:
             st.emit("engine_shutdown")
             st.shutdown_requested.set()
             self.dispatcher.stop()
+            # slab freed in serve_forever's finally AFTER the
+            # dispatcher drains — freeing here (connection thread)
+            # races a dispatcher mid-memcpy on an extent (UAF)
             return {"ok": True, "snapshot": None}
 
         self.critical_handlers["shutdown"] = shutdown
+        # bound method used by engine_status above (store attaches in
+        # __init__ right after _register_core)
+        self.server_pools_backing = lambda: (
+            self.store.usage() if hasattr(self, "store") else None)
 
         # test/diagnostic queued op: holds the dispatcher for `seconds`
         # (stands in for a run until S1.2; proves FIFO + fast-path)
@@ -420,3 +434,7 @@ class Server:
                 os.unlink(path)
             except OSError:
                 pass
+            self.dispatcher.join(timeout=30)
+            if getattr(self, "store", None) is not None \
+                    and self.store.slab is not None:
+                self.store.slab.free()
