@@ -48,6 +48,7 @@ class RunRecord:
     placement_escapes: int = 0
     error: dict | None = None
     torch_reserved_peak: int = 0        # device-scratch component of peak
+    placement_extent_bytes: int = 0     # placed device slab component
     fetched: dict = field(default_factory=dict)
     trace_tail: list = field(default_factory=list)
 
@@ -65,6 +66,7 @@ class RunRecord:
             "pressure_evictions": self.pressure_evictions,
             "placement_escapes": self.placement_escapes,
             "torch_reserved_peak": self.torch_reserved_peak,
+            "placement_extent_bytes": self.placement_extent_bytes,
             "error": self.error,
         }
 
@@ -243,6 +245,8 @@ def install(server) -> None:
 
             rec.makespan_us = result.makespan_us
             rec.peak_fast_bytes = result.peak_fast_bytes
+            rec.placement_extent_bytes = getattr(
+                entry.placement, "extent_bytes", 0) or 0
             try:
                 import torch
 

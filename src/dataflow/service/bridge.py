@@ -98,14 +98,13 @@ def close_session(prog_id: str) -> bool:
     s = _SESSIONS.pop(prog_id, None)
     if s is not None:
         s.close()
-        # device-cache hygiene between programs: torch's caching
-        # allocator otherwise retains freed scratch across the daemon's
-        # lifetime, inflating VISIBLE device usage ~4-5 GiB per prior
-        # program (Shein observed 29 GiB during a 23.4-peak plan) —
-        # residue, not live plan bytes, but it corrupts peak reporting
+        # NO empty_cache here (Shein: many short programs — the cost is
+        # too high, and same-shape programs reuse the retained cache).
+        # Only the peak COUNTER resets, so each program's device-peak
+        # report is row-scoped; retained cache still counts as reserved
+        # (honest under the no-drop regime).
         import torch
 
-        torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats()
         return True
     return False

@@ -24,7 +24,15 @@ def boot_store(server) -> Store:
     cap_bytes = (auto_cap_bytes(reserve_gib=10.0)
                  if cfg.slab_backing_gib == "auto"
                  else int(float(cfg.slab_backing_gib) * 2**30))
-    return Store(cap_bytes, slab=PinnedSlab(cap_bytes, device=cfg.device))
+    store = Store(cap_bytes, slab=PinnedSlab(cap_bytes, device=cfg.device))
+    try:  # device fixed overhead (CUDA context) for peak decomposition
+        import torch
+
+        free_b, total_b = torch.cuda.mem_get_info(cfg.device)
+        server.device_fixed_bytes = total_b - free_b
+    except Exception:
+        server.device_fixed_bytes = 0
+    return store
 
 
 def install(server) -> None:

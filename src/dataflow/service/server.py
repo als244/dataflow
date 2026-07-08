@@ -332,7 +332,9 @@ class Server:
             with st.lock:
                 return {
                     "uptime_s": time.time() - st.boot_t,
-                    "boot_config": st.config.public(),
+                    "boot_config": {**st.config.public(),
+                                    "device_fixed_bytes": getattr(
+                                        self, "device_fixed_bytes", 0)},
                     "pools": {
                         "backing": self.server_pools_backing(),
                         "fast": None,          # fast residency: S2
