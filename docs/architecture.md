@@ -76,24 +76,18 @@ From `dataflow_sim.engine.simulator` (the contract for M1/M2 parity gates):
   (not released) or their update is lost — planners guarantee this, the
   runtime validates it.
 
-## Status (2026-07-03)
+## Verification gates
 
-M0–M4 are done, each behind its gate:
+Every layer sits behind a standing gate:
 
-- **M0** IR + validation + sim round-trips + webapp export.
-- **M1** engine parity vs the simulator on the fake backend (exact).
-- **M2** cuda backend; replay fidelity +0.5% at 8B scale; zero implicit
-  syncs on the steady-state path.
-- **M3** torch/Triton executables, gradcheck ladder, golden llama3 model,
-  plan-invariance / poison-on-free / interleaving-stress.
-- **M4** memory-constrained multi-step llama3-8B training: fused kernel
-  registry, static placement (packing proven at planning time), measured
-  seq-1K sweeps, step-boundary fix (optimizer interleave + honest head).
-  Headline: **3,501 wall tok/s at a 23.75 GiB budget** — above the measured
-  flextrain ceiling on the same machine (3,410–3,435) — and 97% of that
-  ceiling at 12 GiB. See `docs/benchmarking.md` and
-  the design notes (perf-headroom, step-boundary, placement-deadlock,
-  poison-guard-loss) for the measured story.
-- **M5 (next)**: CUDA-graph-per-task (the remaining ~4–5% host-dispatch
-  tax), VMM chunk-backing (the placement geometry tax), new model
-  families via `docs/extending.md`.
+- engine-vs-sim parity on the fake backend, exact
+  (`tests/runtime/test_parity_vs_sim.py`);
+- real-GPU synthetic execution vs the simulator's prediction
+  (`tools/engine_gate.py`);
+- per-op / per-block / per-model correctness ladders
+  (`tests/modules/`, `tests/models/`; `tools/verify_family.py`
+  audits the canon per family);
+- engine stress — poison-on-free, interleaving, measured-cost replan
+  (`tests/runtime/test_engine_stress.py`);
+- measured benchmark sweeps with per-cell provenance
+  (`docs/benchmarking.md`).

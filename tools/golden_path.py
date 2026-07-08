@@ -1,4 +1,4 @@
-"""M0 golden path: shaped program -> PressureFit (+ recompute) -> sim -> exports.
+"""Golden path: shaped program -> PressureFit (+ recompute) -> sim -> exports.
 
 Produces, under --out (default examples/):
     <name>.program.json            bare program (core IR)

@@ -1,4 +1,4 @@
-"""M0 gate: exported programs are accepted by the actual webapp backend.
+"""Webapp export gate: exported programs are accepted by the actual webapp backend.
 
 Runs the FastAPI app in-process (TestClient) — the same code path as
 https://dataflowsim.sunshein.net/ — and posts a schema-source simulation.
