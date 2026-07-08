@@ -440,7 +440,7 @@ def l2norm_reference(x: torch.Tensor) -> torch.Tensor:
 
 def gated_rmsnorm_reference(o: torch.Tensor, z: torch.Tensor, w: torch.Tensor) -> torch.Tensor:
     """RMSNormGated: silu(z) * rmsnorm(o) * w, all over the last dim
-    (head_v_dim). Matches the flextrain/HF gated-delta output norm."""
+    (lin_v_head_dim). Matches the flextrain/HF gated-delta output norm."""
     of = o.float()
     rstd = torch.rsqrt(of.pow(2).mean(-1, keepdim=True) + RMS_EPS)
     zf = z.float()

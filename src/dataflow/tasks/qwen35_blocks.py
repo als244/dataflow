@@ -123,28 +123,28 @@ class Qwen35LinBlockFwd(BlockFwd):
 
         post = st["post_conv"]
         t = post.shape[0]
-        q = post[:, : d.key_dim].reshape(t * d.num_k_heads, d.head_k_dim)
-        k = post[:, d.key_dim : 2 * d.key_dim].reshape(t * d.num_k_heads, d.head_k_dim)
+        q = post[:, : d.key_dim].reshape(t * d.lin_k_heads, d.lin_k_head_dim)
+        k = post[:, d.key_dim : 2 * d.key_dim].reshape(t * d.lin_k_heads, d.lin_k_head_dim)
         qn, _ = l2norm_fwd(q.contiguous())
         kn, _ = l2norm_fwd(k.contiguous())
-        st["qn"] = qn.view(t, d.num_k_heads, d.head_k_dim)
-        st["kn"] = kn.view(t, d.num_k_heads, d.head_k_dim)
-        st["v_h"] = post[:, 2 * d.key_dim :].reshape(t, d.num_v_heads, d.head_v_dim)
+        st["qn"] = qn.view(t, d.lin_k_heads, d.lin_k_head_dim)
+        st["kn"] = kn.view(t, d.lin_k_heads, d.lin_k_head_dim)
+        st["v_h"] = post[:, 2 * d.key_dim :].reshape(t, d.lin_v_heads, d.lin_v_head_dim)
 
     @staticmethod
     def _stage_fla(kctx, K, d, st):
         from fla.ops.gated_delta_rule.chunk import chunk_gated_delta_rule_fwd
 
         w = st["w"]
-        b = st["ba"][:, : d.num_v_heads]
-        a_raw = st["ba"][:, d.num_v_heads :].contiguous()
+        b = st["ba"][:, : d.lin_v_heads]
+        a_raw = st["ba"][:, d.lin_v_heads :].contiguous()
         beta = torch.sigmoid(b.float()).to(b.dtype)
         cu, ci = _cu_seqlens(d, b.device)
         g_post, o, A_int, _fs, _is, _gi = chunk_gated_delta_rule_fwd(
             st["qn"].unsqueeze(0), st["kn"].unsqueeze(0),
             st["v_h"].unsqueeze(0).contiguous(),
             a_raw.unsqueeze(0), beta.unsqueeze(0),
-            scale=d.head_k_dim ** -0.5,
+            scale=d.lin_k_head_dim ** -0.5,
             initial_state=None, output_final_state=False,
             cu_seqlens=cu, chunk_indices=ci,
             use_gate_in_kernel=True,
@@ -160,9 +160,9 @@ class Qwen35LinBlockFwd(BlockFwd):
     @staticmethod
     def _stage_norm_out(kctx, K, d, st):
         t = st["x"].shape[0]
-        rows = t * d.num_v_heads
-        o2 = st["core_out"].reshape(rows, d.head_v_dim)
-        z2 = st["qkvz"][:, d.conv_dim :].contiguous().view(rows, d.head_v_dim)
+        rows = t * d.lin_v_heads
+        o2 = st["core_out"].reshape(rows, d.lin_v_head_dim)
+        z2 = st["qkvz"][:, d.conv_dim :].contiguous().view(rows, d.lin_v_head_dim)
         y2 = torch.empty_like(o2)
         rstd = torch.empty(rows, dtype=torch.float32, device=o2.device)
         K.gated_rmsnorm_fwd(kctx, o2, z2, st["w"]["lin_norm_w"], y2, rstd)
@@ -250,13 +250,13 @@ class Qwen35LinBlockBwd(BlockBwd):
 
         # --- gated norm + out projection (fused kernel; y recomputed for
         # free by the bwd and reused for the out-projection weight grad) ---
-        rows = t * d.num_v_heads
-        z2 = a["qkvz"][:, d.conv_dim :].contiguous().view(rows, d.head_v_dim)
-        o2 = a["core_out"].reshape(rows, d.head_v_dim)
-        do_normed = (dxo @ w["w_out"].T).contiguous().view(rows, d.head_v_dim)
+        rows = t * d.lin_v_heads
+        z2 = a["qkvz"][:, d.conv_dim :].contiguous().view(rows, d.lin_v_head_dim)
+        o2 = a["core_out"].reshape(rows, d.lin_v_head_dim)
+        do_normed = (dxo @ w["w_out"].T).contiguous().view(rows, d.lin_v_head_dim)
         dcore = torch.empty_like(o2)
         dz2 = torch.empty_like(z2)
-        dwn = torch.empty(d.head_v_dim, dtype=torch.float32, device=o2.device)
+        dwn = torch.empty(d.lin_v_head_dim, dtype=torch.float32, device=o2.device)
         y2 = torch.empty_like(o2)
         K.gated_rmsnorm_bwd(
             kctx, do_normed, o2, z2, w["lin_norm_w"], a["rstd_gate"],
@@ -266,36 +266,36 @@ class Qwen35LinBlockBwd(BlockBwd):
         acc("w_out", y2.view(t, d.value_dim).T @ dxo)
         del y2
         acc("lin_norm_w", dwn)
-        dz = dz2.view(t, d.num_v_heads, d.head_v_dim)
+        dz = dz2.view(t, d.lin_v_heads, d.lin_v_head_dim)
 
         # --- recompute conv/l2norm inputs from saved qkvz ---
         conv_in = a["qkvz"][:, : d.conv_dim].contiguous()
         cu, ci = _cu_seqlens(d, dxo.device)
         post = torch.empty_like(conv_in)
         K.causal_conv1d_silu_fwd(kctx, conv_in, w["w_conv"], post, cu)
-        q2 = post[:, : d.key_dim].reshape(t * d.num_k_heads, d.head_k_dim).contiguous()
+        q2 = post[:, : d.key_dim].reshape(t * d.lin_k_heads, d.lin_k_head_dim).contiguous()
         qn, q_rstd = l2norm_fwd(q2)
         del q2
-        k2 = post[:, d.key_dim : 2 * d.key_dim].reshape(t * d.num_k_heads, d.head_k_dim).contiguous()
+        k2 = post[:, d.key_dim : 2 * d.key_dim].reshape(t * d.lin_k_heads, d.lin_k_head_dim).contiguous()
         kn, k_rstd = l2norm_fwd(k2)
         del k2
-        v_h = post[:, 2 * d.key_dim :].reshape(t, d.num_v_heads, d.head_v_dim)
+        v_h = post[:, 2 * d.key_dim :].reshape(t, d.lin_v_heads, d.lin_v_head_dim)
 
-        b = a["ba"][:, : d.num_v_heads]
-        a_raw = a["ba"][:, d.num_v_heads :].contiguous()
+        b = a["ba"][:, : d.lin_v_heads]
+        a_raw = a["ba"][:, d.lin_v_heads :].contiguous()
         beta = torch.sigmoid(b.float()).to(b.dtype)
 
         # --- fla chunk bwd (pinned contract) ---
         dq, dk, dv, db, da, _dh0, dA_log, ddt = chunk_gated_delta_rule_bwd(
-            q=qn.view(t, d.num_k_heads, d.head_k_dim).unsqueeze(0),
-            k=kn.view(t, d.num_k_heads, d.head_k_dim).unsqueeze(0),
+            q=qn.view(t, d.lin_k_heads, d.lin_k_head_dim).unsqueeze(0),
+            k=kn.view(t, d.lin_k_heads, d.lin_k_head_dim).unsqueeze(0),
             v=v_h.unsqueeze(0).contiguous(),
             g=a["g_post"].unsqueeze(0),
             beta=beta.unsqueeze(0),
             A=a["A_int"].unsqueeze(0),
-            scale=d.head_k_dim ** -0.5,
+            scale=d.lin_k_head_dim ** -0.5,
             initial_state=None,
-            do=dcore.reshape(t, d.num_v_heads, d.head_v_dim).unsqueeze(0).contiguous(),
+            do=dcore.reshape(t, d.lin_v_heads, d.lin_v_head_dim).unsqueeze(0).contiguous(),
             dht=None,
             cu_seqlens=cu, chunk_indices=ci,
             use_gate_in_kernel=True, g_input=a_raw.unsqueeze(0),
@@ -306,9 +306,9 @@ class Qwen35LinBlockBwd(BlockBwd):
         acc("dt_bias", ddt)
 
         # --- l2norm bwd (takes OUTPUT + rstd) ---
-        dq_pre = l2norm_bwd(qn, q_rstd, dq.squeeze(0).reshape(t * d.num_k_heads, d.head_k_dim))
+        dq_pre = l2norm_bwd(qn, q_rstd, dq.squeeze(0).reshape(t * d.lin_k_heads, d.lin_k_head_dim))
         del qn, dq
-        dk_pre = l2norm_bwd(kn, k_rstd, dk.squeeze(0).reshape(t * d.num_k_heads, d.head_k_dim))
+        dk_pre = l2norm_bwd(kn, k_rstd, dk.squeeze(0).reshape(t * d.lin_k_heads, d.lin_k_head_dim))
         del kn, dk
 
         # --- conv bwd (silu recomputed internally by the kernel) ---

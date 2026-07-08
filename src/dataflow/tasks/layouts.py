@@ -748,9 +748,9 @@ class Qwen35Dims:
 
     Full-attn: n_heads x head_dim with output gate (w_q projects 2x),
     per-head qk-norm, PARTIAL rope (rot_dim = partial_rotary * head_dim).
-    Linear-attn: num_k_heads x head_k_dim (keys/queries), num_v_heads x
-    head_v_dim (values, GVA: v-head i reads k-head i // (HV/HK)), causal
-    conv (kernel conv_kernel) over [q|k|v], gated RMSNorm over head_v_dim.
+    Linear-attn: lin_k_heads x lin_k_head_dim (keys/queries), lin_v_heads x
+    lin_v_head_dim (values, GVA: v-head i reads k-head i // (HV/HK)), causal
+    conv (kernel lin_conv_kernel) over [q|k|v], gated RMSNorm over lin_v_head_dim.
     All layers share the dense SwiGLU MLP. Embeddings tied ([table |
     final_norm_w] rides W_embed via head_weight_layout).
     """
@@ -764,11 +764,11 @@ class Qwen35Dims:
     head_dim: int
     partial_rotary_factor: float
     # linear-attention sub-block
-    num_k_heads: int
-    num_v_heads: int
-    head_k_dim: int
-    head_v_dim: int
-    conv_kernel: int
+    lin_k_heads: int
+    lin_v_heads: int
+    lin_k_head_dim: int
+    lin_v_head_dim: int
+    lin_conv_kernel: int
     # shared
     d_ff: int
     vocab_size: int
@@ -799,11 +799,11 @@ class Qwen35Dims:
 
     @property
     def key_dim(self) -> int:
-        return self.num_k_heads * self.head_k_dim
+        return self.lin_k_heads * self.lin_k_head_dim
 
     @property
     def value_dim(self) -> int:
-        return self.num_v_heads * self.head_v_dim
+        return self.lin_v_heads * self.lin_v_head_dim
 
     @property
     def conv_dim(self) -> int:
@@ -815,7 +815,7 @@ class Qwen35Dims:
 
     @property
     def ba_dim(self) -> int:
-        return 2 * self.num_v_heads
+        return 2 * self.lin_v_heads
 
     def kind_of(self, layer: int) -> str:
         return "full" if (layer + 1) % self.full_attention_interval == 0 else "lin"
@@ -834,10 +834,10 @@ def _qwen35_lin_attn_specs(dims) -> list[tuple[str, tuple[int, ...]]]:
         ("attn_norm_w", (d,)),
         ("w_qkvz", (d, dims.qkvz_dim)),
         ("w_ba", (d, dims.ba_dim)),
-        ("w_conv", (dims.conv_dim, dims.conv_kernel)),
-        ("A_log", (dims.num_v_heads,)),
-        ("dt_bias", (dims.num_v_heads,)),
-        ("lin_norm_w", (dims.head_v_dim,)),
+        ("w_conv", (dims.conv_dim, dims.lin_conv_kernel)),
+        ("A_log", (dims.lin_v_heads,)),
+        ("dt_bias", (dims.lin_v_heads,)),
+        ("lin_norm_w", (dims.lin_v_head_dim,)),
         ("w_out", (dims.value_dim, d)),
         ("ffn_norm_w", (d,)),
     ]
@@ -845,14 +845,14 @@ def _qwen35_lin_attn_specs(dims) -> list[tuple[str, tuple[int, ...]]]:
 
 def _qwen35_lin_attn_ctx(dims) -> list[tuple[str, tuple[int, ...], str]]:
     t, d = dims.tokens, dims.d_model
-    hv = dims.num_v_heads
+    hv = dims.lin_v_heads
     return [
         ("rstd_attn", (t,), "fp32"),
         ("qkvz", (t, dims.qkvz_dim), "bf16"),
         ("ba", (t, dims.ba_dim), "bf16"),
         ("g_post", (t, hv), "fp32"),
         ("A_int", (t, hv, 64), "bf16"),
-        ("core_out", (t, hv, dims.head_v_dim), "bf16"),
+        ("core_out", (t, hv, dims.lin_v_head_dim), "bf16"),
         ("rstd_gate", (t * hv,), "fp32"),
         ("xo", (t, d), "bf16"),
         ("rstd_ffn", (t,), "fp32"),

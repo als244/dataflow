@@ -15,11 +15,11 @@ Layer kinds (4 layers): `lin lin lin full`
 | `n_kv_heads` | 2 |
 | `head_dim` | 64 |
 | `partial_rotary_factor` | 0.25 |
-| `num_k_heads` | 2 |
-| `num_v_heads` | 4 |
-| `head_k_dim` | 32 |
-| `head_v_dim` | 32 |
-| `conv_kernel` | 4 |
+| `lin_k_heads` | 2 |
+| `lin_v_heads` | 4 |
+| `lin_k_head_dim` | 32 |
+| `lin_v_head_dim` | 32 |
+| `lin_conv_kernel` | 4 |
 | `d_ff` | 512 |
 | `vocab_size` | 512 |
 | `tokens` | 128 |

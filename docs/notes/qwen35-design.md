@@ -36,7 +36,7 @@ was read from those sources, not recalled.
      (T,HV,64), ...). fp32 recurrent state internally
      (`mamba_ssm_dtype: float32`).
   6. gated RMSNorm: `silu(z) · rmsnorm(o) · w_norm` (w over
-     head_v_dim=128); `xo = o_normed @ W_out + x` (out: value_dim→d).
+     lin_v_head_dim=128); `xo = o_normed @ W_out + x` (out: value_dim→d).
 - Per-layer linear-attn params besides projections: conv (8192,4),
   A_log (32,), dt_bias (32,), norm (128,).
 - **Embeddings: the 9B is UNTIED** (config.json `tie_word_embeddings:

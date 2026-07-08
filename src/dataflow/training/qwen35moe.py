@@ -50,11 +50,11 @@ class ShapedQwen35MoeConfig:
     head_dim: int = 256
     partial_rotary_factor: float = 0.25
     # linear-attention sub-block (GatedDeltaNet, same as dense qwen35)
-    num_k_heads: int = 16
-    num_v_heads: int = 32
-    head_k_dim: int = 128
-    head_v_dim: int = 128
-    conv_kernel: int = 4
+    lin_k_heads: int = 16
+    lin_v_heads: int = 32
+    lin_k_head_dim: int = 128
+    lin_v_head_dim: int = 128
+    lin_conv_kernel: int = 4
     # MoE FFN (every layer): routed + one sigmoid-gated shared expert
     n_experts: int = 256
     top_k: int = 8
@@ -103,7 +103,7 @@ class ShapedQwen35MoeConfig:
         dims = dims_of_qwen35moe(self)
         attn = (
             d * dims.qkvz_dim + d * dims.ba_dim
-            + dims.conv_dim * self.conv_kernel + dims.value_dim * d
+            + dims.conv_dim * self.lin_conv_kernel + dims.value_dim * d
         )
         moe = (
             d * self.n_experts + self.n_experts * 3 * f * d
@@ -123,7 +123,7 @@ class ShapedQwen35MoeConfig:
     def tiny(cls) -> "ShapedQwen35MoeConfig":
         return cls(
             n_layers=4, d_model=256, n_heads=4, n_kv_heads=2, head_dim=64,
-            num_k_heads=2, num_v_heads=4, head_k_dim=32, head_v_dim=32,
+            lin_k_heads=2, lin_v_heads=4, lin_k_head_dim=32, lin_v_head_dim=32,
             n_experts=8, top_k=2, d_ff_expert=128, d_ff_shared=128,
             vocab_size=512, seq_len=128, batch=1,
         )
@@ -160,9 +160,9 @@ def dims_of_qwen35moe(cfg: ShapedQwen35MoeConfig) -> Qwen35MoeDims:
         full_attention_interval=cfg.full_attention_interval,
         n_heads=cfg.n_heads, n_kv_heads=cfg.n_kv_heads, head_dim=cfg.head_dim,
         partial_rotary_factor=cfg.partial_rotary_factor,
-        num_k_heads=cfg.num_k_heads, num_v_heads=cfg.num_v_heads,
-        head_k_dim=cfg.head_k_dim, head_v_dim=cfg.head_v_dim,
-        conv_kernel=cfg.conv_kernel, d_ff=cfg.d_ff_expert,
+        lin_k_heads=cfg.lin_k_heads, lin_v_heads=cfg.lin_v_heads,
+        lin_k_head_dim=cfg.lin_k_head_dim, lin_v_head_dim=cfg.lin_v_head_dim,
+        lin_conv_kernel=cfg.lin_conv_kernel, d_ff=cfg.d_ff_expert,
         vocab_size=cfg.vocab_size,
         tokens=cfg.tokens, seq_len=cfg.seq_len, rope_base=cfg.rope_base,
         dtypes=getattr(cfg, "dtypes", None) or DTypePolicy(),
@@ -218,7 +218,7 @@ def _kind_specs(cfg: ShapedQwen35MoeConfig, hw: ShapedHardware) -> dict[str, Lay
         )
 
     lin_attn = d * dims.qkvz_dim + d * dims.ba_dim + dims.value_dim * d
-    lin_scan_flops = 2.0 * t * dims.num_v_heads * dims.head_k_dim * dims.head_v_dim * 2
+    lin_scan_flops = 2.0 * t * dims.lin_v_heads * dims.lin_k_head_dim * dims.lin_v_head_dim * 2
     lin_mem = BF16 * t * (2 * dims.conv_dim + 2 * dims.value_dim)
     lin = spec("linmoe", qwen35moe_lin_weight_layout(dims), qwen35moe_lin_context_layout(dims),
                lin_attn, lin_scan_flops, BF16 * t * 2 * dims.value_dim, lin_mem)

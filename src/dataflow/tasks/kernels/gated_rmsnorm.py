@@ -1,7 +1,7 @@
-"""gated_rmsnorm family: silu(z) * rmsnorm(o) * w over head_v_dim rows
+"""gated_rmsnorm family: silu(z) * rmsnorm(o) * w over lin_v_head_dim rows
 (the Gated-DeltaNet output norm).
 
-Op signatures (rows = tokens*num_v_heads, d = head_v_dim; all contiguous):
+Op signatures (rows = tokens*lin_v_heads, d = lin_v_head_dim; all contiguous):
 - ``gated_rmsnorm_fwd(kctx, o, z, w, out, rstd_out)``: o/z/out (rows, d),
   w (d,), rstd_out (rows,) fp32.
 - ``gated_rmsnorm_bwd(kctx, dy, o, z, w, rstd, do_out, dz_out, dw_out, y_out)``:

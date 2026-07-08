@@ -42,11 +42,11 @@ class ShapedQwen35Config:
     head_dim: int = 256
     partial_rotary_factor: float = 0.25
     # linear-attention sub-block
-    num_k_heads: int = 16
-    num_v_heads: int = 32
-    head_k_dim: int = 128
-    head_v_dim: int = 128
-    conv_kernel: int = 4
+    lin_k_heads: int = 16
+    lin_v_heads: int = 32
+    lin_k_head_dim: int = 128
+    lin_v_head_dim: int = 128
+    lin_conv_kernel: int = 4
     # shared
     d_ff: int = 12288
     vocab_size: int = 248_320
@@ -105,8 +105,8 @@ class ShapedQwen35Config:
         return cls(
             n_layers=4, d_model=256, full_attention_interval=4,
             n_heads=4, n_kv_heads=2, head_dim=64, partial_rotary_factor=0.25,
-            num_k_heads=2, num_v_heads=4, head_k_dim=32, head_v_dim=32,
-            conv_kernel=4, d_ff=512, vocab_size=512, seq_len=128, batch=1,
+            lin_k_heads=2, lin_v_heads=4, lin_k_head_dim=32, lin_v_head_dim=32,
+            lin_conv_kernel=4, d_ff=512, vocab_size=512, seq_len=128, batch=1,
         )
 
     @classmethod
@@ -128,9 +128,9 @@ def dims_of_qwen35(cfg: ShapedQwen35Config) -> Qwen35Dims:
         full_attention_interval=cfg.full_attention_interval,
         n_heads=cfg.n_heads, n_kv_heads=cfg.n_kv_heads, head_dim=cfg.head_dim,
         partial_rotary_factor=cfg.partial_rotary_factor,
-        num_k_heads=cfg.num_k_heads, num_v_heads=cfg.num_v_heads,
-        head_k_dim=cfg.head_k_dim, head_v_dim=cfg.head_v_dim,
-        conv_kernel=cfg.conv_kernel, d_ff=cfg.d_ff, vocab_size=cfg.vocab_size,
+        lin_k_heads=cfg.lin_k_heads, lin_v_heads=cfg.lin_v_heads,
+        lin_k_head_dim=cfg.lin_k_head_dim, lin_v_head_dim=cfg.lin_v_head_dim,
+        lin_conv_kernel=cfg.lin_conv_kernel, d_ff=cfg.d_ff, vocab_size=cfg.vocab_size,
         tokens=cfg.tokens, seq_len=cfg.seq_len, rope_base=cfg.rope_base,
         dtypes=getattr(cfg, "dtypes", None) or DTypePolicy(),
         seq_lens=getattr(cfg, "seq_lens", None),
@@ -181,7 +181,7 @@ def _kind_specs(cfg: ShapedQwen35Config, hw: ShapedHardware) -> dict[str, LayerK
     # linear-attn: projections dominate; delta-rule ~O(T * HV * K * V / 64)
     # chunked work seeded through the attention-efficiency term
     lin_mm = d * dims.qkvz_dim + d * dims.ba_dim + dims.value_dim * d + 3 * d * ff
-    lin_scan_flops = 2.0 * t * dims.num_v_heads * dims.head_k_dim * dims.head_v_dim * 2
+    lin_scan_flops = 2.0 * t * dims.lin_v_heads * dims.lin_k_head_dim * dims.lin_v_head_dim * 2
     lin_mem = BF16 * t * (2 * dims.conv_dim + 2 * dims.value_dim)
     lin = spec("linattn", qwen35_lin_weight_layout(dims), qwen35_lin_context_layout(dims),
                lin_mm, lin_scan_flops, BF16 * t * 2 * dims.value_dim, lin_mem)

@@ -55,15 +55,15 @@ class GoldenQwen35Moe(GoldenQwen35):
         qkvz = h1 @ w["w_qkvz"]
         ba = h1 @ w["w_ba"]
         conv_in = qkvz[:, : d.conv_dim]
-        z = qkvz[:, d.conv_dim :].view(t, d.num_v_heads, d.head_v_dim)
-        b = ba[:, : d.num_v_heads]
-        a = ba[:, d.num_v_heads :]
+        z = qkvz[:, d.conv_dim :].view(t, d.lin_v_heads, d.lin_v_head_dim)
+        b = ba[:, : d.lin_v_heads]
+        a = ba[:, d.lin_v_heads :]
         post = ops.causal_conv1d_silu_reference(conv_in, w["w_conv"], seq_len=d.seq_spec)
-        q = ops.l2norm_reference(post[:, : d.key_dim].reshape(t, d.num_k_heads, d.head_k_dim))
+        q = ops.l2norm_reference(post[:, : d.key_dim].reshape(t, d.lin_k_heads, d.lin_k_head_dim))
         k = ops.l2norm_reference(
-            post[:, d.key_dim : 2 * d.key_dim].reshape(t, d.num_k_heads, d.head_k_dim)
+            post[:, d.key_dim : 2 * d.key_dim].reshape(t, d.lin_k_heads, d.lin_k_head_dim)
         )
-        v = post[:, 2 * d.key_dim :].reshape(t, d.num_v_heads, d.head_v_dim)
+        v = post[:, 2 * d.key_dim :].reshape(t, d.lin_v_heads, d.lin_v_head_dim)
         beta = torch.sigmoid(b.float()).to(x.dtype)
         g = ops.gated_delta_gate_reference(a, w["A_log"], w["dt_bias"])
         core = ops.gated_delta_rule_reference(q, k, v, beta, g, seq_len=d.seq_spec)
