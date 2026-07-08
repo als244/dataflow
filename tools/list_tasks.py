@@ -38,6 +38,8 @@ def _doc(obj) -> str:
     import re as _re
 
     for cls in type(obj).__mro__:
+        if cls is object:
+            break
         d = cls.__doc__
         if not d:
             continue

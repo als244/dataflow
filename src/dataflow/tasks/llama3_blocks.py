@@ -147,6 +147,8 @@ class _Base:
 
 @dataclass(frozen=True)
 class EmbedFwd(_Base):
+    """Token-embedding lookup: tokens + W_embed -> the first hidden
+    state."""
     def launch(self, ctx: TaskContext) -> None:
         d = self.dims
         with torch.cuda.stream(external_stream(ctx.stream)):
@@ -158,6 +160,8 @@ class EmbedFwd(_Base):
 
 @dataclass(frozen=True)
 class BlockFwd(_Base):
+    """Transformer-block forward: runs the STAGES list, writing saved
+    context (and metadata) fields through to the ctx buffers."""
     emit_context: bool = True
 
     def launch(self, ctx: TaskContext) -> None:
@@ -319,6 +323,8 @@ class BlockFwd(_Base):
 
 @dataclass(frozen=True)
 class BlockRecompute(BlockFwd):
+    """Derived recompute: replays the forward stages through the last
+    context-emitting one to repopulate A from the block input."""
     def launch(self, ctx: TaskContext) -> None:
         d = self.dims
         es, kctx = self._stream_ctx(ctx)
@@ -378,6 +384,8 @@ def dense_mlp_tail_bwd(kctx, K, dy, h_mid, rstd_ffn, x1, x3, w, acc, norm_bwd):
 
 @dataclass(frozen=True)
 class BlockBwd(_Base):
+    """Transformer-block backward: MLP-tail then attention backward, per
+    the family template; creates dW on round 0, accumulates after."""
     # ctx field holding the post-attention residual the MLP tail reads
     # (plain class attr, not a dataclass field)
     MLP_RESID_FIELD = "h_mid"
@@ -545,6 +553,8 @@ class HeadLoss(_Base):
 
 @dataclass(frozen=True)
 class EmbedBwd(_Base):
+    """Embedding backward: deterministic per-row scatter of dy into
+    dW_embed (sorted single-writer, never atomics)."""
     @property
     def egl(self) -> PackedLayout:
         return grad_layout(embed_weight_layout(self.dims), self.dims.dtypes, ns="embed")
