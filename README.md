@@ -78,7 +78,9 @@ the program and the resolver, not in the engine.
 The initial intended workload is high-throughput DNN training in low
 GPU-memory regimes. A library of builtin model families (Llama 3,
 OLMoE, Qwen 3, Qwen 3 MoE, Qwen 3.5, Qwen 3.5 MoE, DeepSeek V3,
-DeepSeek V3.2, GLM 5.2) *lowers* a model + training configuration
+DeepSeek V3.2, GLM 5.2 — full preset table with parameter counts:
+[docs/builtin_models.md](docs/builtin_models.md)) *lowers* a model +
+training configuration
 (sequence length, batch, grad-accum rounds, dtype policy, optimizer
 policy) into the Program format the engine expects.
 
