@@ -214,8 +214,8 @@ def install(server) -> None:
 
         result, err_kind, err_msg = bridge.execute_run(
             program, bridge.resolver_for(entry.resolver_spec)[3], values,
-            prog_id=entry.prog_id, placement=entry.placement,
-            pool_demand=entry.pool_demand,
+            prog_id=entry.prog_id, store=store,
+            placement=entry.placement, pool_demand=entry.pool_demand,
             run_args=args, cancel_event=active_cancel)
 
         rec.finished = time.time()

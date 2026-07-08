@@ -66,15 +66,31 @@ def get_backend():
     return _BACKEND
 
 
-def get_session(prog_id: str):
+def get_session(prog_id: str, store=None):
     """One Session PER REGISTERED PROGRAM: streams + BufferPool +
-    placement-adoption records reused across that program's runs
-    (steady-state steps stay zero-vendor-call), never across
-    programs."""
+    placement-adoption records reused across that program's runs,
+    never across programs. With a real store, the pool's BACKING
+    transients draw lazily from the STORE SLAB (one pinned budget;
+    only the real high-water is carved — the conservative demand
+    bound never allocates)."""
     if prog_id not in _SESSIONS:
+        from dataflow.runtime.device.cuda import Buffer
         from dataflow.runtime.engine import Session
 
-        _SESSIONS[prog_id] = Session(backend=get_backend())
+        ext_pair = None
+        if store is not None and store.slab is not None:
+            def _alloc(size, _store=store, _owner=prog_id):
+                ptr, ext, token = _store.alloc_transient(_owner, size)
+                return Buffer(id=f"ext:{token}", location="backing",
+                              size_bytes=size, ptr=ptr,
+                              raw=("external", token))
+
+            def _free(buf, _store=store):
+                _store.free_transient(buf.raw[1])
+
+            ext_pair = (_alloc, _free)
+        _SESSIONS[prog_id] = Session(backend=get_backend(),
+                                     external_backing=ext_pair)
     return _SESSIONS[prog_id]
 
 
@@ -156,20 +172,16 @@ def check_pool_headroom(pool_demand: dict) -> None:
             {"projected_pool_bytes": projected, "available": avail})
 
 
-def execute_run(program, resolver, values, *, prog_id, placement,
-                pool_demand, run_args, cancel_event):
+def execute_run(program, resolver, values, *, prog_id, store=None,
+                placement, pool_demand, run_args, cancel_event):
     """One engine run over store-backed buffers. Returns (result,
     error_kind, error_msg); the caller owns result.close()."""
     from dataflow.runtime import Engine
     from dataflow.runtime.engine import CancelledRun, ExecutionError
 
-    # only the FIRST run of a program pays pool growth; adopted pools
-    # are already allocated — check before growing, not after
-    if prog_id not in _SESSIONS:
-        check_pool_headroom(pool_demand)
     try:
         result = Engine(get_backend(),
-                        session=get_session(prog_id)).execute(
+                        session=get_session(prog_id, store=store)).execute(
             program, resolver=resolver, initial_buffers=values,
             pool_prewarm=pool_demand, placement=placement,
             run_args=run_args, cancel_event=cancel_event,

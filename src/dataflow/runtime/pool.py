@@ -49,6 +49,14 @@ class BufferPool:
     # (location, size) -> total buffers ever created: a completed run's map is
     # the exact prewarm demand for a repeat run (direct regime only).
     allocated_by_key: dict[tuple[str, int], int] = field(default_factory=dict)
+    # location -> (alloc_fn(size)->Buffer, free_fn(Buffer)): dynamic
+    # allocations for that location draw from an EXTERNAL owner (the
+    # engine-service store slab) instead of the vendor allocator. The
+    # returned Buffer must carry raw=("external", token); drain routes
+    # such buffers to free_fn. prewarm() skips external locations —
+    # suballocation is microseconds, so laziness is the point (only the
+    # real high-water is carved, not the conservative demand bound).
+    external_alloc: dict = field(default_factory=dict)
     # placed mode drops Buffer objects at put() (offsets are identity-managed),
     # which would also drop a pending guard (poison memset still queued): the
     # guard outlives the object here, keyed by address range, and re-attaches
@@ -188,6 +196,9 @@ class BufferPool:
         self.allocated_by_key[key] = self.allocated_by_key.get(key, 0) + 1
         slab = self.slabs.get(location)
         if slab is None:
+            ext = self.external_alloc.get(location)
+            if ext is not None:
+                return ext[0](size_bytes)
             return self.backend.alloc(location, size_bytes)
         return self._carve(slab, location, size_bytes)
 
@@ -259,6 +270,8 @@ class BufferPool:
         self.free_lists.setdefault((buffer.location, buffer.size_bytes), []).append(buffer)
 
     def prewarm(self, demand: dict[tuple[str, int], int]) -> None:
+        demand = {k: v for k, v in demand.items()
+                  if k[0] not in self.external_alloc}
         """Pre-create direct-regime buffers (e.g. pinned backing) so steady
         state never calls the vendor allocator. Slab-backed locations skip
         this — their single upfront allocation already happened."""
@@ -284,6 +297,8 @@ class BufferPool:
                 buf = stack.pop()
                 if isinstance(buf.raw, tuple) and buf.raw[0] == "slab":
                     buf.raw[2].free(buf.raw[1], buf.size_bytes)
+                elif isinstance(buf.raw, tuple) and buf.raw[0] == "external":
+                    self.external_alloc[buf.location][1](buf)
                 else:
                     self.backend.free(buf)
         self.free_lists.clear()

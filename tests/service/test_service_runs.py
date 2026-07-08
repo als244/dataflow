@@ -249,3 +249,30 @@ def test_cancel_mid_run_leaves_healthy_daemon(rig):
         # daemon healthy; next run completes
         r = c.run(reg["prog_id"], args={"step": 0}, fetch=["loss_0_0"])
         assert r["state"] == "done" and c.health()["ok"]
+
+
+def test_transients_visible_and_reclaimed(rig):
+    """Unified budget: after a run, the slab shows owner-tagged
+    transient bytes (dW/A staging drawn from the SAME slab as
+    residents); unregistering the program returns them to the free
+    list."""
+    cfg = rig["cfg"]
+    toks, tgts = _tokens(cfg, seed=55)
+    with EngineClient(rig["sock"], client_name="transients") as c:
+        c.wipe("all", force=True)
+        c.materialize_group({"kind": "family_init_all", "family": "llama3",
+                             "cfg": _cfg_dict(cfg), "seed": 4})
+        c.put_object("tokens_0_0", toks.numpy().tobytes())
+        c.put_object("targets_0_0", tgts.numpy().tobytes())
+        reg = c.register_program(rig["prog_dict"], resolver=rig["resolver"])
+        c.run(reg["prog_id"], args={"step": 0}, fetch=["loss_0_0"])
+        u = c.query_backing()
+        assert u["transient_bytes"] > 0, u
+        assert reg["prog_id"] in u["by_owner"], u["by_owner"]
+        assert u["resident_bytes"] > 0
+        c.unregister_program(reg["prog_id"])
+        u2 = c.query_backing()
+        # scope to THIS program: other tests' registered programs
+        # rightfully retain their own transients in the shared daemon
+        assert reg["prog_id"] not in u2["by_owner"], u2["by_owner"]
+        assert u2["transient_bytes"] < u["transient_bytes"], (u, u2)

@@ -162,6 +162,7 @@ class Store:
         self.object_groups: dict[str, ObjectGroup] = {}
         self.slab = slab
         self._bytes = bytearray(capacity_bytes) if slab is None else None
+        self._transients: dict[str, tuple] = {}   # token -> (owner, Extent)
 
     # ---- raw byte access ----
     def view(self, rec: ObjectRecord) -> memoryview:
@@ -338,9 +339,38 @@ class Store:
         return self.resolve_object_group(scope)
 
     # ---- queries ----
+    # ---- transient extents (execution-context pool draws) ----
+    # Named in the PROGRAM (dW_*, A_* ...), uncataloged here: these are
+    # run-scoped bytes carved from the same slab as residents — ONE
+    # pinned budget (Shein: "shouldn't this be part of the slab?").
+    def alloc_transient(self, owner: str, size_bytes: int):
+        with self.catalog_lock:
+            ext = self.allocator.alloc(size_bytes)   # CAPACITY on exhaust
+            token = f"t{len(self._transients)}-{owner}-{ext.offset}"
+            self._transients[token] = (owner, ext)
+        return self.slab.ptr + ext.offset if self.slab else ext.offset, \
+            ext, token
+
+    def free_transient(self, token: str) -> None:
+        with self.catalog_lock:
+            owner, ext = self._transients.pop(token)
+            self.allocator.release(ext)
+
+    def transient_usage(self) -> dict:
+        # CALLER HOLDS catalog_lock (query_backing's fast path already
+        # locks; double-acquire on the non-reentrant Lock self-deadlocked
+        # the connection thread — found by faulthandler dump)
+        by_owner: dict[str, int] = {}
+        for owner, ext in self._transients.values():
+            by_owner[owner] = by_owner.get(owner, 0) + ext.size
+        return {"transient_bytes": sum(by_owner.values()),
+                "by_owner": by_owner}
+
     def usage(self) -> dict:
         st = self.allocator.stats()
         st["n_objects"] = len(self.objects)
+        st["resident_bytes"] = sum(o.size_bytes for o in self.objects.values())
+        st.update(self.transient_usage())
         return st
 
     def largest(self, n: int = 10) -> list[tuple[str, int]]:

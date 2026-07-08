@@ -104,6 +104,9 @@ class Session:
 
     backend: DeviceBackend
     pool: "BufferPool | None" = None
+    # (alloc_fn, free_fn) for backing transients from an external owner
+    # (engine service store slab); see BufferPool.external_alloc
+    external_backing: tuple | None = None
     slab_caps: dict[str, int] | None = None
     # streams created once and reused every execute(): torch's caching
     # allocator keys cached blocks per-stream, so per-execute stream churn
@@ -130,6 +133,8 @@ class Session:
             caps["backing"] = program.backing_memory_capacity
         if self.pool is None:
             self.pool = BufferPool(self.backend)
+            if self.external_backing is not None:
+                self.pool.external_alloc["backing"] = self.external_backing
             if getattr(self.backend, "physical", False):
                 for location, cap in caps.items():
                     self.pool.add_slab(
