@@ -227,11 +227,29 @@ def record_kernel_seqs(fam, cfg, dims, prog) -> dict[str, str]:
     base = fam.build_resolver(dims, kernels=proxy)
     seen: set[str] = set()
 
+    STAGE_MARK = "\x00stage:"
+
     class Tag:
         def __init__(self, inner, key):
             self.inner, self.key = inner, key
             if hasattr(inner, "profile_fill"):
                 self.profile_fill = inner.profile_fill
+            # shadow STAGES with marker-emitting wrappers so traced ops
+            # attribute to their stage (tuple shape preserved: emits and
+            # the meta 4th element drive real behavior)
+            if hasattr(inner, "STAGES"):
+                def wrap(stage_name, fn):
+                    def wrapped(*a, **k):
+                        if proxy.current is not None:
+                            proxy.log.setdefault(proxy.current, []).append(
+                                STAGE_MARK + stage_name)
+                        return fn(*a, **k)
+                    return wrapped
+
+                shadowed = tuple(
+                    (st[0], wrap(st[0], st[1]), *st[2:])
+                    for st in inner.STAGES)
+                object.__setattr__(inner, "STAGES", shadowed)
 
         def launch(self, ctx):
             first = self.key not in seen
@@ -252,7 +270,22 @@ def record_kernel_seqs(fam, cfg, dims, prog) -> dict[str, str]:
     with _patch_direct_calls(proxy):
         profile_program(prog, resolver, CudaBackend(),
                         warmup=0, repeats=1, soak_seconds=0)
-    return {k: compress_list(v) for k, v in proxy.log.items()}
+
+    def grouped(seq):
+        """[(stage|None, [compressed ops])] split at stage markers."""
+        groups, cur_stage, cur = [], None, []
+        for item in seq:
+            if item.startswith(STAGE_MARK):
+                if cur:
+                    groups.append((cur_stage, compress_list(cur)))
+                cur_stage, cur = item[len(STAGE_MARK):], []
+            else:
+                cur.append(item)
+        if cur or cur_stage is not None:
+            groups.append((cur_stage, compress_list(cur)))
+        return groups
+
+    return {k: grouped(v) for k, v in proxy.log.items()}
 
 
 # ---------------------------------------------------------------- page
@@ -463,9 +496,23 @@ def gen_page(name: str, preset: str, record: bool,
                     marker = "  ← derived recompute boundary"
                 out.append(f"    {si}. `{st[0]}` — {emits}{meta}{marker}")
         if ck in kern_seqs:
-            out.append("- kernel calls:")
-            for ki, op in enumerate(kern_seqs[ck]):
-                out.append(f"    {ki}. `{op}`")
+            groups = kern_seqs[ck]
+            if any(stage for stage, _ in groups):
+                out.append("- kernel calls, by stage:")
+                for stage, ops in groups:
+                    label = f"`{stage}`" if stage else "(pre-stage)"
+                    if ops:
+                        out.append(f"    - {label}: "
+                                   + ", ".join(f"`{o}`" for o in ops))
+                    else:
+                        out.append(f"    - {label}: —")
+            else:
+                out.append("- kernel calls:")
+                ki = 0
+                for _, ops in groups:
+                    for op in ops:
+                        out.append(f"    {ki}. `{op}`")
+                        ki += 1
         out.append("")
 
     if rec_note:

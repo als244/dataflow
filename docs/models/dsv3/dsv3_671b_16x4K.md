@@ -176,22 +176,15 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
     5. `up_proj` — x1, x3  ← derived recompute boundary
     6. `swiglu` — —
     7. `down_resid` — —
-- kernel calls:
-    0. `rmsnorm_fwd`
-    1. `mm`
-    2. `rmsnorm_fwd`
-    3. `mm`
-    4. `rope_fwd`
-    5. `mm`
-    6. `rmsnorm_fwd`
-    7. `rope_fwd`
-    8. `mm`
-    9. `_scaled_dot_product_flash_attention`
-    10. `addmm`
-    11. `rmsnorm_fwd`
-    12. `mm ×2`
-    13. `swiglu_fwd_out`
-    14. `addmm`
+- kernel calls, by stage:
+    - `attn_norm`: `rmsnorm_fwd`
+    - `mla_q`: `mm`, `rmsnorm_fwd`, `mm`, `rope_fwd`
+    - `mla_kv`: `mm`, `rmsnorm_fwd`, `rope_fwd`, `mm`
+    - `mla_attn`: `_scaled_dot_product_flash_attention`
+    - `resid1_norm2`: `addmm`, `rmsnorm_fwd`
+    - `up_proj`: `mm ×2`
+    - `swiglu`: `swiglu_fwd_out`
+    - `down_resid`: `addmm`
 
 ### `mlamoe_fwd` — `Dsv3MoeBlockFwd`
 
@@ -210,30 +203,17 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
     7. `moe_experts13` — h13
     8. `moe_shared` — s13  ← derived recompute boundary
     9. `moe_experts2_combine` — —
-- kernel calls:
-    0. `rmsnorm_fwd`
-    1. `mm`
-    2. `rmsnorm_fwd`
-    3. `mm`
-    4. `rope_fwd`
-    5. `mm`
-    6. `rmsnorm_fwd`
-    7. `rope_fwd`
-    8. `mm`
-    9. `_scaled_dot_product_flash_attention`
-    10. `addmm`
-    11. `rmsnorm_fwd`
-    12. `mm`
-    13. `moe_topk_sigmoid_noaux`
-    14. `moe_sort`
-    15. `moe_dispatch_fwd`
-    16. `moe_grouped_mm_fwd`
-    17. `mm`
-    18. `swiglu_packed_fwd`
-    19. `moe_grouped_mm_fwd`
-    20. `swiglu_packed_fwd`
-    21. `mm`
-    22. `moe_combine_fwd`
+- kernel calls, by stage:
+    - `attn_norm`: `rmsnorm_fwd`
+    - `mla_q`: `mm`, `rmsnorm_fwd`, `mm`, `rope_fwd`
+    - `mla_kv`: `mm`, `rmsnorm_fwd`, `rope_fwd`, `mm`
+    - `mla_attn`: `_scaled_dot_product_flash_attention`
+    - `resid1_norm2`: `addmm`, `rmsnorm_fwd`
+    - `moe_route`: `mm`, `moe_topk_sigmoid_noaux`
+    - `moe_dispatch`: `moe_sort`, `moe_dispatch_fwd`
+    - `moe_experts13`: `moe_grouped_mm_fwd`
+    - `moe_shared`: `mm`
+    - `moe_experts2_combine`: `swiglu_packed_fwd`, `moe_grouped_mm_fwd`, `swiglu_packed_fwd`, `mm`, `moe_combine_fwd`
 
 ### `head_loss` — `HeadLoss`
 

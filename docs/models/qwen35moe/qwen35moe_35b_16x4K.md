@@ -181,27 +181,19 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
     9. `moe_experts13` — h13
     10. `moe_shared` — s13, gate_pre  ← derived recompute boundary
     11. `moe_experts2_combine` — —
-- kernel calls:
-    0. `rmsnorm_fwd`
-    1. `mm ×2`
-    2. `causal_conv1d_silu_fwd`
-    3. `fla::l2norm_fwd ×2`
-    4. `fla::chunk_gated_delta_rule_fwd`
-    5. `gated_rmsnorm_fwd`
-    6. `addmm`
-    7. `rmsnorm_fwd`
-    8. `mm`
-    9. `moe_topk_softmax`
-    10. `moe_sort`
-    11. `moe_dispatch_fwd`
-    12. `moe_grouped_mm_fwd`
-    13. `mm ×2`
-    14. `swiglu_packed_fwd`
-    15. `moe_grouped_mm_fwd`
-    16. `swiglu_packed_fwd`
-    17. `mm`
-    18. `moe_scale_rows`
-    19. `moe_combine_fwd`
+- kernel calls, by stage:
+    - `attn_norm`: `rmsnorm_fwd`
+    - `proj`: `mm ×2`
+    - `conv`: `causal_conv1d_silu_fwd`
+    - `heads_l2norm`: `fla::l2norm_fwd ×2`
+    - `fla`: `fla::chunk_gated_delta_rule_fwd`
+    - `norm_out`: `gated_rmsnorm_fwd`, `addmm`
+    - `ffn_norm`: `rmsnorm_fwd`
+    - `moe_route`: `mm`, `moe_topk_softmax`
+    - `moe_dispatch`: `moe_sort`, `moe_dispatch_fwd`
+    - `moe_experts13`: `moe_grouped_mm_fwd`
+    - `moe_shared`: `mm ×2`
+    - `moe_experts2_combine`: `swiglu_packed_fwd`, `moe_grouped_mm_fwd`, `swiglu_packed_fwd`, `mm`, `moe_scale_rows`, `moe_combine_fwd`
 
 ### `gattnmoe_fwd` — `Qwen35MoeAttnBlockFwd`
 
@@ -221,26 +213,18 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
     8. `moe_experts13` — h13
     9. `moe_shared` — s13, gate_pre  ← derived recompute boundary
     10. `moe_experts2_combine` — —
-- kernel calls:
-    0. `rmsnorm_fwd`
-    1. `mm ×3`
-    2. `rmsnorm_fwd ×2`
-    3. `rope_fwd ×2`
-    4. `_scaled_dot_product_flash_attention`
-    5. `addmm`
-    6. `rmsnorm_fwd`
-    7. `mm`
-    8. `moe_topk_softmax`
-    9. `moe_sort`
-    10. `moe_dispatch_fwd`
-    11. `moe_grouped_mm_fwd`
-    12. `mm ×2`
-    13. `swiglu_packed_fwd`
-    14. `moe_grouped_mm_fwd`
-    15. `swiglu_packed_fwd`
-    16. `mm`
-    17. `moe_scale_rows`
-    18. `moe_combine_fwd`
+- kernel calls, by stage:
+    - `attn_norm`: `rmsnorm_fwd`
+    - `qkv_gate`: `mm ×3`
+    - `qknorm_rope`: `rmsnorm_fwd ×2`, `rope_fwd ×2`
+    - `attn`: `_scaled_dot_product_flash_attention`
+    - `gate_o`: `addmm`
+    - `ffn_norm`: `rmsnorm_fwd`
+    - `moe_route`: `mm`, `moe_topk_softmax`
+    - `moe_dispatch`: `moe_sort`, `moe_dispatch_fwd`
+    - `moe_experts13`: `moe_grouped_mm_fwd`
+    - `moe_shared`: `mm ×2`
+    - `moe_experts2_combine`: `swiglu_packed_fwd`, `moe_grouped_mm_fwd`, `swiglu_packed_fwd`, `mm`, `moe_scale_rows`, `moe_combine_fwd`
 
 ### `head_loss` — `HeadLoss`
 

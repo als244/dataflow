@@ -118,17 +118,15 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
     5. `up_proj` — x1, x3  ← derived recompute boundary
     6. `swiglu` — —
     7. `down_resid` — —
-- kernel calls:
-    0. `rmsnorm_fwd`
-    1. `mm ×3`
-    2. `rmsnorm_fwd ×2`
-    3. `rope_fwd ×2`
-    4. `_scaled_dot_product_flash_attention`
-    5. `addmm`
-    6. `rmsnorm_fwd`
-    7. `mm ×2`
-    8. `swiglu_fwd_out`
-    9. `addmm`
+- kernel calls, by stage:
+    - `attn_norm`: `rmsnorm_fwd`
+    - `qkv_qknorm`: `mm ×3`, `rmsnorm_fwd ×2`
+    - `rope`: `rope_fwd ×2`
+    - `attn`: `_scaled_dot_product_flash_attention`
+    - `resid1_norm2`: `addmm`, `rmsnorm_fwd`
+    - `up_proj`: `mm ×2`
+    - `swiglu`: `swiglu_fwd_out`
+    - `down_resid`: `addmm`
 
 ### `head_loss` — `HeadLoss`
 

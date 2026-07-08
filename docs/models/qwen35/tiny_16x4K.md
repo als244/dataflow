@@ -168,18 +168,17 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
     7. `up_proj` — x1, x3  ← derived recompute boundary
     8. `swiglu` — —
     9. `down_resid` — —
-- kernel calls:
-    0. `rmsnorm_fwd`
-    1. `mm ×2`
-    2. `causal_conv1d_silu_fwd`
-    3. `fla::l2norm_fwd ×2`
-    4. `fla::chunk_gated_delta_rule_fwd`
-    5. `gated_rmsnorm_fwd`
-    6. `addmm`
-    7. `rmsnorm_fwd`
-    8. `mm ×2`
-    9. `swiglu_fwd_out`
-    10. `addmm`
+- kernel calls, by stage:
+    - `attn_norm`: `rmsnorm_fwd`
+    - `proj`: `mm ×2`
+    - `conv`: `causal_conv1d_silu_fwd`
+    - `heads_l2norm`: `fla::l2norm_fwd ×2`
+    - `fla`: `fla::chunk_gated_delta_rule_fwd`
+    - `norm_out`: `gated_rmsnorm_fwd`, `addmm`
+    - `ffn_norm`: `rmsnorm_fwd`
+    - `up_proj`: `mm ×2`
+    - `swiglu`: `swiglu_fwd_out`
+    - `down_resid`: `addmm`
 
 ### `gattn_fwd` — `Qwen35AttnBlockFwd`
 
@@ -197,17 +196,16 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
     6. `up_proj` — x1, x3  ← derived recompute boundary
     7. `swiglu` — —
     8. `down_resid` — —
-- kernel calls:
-    0. `rmsnorm_fwd`
-    1. `mm ×3`
-    2. `rmsnorm_fwd ×2`
-    3. `rope_fwd ×2`
-    4. `_scaled_dot_product_flash_attention`
-    5. `addmm`
-    6. `rmsnorm_fwd`
-    7. `mm ×2`
-    8. `swiglu_fwd_out`
-    9. `addmm`
+- kernel calls, by stage:
+    - `attn_norm`: `rmsnorm_fwd`
+    - `qkv_gate`: `mm ×3`
+    - `qknorm_rope`: `rmsnorm_fwd ×2`, `rope_fwd ×2`
+    - `attn`: `_scaled_dot_product_flash_attention`
+    - `gate_o`: `addmm`
+    - `ffn_norm`: `rmsnorm_fwd`
+    - `up_proj`: `mm ×2`
+    - `swiglu`: `swiglu_fwd_out`
+    - `down_resid`: `addmm`
 
 ### `head_loss` — `HeadLoss`
 
