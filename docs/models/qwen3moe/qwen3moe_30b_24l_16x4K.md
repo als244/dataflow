@@ -1,29 +1,14 @@
-# qwen3moe: tasks, objects, kernels
+# qwen3moe / `qwen3moe_30b_24l` @ 16x4K: tasks, objects, kernels
 
-GENERATED from `ShapedQwen3MoeConfig.qwen3moe_30b()` at the standard documentation run shape (seq 4096 × microbatch 16) — regenerate with `python tools/gen_model_docs.py --family qwen3moe`. Presets: [builtin_models.md](../builtin_models.md); task-kind fleet index: [task_kinds.md](../task_kinds.md).
+GENERATED from `ShapedQwen3MoeConfig.qwen3moe_30b_24l()` at run shape microbatch 16 × seq 4096 — regenerate with `python tools/gen_model_page.py --preset qwen3moe_30b_24l --microbatch 16 --seq-len 4096`. All presets: [builtin_models.md](../../builtin_models.md); task-kind fleet index: [task_kinds.md](../../task_kinds.md).
 
-Layer kinds (48 layers): `block block block block block block block block block block block block block block block block block block block block block block block block block block block block block block block block block block block block block block block block block block block block block block block block`
+Layer kinds (24 layers): `block block block block block block block block block block block block block block block block block block block block block block block block`
 
-**Run shape of this documentation preset**: microbatch 16 × seq_len 4096 = **65,536 tokens per round** (× 1 grad-accum round(s) per step). `A_*`/`M_*` objects are sized per round; their bytes/token figures below transfer to any run shape.
-
-## Dims (documentation preset)
-
-| field | value |
-|---|---|
-| `d_model` | 2048 |
-| `n_heads` | 32 |
-| `n_kv_heads` | 4 |
-| `head_dim` | 128 |
-| `d_ff` | 768 |
-| `vocab_size` | 151936 |
-| `tokens` | 65536 |
-| `seq_len` | 4096 |
-| `rope_base` | 1000000.0 |
-| `opt_policy` | adamw |
+**Run shape**: microbatch 16 × seq_len 4096 = **65,536 tokens per round** (× 1 grad-accum round(s) per step). `A_*`/`M_*` objects are sized per round; bytes/token figures transfer to any run shape.
 
 ## Object summary
 
-At the documentation run shape (65,536 tokens/round). Token-scaled objects show bytes/token in parens. Details per kind below.
+At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token in parens. Details per kind below.
 
 | object | scope | bytes |
 |---|---|---|
@@ -42,11 +27,26 @@ At the documentation run shape (65,536 tokens/round). Token-scaled objects show 
 
 | type | objects | total bytes |
 |---|---|---|
-| W (all weights, incl. embed/head) | 50 | 61,064,245,248 |
-| dW (all gradients, per step) | 50 | 61,064,245,248 |
-| O (all optimizer state) | 50 | 122,128,490,496 |
-| A (all saved contexts, one round) | 48 | 149,862,481,920 (2,286,720.0/token) |
-| M (all metadata, one round) | 48 | 251,695,104 (3,840.6/token) |
+| W (all weights, incl. embed/head) | 26 | 31,154,454,528 |
+| dW (all gradients, incl. metadata grads, per step) | 26 | 31,154,454,528 |
+| O (all optimizer state) | 26 | 62,308,909,056 |
+| A (all saved contexts, one round) | 24 | 74,931,240,960 (1,143,360.0/token) |
+| M (all metadata, one round) | 24 | 125,847,552 (1,920.3/token) |
+
+## Dims
+
+| field | value |
+|---|---|
+| `d_model` | 2048 |
+| `n_heads` | 32 |
+| `n_kv_heads` | 4 |
+| `head_dim` | 128 |
+| `d_ff` | 768 |
+| `vocab_size` | 151936 |
+| `tokens` | 65536 |
+| `seq_len` | 4096 |
+| `rope_base` | 1000000.0 |
+| `opt_policy` | adamw |
 
 ## Objects, per layer kind
 
@@ -133,8 +133,8 @@ At the documentation run shape (65,536 tokens/round). Token-scaled objects show 
 ### `head_loss` — `HeadLoss`
 
 - example task: `head_loss_0_0`
-- inputs: `y_0_0_47` (268,435,456B), `targets_0_0` (262,144B), `W_head` (622,333,952B)
-- outputs: `dy_0_0_47` (268,435,456B), `loss_0_0` (4B), `dW_head_0` (622,333,952B)
+- inputs: `y_0_0_23` (268,435,456B), `targets_0_0` (262,144B), `W_head` (622,333,952B)
+- outputs: `dy_0_0_23` (268,435,456B), `loss_0_0` (4B), `dW_head_0` (622,333,952B)
 - mutates: —
 - kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_fwd → ce_loss_fwd_bwd → rmsnorm_bwd
 
@@ -148,18 +148,18 @@ At the documentation run shape (65,536 tokens/round). Token-scaled objects show 
 
 ### `q3moeattn_bwd` — `Qwen3MoeBlockBwd`
 
-- example task: `block_bwd_0_0_47`
-- inputs: `dy_0_0_47` (268,435,456B), `A_0_0_47` (3,122,135,040B), `y_0_0_46` (268,435,456B), `W_47` (1,246,241,280B), `M_0_0_47` (5,243,648B)
-- outputs: `dy_0_0_46` (268,435,456B), `dW_0_47` (1,246,241,280B)
+- example task: `block_bwd_0_0_23`
+- inputs: `dy_0_0_23` (268,435,456B), `A_0_0_23` (3,122,135,040B), `y_0_0_22` (268,435,456B), `W_23` (1,246,241,280B), `M_0_0_23` (5,243,648B)
+- outputs: `dy_0_0_22` (268,435,456B), `dW_0_23` (1,246,241,280B)
 - mutates: —
 - kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_apply → moe_dispatch_fwd×2 → swiglu_packed_fwd → moe_grouped_mm_dgrad → moe_rowdot → moe_scale_rows → moe_grouped_mm_wgrad → moe_scale_rows → swiglu_packed_bwd → moe_grouped_mm_wgrad → moe_grouped_mm_dgrad → moe_dispatch_bwd → moe_router_bwd → moe_aux_lb_grad → rmsnorm_bwd → rmsnorm_apply×2 → rope_fwd×2 → rope_bwd×2 → rmsnorm_bwd×2 → rmsnorm_apply → rmsnorm_bwd
 
 ### `optimizer_block` — `AdamWStep`
 
-- example task: `optimizer_0_47`
-- inputs: `W_47` (1,246,241,280B), `dW_0_47` (1,246,241,280B), `O_47` (2,492,482,560B)
+- example task: `optimizer_0_23`
+- inputs: `W_23` (1,246,241,280B), `dW_0_23` (1,246,241,280B), `O_23` (2,492,482,560B)
 - outputs: —
-- mutates: `W_47`, `O_47`
+- mutates: `W_23`, `O_23`
 - kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): adamw_step×11
 
 ### `embed_bwd` — `EmbedBwd`

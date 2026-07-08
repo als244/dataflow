@@ -1,29 +1,14 @@
-# qwen3: tasks, objects, kernels
+# qwen3 / `qwen3_8b` @ 16x4K: tasks, objects, kernels
 
-GENERATED from `ShapedQwen3Config.qwen3_8b()` at the standard documentation run shape (seq 4096 × microbatch 16) — regenerate with `python tools/gen_model_docs.py --family qwen3`. Presets: [builtin_models.md](../builtin_models.md); task-kind fleet index: [task_kinds.md](../task_kinds.md).
+GENERATED from `ShapedQwen3Config.qwen3_8b()` at run shape microbatch 16 × seq 4096 — regenerate with `python tools/gen_model_page.py --preset qwen3_8b --microbatch 16 --seq-len 4096`. All presets: [builtin_models.md](../../builtin_models.md); task-kind fleet index: [task_kinds.md](../../task_kinds.md).
 
 Layer kinds (36 layers): `block block block block block block block block block block block block block block block block block block block block block block block block block block block block block block block block block block block block`
 
-**Run shape of this documentation preset**: microbatch 16 × seq_len 4096 = **65,536 tokens per round** (× 1 grad-accum round(s) per step). `A_*`/`M_*` objects are sized per round; their bytes/token figures below transfer to any run shape.
-
-## Dims (documentation preset)
-
-| field | value |
-|---|---|
-| `d_model` | 4096 |
-| `n_heads` | 32 |
-| `n_kv_heads` | 8 |
-| `head_dim` | 128 |
-| `d_ff` | 12288 |
-| `vocab_size` | 151936 |
-| `tokens` | 65536 |
-| `seq_len` | 4096 |
-| `rope_base` | 1000000.0 |
-| `opt_policy` | adamw |
+**Run shape**: microbatch 16 × seq_len 4096 = **65,536 tokens per round** (× 1 grad-accum round(s) per step). `A_*`/`M_*` objects are sized per round; bytes/token figures transfer to any run shape.
 
 ## Object summary
 
-At the documentation run shape (65,536 tokens/round). Token-scaled objects show bytes/token in parens. Details per kind below.
+At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token in parens. Details per kind below.
 
 | object | scope | bytes |
 |---|---|---|
@@ -42,9 +27,24 @@ At the documentation run shape (65,536 tokens/round). Token-scaled objects show 
 | type | objects | total bytes |
 |---|---|---|
 | W (all weights, incl. embed/head) | 38 | 16,381,470,720 |
-| dW (all gradients, per step) | 38 | 16,381,470,720 |
+| dW (all gradients, incl. metadata grads, per step) | 38 | 16,381,470,720 |
 | O (all optimizer state) | 38 | 32,762,941,440 |
 | A (all saved contexts, one round) | 36 | 184,308,203,520 (2,812,320.0/token) |
+
+## Dims
+
+| field | value |
+|---|---|
+| `d_model` | 4096 |
+| `n_heads` | 32 |
+| `n_kv_heads` | 8 |
+| `head_dim` | 128 |
+| `d_ff` | 12288 |
+| `vocab_size` | 151936 |
+| `tokens` | 65536 |
+| `seq_len` | 4096 |
+| `rope_base` | 1000000.0 |
+| `opt_policy` | adamw |
 
 ## Objects, per layer kind
 

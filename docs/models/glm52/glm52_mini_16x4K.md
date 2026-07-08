@@ -1,38 +1,14 @@
-# glm52: tasks, objects, kernels
+# glm52 / `glm52_mini` @ 16x4K: tasks, objects, kernels
 
-GENERATED from `ShapedGlm52Config.glm52_mini()` at the standard documentation run shape (seq 4096 × microbatch 16) — regenerate with `python tools/gen_model_docs.py --family glm52`. Presets: [builtin_models.md](../builtin_models.md); task-kind fleet index: [task_kinds.md](../task_kinds.md).
+GENERATED from `ShapedGlm52Config.glm52_mini()` at run shape microbatch 16 × seq 4096 — regenerate with `python tools/gen_model_page.py --preset glm52_mini --microbatch 16 --seq-len 4096`. All presets: [builtin_models.md](../../builtin_models.md); task-kind fleet index: [task_kinds.md](../../task_kinds.md).
 
 Layer kinds (18 layers): `gdl gdl gml gmf gmf gmf gml gmf gmf gmf gml gmf gmf gmf gml gmf gmf gmf`
 
-**Run shape of this documentation preset**: microbatch 16 × seq_len 4096 = **65,536 tokens per round** (× 1 grad-accum round(s) per step). `A_*`/`M_*` objects are sized per round; their bytes/token figures below transfer to any run shape.
-
-## Dims (documentation preset)
-
-| field | value |
-|---|---|
-| `d_model` | 2048 |
-| `n_heads` | 16 |
-| `q_lora_rank` | 512 |
-| `kv_lora_rank` | 256 |
-| `qk_nope_dim` | 64 |
-| `qk_rope_dim` | 32 |
-| `v_head_dim` | 64 |
-| `d_ff` | 8192 |
-| `first_k_dense` | 2 |
-| `vocab_size` | 129280 |
-| `tokens` | 65536 |
-| `seq_len` | 4096 |
-| `rope_base` | 10000.0 |
-| `opt_policy` | adamw |
-| `index_n_heads` | 8 |
-| `index_head_dim` | 64 |
-| `index_topk` | 1024 |
-| `sparse_mode` | True |
-| `train_indexer` | True |
+**Run shape**: microbatch 16 × seq_len 4096 = **65,536 tokens per round** (× 1 grad-accum round(s) per step). `A_*`/`M_*` objects are sized per round; bytes/token figures transfer to any run shape.
 
 ## Object summary
 
-At the documentation run shape (65,536 tokens/round). Token-scaled objects show bytes/token in parens. Details per kind below.
+At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token in parens. Details per kind below.
 
 | object | scope | bytes |
 |---|---|---|
@@ -62,11 +38,34 @@ At the documentation run shape (65,536 tokens/round). Token-scaled objects show 
 | type | objects | total bytes |
 |---|---|---|
 | W (all weights, incl. embed/head) | 20 | 27,426,875,392 |
-| dW (all gradients, per step) | 20 | 27,426,875,392 |
+| dW (all gradients, incl. metadata grads, per step) | 24 | 28,500,617,216 |
 | O (all optimizer state) | 20 | 54,853,750,784 |
 | A (all saved contexts, one round) | 18 | 52,447,674,368 (800,288.0/token) |
 | M (all metadata, one round) | 18 | 1,694,511,104 (25,856.2/token) |
-| dM (metadata gradients) | 4 | 1,073,741,824 |
+
+## Dims
+
+| field | value |
+|---|---|
+| `d_model` | 2048 |
+| `n_heads` | 16 |
+| `q_lora_rank` | 512 |
+| `kv_lora_rank` | 256 |
+| `qk_nope_dim` | 64 |
+| `qk_rope_dim` | 32 |
+| `v_head_dim` | 64 |
+| `d_ff` | 8192 |
+| `first_k_dense` | 2 |
+| `vocab_size` | 129280 |
+| `tokens` | 65536 |
+| `seq_len` | 4096 |
+| `rope_base` | 10000.0 |
+| `opt_policy` | adamw |
+| `index_n_heads` | 8 |
+| `index_head_dim` | 64 |
+| `index_topk` | 1024 |
+| `sparse_mode` | True |
+| `train_indexer` | True |
 
 ## Objects, per layer kind
 

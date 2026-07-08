@@ -1,0 +1,180 @@
+# qwen3moe / `tiny` @ 16x4K: tasks, objects, kernels
+
+GENERATED from `ShapedQwen3MoeConfig.tiny()` at run shape microbatch 16 × seq 4096 — regenerate with `python tools/gen_model_page.py --preset tiny --microbatch 16 --seq-len 4096`. All presets: [builtin_models.md](../../builtin_models.md); task-kind fleet index: [task_kinds.md](../../task_kinds.md).
+
+Layer kinds (2 layers): `block block`
+
+**Run shape**: microbatch 16 × seq_len 4096 = **65,536 tokens per round** (× 1 grad-accum round(s) per step). `A_*`/`M_*` objects are sized per round; bytes/token figures transfer to any run shape.
+
+## Object summary
+
+At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token in parens. Details per kind below.
+
+| object | scope | bytes |
+|---|---|---|
+| `W_i (block)` | layer | 494,592 |
+| `dW_i (block)` | layer/step | 494,592 |
+| `O_i (block)` | layer | 989,184 |
+| `A (block)` | layer × round | 104,857,600 (1,600.0/token) |
+| `M (block)` | layer × round | 1,310,976 (20.0/token) |
+| `W_head` | run | 131,328 |
+| `W_embed` | run | 131,072 |
+| `O_embed` | run | 262,144 |
+| `O_head` | run | 262,656 |
+| `hidden state (y)` | boundary buffer | 16,777,216 (256.0/token) |
+
+### Aggregate totals (all layers, this run shape)
+
+| type | objects | total bytes |
+|---|---|---|
+| W (all weights, incl. embed/head) | 4 | 1,251,584 |
+| dW (all gradients, incl. metadata grads, per step) | 4 | 1,251,584 |
+| O (all optimizer state) | 4 | 2,503,168 |
+| A (all saved contexts, one round) | 2 | 209,715,200 (3,200.0/token) |
+| M (all metadata, one round) | 2 | 2,621,952 (40.0/token) |
+
+## Dims
+
+| field | value |
+|---|---|
+| `d_model` | 128 |
+| `n_heads` | 4 |
+| `n_kv_heads` | 2 |
+| `head_dim` | 32 |
+| `d_ff` | 64 |
+| `vocab_size` | 512 |
+| `tokens` | 65536 |
+| `seq_len` | 4096 |
+| `rope_base` | 1000000.0 |
+| `opt_policy` | adamw |
+
+## Objects, per layer kind
+
+`dW_i` mirrors `W_i`'s fields at the grad dtypes; `O_i` holds the optimizer policy's state slots per field (adamw default: `m_f`+`v_f` at the opt dtype; sgd fields contribute none — see extending.md §6). `A_i`/`M_i` exist per (step, round).
+
+### kind `block` (e.g. layer 0)
+
+**`W_0` weights** — 494,592 bytes
+
+| field | dtype | shape | bytes |
+|---|---|---|---|
+| `attn_norm_w` | bf16 | (128,) | 256 |
+| `wq` | bf16 | (128, 128) | 32,768 |
+| `wk` | bf16 | (128, 64) | 16,384 |
+| `wv` | bf16 | (128, 64) | 16,384 |
+| `q_norm_w` | bf16 | (32,) | 64 |
+| `k_norm_w` | bf16 | (32,) | 64 |
+| `wo` | bf16 | (128, 128) | 32,768 |
+| `ffn_norm_w` | bf16 | (128,) | 256 |
+| `w_router` | bf16 | (128, 8) | 2,048 |
+| `w13_experts` | bf16 | (8, 128, 128) | 262,144 |
+| `w2_experts` | bf16 | (8, 64, 128) | 131,072 |
+
+**`A_.._0` saved context** — 104,857,600 bytes = **1,600.0 bytes/token** (per (step, round))
+
+| field | dtype | shape | bytes |
+|---|---|---|---|
+| `rstd_attn` | fp32 | (65536,) | 262,144 |
+| `qm` | bf16 | (65536, 128) | 16,777,216 |
+| `km` | bf16 | (65536, 64) | 8,388,608 |
+| `rstd_q` | fp32 | (262144,) | 1,048,576 |
+| `rstd_k` | fp32 | (131072,) | 524,288 |
+| `v` | bf16 | (65536, 64) | 8,388,608 |
+| `lse` | fp32 | (64, 4096) | 1,048,576 |
+| `attn_out` | bf16 | (65536, 128) | 16,777,216 |
+| `h_mid` | bf16 | (65536, 128) | 16,777,216 |
+| `rstd_ffn` | fp32 | (65536,) | 262,144 |
+| `router_logits` | bf16 | (65536, 8) | 1,048,576 |
+| `h13` | bf16 | (131072, 128) | 33,554,432 |
+
+**`M_.._0` metadata** — 1,310,976 bytes = **20.0 bytes/token** (never recomputed)
+
+| field | dtype | shape | bytes |
+|---|---|---|---|
+| `route_w` | bf16 | (65536, 2) | 262,144 |
+| `route_ids` | int32 | (65536, 2) | 524,288 |
+| `route_order` | int32 | (131072,) | 524,288 |
+| `route_offsets` | int32 | (9,) | 36 |
+
+**`W_head`** — 131,328 bytes
+
+| field | dtype | shape | bytes |
+|---|---|---|---|
+| `w` | bf16 | (512, 128) | 131,072 |
+| `final_norm_w` | bf16 | (128,) | 256 |
+
+## Tasks
+
+### `embed_fwd` — `EmbedFwd`
+
+- example task: `embed_fwd_0_0`
+- inputs: `tokens_0_0` (262,144B), `W_embed` (131,072B)
+- outputs: `y_embed_0_0` (16,777,216B)
+- mutates: —
+
+### `q3moeattn_fwd` — `Qwen3MoeBlockFwd`
+
+- example task: `block_fwd_0_0_0`
+- inputs: `y_embed_0_0` (16,777,216B), `W_0` (494,592B)
+- outputs: `y_0_0_0` (16,777,216B), `A_0_0_0` (104,857,600B), `M_0_0_0` (1,310,976B)
+- mutates: —
+- stages (name — emitted ctx fields):
+    0. `attn_norm` — rstd_attn
+    1. `qkv_qknorm` — qm, km, rstd_q, rstd_k, v
+    2. `rope` — —
+    3. `attn` — lse, attn_out
+    4. `resid1_norm2` — h_mid, rstd_ffn
+    5. `moe_route` — router_logits
+    6. `moe_dispatch` — —
+    7. `moe_experts13` — h13  ← derived recompute boundary
+    8. `moe_experts2_combine` — —
+- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_fwd×3 → rope_fwd×2 → rmsnorm_fwd → moe_topk_softmax → moe_sort → moe_dispatch_fwd → moe_grouped_mm_fwd → swiglu_packed_fwd → moe_grouped_mm_fwd → moe_combine_fwd
+
+### `head_loss` — `HeadLoss`
+
+- example task: `head_loss_0_0`
+- inputs: `y_0_0_1` (16,777,216B), `targets_0_0` (262,144B), `W_head` (131,328B)
+- outputs: `dy_0_0_1` (16,777,216B), `loss_0_0` (4B), `dW_head_0` (131,328B)
+- mutates: —
+- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_fwd → ce_loss_fwd_bwd → rmsnorm_bwd
+
+### `optimizer_head` — `AdamWStep`
+
+- example task: `optimizer_head_0`
+- inputs: `W_head` (131,328B), `dW_head_0` (131,328B), `O_head` (262,656B)
+- outputs: —
+- mutates: `W_head`, `O_head`
+- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): adamw_step×2
+
+### `q3moeattn_bwd` — `Qwen3MoeBlockBwd`
+
+- example task: `block_bwd_0_0_1`
+- inputs: `dy_0_0_1` (16,777,216B), `A_0_0_1` (104,857,600B), `y_0_0_0` (16,777,216B), `W_1` (494,592B), `M_0_0_1` (1,310,976B)
+- outputs: `dy_0_0_0` (16,777,216B), `dW_0_1` (494,592B)
+- mutates: —
+- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_apply → moe_dispatch_fwd×2 → swiglu_packed_fwd → moe_grouped_mm_dgrad → moe_rowdot → moe_scale_rows → moe_grouped_mm_wgrad → moe_scale_rows → swiglu_packed_bwd → moe_grouped_mm_wgrad → moe_grouped_mm_dgrad → moe_dispatch_bwd → moe_router_bwd → moe_aux_lb_grad → rmsnorm_bwd → rmsnorm_apply×2 → rope_fwd×2 → rope_bwd×2 → rmsnorm_bwd×2 → rmsnorm_apply → rmsnorm_bwd
+
+### `optimizer_block` — `AdamWStep`
+
+- example task: `optimizer_0_1`
+- inputs: `W_1` (494,592B), `dW_0_1` (494,592B), `O_1` (989,184B)
+- outputs: —
+- mutates: `W_1`, `O_1`
+- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): adamw_step×11
+
+### `embed_bwd` — `EmbedBwd`
+
+- example task: `embed_bwd_0_0`
+- inputs: `dy_embed_0_0` (16,777,216B), `tokens_0_0` (262,144B)
+- outputs: `dW_embed_0` (131,072B)
+- mutates: —
+- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): embed_bwd_accum
+
+### `optimizer_embed` — `AdamWStep`
+
+- example task: `optimizer_embed_0`
+- inputs: `W_embed` (131,072B), `dW_embed_0` (131,072B), `O_embed` (262,144B)
+- outputs: —
+- mutates: `W_embed`, `O_embed`
+- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): adamw_step
+

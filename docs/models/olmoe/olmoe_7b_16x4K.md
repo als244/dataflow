@@ -1,29 +1,14 @@
-# olmoe: tasks, objects, kernels
+# olmoe / `olmoe_7b` @ 16x4K: tasks, objects, kernels
 
-GENERATED from `ShapedOlmoeConfig.olmoe_7b()` at the standard documentation run shape (seq 4096 × microbatch 16) — regenerate with `python tools/gen_model_docs.py --family olmoe`. Presets: [builtin_models.md](../builtin_models.md); task-kind fleet index: [task_kinds.md](../task_kinds.md).
+GENERATED from `ShapedOlmoeConfig.olmoe_7b()` at run shape microbatch 16 × seq 4096 — regenerate with `python tools/gen_model_page.py --preset olmoe_7b --microbatch 16 --seq-len 4096`. All presets: [builtin_models.md](../../builtin_models.md); task-kind fleet index: [task_kinds.md](../../task_kinds.md).
 
 Layer kinds (16 layers): `block block block block block block block block block block block block block block block block`
 
-**Run shape of this documentation preset**: microbatch 16 × seq_len 4096 = **65,536 tokens per round** (× 1 grad-accum round(s) per step). `A_*`/`M_*` objects are sized per round; their bytes/token figures below transfer to any run shape.
-
-## Dims (documentation preset)
-
-| field | value |
-|---|---|
-| `d_model` | 2048 |
-| `n_heads` | 16 |
-| `n_kv_heads` | 16 |
-| `head_dim` | 128 |
-| `d_ff` | 1024 |
-| `vocab_size` | 50304 |
-| `tokens` | 65536 |
-| `seq_len` | 4096 |
-| `rope_base` | 10000.0 |
-| `opt_policy` | adamw |
+**Run shape**: microbatch 16 × seq_len 4096 = **65,536 tokens per round** (× 1 grad-accum round(s) per step). `A_*`/`M_*` objects are sized per round; bytes/token figures transfer to any run shape.
 
 ## Object summary
 
-At the documentation run shape (65,536 tokens/round). Token-scaled objects show bytes/token in parens. Details per kind below.
+At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token in parens. Details per kind below.
 
 | object | scope | bytes |
 |---|---|---|
@@ -43,10 +28,25 @@ At the documentation run shape (65,536 tokens/round). Token-scaled objects show 
 | type | objects | total bytes |
 |---|---|---|
 | W (all weights, incl. embed/head) | 18 | 13,838,323,712 |
-| dW (all gradients, per step) | 18 | 13,838,323,712 |
+| dW (all gradients, incl. metadata grads, per step) | 18 | 13,838,323,712 |
 | O (all optimizer state) | 18 | 27,676,647,424 |
 | A (all saved contexts, one round) | 16 | 56,052,678,656 (855,296.0/token) |
 | M (all metadata, one round) | 16 | 83,894,272 (1,280.1/token) |
+
+## Dims
+
+| field | value |
+|---|---|
+| `d_model` | 2048 |
+| `n_heads` | 16 |
+| `n_kv_heads` | 16 |
+| `head_dim` | 128 |
+| `d_ff` | 1024 |
+| `vocab_size` | 50304 |
+| `tokens` | 65536 |
+| `seq_len` | 4096 |
+| `rope_base` | 10000.0 |
+| `opt_policy` | adamw |
 
 ## Objects, per layer kind
 

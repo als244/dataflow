@@ -1,31 +1,31 @@
-"""Generate docs/models/<family>.md — a comprehensive, per-family
-reference derived entirely from the code (no hand-maintained content):
+"""Generate docs/models/<family>/<preset>_<bs>x<seq>.md — per-preset
+references derived entirely from the code (no hand-maintained content):
 
-    python tools/gen_model_docs.py                 # all families, GPU record
+    python tools/gen_model_docs.py                     # every (family, preset)
     python tools/gen_model_docs.py --family glm52
-    python tools/gen_model_docs.py --no-record     # CPU-only (skip kernel seqs)
+    python tools/gen_model_docs.py --family glm52 --preset glm52_mini
+    python tools/gen_model_docs.py --no-record         # CPU-only (skip traces)
 
-Per family page:
-- dims of the documentation preset (mini where it exists, else tiny) —
-  every scalar dims field, so object shapes below are derivable;
-- objects per layer kind: field-level tables (name / dtype / shape /
-  bytes) for W_i, the saved context A_i, and M_i where the kind has
-  one, plus embed/head weight tables and the dW/O sizing rules;
-- every task kind: executable, buffer contract (a representative
-  lowered task's inputs/outputs/mutates with byte sizes), the forward
-  STAGE list with emitted-context fields and the derived recompute
-  boundary, and the TRACED kernel-call sequence.
+Default pages use the STANDARD documentation run shape (microbatch 16 ×
+seq 4096 → files named `<preset>_16x4K.md`) so object tables compare
+across presets and families. For a page at a DIFFERENT run shape, use
+`tools/gen_model_page.py --preset <p> --microbatch B --seq-len S`.
 
-Generation is LIGHT by construction: everything about the
-documentation preset (object tables, sizes, contracts) is pure layout
-arithmetic — no allocation, no kernels, any scale in milliseconds.
-Kernel sequences are dims-invariant per task kind, so they are traced
-ONCE at the family's TINY preset (megabyte buffers, one launch per
-signature through a recording KernelSet proxy); per-sequence op
-counts scale with the microbatch and are labeled as traced.
+Per page: dims; per-object and aggregate size summaries (dM counts
+toward dW — metadata gradients are gradients); per-layer-kind
+FIELD-LEVEL tables for W/A/M; every task kind with buffer contract,
+forward STAGE list (meta marks + derived recompute boundary), and the
+TRACED kernel-call sequence.
 
-External families generate identically (plugins load first): add a
-family, rerun, get the same page.
+Generation is LIGHT by construction: object tables, sizes, and
+contracts are pure layout arithmetic — no allocation, no kernels, any
+scale in milliseconds. Kernel sequences are dims-invariant per task
+kind, so they are traced ONCE PER FAMILY at the tiny preset (megabyte
+buffers, one launch per signature through a recording KernelSet proxy)
+and shared by that family's pages; per-sequence op counts scale with
+the microbatch and are labeled as traced.
+
+External families generate identically (plugins load first).
 """
 from __future__ import annotations
 
@@ -38,24 +38,13 @@ from dataflow.training import families as F
 
 REPO = Path(__file__).resolve().parent.parent
 
-# documentation presets (Shein): full-scale where a single GPU can
-# still profile the per-task signatures; mini for the 671B-class
-# families. External families fall back to {name}_mini, then tiny.
-DOC_PRESETS = {
-    "llama3": "llama3_8b",
-    "olmoe": "olmoe_7b",
-    "qwen3": "qwen3_8b",
-    "qwen3moe": "qwen3moe_30b",
-    "qwen35": "qwen35_9b",
-    "qwen35moe": "qwen35moe_35b",
-    "dsv3": "dsv3_mini",
-    "dsv32": "dsv32_mini",
-    "glm52": "glm52_mini",
-}
-# every page documents the SAME run shape so A_*/M_* tables compare
-# across families
 DOC_SEQ_LEN = 4096
 DOC_BATCH = 16
+
+
+def shape_tag(batch: int, seq_len: int) -> str:
+    seq = f"{seq_len // 1024}K" if seq_len % 1024 == 0 else str(seq_len)
+    return f"{batch}x{seq}"
 
 
 # ---------------------------------------------------------------- helpers
@@ -135,8 +124,8 @@ def compress(seq: list[str]) -> str:
 
 
 def record_kernel_seqs(fam, cfg, dims, prog) -> dict[str, str]:
-    """Execute each task signature once (profiler machinery) through a
-    recording kernel proxy; return {compute_key: op sequence}."""
+    """Execute each task signature once (profiler machinery, tiny dims)
+    through a recording kernel proxy; {compute_key: op sequence}."""
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.tasks.kernels import resolve_kernels
     from dataflow.training.profiling import profile_program
@@ -148,7 +137,6 @@ def record_kernel_seqs(fam, cfg, dims, prog) -> dict[str, str]:
     class Tag:
         def __init__(self, inner, key):
             self.inner, self.key = inner, key
-            # profiling hooks (profile_fill) must remain reachable
             if hasattr(inner, "profile_fill"):
                 self.profile_fill = inner.profile_fill
 
@@ -171,123 +159,111 @@ def record_kernel_seqs(fam, cfg, dims, prog) -> dict[str, str]:
 
 # ---------------------------------------------------------------- page
 
-def gen_family(name: str, record: bool) -> str:
+def gen_page(name: str, preset: str, record: bool,
+             kern_cache: dict | None = None, *,
+             batch: int = DOC_BATCH, seq_len: int = DOC_SEQ_LEN) -> str:
     fam = F.family(name)
     cls = fam.config_type
-    preset = DOC_PRESETS.get(name)
-    if preset is None or not isinstance(cls.__dict__.get(preset), classmethod):
-        for cand in (f"{name}_mini", "tiny"):
-            if isinstance(cls.__dict__.get(cand), classmethod):
-                preset = cand
-                break
     cfg = dataclasses.replace(getattr(cls, preset)(),
-                              seq_len=DOC_SEQ_LEN, batch=DOC_BATCH)
+                              seq_len=seq_len, batch=batch)
     dims = fam.dims_of(cfg)
     prog = fam.lower(cfg)
     resolver = fam.build_resolver(dims)
     sizes = prog.object_sizes()
     tasks = prog.task_by_id()
+    tag = shape_tag(batch, seq_len)
 
     kern_seqs: dict[str, str] = {}
     rec_note = ""
     if record:
-        try:
-            # trace at TINY dims: sequences are dims-invariant per task
-            # kind; only the trace should ever touch the GPU
-            tiny_cfg = cls.tiny()
-            tiny_dims = fam.dims_of(tiny_cfg)
-            kern_seqs = record_kernel_seqs(
-                fam, tiny_cfg, tiny_dims, fam.lower(tiny_cfg))
-        except Exception as exc:
-            rec_note = f" (kernel tracing unavailable: {exc})"
+        if kern_cache is not None and name in kern_cache:
+            kern_seqs = kern_cache[name]
+        else:
+            try:
+                # trace at TINY dims: sequences are dims-invariant per
+                # task kind; one trace per family, shared by its pages
+                tiny_cfg = cls.tiny()
+                tiny_dims = fam.dims_of(tiny_cfg)
+                kern_seqs = record_kernel_seqs(
+                    fam, tiny_cfg, tiny_dims, fam.lower(tiny_cfg))
+            except Exception as exc:
+                rec_note = f"kernel tracing unavailable: {exc}"
+            if kern_cache is not None:
+                kern_cache[name] = kern_seqs
 
     L = cfg.n_layers
     kind_of = getattr(dims, "kind_of", lambda i: "block")
     kinds_seq = [str(kind_of(i)) for i in range(L)]
     rep_layer = {k: kinds_seq.index(k) for k in dict.fromkeys(kinds_seq)}
 
-    out = [f"# {name}: tasks, objects, kernels",
+    out = [f"# {name} / `{preset}` @ {tag}: tasks, objects, kernels",
            "",
-           f"GENERATED from `{cls.__name__}.{preset}()` at the standard "
-           f"documentation run shape (seq {DOC_SEQ_LEN} × microbatch "
-           f"{DOC_BATCH}) — regenerate with "
-           f"`python tools/gen_model_docs.py --family {name}`. Presets: "
-           f"[builtin_models.md](../builtin_models.md); task-kind fleet "
-           f"index: [task_kinds.md](../task_kinds.md).",
+           f"GENERATED from `{cls.__name__}.{preset}()` at run shape "
+           f"microbatch {batch} × seq {seq_len} — regenerate with "
+           f"`python tools/gen_model_page.py --preset {preset} "
+           f"--microbatch {batch} --seq-len {seq_len}`. All presets: "
+           f"[builtin_models.md](../../builtin_models.md); task-kind "
+           f"fleet index: [task_kinds.md](../../task_kinds.md).",
            "",
            f"Layer kinds ({L} layers): `{' '.join(kinds_seq)}`",
            "",
-           f"**Run shape of this documentation preset**: microbatch "
-           f"{cfg.batch} × seq_len {cfg.seq_len} = **{dims.tokens:,} "
-           f"tokens per round** (× {cfg.grad_accum_rounds} grad-accum "
-           f"round(s) per step). `A_*`/`M_*` objects are sized per "
-           f"round; their bytes/token figures below transfer to any "
-           f"run shape.",
-           "",
-           "## Dims (documentation preset)",
-           "",
-           "| field | value |", "|---|---|"]
-    for f in dataclasses.fields(dims):
-        v = getattr(dims, f.name)
-        if isinstance(v, (int, float, str, bool)):
-            out.append(f"| `{f.name}` | {v} |")
-        elif isinstance(v, tuple) and len(v) <= 8 and all(
-                isinstance(x, (int, str)) for x in v):
-            out.append(f"| `{f.name}` | {v} |")
-    out.append("")
+           f"**Run shape**: microbatch {cfg.batch} × seq_len "
+           f"{cfg.seq_len} = **{dims.tokens:,} tokens per round** "
+           f"(× {cfg.grad_accum_rounds} grad-accum round(s) per step). "
+           f"`A_*`/`M_*` objects are sized per round; bytes/token "
+           f"figures transfer to any run shape.",
+           ""]
 
     # ---- objects per layer kind (collect summary rows as we go) ----
-    summary: list[tuple[str, str, int]] = []   # (object, per, bytes)
+    summary: list[tuple[str, str, int]] = []
     detail = ["## Objects, per layer kind", "",
-              "`dW_i` mirrors `W_i`'s fields at the grad dtypes; `O_i` holds "
-              "the optimizer policy's state slots per field (adamw default: "
-              "`m_f`+`v_f` at the opt dtype; sgd fields contribute none — "
-              "see extending.md §6). `A_i`/`M_i` exist per (step, round).", ""]
-    out_main = out
-    out = detail
-    for kind, layer in rep_layer.items():
-        fwd_key = None
-        for t in tasks.values():
-            if t.compute_block_key.endswith("_fwd") and \
-                    t.block_params.get("layer") == layer and \
-                    t.id.startswith("block_fwd"):
-                fwd_key = t
-                break
-        if fwd_key is None:
-            continue
-        ex = resolver(fwd_key)
-        out.append(f"### kind `{kind}` (e.g. layer {layer})")
-        out.append("")
-        wl = ex._weight_layout(layer) if hasattr(ex, "_weight_layout") else None
-        out += field_table(wl, f"`W_{layer}` weights")
-        cl = getattr(ex, "cl", None)
-        out += field_table(cl, f"`A_.._{layer}` saved context",
-                           "per (step, round)", per_token=dims.tokens)
-        ml = _meta_layout(name, dims, layer)
-        out += field_table(ml, f"`M_.._{layer}` metadata",
-                           "never recomputed", per_token=dims.tokens)
-        if wl is not None:
-            from dataflow.tasks.layouts import grad_layout, opt_state_layout
+              "`dW_i` mirrors `W_i`'s fields at the grad dtypes; `O_i` "
+              "holds the optimizer policy's state slots per field (adamw "
+              "default: `m_f`+`v_f` at the opt dtype; sgd fields "
+              "contribute none — see extending.md §6). `A_i`/`M_i` exist "
+              "per (step, round).", ""]
+    from dataflow.tasks.layouts import grad_layout, opt_state_layout
 
+    for kind, layer in rep_layer.items():
+        fwd_task = None
+        for t in tasks.values():
+            if t.id.startswith("block_fwd") and \
+                    t.block_params.get("layer") == layer:
+                fwd_task = t
+                break
+        if fwd_task is None:
+            continue
+        ex = resolver(fwd_task)
+        detail.append(f"### kind `{kind}` (e.g. layer {layer})")
+        detail.append("")
+        wl = ex._weight_layout(layer) if hasattr(ex, "_weight_layout") else None
+        detail += field_table(wl, f"`W_{layer}` weights")
+        cl = getattr(ex, "cl", None)
+        detail += field_table(cl, f"`A_.._{layer}` saved context",
+                              "per (step, round)", per_token=dims.tokens)
+        ml = _meta_layout(name, dims, layer)
+        detail += field_table(ml, f"`M_.._{layer}` metadata",
+                              "never recomputed", per_token=dims.tokens)
+        if wl is not None:
             summary.append((f"W_i ({kind})", "layer", wl.total_bytes))
             summary.append((f"dW_i ({kind})", "layer/step",
                             grad_layout(wl, dims.dtypes, layer=layer)
                             .total_bytes))
             summary.append((f"O_i ({kind})", "layer",
-                            opt_state_layout(wl, dims.dtypes, layer=layer,
-                                             opt_policy=getattr(
-                                                 dims, "opt_policy", None))
-                            .total_bytes))
+                            opt_state_layout(
+                                wl, dims.dtypes, layer=layer,
+                                opt_policy=getattr(dims, "opt_policy",
+                                                   None)).total_bytes))
         if cl is not None:
             summary.append((f"A ({kind})", "layer × round", cl.total_bytes))
         if ml is not None and ml.fields:
             summary.append((f"M ({kind})", "layer × round", ml.total_bytes))
 
-    # embed/head weights
     try:
         from dataflow.tasks.layouts import head_weight_layout
+
         hl = head_weight_layout(dims)
-        out += field_table(hl, "`W_head`")
+        detail += field_table(hl, "`W_head`")
         summary.append(("W_head", "run", hl.total_bytes))
     except Exception:
         pass
@@ -297,11 +273,10 @@ def gen_family(name: str, record: bool) -> str:
     summary.append(("hidden state (y)", "boundary buffer",
                     dims.tokens * dims.d_model * 2))
 
-    out = out_main
     out += ["## Object summary", "",
-            f"At the documentation run shape ({dims.tokens:,} "
-            f"tokens/round). Token-scaled objects show bytes/token in "
-            f"parens. Details per kind below.", "",
+            f"At this run shape ({dims.tokens:,} tokens/round). "
+            f"Token-scaled objects show bytes/token in parens. Details "
+            f"per kind below.", "",
             "| object | scope | bytes |", "|---|---|---|"]
     for label, per, b in summary:
         cell = f"{b:,}"
@@ -310,35 +285,54 @@ def gen_family(name: str, record: bool) -> str:
         out.append(f"| `{label}` | {per} | {cell} |")
     out.append("")
 
-    # ---- aggregate totals by object TYPE, from the lowered program ----
-    groups = {"W": ("W_",), "dW": ("dW_",), "O": ("O_",),
-              "A": ("A_",), "M": ("M_",), "dM": ("dM_",)}
+    # ---- aggregate totals by type (dM counts toward dW: gradients) ----
     agg: dict[str, tuple[int, int]] = {}
+
+    def add(g, b):
+        n, tot = agg.get(g, (0, 0))
+        agg[g] = (n + 1, tot + b)
+
     for oid, b in sizes.items():
-        for gname, prefixes in groups.items():
-            if any(oid.startswith(pref) for pref in prefixes) and \
-                    not (gname == "W" and oid.startswith(("dW_",))) and \
-                    not (gname == "M" and oid.startswith(("dM_",))):
-                n, tot = agg.get(gname, (0, 0))
-                agg[gname] = (n + 1, tot + b)
-                break
+        if oid.startswith(("dW_", "dM_")):
+            add("dW", b)
+        elif oid.startswith("W_"):
+            add("W", b)
+        elif oid.startswith("O_"):
+            add("O", b)
+        elif oid.startswith("A_"):
+            add("A", b)
+        elif oid.startswith("M_"):
+            add("M", b)
     out += ["### Aggregate totals (all layers, this run shape)", "",
             "| type | objects | total bytes |", "|---|---|---|"]
-    label_of = {"W": "W (all weights, incl. embed/head)",
-                "dW": "dW (all gradients, per step)",
-                "O": "O (all optimizer state)",
-                "A": "A (all saved contexts, one round)",
-                "M": "M (all metadata, one round)",
-                "dM": "dM (metadata gradients)"}
-    for gname in ("W", "dW", "O", "A", "M", "dM"):
-        if gname not in agg:
+    label_of = {
+        "W": "W (all weights, incl. embed/head)",
+        "dW": "dW (all gradients, incl. metadata grads, per step)",
+        "O": "O (all optimizer state)",
+        "A": "A (all saved contexts, one round)",
+        "M": "M (all metadata, one round)",
+    }
+    for g in ("W", "dW", "O", "A", "M"):
+        if g not in agg:
             continue
-        n, tot = agg[gname]
+        n, tot = agg[g]
         cell = f"{tot:,}"
-        if gname in ("A", "M"):
+        if g in ("A", "M"):
             cell += f" ({tot / dims.tokens:,.1f}/token)"
-        out.append(f"| {label_of[gname]} | {n} | {cell} |")
+        out.append(f"| {label_of[g]} | {n} | {cell} |")
     out.append("")
+
+    # ---- dims table ----
+    out += ["## Dims", "", "| field | value |", "|---|---|"]
+    for f in dataclasses.fields(dims):
+        v = getattr(dims, f.name)
+        if isinstance(v, (int, float, str, bool)):
+            out.append(f"| `{f.name}` | {v} |")
+        elif isinstance(v, tuple) and len(v) <= 8 and all(
+                isinstance(x, (int, str)) for x in v):
+            out.append(f"| `{f.name}` | {v} |")
+    out.append("")
+
     out += detail
 
     # ---- tasks ----
@@ -377,16 +371,39 @@ def gen_family(name: str, record: bool) -> str:
         out.append("")
 
     if rec_note:
-        out.append(f"_Note: {rec_note.strip()}_")
+        out.append(f"_Note: {rec_note}_")
     return "\n".join(out) + "\n"
+
+
+def presets_of(cls) -> list[str]:
+    out = []
+    for n in dir(cls):
+        if n.startswith("_") or not isinstance(cls.__dict__.get(n), classmethod):
+            continue
+        try:
+            getattr(cls, n)()
+        except TypeError:
+            continue
+        out.append(n)
+    return sorted(out)
+
+
+def family_of_preset(preset: str) -> str | None:
+    """Resolve a preset classmethod name to its family (None if
+    ambiguous, e.g. 'tiny')."""
+    hits = [n for n in F._FAMILIES
+            if isinstance(F.family(n).config_type.__dict__.get(preset),
+                          classmethod)]
+    return hits[0] if len(hits) == 1 else None
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--family", default=None)
+    ap.add_argument("--preset", default=None)
     ap.add_argument("--record", action=argparse.BooleanOptionalAction,
                     default=True,
-                    help="execute each task once to record kernel calls "
+                    help="trace each task kind once at tiny dims "
                          "(needs a CUDA device)")
     ap.add_argument("--out-dir", default=str(REPO / "docs/models"))
     args = ap.parse_args()
@@ -394,23 +411,34 @@ def main() -> None:
     F.load_plugins()
     names = [args.family] if args.family else list(F._FAMILIES)
     outd = Path(args.out_dir)
-    outd.mkdir(parents=True, exist_ok=True)
-    for name in names:
-        page = gen_family(name, args.record)
-        (outd / f"{name}.md").write_text(page)
-        print(f"wrote {outd}/{name}.md", file=sys.stderr)
-    index = ["# Model family references",
+    tag = shape_tag(DOC_BATCH, DOC_SEQ_LEN)
+    kern_cache: dict = {}
+    index = ["# Model references — one page per (family, preset)",
              "",
-             "GENERATED — `python tools/gen_model_docs.py` regenerates "
-             "every page (add `--family X` for one; `--no-record` skips "
-             "the measured kernel sequences on CPU-only machines). New "
-             "families — builtin or plugin — get the same page "
-             "automatically.",
+             f"GENERATED — `python tools/gen_model_docs.py` regenerates "
+             f"everything (`--family X [--preset P]` narrows; "
+             f"`--no-record` skips kernel tracing on CPU-only machines). "
+             f"Default pages use the standard documentation run shape "
+             f"(microbatch {DOC_BATCH} × seq {DOC_SEQ_LEN} — the "
+             f"`_{tag}` filename suffix); pages at other shapes: "
+             f"`tools/gen_model_page.py`. New families — builtin or "
+             f"plugin — appear automatically.",
              ""]
-    for name in F._FAMILIES:
-        index.append(f"- [{name}]({name}.md)")
-    (outd / "README.md").write_text("\n".join(index) + "\n")
-    print(f"wrote {outd}/README.md", file=sys.stderr)
+    for name in names:
+        cls = F.family(name).config_type
+        presets = [args.preset] if args.preset else presets_of(cls)
+        fdir = outd / name
+        fdir.mkdir(parents=True, exist_ok=True)
+        index.append(
+            f"- **{name}**: "
+            + " · ".join(f"[{p}]({name}/{p}_{tag}.md)" for p in presets))
+        for preset in presets:
+            page = gen_page(name, preset, args.record, kern_cache)
+            (fdir / f"{preset}_{tag}.md").write_text(page)
+            print(f"wrote {fdir}/{preset}_{tag}.md", file=sys.stderr)
+    if not args.family:
+        (outd / "README.md").write_text("\n".join(index) + "\n")
+        print(f"wrote {outd}/README.md", file=sys.stderr)
 
 
 if __name__ == "__main__":

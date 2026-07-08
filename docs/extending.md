@@ -400,7 +400,8 @@ What adding a family (e.g. Qwen3) actually touches, in order:
    automatically (plugins included): `python tools/list_models.py >
    docs/builtin_models.md`, `python tools/list_tasks.py >
    docs/task_kinds.md`, `python tools/gen_model_docs.py --family
-   <name>` (and `tools/list_kernels.py` if you added registry ops).
+   <name>` (and `tools/list_kernels.py` if you added registry ops); pages at
+   non-standard run shapes: `tools/gen_model_page.py`.
    Beyond the standard contract the generators need: no-arg preset
    CLASSMETHODS (`tiny()` mandatory — it is also the kernel-TRACING
    scale); an optional `DOC_PRESETS` entry in gen_model_docs (fallback

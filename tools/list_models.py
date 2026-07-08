@@ -32,8 +32,9 @@ full-scale presets match the published architectures (dims verified
 against the HF configs; totals match announced parameter counts).
 One section per family; the extra columns in each table are that
 family's OWN configuration axes (fields no other family shares).
-Per-family deep references (objects, stages, kernels):
-[models/](models/README.md).
+Each preset name links to its generated deep reference (objects,
+stages, kernels) at the standard 16×4K run shape; other run shapes:
+`tools/gen_model_page.py`. Index: [models/](models/README.md).
 """
 
 # run-shape knobs, policies, and the cross-family commons — never
@@ -140,11 +141,11 @@ def main() -> None:
             ucells = "".join(f" {vals.get(lbl, '-')} |"
                              for lbl in (col_labels or []))
             rows.append(
-                f"| `{preset}`{note} | {cfg.n_layers} | {cfg.d_model} | "
+                f"| [`{preset}`](models/{name}/{preset}_16x4K.md){note} | "
+                f"{cfg.n_layers} | {cfg.d_model} | "
                 f"{cfg.vocab_size} | {cfg.seq_len} |{ucells} "
                 f"{fmt_params(p)} |")
-        out.append(f"\n## {name} — `{cls.__name__}` "
-                   f"([deep reference](models/{name}.md))\n")
+        out.append(f"\n## {name} — `{cls.__name__}`\n")
         uh = "".join(f" `{c}` |" for c in (col_labels or []))
         out.append(f"| preset | layers | d_model | vocab | seq default |"
                    f"{uh} params |")

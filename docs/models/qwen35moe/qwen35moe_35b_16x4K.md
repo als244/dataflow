@@ -1,37 +1,14 @@
-# qwen35moe: tasks, objects, kernels
+# qwen35moe / `qwen35moe_35b` @ 16x4K: tasks, objects, kernels
 
-GENERATED from `ShapedQwen35MoeConfig.qwen35moe_35b()` at the standard documentation run shape (seq 4096 × microbatch 16) — regenerate with `python tools/gen_model_docs.py --family qwen35moe`. Presets: [builtin_models.md](../builtin_models.md); task-kind fleet index: [task_kinds.md](../task_kinds.md).
+GENERATED from `ShapedQwen35MoeConfig.qwen35moe_35b()` at run shape microbatch 16 × seq 4096 — regenerate with `python tools/gen_model_page.py --preset qwen35moe_35b --microbatch 16 --seq-len 4096`. All presets: [builtin_models.md](../../builtin_models.md); task-kind fleet index: [task_kinds.md](../../task_kinds.md).
 
 Layer kinds (40 layers): `lin lin lin full lin lin lin full lin lin lin full lin lin lin full lin lin lin full lin lin lin full lin lin lin full lin lin lin full lin lin lin full lin lin lin full`
 
-**Run shape of this documentation preset**: microbatch 16 × seq_len 4096 = **65,536 tokens per round** (× 1 grad-accum round(s) per step). `A_*`/`M_*` objects are sized per round; their bytes/token figures below transfer to any run shape.
-
-## Dims (documentation preset)
-
-| field | value |
-|---|---|
-| `d_model` | 2048 |
-| `n_layers` | 40 |
-| `full_attention_interval` | 4 |
-| `n_heads` | 16 |
-| `n_kv_heads` | 2 |
-| `head_dim` | 256 |
-| `partial_rotary_factor` | 0.25 |
-| `lin_k_heads` | 16 |
-| `lin_v_heads` | 32 |
-| `lin_k_head_dim` | 128 |
-| `lin_v_head_dim` | 128 |
-| `lin_conv_kernel` | 4 |
-| `d_ff` | 512 |
-| `vocab_size` | 248320 |
-| `tokens` | 65536 |
-| `seq_len` | 4096 |
-| `rope_base` | 10000000.0 |
-| `opt_policy` | adamw |
+**Run shape**: microbatch 16 × seq_len 4096 = **65,536 tokens per round** (× 1 grad-accum round(s) per step). `A_*`/`M_*` objects are sized per round; bytes/token figures transfer to any run shape.
 
 ## Object summary
 
-At the documentation run shape (65,536 tokens/round). Token-scaled objects show bytes/token in parens. Details per kind below.
+At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token in parens. Details per kind below.
 
 | object | scope | bytes |
 |---|---|---|
@@ -54,10 +31,33 @@ At the documentation run shape (65,536 tokens/round). Token-scaled objects show 
 | type | objects | total bytes |
 |---|---|---|
 | W (all weights, incl. embed/head) | 42 | 69,321,232,896 |
-| dW (all gradients, per step) | 42 | 69,321,232,896 |
+| dW (all gradients, incl. metadata grads, per step) | 42 | 69,321,232,896 |
 | O (all optimizer state) | 42 | 138,642,465,792 |
 | A (all saved contexts, one round) | 40 | 151,194,173,440 (2,307,040.0/token) |
 | M (all metadata, one round) | 40 | 209,766,400 (3,200.8/token) |
+
+## Dims
+
+| field | value |
+|---|---|
+| `d_model` | 2048 |
+| `n_layers` | 40 |
+| `full_attention_interval` | 4 |
+| `n_heads` | 16 |
+| `n_kv_heads` | 2 |
+| `head_dim` | 256 |
+| `partial_rotary_factor` | 0.25 |
+| `lin_k_heads` | 16 |
+| `lin_v_heads` | 32 |
+| `lin_k_head_dim` | 128 |
+| `lin_v_head_dim` | 128 |
+| `lin_conv_kernel` | 4 |
+| `d_ff` | 512 |
+| `vocab_size` | 248320 |
+| `tokens` | 65536 |
+| `seq_len` | 4096 |
+| `rope_base` | 10000000.0 |
+| `opt_policy` | adamw |
 
 ## Objects, per layer kind
 
