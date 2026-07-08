@@ -1,7 +1,7 @@
 # Dataflow — A CPU–GPU Dataflow Runtime
 
 A runtime that realizes the execution model of
-[dataflow_sim](https://dataflowsim.sunshein.net/) on real hardware:
+[dataflow_sim](https://dataflowsim.sunshein.net/) ([repo link](https://github.com/als244/dataflow_sim)) on real hardware:
 programs are linear chains of tasks over named objects; each task declares
 its inputs / mutations / outputs; annotated directives (release, offload,
 prefetch) move objects between GPU ("fast") and pinned-host ("slow/backing")
@@ -43,11 +43,17 @@ cell) plus, per cell, the exact dataflow program, its annotated plan,
 and the measured row. Full protocol — legality contract, placement
 modes, tool matrix: [docs/benchmarking.md](docs/benchmarking.md).
 
+---
+
+# High Level Components
+
 ## Dataflow Engine
 
-At its core is a `Dataflow Engine` that accepts a `Dataflow Program`: a
-linear chain of tasks over named objects, where each task declares its
-input / mutated / output objects (with sizes) and a compute key that a
+At its core is a `Dataflow Engine`
+([API reference](docs/engine_api.md)) that accepts a `Dataflow
+Program` ([schema reference](docs/program_schema.md)): a linear chain
+of tasks over named objects, where each task declares its input /
+mutated / output objects (with sizes) and a compute key that a
 resolver maps to an executable (`task -> executable.launch(ctx)`).
 Tasks execute in chain order; a task is dispatched once all of its
 input and mutated objects are resident in fast memory and space is
@@ -98,18 +104,18 @@ task kinds per distinct layer type):
   - outputs: the first hidden state `x_0`
 - **Forward** (per layer)
   - inputs: layer input hidden state `x_i`, parameters `W_i`
-  - outputs: next hidden state `x_{i+1}`, `A_i` (+ `M_i`)
+  - outputs: next hidden state `x_{i+1}`, `A_i` (+ optionally `M_i`)
 - **Head + Loss** — a SINGLE fused task: final norm + LM head forward
-  + loss + head backward, token-chunked so no (tokens, vocab) tensor
+  + loss + head backward, rowwise token-chunked so no (tokens, vocab) tensor
   is ever materialized
-  - inputs: last hidden state, `targets`, `W_head`
-  - outputs: `loss`, the first upstream gradient; `dW_head` on round 0
+  - inputs: last hidden state = `x_L`, `targets`, `W_head`
+  - outputs: `loss`, the first upstream gradient = `dy_L`; `dW_head` on round 0
   - mutates: `dW_head` on later rounds (accumulation)
 - **Recompute** (per layer; only where the plan dropped `A_i`)
-  - inputs: the same `x_i` and `W_i` (+ `M_i`, consumed as-is)
-  - outputs: repopulated `A_i` as created during forwards
+  - inputs: `x_i` and `W_i` (+ optionally `M_i`)
+  - outputs:`A_i`, repopulated with same activations as seen during forwards
 - **Backward** (per layer)
-  - inputs: upstream gradient `dy_{i+1}`, `A_i` (+ `M_i`), `W_i`, `x_i`
+  - inputs: upstream gradient `dy_{i+1}`, `A_i` (+ optionally `M_i`), `W_i`, `x_i`
   - outputs: downstream gradient `dy_i`; `dW_i` on round 0
   - mutates: `dW_i` on later rounds (accumulation)
 - **Embed Backward**
@@ -131,8 +137,7 @@ ladder.
 To add a family — builtin or from your own package — see
 [docs/extending.md](docs/extending.md) and
 [docs/extending_external.md](docs/extending_external.md); for programs
-outside the standard training shape (e.g. RL post-training from saved
-rollouts, with worked per-family examples under
+outside the standard training shape (e.g. RL training engine from inference-engine saved activations, with worked per-family examples under
 [examples/rl_training](examples/rl_training/RL_TRAINING_EXAMPLE.md)),
 see [docs/extending_programs.md](docs/extending_programs.md).
 

@@ -40,9 +40,11 @@ Notes:
 
 ## Building a Program in Python
 
-Construct through `dataflow.core` (`Program`, `TaskSpec`, `ObjectSpec`);
-`validate()` runs structural checks, `save_program`/`load_program`
-round-trip it, and the same JSON uploads to the webapp simulator.
+Construct through `dataflow.core` (`Program`, `TaskSpec`, `ObjectSpec`
+— field-by-field reference: [program_schema.md](program_schema.md));
+`validate_program()` runs structural checks, `save_program`/
+`load_program` round-trip it, and the same JSON uploads to the webapp
+simulator. The engine surface it feeds: [engine_api.md](engine_api.md).
 
 ```python
 from dataflow.core import ObjectSpec, Program, TaskSpec
