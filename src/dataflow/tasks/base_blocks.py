@@ -367,7 +367,10 @@ class AdamWStep(_Base):  # name kept for resolver back-compat; see OptimizerStep
             o_buf = (ctx.mutates[ctx.task.mutates[1]]
                      if len(ctx.task.mutates) > 1 else None)
             wl_, gl_, ol_, ns = self._layouts(ctx.task, w_buf.size_bytes)
-            step = int(ctx.task.block_params.get("step", 0)) + 1
+            ra = getattr(ctx, "run_args", None) or {}
+            # service runs bind the global step per run (run_args);
+            # in-process paths keep baking it into block_params
+            step = int(ra.get("step", ctx.task.block_params.get("step", 0))) + 1
             op = resolve_opt_policy(getattr(self.dims, "opt_policy", None))
             layer = self.layer_of(ctx.task)
             key = (lambda n: f"{ns}.{n}") if ns else (lambda n: n)

@@ -26,9 +26,12 @@ class PinnedSlab:
     """One cudaHostAlloc'd region; freed explicitly (daemon shutdown)."""
 
     def __init__(self, capacity_bytes: int, *, device: int = 0):
+        import threading
+
         from cuda.bindings import runtime as cudart
 
         self._cudart = cudart
+        self._free_lock = threading.Lock()
         _check(cudart.cudaSetDevice(device))
         (ptr,) = _check(cudart.cudaHostAlloc(
             capacity_bytes, cudart.cudaHostAllocDefault))
@@ -36,9 +39,15 @@ class PinnedSlab:
         self.capacity = capacity_bytes
 
     def free(self) -> None:
-        if self.ptr:
-            _check(self._cudart.cudaFreeHost(self.ptr))
-            self.ptr = 0
+        # idempotent + thread-safe: shutdown's serve_forever finally
+        # and external owners (test fixtures) may both call this — the
+        # bare `if self.ptr` guard was a TOCTOU double-free (CUDA
+        # error 1 in a daemon thread, found by the cancel gate's
+        # teardown)
+        with self._free_lock:
+            ptr, self.ptr = self.ptr, 0
+        if ptr:
+            _check(self._cudart.cudaFreeHost(ptr))
 
 
 def meminfo_available_bytes() -> int:

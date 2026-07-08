@@ -218,6 +218,25 @@ class CudaBackend:
         )
 
     # --- completion tokens ------------------------------------------------------
+    def drain_aborted(self) -> int:
+        """Abort-path cleanup (engine service session reuse): wait for
+        ALL enqueued device work, then discard every pending completion
+        token. A cancelled/failed run otherwise leaves its _TaskDone /
+        transfer completions queued, and the NEXT run on the same
+        Session pops them ("completion for a job that is not in
+        flight"). Returns the number of tokens discarded."""
+        _check(cudart.cudaDeviceSynchronize())
+        n = 0
+        for dq in self._pending.values():
+            n += len(dq)
+            dq.clear()
+        if self.completion_mode == "hostfn":
+            with self._hostfn_lock:
+                n += len(self._hostfn_tokens)
+                self._hostfn_tokens.clear()
+                self._hostfn_outstanding = 0
+        return n
+
     def notify_after(self, stream: Stream, event: Event, token: Any, *, priority: int) -> None:
         pending = _Pending(event=event, token=token, priority=priority)
         if self.completion_mode == "hostfn":

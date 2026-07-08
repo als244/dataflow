@@ -28,6 +28,10 @@ class TaskContext:
     mutates: Mapping[str, Buffer]
     backend: DeviceBackend
     workspace: Buffer | None = None
+    # per-run opaque parameters (engine service run(args=...)); the
+    # engine never interprets them — executables read what they need
+    # (e.g. the optimizer's global step for bias correction)
+    run_args: Mapping[str, object] | None = None
 
 
 class Executable(Protocol):

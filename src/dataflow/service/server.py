@@ -314,10 +314,11 @@ class Server:
         self.critical_handlers: dict[str, callable] = {}
         self._register_core()
         self._sock: socket.socket | None = None
-        from . import handlers_store
+        from . import handlers_runs, handlers_store
 
         self.store = handlers_store.boot_store(self)
         handlers_store.install(self)
+        handlers_runs.install(self)
 
     # ---- core handlers (S1.0) ----
     def _register_core(self) -> None:

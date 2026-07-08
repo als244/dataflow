@@ -38,6 +38,12 @@ from .trace import Interval, RunTrace, TraceEvent
 from .transfers import TransferDone, TransferEngine, TransferJob
 
 
+class CancelledRun(RuntimeError):
+    """Boundary-cancel (engine service): raised between task
+    dispatches when the caller's cancel_event is set; unwinds through
+    the same cleanup path as ExecutionError."""
+
+
 class ExecutionError(RuntimeError):
     """A directive or task hit an invalid object state (plan/runtime bug)."""
 
@@ -179,6 +185,8 @@ class Engine:
         placement=None,           # runtime.placement.Placement: assigned mode
         record_placement=None,    # runtime.placement.PlacementRecorder: dry runs
         vmm: bool = False,        # fast buffers from a VMM arena (device/vmm.py)
+        run_args: Mapping[str, object] | None = None,   # -> TaskContext.run_args
+        cancel_event=None,        # threading.Event: boundary-cancel (service)
         annotate_rename=None,     # Callable[[str], str]: NVTX display names only
                                   # (a replayed 1-step plan bakes step 0 into every
                                   # id; the caller knows the GLOBAL step and rewrites
@@ -331,6 +339,14 @@ class Engine:
             stats["token_detect_n"] = 0
             state.stats = stats
         for task_pos, task in enumerate(program.tasks):
+            # service boundary-cancel: observed ONLY here, between task
+            # dispatches — in-flight work drains normally, the ledger
+            # stays consistent, and the finally-path releases buffers
+            # exactly as an ExecutionError would
+            if cancel_event is not None and cancel_event.is_set():
+                raise CancelledRun(
+                    f"cancelled before task {task.id!r} "
+                    f"({task_pos}/{len(program.tasks)})")
             fast_out = sum(o.size_bytes for o in task.outputs if o.location == "fast")
             backing_out = sum(o.size_bytes for o in task.outputs if o.location == "backing")
             state.cursor = task_pos
@@ -457,6 +473,7 @@ class Engine:
                 resolver(task).launch(TaskContext(
                     task=task, stream=compute, inputs=in_buffers, outputs=out_buffers,
                     mutates=mut_buffers, backend=self.backend,
+                    run_args=run_args,
                 ))
             finally:
                 annotator.range_pop()

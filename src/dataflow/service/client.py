@@ -283,6 +283,62 @@ class EngineClient:
     def query_fast(self):
         return self._call("query_fast", {})
 
+    # ---- programs + runs ----
+    def register_program(self, program, *, resolver: dict,
+                         name: str | None = None, wait=True):
+        return self._call("register_program",
+                          {"program": program, "resolver": resolver,
+                           "name": name}, wait=wait)
+
+    def validate_program(self, program, *, resolver: dict, wait=True):
+        return self._call("validate_program",
+                          {"program": program, "resolver": resolver},
+                          wait=wait)
+
+    def unregister_program(self, prog_id: str, *, wait=True):
+        return self._call("unregister_program", {"prog_id": prog_id},
+                          wait=wait)
+
+    def profile_program(self, program, *, resolver: dict,
+                        refresh: bool = False, wait=True):
+        return self._call("profile_program",
+                          {"program": program, "resolver": resolver,
+                           "refresh": refresh}, wait=wait)
+
+    def load_plugin(self, spec: dict, *, wait=True):
+        return self._call("load_plugin", {"spec": spec}, wait=wait)
+
+    def run(self, prog_id: str, *, args: dict | None = None,
+            rebind: dict | None = None, fetch=(), label=None,
+            wait=True, timeout=None):
+        return self._call("run", {"prog_id": prog_id,
+                                  "args": args or {},
+                                  "rebind": rebind or {},
+                                  "fetch": list(fetch), "label": label},
+                          wait=wait, timeout=timeout)
+
+    def cancel_run(self, run_id: str):
+        return self._call("cancel_run", {"run_id": run_id})
+
+    def run_status(self, run_id: str):
+        return self._call("run_status", {"run_id": run_id})
+
+    def list_runs(self, limit: int = 100):
+        return self._call("list_runs", {"limit": limit})
+
+    def run_events(self, run_id: str, tail: int = 200):
+        return self._call("run_events", {"run_id": run_id, "tail": tail})
+
+    def export_trace(self, run_id: str, dest, *, wait=True):
+        return self._call("export_trace",
+                          {"run_id": run_id, "dest": str(dest)}, wait=wait)
+
+    def list_programs(self):
+        return self._call("list_programs", {})
+
+    def list_families(self):
+        return self._call("list_families", {})
+
     # ---- S1.0 diagnostic ----
     def _debug_hold(self, seconds: float, *, wait: bool = True,
                     timeout: float | None = None):
