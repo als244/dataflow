@@ -33,7 +33,7 @@ Usage:
         --seq-len 4096 --device-gib 12,16,20,24,28 \
         --placements static,vmm --steps 3 \
         --shapes 12:bs4ga4,16:bs8ga2,20:bs8ga2,24:bs16ga1,28:bs16ga1 \
-        --run --pace-seconds 40 \
+        --run \
         --out-dir results/bench/dsa-round5
 
 Render-only (rebuild tables from existing artifacts, no GPU):
@@ -43,7 +43,7 @@ Render-only (rebuild tables from existing artifacts, no GPU):
 
 Cells are run in SUBPROCESSES (one bench_train invocation per family x
 shape x mode, envelopes sharing a shape batched into one invocation to
-amortize host pinning), paced by --pace-seconds to stay under
+amortize host pinning); --pace-seconds adds settle between cells, under
 systemd-oomd pressure limits during pinning churn. Existing legal rows
 are skipped unless --rerun. Config names follow the repo convention
 "{family}-{seq_tag}-{shape}" and must exist in bench_train CONFIGS.

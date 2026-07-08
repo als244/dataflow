@@ -60,10 +60,14 @@ python tools/bench_frontier.py \
 | `--rerun` | re-execute cells even if rows already exist |
 | `--reuse-shared` | also scan the shared `artifacts/bench` pool (default: isolated to `{out-dir}/raw`) |
 | `--dry-run` | print the bench_train commands without running |
-| `--pace-seconds` | sleep between subprocess launches (memory-pressure decay; default 40) |
+| `--pace-seconds` | settle between cell invocations (default 5; each bench_train subprocess is waited on — this is extra soak, not the wait) |
+| `--backing-gib` | forwarded to bench_train: explicit pinned-host plan-cap (default: auto-derived from host MemAvailable) |
+| `--backing-leeway-gib` | forwarded to bench_train: leeway subtracted from MemAvailable for the auto cap (default 10) |
 | `--allow-illegal` | render envelope-busting rows, flagged, instead of dropping them |
 | `--out-dir` | sweep directory: `TABLES.md` + `cells/` + `raw/` (omit for stdout tables) |
 | `--plugin` | external family plugin module(s); installed entry points load automatically |
+
+Backing (pinned-host) capacity: unless `--backing-gib` is given, bench_train derives a PLAN-cap from the host's available memory minus `--backing-leeway-gib` (default 10 GiB), plans under it, and executes with the capacity stripped — the runtime pins by plan demand, never by the cap. Saved plans record their capacities in `Program.metadata` ([program_schema.md](program_schema.md)).
 
 Output layout under `--out-dir`:
 
