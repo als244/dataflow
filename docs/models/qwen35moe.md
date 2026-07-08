@@ -4,6 +4,8 @@ GENERATED from `ShapedQwen35MoeConfig.tiny()` — regenerate with `python tools/
 
 Layer kinds (4 layers): `lin lin lin full`
 
+**Run shape of this documentation preset**: microbatch 1 × seq_len 128 = **128 tokens per round** (× 1 grad-accum round(s) per step). `A_*`/`M_*` objects are sized per round; their bytes/token figures below transfer to any run shape.
+
 ## Dims (documentation preset)
 
 | field | value |
@@ -53,7 +55,7 @@ Layer kinds (4 layers): `lin lin lin full`
 | `w_s13` | bf16 | (256, 256) | 131,072 |
 | `w_s2` | bf16 | (128, 256) | 65,536 |
 
-**`A_.._0` saved context** — 468,224 bytes (per (step, round))
+**`A_.._0` saved context** — 468,224 bytes = **3,658.0 bytes/token** (per (step, round))
 
 | field | dtype | shape | bytes |
 |---|---|---|---|
@@ -92,7 +94,7 @@ Layer kinds (4 layers): `lin lin lin full`
 | `w_s13` | bf16 | (256, 256) | 131,072 |
 | `w_s2` | bf16 | (128, 256) | 65,536 |
 
-**`A_.._3` saved context** — 532,736 bytes (per (step, round))
+**`A_.._3` saved context** — 532,736 bytes = **4,162.0 bytes/token** (per (step, round))
 
 | field | dtype | shape | bytes |
 |---|---|---|---|

@@ -61,12 +61,16 @@ def _meta_layout(family: str, dims, layer: int):
     return None
 
 
-def field_table(layout, title: str, note: str = "") -> list[str]:
+def field_table(layout, title: str, note: str = "",
+                per_token: int | None = None) -> list[str]:
     if layout is None or not layout.fields:
         return []
-    out = [f"**{title}** — {layout.total_bytes:,} bytes"
-           + (f" ({note})" if note else ""), "",
-           "| field | dtype | shape | bytes |", "|---|---|---|---|"]
+    head = f"**{title}** — {layout.total_bytes:,} bytes"
+    if per_token:
+        head += f" = **{layout.total_bytes / per_token:,.1f} bytes/token**"
+    if note:
+        head += f" ({note})"
+    out = [head, "", "| field | dtype | shape | bytes |", "|---|---|---|---|"]
     for f in layout.fields:
         out.append(f"| `{f.name}` | {f.dtype} | {tuple(f.shape)} | {f.nbytes:,} |")
     out.append("")
@@ -179,6 +183,13 @@ def gen_family(name: str, record: bool) -> str:
            "",
            f"Layer kinds ({L} layers): `{' '.join(kinds_seq)}`",
            "",
+           f"**Run shape of this documentation preset**: microbatch "
+           f"{cfg.batch} × seq_len {cfg.seq_len} = **{dims.tokens:,} "
+           f"tokens per round** (× {cfg.grad_accum_rounds} grad-accum "
+           f"round(s) per step). `A_*`/`M_*` objects are sized per "
+           f"round; their bytes/token figures below transfer to any "
+           f"run shape.",
+           "",
            "## Dims (documentation preset)",
            "",
            "| field | value |", "|---|---|"]
@@ -214,10 +225,10 @@ def gen_family(name: str, record: bool) -> str:
         out += field_table(wl, f"`W_{layer}` weights")
         cl = getattr(ex, "cl", None)
         out += field_table(cl, f"`A_.._{layer}` saved context",
-                           "per (step, round)")
+                           "per (step, round)", per_token=dims.tokens)
         ml = _meta_layout(name, dims, layer)
         out += field_table(ml, f"`M_.._{layer}` metadata",
-                           "never recomputed")
+                           "never recomputed", per_token=dims.tokens)
 
     # embed/head weights
     try:

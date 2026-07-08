@@ -4,6 +4,8 @@ GENERATED from `ShapedLlamaConfig.tiny()` — regenerate with `python tools/gen_
 
 Layer kinds (2 layers): `block block`
 
+**Run shape of this documentation preset**: microbatch 1 × seq_len 64 = **64 tokens per round** (× 1 grad-accum round(s) per step). `A_*`/`M_*` objects are sized per round; their bytes/token figures below transfer to any run shape.
+
 ## Dims (documentation preset)
 
 | field | value |
@@ -38,7 +40,7 @@ Layer kinds (2 layers): `block block`
 | `w3` | bf16 | (64, 160) | 20,480 |
 | `w2` | bf16 | (160, 64) | 20,480 |
 
-**`A_.._0` saved context** — 75,264 bytes (per (step, round))
+**`A_.._0` saved context** — 75,264 bytes = **1,176.0 bytes/token** (per (step, round))
 
 | field | dtype | shape | bytes |
 |---|---|---|---|

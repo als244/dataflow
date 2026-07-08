@@ -4,6 +4,8 @@ GENERATED from `ShapedOlmoeConfig.tiny()` — regenerate with `python tools/gen_
 
 Layer kinds (2 layers): `block block`
 
+**Run shape of this documentation preset**: microbatch 1 × seq_len 128 = **128 tokens per round** (× 1 grad-accum round(s) per step). `A_*`/`M_*` objects are sized per round; their bytes/token figures below transfer to any run shape.
+
 ## Dims (documentation preset)
 
 | field | value |
@@ -41,7 +43,7 @@ Layer kinds (2 layers): `block block`
 | `w13_experts` | bf16 | (8, 128, 256) | 524,288 |
 | `w2_experts` | bf16 | (8, 128, 128) | 262,144 |
 
-**`A_.._0` saved context** — 301,056 bytes (per (step, round))
+**`A_.._0` saved context** — 301,056 bytes = **2,352.0 bytes/token** (per (step, round))
 
 | field | dtype | shape | bytes |
 |---|---|---|---|
@@ -58,7 +60,7 @@ Layer kinds (2 layers): `block block`
 | `router_logits` | bf16 | (128, 8) | 2,048 |
 | `h13` | bf16 | (256, 256) | 131,072 |
 
-**`M_.._0` metadata** — 2,816 bytes (never recomputed)
+**`M_.._0` metadata** — 2,816 bytes = **22.0 bytes/token** (never recomputed)
 
 | field | dtype | shape | bytes |
 |---|---|---|---|

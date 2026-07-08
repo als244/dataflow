@@ -4,6 +4,8 @@ GENERATED from `ShapedGlm52Config.glm52_mini()` — regenerate with `python tool
 
 Layer kinds (18 layers): `gdl gdl gml gmf gmf gmf gml gmf gmf gmf gml gmf gmf gmf gml gmf gmf gmf`
 
+**Run shape of this documentation preset**: microbatch 1 × seq_len 4096 = **4,096 tokens per round** (× 1 grad-accum round(s) per step). `A_*`/`M_*` objects are sized per round; their bytes/token figures below transfer to any run shape.
+
 ## Dims (documentation preset)
 
 | field | value |
@@ -56,7 +58,7 @@ Layer kinds (18 layers): `gdl gdl gml gmf gmf gmf gml gmf gmf gmf gml gmf gmf gm
 | `w3` | bf16 | (2048, 8192) | 33,554,432 |
 | `w2` | bf16 | (8192, 2048) | 33,554,432 |
 
-**`A_.._0` saved context** — 166,264,832 bytes (per (step, round))
+**`A_.._0` saved context** — 166,264,832 bytes = **40,592.0 bytes/token** (per (step, round))
 
 | field | dtype | shape | bytes |
 |---|---|---|---|
@@ -72,7 +74,7 @@ Layer kinds (18 layers): `gdl gdl gml gmf gmf gmf gml gmf gmf gmf gml gmf gmf gm
 | `x1` | bf16 | (4096, 8192) | 67,108,864 |
 | `x3` | bf16 | (4096, 8192) | 67,108,864 |
 
-**`M_.._0` metadata** — 16,777,216 bytes (never recomputed)
+**`M_.._0` metadata** — 16,777,216 bytes = **4,096.0 bytes/token** (never recomputed)
 
 | field | dtype | shape | bytes |
 |---|---|---|---|
@@ -105,7 +107,7 @@ Layer kinds (18 layers): `gdl gdl gml gmf gmf gmf gml gmf gmf gmf gml gmf gmf gm
 | `w_s13` | bf16 | (2048, 2048) | 8,388,608 |
 | `w_s2` | bf16 | (1024, 2048) | 4,194,304 |
 
-**`A_.._2` saved context** — 184,090,624 bytes (per (step, round))
+**`A_.._2` saved context** — 184,090,624 bytes = **44,944.0 bytes/token** (per (step, round))
 
 | field | dtype | shape | bytes |
 |---|---|---|---|
@@ -122,7 +124,7 @@ Layer kinds (18 layers): `gdl gdl gml gmf gmf gmf gml gmf gmf gmf gml gmf gmf gm
 | `h13` | bf16 | (32768, 2048) | 134,217,728 |
 | `s13` | bf16 | (4096, 2048) | 16,777,216 |
 
-**`M_.._2` metadata** — 17,105,664 bytes (never recomputed)
+**`M_.._2` metadata** — 17,105,664 bytes = **4,176.2 bytes/token** (never recomputed)
 
 | field | dtype | shape | bytes |
 |---|---|---|---|
@@ -154,7 +156,7 @@ Layer kinds (18 layers): `gdl gdl gml gmf gmf gmf gml gmf gmf gmf gml gmf gmf gm
 | `w_s13` | bf16 | (2048, 2048) | 8,388,608 |
 | `w_s2` | bf16 | (1024, 2048) | 4,194,304 |
 
-**`A_.._3` saved context** — 184,090,624 bytes (per (step, round))
+**`A_.._3` saved context** — 184,090,624 bytes = **44,944.0 bytes/token** (per (step, round))
 
 | field | dtype | shape | bytes |
 |---|---|---|---|
@@ -171,7 +173,7 @@ Layer kinds (18 layers): `gdl gdl gml gmf gmf gmf gml gmf gmf gmf gml gmf gmf gm
 | `h13` | bf16 | (32768, 2048) | 134,217,728 |
 | `s13` | bf16 | (4096, 2048) | 16,777,216 |
 
-**`M_.._3` metadata** — 328,448 bytes (never recomputed)
+**`M_.._3` metadata** — 328,448 bytes = **80.2 bytes/token** (never recomputed)
 
 | field | dtype | shape | bytes |
 |---|---|---|---|

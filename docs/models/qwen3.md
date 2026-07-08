@@ -4,6 +4,8 @@ GENERATED from `ShapedQwen3Config.tiny()` — regenerate with `python tools/gen_
 
 Layer kinds (2 layers): `block block`
 
+**Run shape of this documentation preset**: microbatch 1 × seq_len 64 = **64 tokens per round** (× 1 grad-accum round(s) per step). `A_*`/`M_*` objects are sized per round; their bytes/token figures below transfer to any run shape.
+
 ## Dims (documentation preset)
 
 | field | value |
@@ -41,7 +43,7 @@ Layer kinds (2 layers): `block block`
 | `w3` | bf16 | (256, 512) | 262,144 |
 | `w2` | bf16 | (512, 256) | 262,144 |
 
-**`A_.._0` saved context** — 265,216 bytes (per (step, round))
+**`A_.._0` saved context** — 265,216 bytes = **4,144.0 bytes/token** (per (step, round))
 
 | field | dtype | shape | bytes |
 |---|---|---|---|

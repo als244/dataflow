@@ -4,6 +4,8 @@ GENERATED from `ShapedDsv3Config.dsv3_mini()` — regenerate with `python tools/
 
 Layer kinds (18 layers): `dense dense moe moe moe moe moe moe moe moe moe moe moe moe moe moe moe moe`
 
+**Run shape of this documentation preset**: microbatch 1 × seq_len 4096 = **4,096 tokens per round** (× 1 grad-accum round(s) per step). `A_*`/`M_*` objects are sized per round; their bytes/token figures below transfer to any run shape.
+
 ## Dims (documentation preset)
 
 | field | value |
@@ -46,7 +48,7 @@ Layer kinds (18 layers): `dense dense moe moe moe moe moe moe moe moe moe moe mo
 | `w3` | bf16 | (2048, 8192) | 33,554,432 |
 | `w2` | bf16 | (8192, 2048) | 33,554,432 |
 
-**`A_.._0` saved context** — 166,264,832 bytes (per (step, round))
+**`A_.._0` saved context** — 166,264,832 bytes = **40,592.0 bytes/token** (per (step, round))
 
 | field | dtype | shape | bytes |
 |---|---|---|---|
@@ -84,7 +86,7 @@ Layer kinds (18 layers): `dense dense moe moe moe moe moe moe moe moe moe moe mo
 | `w_s13` | bf16 | (2048, 2048) | 8,388,608 |
 | `w_s2` | bf16 | (1024, 2048) | 4,194,304 |
 
-**`A_.._2` saved context** — 184,090,624 bytes (per (step, round))
+**`A_.._2` saved context** — 184,090,624 bytes = **44,944.0 bytes/token** (per (step, round))
 
 | field | dtype | shape | bytes |
 |---|---|---|---|
@@ -101,7 +103,7 @@ Layer kinds (18 layers): `dense dense moe moe moe moe moe moe moe moe moe moe mo
 | `h13` | bf16 | (32768, 2048) | 134,217,728 |
 | `s13` | bf16 | (4096, 2048) | 16,777,216 |
 
-**`M_.._2` metadata** — 328,448 bytes (never recomputed)
+**`M_.._2` metadata** — 328,448 bytes = **80.2 bytes/token** (never recomputed)
 
 | field | dtype | shape | bytes |
 |---|---|---|---|

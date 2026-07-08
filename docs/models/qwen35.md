@@ -4,6 +4,8 @@ GENERATED from `ShapedQwen35Config.tiny()` — regenerate with `python tools/gen
 
 Layer kinds (4 layers): `lin lin lin full`
 
+**Run shape of this documentation preset**: microbatch 1 × seq_len 128 = **128 tokens per round** (× 1 grad-accum round(s) per step). `A_*`/`M_*` objects are sized per round; their bytes/token figures below transfer to any run shape.
+
 ## Dims (documentation preset)
 
 | field | value |
@@ -50,7 +52,7 @@ Layer kinds (4 layers): `lin lin lin full`
 | `w3` | bf16 | (256, 512) | 262,144 |
 | `w2` | bf16 | (512, 256) | 262,144 |
 
-**`A_.._0` saved context** — 531,456 bytes (per (step, round))
+**`A_.._0` saved context** — 531,456 bytes = **4,152.0 bytes/token** (per (step, round))
 
 | field | dtype | shape | bytes |
 |---|---|---|---|
@@ -84,7 +86,7 @@ Layer kinds (4 layers): `lin lin lin full`
 | `w3` | bf16 | (256, 512) | 262,144 |
 | `w2` | bf16 | (512, 256) | 262,144 |
 
-**`A_.._3` saved context** — 595,968 bytes (per (step, round))
+**`A_.._3` saved context** — 595,968 bytes = **4,656.0 bytes/token** (per (step, round))
 
 | field | dtype | shape | bytes |
 |---|---|---|---|
