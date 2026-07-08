@@ -1,31 +1,31 @@
 # qwen35: tasks, objects, kernels
 
-GENERATED from `ShapedQwen35Config.tiny()` — regenerate with `python tools/gen_model_docs.py --family qwen35`. Presets: [builtin_models.md](../builtin_models.md); task-kind fleet index: [task_kinds.md](../task_kinds.md).
+GENERATED from `ShapedQwen35Config.qwen35_9b()` at the standard documentation run shape (seq 4096 × microbatch 16) — regenerate with `python tools/gen_model_docs.py --family qwen35`. Presets: [builtin_models.md](../builtin_models.md); task-kind fleet index: [task_kinds.md](../task_kinds.md).
 
-Layer kinds (4 layers): `lin lin lin full`
+Layer kinds (32 layers): `lin lin lin full lin lin lin full lin lin lin full lin lin lin full lin lin lin full lin lin lin full lin lin lin full lin lin lin full`
 
-**Run shape of this documentation preset**: microbatch 1 × seq_len 128 = **128 tokens per round** (× 1 grad-accum round(s) per step). `A_*`/`M_*` objects are sized per round; their bytes/token figures below transfer to any run shape.
+**Run shape of this documentation preset**: microbatch 16 × seq_len 4096 = **65,536 tokens per round** (× 1 grad-accum round(s) per step). `A_*`/`M_*` objects are sized per round; their bytes/token figures below transfer to any run shape.
 
 ## Dims (documentation preset)
 
 | field | value |
 |---|---|
-| `d_model` | 256 |
-| `n_layers` | 4 |
+| `d_model` | 4096 |
+| `n_layers` | 32 |
 | `full_attention_interval` | 4 |
-| `n_heads` | 4 |
-| `n_kv_heads` | 2 |
-| `head_dim` | 64 |
+| `n_heads` | 16 |
+| `n_kv_heads` | 4 |
+| `head_dim` | 256 |
 | `partial_rotary_factor` | 0.25 |
-| `lin_k_heads` | 2 |
-| `lin_v_heads` | 4 |
-| `lin_k_head_dim` | 32 |
-| `lin_v_head_dim` | 32 |
+| `lin_k_heads` | 16 |
+| `lin_v_heads` | 32 |
+| `lin_k_head_dim` | 128 |
+| `lin_v_head_dim` | 128 |
 | `lin_conv_kernel` | 4 |
-| `d_ff` | 512 |
-| `vocab_size` | 512 |
-| `tokens` | 128 |
-| `seq_len` | 128 |
+| `d_ff` | 12288 |
+| `vocab_size` | 248320 |
+| `tokens` | 65536 |
+| `seq_len` | 4096 |
 | `rope_base` | 10000000.0 |
 | `opt_policy` | adamw |
 
@@ -35,96 +35,96 @@ Layer kinds (4 layers): `lin lin lin full`
 
 ### kind `lin` (e.g. layer 0)
 
-**`W_0` weights** — 1,056,512 bytes
+**`W_0` weights** — 436,814,592 bytes
 
 | field | dtype | shape | bytes |
 |---|---|---|---|
-| `attn_norm_w` | bf16 | (256,) | 512 |
-| `w_qkvz` | bf16 | (256, 384) | 196,608 |
-| `w_ba` | bf16 | (256, 8) | 4,096 |
-| `w_conv` | bf16 | (256, 4) | 2,048 |
-| `A_log` | bf16 | (4,) | 8 |
-| `dt_bias` | bf16 | (4,) | 8 |
-| `lin_norm_w` | bf16 | (32,) | 64 |
-| `w_out` | bf16 | (128, 256) | 65,536 |
-| `ffn_norm_w` | bf16 | (256,) | 512 |
-| `w1` | bf16 | (256, 512) | 262,144 |
-| `w3` | bf16 | (256, 512) | 262,144 |
-| `w2` | bf16 | (512, 256) | 262,144 |
+| `attn_norm_w` | bf16 | (4096,) | 8,192 |
+| `w_qkvz` | bf16 | (4096, 12288) | 100,663,296 |
+| `w_ba` | bf16 | (4096, 64) | 524,288 |
+| `w_conv` | bf16 | (8192, 4) | 65,536 |
+| `A_log` | bf16 | (32,) | 64 |
+| `dt_bias` | bf16 | (32,) | 64 |
+| `lin_norm_w` | bf16 | (128,) | 256 |
+| `w_out` | bf16 | (4096, 4096) | 33,554,432 |
+| `ffn_norm_w` | bf16 | (4096,) | 8,192 |
+| `w1` | bf16 | (4096, 12288) | 100,663,296 |
+| `w3` | bf16 | (4096, 12288) | 100,663,296 |
+| `w2` | bf16 | (12288, 4096) | 100,663,296 |
 
-**`A_.._0` saved context** — 531,456 bytes = **4,152.0 bytes/token** (per (step, round))
+**`A_.._0` saved context** — 6,199,705,600 bytes = **94,600.0 bytes/token** (per (step, round))
 
 | field | dtype | shape | bytes |
 |---|---|---|---|
-| `rstd_attn` | fp32 | (128,) | 512 |
-| `qkvz` | bf16 | (128, 384) | 98,304 |
-| `ba` | bf16 | (128, 8) | 2,048 |
-| `g_post` | fp32 | (128, 4) | 2,048 |
-| `A_int` | bf16 | (128, 4, 64) | 65,536 |
-| `core_out` | bf16 | (128, 4, 32) | 32,768 |
-| `rstd_gate` | fp32 | (512,) | 2,048 |
-| `xo` | bf16 | (128, 256) | 65,536 |
-| `rstd_ffn` | fp32 | (128,) | 512 |
-| `x1` | bf16 | (128, 512) | 131,072 |
-| `x3` | bf16 | (128, 512) | 131,072 |
+| `rstd_attn` | fp32 | (65536,) | 262,144 |
+| `qkvz` | bf16 | (65536, 12288) | 1,610,612,736 |
+| `ba` | bf16 | (65536, 64) | 8,388,608 |
+| `g_post` | fp32 | (65536, 32) | 8,388,608 |
+| `A_int` | bf16 | (65536, 32, 64) | 268,435,456 |
+| `core_out` | bf16 | (65536, 32, 128) | 536,870,912 |
+| `rstd_gate` | fp32 | (2097152,) | 8,388,608 |
+| `xo` | bf16 | (65536, 4096) | 536,870,912 |
+| `rstd_ffn` | fp32 | (65536,) | 262,144 |
+| `x1` | bf16 | (65536, 12288) | 1,610,612,736 |
+| `x3` | bf16 | (65536, 12288) | 1,610,612,736 |
 
 ### kind `full` (e.g. layer 3)
 
-**`W_3` weights** — 1,312,256 bytes
+**`W_3` weights** — 419,447,808 bytes
 
 | field | dtype | shape | bytes |
 |---|---|---|---|
-| `attn_norm_w` | bf16 | (256,) | 512 |
-| `wq` | bf16 | (256, 512) | 262,144 |
-| `wk` | bf16 | (256, 128) | 65,536 |
-| `wv` | bf16 | (256, 128) | 65,536 |
-| `q_norm_w` | bf16 | (64,) | 128 |
-| `k_norm_w` | bf16 | (64,) | 128 |
-| `wo` | bf16 | (256, 256) | 131,072 |
-| `ffn_norm_w` | bf16 | (256,) | 512 |
-| `w1` | bf16 | (256, 512) | 262,144 |
-| `w3` | bf16 | (256, 512) | 262,144 |
-| `w2` | bf16 | (512, 256) | 262,144 |
+| `attn_norm_w` | bf16 | (4096,) | 8,192 |
+| `wq` | bf16 | (4096, 8192) | 67,108,864 |
+| `wk` | bf16 | (4096, 1024) | 8,388,608 |
+| `wv` | bf16 | (4096, 1024) | 8,388,608 |
+| `q_norm_w` | bf16 | (256,) | 512 |
+| `k_norm_w` | bf16 | (256,) | 512 |
+| `wo` | bf16 | (4096, 4096) | 33,554,432 |
+| `ffn_norm_w` | bf16 | (4096,) | 8,192 |
+| `w1` | bf16 | (4096, 12288) | 100,663,296 |
+| `w3` | bf16 | (4096, 12288) | 100,663,296 |
+| `w2` | bf16 | (12288, 4096) | 100,663,296 |
 
-**`A_.._3` saved context** — 595,968 bytes = **4,656.0 bytes/token** (per (step, round))
-
-| field | dtype | shape | bytes |
-|---|---|---|---|
-| `rstd_attn` | fp32 | (128,) | 512 |
-| `qm` | bf16 | (128, 256) | 65,536 |
-| `km` | bf16 | (128, 128) | 32,768 |
-| `rstd_q` | fp32 | (512,) | 2,048 |
-| `rstd_k` | fp32 | (256,) | 1,024 |
-| `gate` | bf16 | (128, 256) | 65,536 |
-| `v` | bf16 | (128, 128) | 32,768 |
-| `lse` | fp32 | (4, 128) | 2,048 |
-| `attn_out` | bf16 | (128, 256) | 65,536 |
-| `xo` | bf16 | (128, 256) | 65,536 |
-| `rstd_ffn` | fp32 | (128,) | 512 |
-| `x1` | bf16 | (128, 512) | 131,072 |
-| `x3` | bf16 | (128, 512) | 131,072 |
-
-**`W_head`** — 262,656 bytes
+**`A_.._3` saved context** — 5,647,106,048 bytes = **86,168.0 bytes/token** (per (step, round))
 
 | field | dtype | shape | bytes |
 |---|---|---|---|
-| `w` | bf16 | (512, 256) | 262,144 |
-| `final_norm_w` | bf16 | (256,) | 512 |
+| `rstd_attn` | fp32 | (65536,) | 262,144 |
+| `qm` | bf16 | (65536, 4096) | 536,870,912 |
+| `km` | bf16 | (65536, 1024) | 134,217,728 |
+| `rstd_q` | fp32 | (1048576,) | 4,194,304 |
+| `rstd_k` | fp32 | (262144,) | 1,048,576 |
+| `gate` | bf16 | (65536, 4096) | 536,870,912 |
+| `v` | bf16 | (65536, 1024) | 134,217,728 |
+| `lse` | fp32 | (256, 4096) | 4,194,304 |
+| `attn_out` | bf16 | (65536, 4096) | 536,870,912 |
+| `xo` | bf16 | (65536, 4096) | 536,870,912 |
+| `rstd_ffn` | fp32 | (65536,) | 262,144 |
+| `x1` | bf16 | (65536, 12288) | 1,610,612,736 |
+| `x3` | bf16 | (65536, 12288) | 1,610,612,736 |
+
+**`W_head`** — 2,034,245,632 bytes
+
+| field | dtype | shape | bytes |
+|---|---|---|---|
+| `w` | bf16 | (248320, 4096) | 2,034,237,440 |
+| `final_norm_w` | bf16 | (4096,) | 8,192 |
 
 ## Tasks
 
 ### `embed_fwd` — `EmbedFwd`
 
 - example task: `embed_fwd_0_0`
-- inputs: `tokens_0_0` (512B), `W_embed` (262,144B)
-- outputs: `y_embed_0_0` (65,536B)
+- inputs: `tokens_0_0` (262,144B), `W_embed` (2,034,237,440B)
+- outputs: `y_embed_0_0` (536,870,912B)
 - mutates: —
 
 ### `linattn_fwd` — `Qwen35LinBlockFwd`
 
 - example task: `block_fwd_0_0_0`
-- inputs: `y_embed_0_0` (65,536B), `W_0` (1,056,512B)
-- outputs: `y_0_0_0` (65,536B), `A_0_0_0` (531,456B)
+- inputs: `y_embed_0_0` (536,870,912B), `W_0` (436,814,592B)
+- outputs: `y_0_0_0` (536,870,912B), `A_0_0_0` (6,199,705,600B)
 - mutates: —
 - stages (name — emitted ctx fields):
     0. `attn_norm` — rstd_attn
@@ -137,13 +137,13 @@ Layer kinds (4 layers): `lin lin lin full`
     7. `up_proj` — x1, x3  ← derived recompute boundary
     8. `swiglu` — —
     9. `down_resid` — —
-- kernel calls (measured, one launch): rmsnorm_fwd → causal_conv1d_silu_fwd → gated_rmsnorm_fwd → rmsnorm_fwd → swiglu_fwd_out
+- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_fwd → causal_conv1d_silu_fwd → gated_rmsnorm_fwd → rmsnorm_fwd → swiglu_fwd_out
 
 ### `gattn_fwd` — `Qwen35AttnBlockFwd`
 
 - example task: `block_fwd_0_0_3`
-- inputs: `y_0_0_2` (65,536B), `W_3` (1,312,256B)
-- outputs: `y_0_0_3` (65,536B), `A_0_0_3` (595,968B)
+- inputs: `y_0_0_2` (536,870,912B), `W_3` (419,447,808B)
+- outputs: `y_0_0_3` (536,870,912B), `A_0_0_3` (5,647,106,048B)
 - mutates: —
 - stages (name — emitted ctx fields):
     0. `attn_norm` — rstd_attn
@@ -155,61 +155,61 @@ Layer kinds (4 layers): `lin lin lin full`
     6. `up_proj` — x1, x3  ← derived recompute boundary
     7. `swiglu` — —
     8. `down_resid` — —
-- kernel calls (measured, one launch): rmsnorm_fwd×3 → rope_fwd×2 → rmsnorm_fwd → swiglu_fwd_out
+- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_fwd×3 → rope_fwd×2 → rmsnorm_fwd → swiglu_fwd_out
 
 ### `head_loss` — `HeadLoss`
 
 - example task: `head_loss_0_0`
-- inputs: `y_0_0_3` (65,536B), `targets_0_0` (512B), `W_head` (262,656B)
-- outputs: `dy_0_0_3` (65,536B), `loss_0_0` (4B), `dW_head_0` (262,656B)
+- inputs: `y_0_0_31` (536,870,912B), `targets_0_0` (262,144B), `W_head` (2,034,245,632B)
+- outputs: `dy_0_0_31` (536,870,912B), `loss_0_0` (4B), `dW_head_0` (2,034,245,632B)
 - mutates: —
-- kernel calls (measured, one launch): rmsnorm_fwd → ce_loss_fwd_bwd → rmsnorm_bwd
+- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_fwd → ce_loss_fwd_bwd → rmsnorm_bwd
 
 ### `optimizer_head` — `AdamWStep`
 
 - example task: `optimizer_head_0`
-- inputs: `W_head` (262,656B), `dW_head_0` (262,656B), `O_head` (525,312B)
+- inputs: `W_head` (2,034,245,632B), `dW_head_0` (2,034,245,632B), `O_head` (4,068,491,264B)
 - outputs: —
 - mutates: `W_head`, `O_head`
-- kernel calls (measured, one launch): adamw_step×2
+- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): adamw_step×2
 
 ### `gattn_bwd` — `Qwen35AttnBlockBwd`
 
-- example task: `block_bwd_0_0_3`
-- inputs: `dy_0_0_3` (65,536B), `A_0_0_3` (595,968B), `y_0_0_2` (65,536B), `W_3` (1,312,256B)
-- outputs: `dy_0_0_2` (65,536B), `dW_0_3` (1,312,256B)
+- example task: `block_bwd_0_0_31`
+- inputs: `dy_0_0_31` (536,870,912B), `A_0_0_31` (5,647,106,048B), `y_0_0_30` (536,870,912B), `W_31` (419,447,808B)
+- outputs: `dy_0_0_30` (536,870,912B), `dW_0_31` (419,447,808B)
 - mutates: —
-- kernel calls (measured, one launch): rmsnorm_apply → swiglu_fwd_out → swiglu_bwd → rmsnorm_bwd → rmsnorm_apply×2 → rope_fwd×2 → rope_bwd×2 → rmsnorm_bwd×2 → rmsnorm_apply → rmsnorm_bwd
+- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_apply → swiglu_fwd_out → swiglu_bwd → rmsnorm_bwd → rmsnorm_apply×2 → rope_fwd×2 → rope_bwd×2 → rmsnorm_bwd×2 → rmsnorm_apply → rmsnorm_bwd
 
 ### `optimizer_block` — `AdamWStep`
 
-- example task: `optimizer_0_3`
-- inputs: `W_3` (1,312,256B), `dW_0_3` (1,312,256B), `O_3` (2,624,512B)
+- example task: `optimizer_0_31`
+- inputs: `W_31` (419,447,808B), `dW_0_31` (419,447,808B), `O_31` (838,895,616B)
 - outputs: —
-- mutates: `W_3`, `O_3`
-- kernel calls (measured, one launch): adamw_step×11
+- mutates: `W_31`, `O_31`
+- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): adamw_step×11
 
 ### `linattn_bwd` — `Qwen35LinBlockBwd`
 
-- example task: `block_bwd_0_0_2`
-- inputs: `dy_0_0_2` (65,536B), `A_0_0_2` (531,456B), `y_0_0_1` (65,536B), `W_2` (1,056,512B)
-- outputs: `dy_0_0_1` (65,536B), `dW_0_2` (1,056,512B)
+- example task: `block_bwd_0_0_30`
+- inputs: `dy_0_0_30` (536,870,912B), `A_0_0_30` (6,199,705,600B), `y_0_0_29` (536,870,912B), `W_30` (436,814,592B)
+- outputs: `dy_0_0_29` (536,870,912B), `dW_0_30` (436,814,592B)
 - mutates: —
-- kernel calls (measured, one launch): rmsnorm_apply → swiglu_fwd_out → swiglu_bwd → rmsnorm_bwd → gated_rmsnorm_bwd → causal_conv1d_silu_fwd → causal_conv1d_silu_bwd → rmsnorm_apply → rmsnorm_bwd
+- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_apply → swiglu_fwd_out → swiglu_bwd → rmsnorm_bwd → gated_rmsnorm_bwd → causal_conv1d_silu_fwd → causal_conv1d_silu_bwd → rmsnorm_apply → rmsnorm_bwd
 
 ### `embed_bwd` — `EmbedBwd`
 
 - example task: `embed_bwd_0_0`
-- inputs: `dy_embed_0_0` (65,536B), `tokens_0_0` (512B)
-- outputs: `dW_embed_0` (262,144B)
+- inputs: `dy_embed_0_0` (536,870,912B), `tokens_0_0` (262,144B)
+- outputs: `dW_embed_0` (2,034,237,440B)
 - mutates: —
-- kernel calls (measured, one launch): embed_bwd_accum
+- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): embed_bwd_accum
 
 ### `optimizer_embed` — `AdamWStep`
 
 - example task: `optimizer_embed_0`
-- inputs: `W_embed` (262,144B), `dW_embed_0` (262,144B), `O_embed` (524,288B)
+- inputs: `W_embed` (2,034,237,440B), `dW_embed_0` (2,034,237,440B), `O_embed` (4,068,474,880B)
 - outputs: —
 - mutates: `W_embed`, `O_embed`
-- kernel calls (measured, one launch): adamw_step
+- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): adamw_step
 

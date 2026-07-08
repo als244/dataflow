@@ -14,9 +14,15 @@ Per family page:
 - every task kind: executable, buffer contract (a representative
   lowered task's inputs/outputs/mutates with byte sizes), the forward
   STAGE list with emitted-context fields and the derived recompute
-  boundary, and the MEASURED kernel-call sequence (each task signature
-  is executed once through a recording KernelSet proxy — the op list
-  is captured, not transcribed).
+  boundary, and the TRACED kernel-call sequence.
+
+Generation is LIGHT by construction: everything about the
+documentation preset (object tables, sizes, contracts) is pure layout
+arithmetic — no allocation, no kernels, any scale in milliseconds.
+Kernel sequences are dims-invariant per task kind, so they are traced
+ONCE at the family's TINY preset (megabyte buffers, one launch per
+signature through a recording KernelSet proxy); per-sequence op
+counts scale with the microbatch and are labeled as traced.
 
 External families generate identically (plugins load first): add a
 family, rerun, get the same page.
@@ -31,6 +37,25 @@ from pathlib import Path
 from dataflow.training import families as F
 
 REPO = Path(__file__).resolve().parent.parent
+
+# documentation presets (Shein): full-scale where a single GPU can
+# still profile the per-task signatures; mini for the 671B-class
+# families. External families fall back to {name}_mini, then tiny.
+DOC_PRESETS = {
+    "llama3": "llama3_8b",
+    "olmoe": "olmoe_7b",
+    "qwen3": "qwen3_8b",
+    "qwen3moe": "qwen3moe_30b",
+    "qwen35": "qwen35_9b",
+    "qwen35moe": "qwen35moe_35b",
+    "dsv3": "dsv3_mini",
+    "dsv32": "dsv32_mini",
+    "glm52": "glm52_mini",
+}
+# every page documents the SAME run shape so A_*/M_* tables compare
+# across families
+DOC_SEQ_LEN = 4096
+DOC_BATCH = 16
 
 
 # ---------------------------------------------------------------- helpers
@@ -149,12 +174,14 @@ def record_kernel_seqs(fam, cfg, dims, prog) -> dict[str, str]:
 def gen_family(name: str, record: bool) -> str:
     fam = F.family(name)
     cls = fam.config_type
-    preset = None
-    for cand in (f"{name}_mini", "tiny"):
-        if isinstance(cls.__dict__.get(cand), classmethod):
-            preset = cand
-            break
-    cfg = getattr(cls, preset)()
+    preset = DOC_PRESETS.get(name)
+    if preset is None or not isinstance(cls.__dict__.get(preset), classmethod):
+        for cand in (f"{name}_mini", "tiny"):
+            if isinstance(cls.__dict__.get(cand), classmethod):
+                preset = cand
+                break
+    cfg = dataclasses.replace(getattr(cls, preset)(),
+                              seq_len=DOC_SEQ_LEN, batch=DOC_BATCH)
     dims = fam.dims_of(cfg)
     prog = fam.lower(cfg)
     resolver = fam.build_resolver(dims)
@@ -165,9 +192,14 @@ def gen_family(name: str, record: bool) -> str:
     rec_note = ""
     if record:
         try:
-            kern_seqs = record_kernel_seqs(fam, cfg, dims, prog)
+            # trace at TINY dims: sequences are dims-invariant per task
+            # kind; only the trace should ever touch the GPU
+            tiny_cfg = cls.tiny()
+            tiny_dims = fam.dims_of(tiny_cfg)
+            kern_seqs = record_kernel_seqs(
+                fam, tiny_cfg, tiny_dims, fam.lower(tiny_cfg))
         except Exception as exc:
-            rec_note = f" (kernel recording unavailable: {exc})"
+            rec_note = f" (kernel tracing unavailable: {exc})"
 
     L = cfg.n_layers
     kind_of = getattr(dims, "kind_of", lambda i: "block")
@@ -176,7 +208,9 @@ def gen_family(name: str, record: bool) -> str:
 
     out = [f"# {name}: tasks, objects, kernels",
            "",
-           f"GENERATED from `{cls.__name__}.{preset}()` — regenerate with "
+           f"GENERATED from `{cls.__name__}.{preset}()` at the standard "
+           f"documentation run shape (seq {DOC_SEQ_LEN} × microbatch "
+           f"{DOC_BATCH}) — regenerate with "
            f"`python tools/gen_model_docs.py --family {name}`. Presets: "
            f"[builtin_models.md](../builtin_models.md); task-kind fleet "
            f"index: [task_kinds.md](../task_kinds.md).",
@@ -267,7 +301,8 @@ def gen_family(name: str, record: bool) -> str:
                     marker = "  ← derived recompute boundary"
                 out.append(f"    {si}. `{st[0]}` — {emits}{meta}{marker}")
         if ck in kern_seqs:
-            out.append(f"- kernel calls (measured, one launch): "
+            out.append(f"- kernel calls (traced once at tiny dims; "
+                       f"per-sequence op counts scale with microbatch): "
                        f"{kern_seqs[ck]}")
         out.append("")
 

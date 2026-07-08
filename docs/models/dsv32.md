@@ -1,10 +1,10 @@
 # dsv32: tasks, objects, kernels
 
-GENERATED from `ShapedDsv32Config.dsv32_mini()` — regenerate with `python tools/gen_model_docs.py --family dsv32`. Presets: [builtin_models.md](../builtin_models.md); task-kind fleet index: [task_kinds.md](../task_kinds.md).
+GENERATED from `ShapedDsv32Config.dsv32_mini()` at the standard documentation run shape (seq 4096 × microbatch 16) — regenerate with `python tools/gen_model_docs.py --family dsv32`. Presets: [builtin_models.md](../builtin_models.md); task-kind fleet index: [task_kinds.md](../task_kinds.md).
 
 Layer kinds (18 layers): `dense dense moe moe moe moe moe moe moe moe moe moe moe moe moe moe moe moe`
 
-**Run shape of this documentation preset**: microbatch 1 × seq_len 4096 = **4,096 tokens per round** (× 1 grad-accum round(s) per step). `A_*`/`M_*` objects are sized per round; their bytes/token figures below transfer to any run shape.
+**Run shape of this documentation preset**: microbatch 16 × seq_len 4096 = **65,536 tokens per round** (× 1 grad-accum round(s) per step). `A_*`/`M_*` objects are sized per round; their bytes/token figures below transfer to any run shape.
 
 ## Dims (documentation preset)
 
@@ -20,7 +20,7 @@ Layer kinds (18 layers): `dense dense moe moe moe moe moe moe moe moe moe moe mo
 | `d_ff` | 8192 |
 | `first_k_dense` | 2 |
 | `vocab_size` | 129280 |
-| `tokens` | 4096 |
+| `tokens` | 65536 |
 | `seq_len` | 4096 |
 | `rope_base` | 10000.0 |
 | `opt_policy` | adamw |
@@ -58,27 +58,27 @@ Layer kinds (18 layers): `dense dense moe moe moe moe moe moe moe moe moe moe mo
 | `w3` | bf16 | (2048, 8192) | 33,554,432 |
 | `w2` | bf16 | (8192, 2048) | 33,554,432 |
 
-**`A_.._0` saved context** — 166,264,832 bytes = **40,592.0 bytes/token** (per (step, round))
+**`A_.._0` saved context** — 2,660,237,312 bytes = **40,592.0 bytes/token** (per (step, round))
 
 | field | dtype | shape | bytes |
 |---|---|---|---|
-| `rstd_attn` | fp32 | (4096,) | 16,384 |
-| `q_a` | bf16 | (4096, 512) | 4,194,304 |
-| `rstd_qa` | fp32 | (4096,) | 16,384 |
-| `kv_a` | bf16 | (4096, 288) | 2,359,296 |
-| `rstd_kva` | fp32 | (4096,) | 16,384 |
-| `lse` | fp32 | (16, 4096) | 262,144 |
-| `attn_out` | bf16 | (4096, 1024) | 8,388,608 |
-| `h_mid` | bf16 | (4096, 2048) | 16,777,216 |
-| `rstd_ffn` | fp32 | (4096,) | 16,384 |
-| `x1` | bf16 | (4096, 8192) | 67,108,864 |
-| `x3` | bf16 | (4096, 8192) | 67,108,864 |
+| `rstd_attn` | fp32 | (65536,) | 262,144 |
+| `q_a` | bf16 | (65536, 512) | 67,108,864 |
+| `rstd_qa` | fp32 | (65536,) | 262,144 |
+| `kv_a` | bf16 | (65536, 288) | 37,748,736 |
+| `rstd_kva` | fp32 | (65536,) | 262,144 |
+| `lse` | fp32 | (256, 4096) | 4,194,304 |
+| `attn_out` | bf16 | (65536, 1024) | 134,217,728 |
+| `h_mid` | bf16 | (65536, 2048) | 268,435,456 |
+| `rstd_ffn` | fp32 | (65536,) | 262,144 |
+| `x1` | bf16 | (65536, 8192) | 1,073,741,824 |
+| `x3` | bf16 | (65536, 8192) | 1,073,741,824 |
 
-**`M_.._0` metadata** — 16,777,216 bytes = **4,096.0 bytes/token** (never recomputed)
+**`M_.._0` metadata** — 268,435,456 bytes = **4,096.0 bytes/token** (never recomputed)
 
 | field | dtype | shape | bytes |
 |---|---|---|---|
-| `dsa_idx` | int32 | (4096, 1024) | 16,777,216 |
+| `dsa_idx` | int32 | (65536, 1024) | 268,435,456 |
 
 ### kind `moe` (e.g. layer 2)
 
@@ -107,31 +107,31 @@ Layer kinds (18 layers): `dense dense moe moe moe moe moe moe moe moe moe moe mo
 | `w_s13` | bf16 | (2048, 2048) | 8,388,608 |
 | `w_s2` | bf16 | (1024, 2048) | 4,194,304 |
 
-**`A_.._2` saved context** — 184,090,624 bytes = **44,944.0 bytes/token** (per (step, round))
+**`A_.._2` saved context** — 2,945,449,984 bytes = **44,944.0 bytes/token** (per (step, round))
 
 | field | dtype | shape | bytes |
 |---|---|---|---|
-| `rstd_attn` | fp32 | (4096,) | 16,384 |
-| `q_a` | bf16 | (4096, 512) | 4,194,304 |
-| `rstd_qa` | fp32 | (4096,) | 16,384 |
-| `kv_a` | bf16 | (4096, 288) | 2,359,296 |
-| `rstd_kva` | fp32 | (4096,) | 16,384 |
-| `lse` | fp32 | (16, 4096) | 262,144 |
-| `attn_out` | bf16 | (4096, 1024) | 8,388,608 |
-| `h_mid` | bf16 | (4096, 2048) | 16,777,216 |
-| `rstd_ffn` | fp32 | (4096,) | 16,384 |
-| `router_logits` | bf16 | (4096, 128) | 1,048,576 |
-| `h13` | bf16 | (32768, 2048) | 134,217,728 |
-| `s13` | bf16 | (4096, 2048) | 16,777,216 |
+| `rstd_attn` | fp32 | (65536,) | 262,144 |
+| `q_a` | bf16 | (65536, 512) | 67,108,864 |
+| `rstd_qa` | fp32 | (65536,) | 262,144 |
+| `kv_a` | bf16 | (65536, 288) | 37,748,736 |
+| `rstd_kva` | fp32 | (65536,) | 262,144 |
+| `lse` | fp32 | (256, 4096) | 4,194,304 |
+| `attn_out` | bf16 | (65536, 1024) | 134,217,728 |
+| `h_mid` | bf16 | (65536, 2048) | 268,435,456 |
+| `rstd_ffn` | fp32 | (65536,) | 262,144 |
+| `router_logits` | bf16 | (65536, 128) | 16,777,216 |
+| `h13` | bf16 | (524288, 2048) | 2,147,483,648 |
+| `s13` | bf16 | (65536, 2048) | 268,435,456 |
 
-**`M_.._2` metadata** — 17,105,664 bytes = **4,176.2 bytes/token** (never recomputed)
+**`M_.._2` metadata** — 273,679,104 bytes = **4,176.0 bytes/token** (never recomputed)
 
 | field | dtype | shape | bytes |
 |---|---|---|---|
-| `dsa_idx` | int32 | (4096, 1024) | 16,777,216 |
-| `route_w` | bf16 | (4096, 8) | 65,536 |
-| `route_ids` | int32 | (4096, 8) | 131,072 |
-| `route_order` | int32 | (32768,) | 131,072 |
+| `dsa_idx` | int32 | (65536, 1024) | 268,435,456 |
+| `route_w` | bf16 | (65536, 8) | 1,048,576 |
+| `route_ids` | int32 | (65536, 8) | 2,097,152 |
+| `route_order` | int32 | (524288,) | 2,097,152 |
 | `route_offsets` | int32 | (129,) | 516 |
 
 **`W_head`** — 529,534,976 bytes
@@ -146,15 +146,15 @@ Layer kinds (18 layers): `dense dense moe moe moe moe moe moe moe moe moe moe mo
 ### `embed_fwd` — `EmbedFwd`
 
 - example task: `embed_fwd_0_0`
-- inputs: `tokens_0_0` (16,384B), `W_embed` (529,530,880B)
-- outputs: `y_embed_0_0` (16,777,216B)
+- inputs: `tokens_0_0` (262,144B), `W_embed` (529,530,880B)
+- outputs: `y_embed_0_0` (268,435,456B)
 - mutates: —
 
 ### `dsadense_fwd` — `Dsv32DenseBlockFwd`
 
 - example task: `block_fwd_0_0_0`
-- inputs: `y_embed_0_0` (16,777,216B), `W_0` (111,618,048B)
-- outputs: `y_0_0_0` (16,777,216B), `A_0_0_0` (166,264,832B), `M_0_0_0` (16,777,216B)
+- inputs: `y_embed_0_0` (268,435,456B), `W_0` (111,618,048B)
+- outputs: `y_0_0_0` (268,435,456B), `A_0_0_0` (2,660,237,312B), `M_0_0_0` (268,435,456B)
 - mutates: —
 - stages (name — emitted ctx fields):
     0. `attn_norm` — rstd_attn
@@ -166,13 +166,13 @@ Layer kinds (18 layers): `dense dense moe moe moe moe moe moe moe moe moe moe mo
     6. `up_proj` — x1, x3  ← derived recompute boundary
     7. `swiglu` — —
     8. `down_resid` — —
-- kernel calls (measured, one launch): rmsnorm_fwd×2 → rope_fwd → rmsnorm_apply → rope_fwd×2 → rmsnorm_fwd → rope_fwd → dsa_index_scores → dsa_topk → dsa_sparse_attn_fwd → rmsnorm_fwd → swiglu_fwd_out
+- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_fwd×2 → rope_fwd → rmsnorm_apply → rope_fwd×2 → rmsnorm_fwd → rope_fwd → dsa_index_scores → dsa_topk → dsa_sparse_attn_fwd → rmsnorm_fwd → swiglu_fwd_out
 
 ### `dsamoe_fwd` — `Dsv32MoeBlockFwd`
 
 - example task: `block_fwd_0_0_2`
-- inputs: `y_0_0_1` (16,777,216B), `W_2` (1,634,675,200B)
-- outputs: `y_0_0_2` (16,777,216B), `A_0_0_2` (184,090,624B), `M_0_0_2` (17,105,664B)
+- inputs: `y_0_0_1` (268,435,456B), `W_2` (1,634,675,200B)
+- outputs: `y_0_0_2` (268,435,456B), `A_0_0_2` (2,945,449,984B), `M_0_0_2` (273,679,104B)
 - mutates: —
 - stages (name — emitted ctx fields):
     0. `attn_norm` — rstd_attn
@@ -186,15 +186,15 @@ Layer kinds (18 layers): `dense dense moe moe moe moe moe moe moe moe moe moe mo
     8. `moe_experts13` — h13
     9. `moe_shared` — s13  ← derived recompute boundary
     10. `moe_experts2_combine` — —
-- kernel calls (measured, one launch): rmsnorm_fwd×2 → rope_fwd → rmsnorm_apply → rope_fwd×2 → rmsnorm_fwd → rope_fwd → dsa_index_scores → dsa_topk → dsa_sparse_attn_fwd → rmsnorm_fwd → moe_topk_sigmoid_noaux → moe_sort → moe_dispatch_fwd → moe_grouped_mm_fwd → swiglu_packed_fwd → moe_grouped_mm_fwd → swiglu_packed_fwd → moe_combine_fwd
+- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_fwd×2 → rope_fwd → rmsnorm_apply → rope_fwd×2 → rmsnorm_fwd → rope_fwd → dsa_index_scores → dsa_topk → dsa_sparse_attn_fwd → rmsnorm_fwd → moe_topk_sigmoid_noaux → moe_sort → moe_dispatch_fwd → moe_grouped_mm_fwd → swiglu_packed_fwd → moe_grouped_mm_fwd → swiglu_packed_fwd → moe_combine_fwd
 
 ### `head_loss` — `HeadLoss`
 
 - example task: `head_loss_0_0`
-- inputs: `y_0_0_17` (16,777,216B), `targets_0_0` (16,384B), `W_head` (529,534,976B)
-- outputs: `dy_0_0_17` (16,777,216B), `loss_0_0` (4B), `dW_head_0` (529,534,976B)
+- inputs: `y_0_0_17` (268,435,456B), `targets_0_0` (262,144B), `W_head` (529,534,976B)
+- outputs: `dy_0_0_17` (268,435,456B), `loss_0_0` (4B), `dW_head_0` (529,534,976B)
 - mutates: —
-- kernel calls (measured, one launch): rmsnorm_fwd → ce_loss_fwd_bwd → rmsnorm_bwd → rmsnorm_fwd → ce_loss_fwd_bwd → rmsnorm_bwd
+- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_fwd → ce_loss_fwd_bwd → rmsnorm_bwd
 
 ### `optimizer_head` — `AdamWStep`
 
@@ -202,15 +202,15 @@ Layer kinds (18 layers): `dense dense moe moe moe moe moe moe moe moe moe moe mo
 - inputs: `W_head` (529,534,976B), `dW_head_0` (529,534,976B), `O_head` (1,059,069,952B)
 - outputs: —
 - mutates: `W_head`, `O_head`
-- kernel calls (measured, one launch): adamw_step×2
+- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): adamw_step×2
 
 ### `dsamoe_bwd` — `Dsv32MoeBlockBwd`
 
 - example task: `block_bwd_0_0_17`
-- inputs: `dy_0_0_17` (16,777,216B), `A_0_0_17` (184,090,624B), `y_0_0_16` (16,777,216B), `W_17` (1,634,675,200B), `M_0_0_17` (17,105,664B)
-- outputs: `dy_0_0_16` (16,777,216B), `dW_0_17` (1,634,675,200B)
+- inputs: `dy_0_0_17` (268,435,456B), `A_0_0_17` (2,945,449,984B), `y_0_0_16` (268,435,456B), `W_17` (1,634,675,200B), `M_0_0_17` (273,679,104B)
+- outputs: `dy_0_0_16` (268,435,456B), `dW_0_17` (1,634,675,200B)
 - mutates: —
-- kernel calls (measured, one launch): rmsnorm_apply → moe_dispatch_fwd×2 → swiglu_packed_fwd → moe_grouped_mm_dgrad → moe_rowdot → moe_scale_rows → moe_grouped_mm_wgrad → moe_scale_rows → swiglu_packed_bwd → moe_grouped_mm_wgrad → moe_grouped_mm_dgrad → moe_dispatch_bwd → moe_router_bwd_sigmoid → moe_seq_aux_grad → swiglu_packed_fwd → swiglu_packed_bwd → rmsnorm_bwd → rmsnorm_apply → rope_fwd → rmsnorm_apply → rope_fwd → dsa_sparse_attn_bwd → rmsnorm_apply → rope_fwd×2 → dsa_index_scores → dsa_probs_sum → dsa_index_bwd → rope_bwd×3 → rmsnorm_bwd → rope_bwd → rmsnorm_bwd×2
+- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_apply → moe_dispatch_fwd×2 → swiglu_packed_fwd → moe_grouped_mm_dgrad → moe_rowdot → moe_scale_rows → moe_grouped_mm_wgrad → moe_scale_rows → swiglu_packed_bwd → moe_grouped_mm_wgrad → moe_grouped_mm_dgrad → moe_dispatch_bwd → moe_router_bwd_sigmoid → moe_seq_aux_grad → swiglu_packed_fwd → swiglu_packed_bwd → rmsnorm_bwd → rmsnorm_apply → rope_fwd → rmsnorm_apply → rope_fwd → dsa_sparse_attn_bwd → rmsnorm_apply → rope_fwd×2 → dsa_index_scores → dsa_probs_sum → dsa_index_bwd → rope_bwd×3 → rmsnorm_bwd → rope_bwd → rmsnorm_bwd×2
 
 ### `optimizer_block` — `AdamWStep`
 
@@ -218,23 +218,23 @@ Layer kinds (18 layers): `dense dense moe moe moe moe moe moe moe moe moe moe mo
 - inputs: `W_17` (1,634,675,200B), `dW_0_17` (1,634,675,200B), `O_17` (3,269,350,400B)
 - outputs: —
 - mutates: `W_17`, `O_17`
-- kernel calls (measured, one launch): adamw_step×19
+- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): adamw_step×19
 
 ### `dsadense_bwd` — `Dsv32DenseBlockBwd`
 
 - example task: `block_bwd_0_0_1`
-- inputs: `dy_0_0_1` (16,777,216B), `A_0_0_1` (166,264,832B), `y_0_0_0` (16,777,216B), `W_1` (111,618,048B), `M_0_0_1` (16,777,216B)
-- outputs: `dy_0_0_0` (16,777,216B), `dW_0_1` (111,618,048B)
+- inputs: `dy_0_0_1` (268,435,456B), `A_0_0_1` (2,660,237,312B), `y_0_0_0` (268,435,456B), `W_1` (111,618,048B), `M_0_0_1` (268,435,456B)
+- outputs: `dy_0_0_0` (268,435,456B), `dW_0_1` (111,618,048B)
 - mutates: —
-- kernel calls (measured, one launch): rmsnorm_apply → swiglu_fwd_out → swiglu_bwd → rmsnorm_bwd → rmsnorm_apply → rope_fwd → rmsnorm_apply → rope_fwd → dsa_sparse_attn_bwd → rmsnorm_apply → rope_fwd×2 → dsa_index_scores → dsa_probs_sum → dsa_index_bwd → rope_bwd×3 → rmsnorm_bwd → rope_bwd → rmsnorm_bwd×2
+- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_apply → swiglu_fwd_out → swiglu_bwd → rmsnorm_bwd → rmsnorm_apply → rope_fwd → rmsnorm_apply → rope_fwd → dsa_sparse_attn_bwd → rmsnorm_apply → rope_fwd×2 → dsa_index_scores → dsa_probs_sum → dsa_index_bwd → rope_bwd×3 → rmsnorm_bwd → rope_bwd → rmsnorm_bwd×2
 
 ### `embed_bwd` — `EmbedBwd`
 
 - example task: `embed_bwd_0_0`
-- inputs: `dy_embed_0_0` (16,777,216B), `tokens_0_0` (16,384B)
+- inputs: `dy_embed_0_0` (268,435,456B), `tokens_0_0` (262,144B)
 - outputs: `dW_embed_0` (529,530,880B)
 - mutates: —
-- kernel calls (measured, one launch): embed_bwd_accum
+- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): embed_bwd_accum
 
 ### `optimizer_embed` — `AdamWStep`
 
@@ -242,5 +242,5 @@ Layer kinds (18 layers): `dense dense moe moe moe moe moe moe moe moe moe moe mo
 - inputs: `W_embed` (529,530,880B), `dW_embed_0` (529,530,880B), `O_embed` (1,059,061,760B)
 - outputs: —
 - mutates: `W_embed`, `O_embed`
-- kernel calls (measured, one launch): adamw_step
+- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): adamw_step
 
