@@ -29,7 +29,7 @@ _ALIGN = 256
 @dataclass(frozen=True)
 class ParamDTypes:
     """Storage dtypes for one trainable field: the parameter itself, its
-    gradient, and its AdamW moments (design: docs/notes/dtype-policy-design.md).
+    gradient, and its AdamW moments (design: the dtype-policy-design design note).
     Defaults reproduce the historical all-bf16 convention."""
 
     param: str = "bf16"
@@ -900,7 +900,7 @@ def _dense_mlp_specs(dims) -> list[tuple[str, tuple[int, ...]]]:
 def qwen35_lin_weight_layout(dims: Qwen35Dims, layer: int | None = None) -> PackedLayout:
     """DeltaNet layer weights. Default policy stores A_log/dt_bias bf16
     (golden identical — fla receives fp32 casts at call time; bf16-ULP-vs-
-    AdamW caveat recorded in docs/notes/qwen35-design.md); a dtype policy
+    AdamW caveat recorded in the qwen35-design design note); a dtype policy
     override ("A_log"/"dt_bias" -> fp32) lifts that."""
     return PackedLayout.build(_param_specs(
         dims, _qwen35_lin_attn_specs(dims) + _dense_mlp_specs(dims), layer=layer,

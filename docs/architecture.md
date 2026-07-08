@@ -91,8 +91,8 @@ M0–M4 are done, each behind its gate:
   seq-1K sweeps, step-boundary fix (optimizer interleave + honest head).
   Headline: **3,501 wall tok/s at a 23.75 GiB budget** — above the measured
   flextrain ceiling on the same machine (3,410–3,435) — and 97% of that
-  ceiling at 12 GiB. See `docs/benchmarking.md`, `results/bench/`, and
-  `docs/notes/` (perf-headroom, step-boundary, placement-deadlock,
+  ceiling at 12 GiB. See `docs/benchmarking.md` and
+  the design notes (perf-headroom, step-boundary, placement-deadlock,
   poison-guard-loss) for the measured story.
 - **M5 (next)**: CUDA-graph-per-task (the remaining ~4–5% host-dispatch
   tax), VMM chunk-backing (the placement geometry tax), new model

@@ -1,7 +1,7 @@
 """VMM arena gates: extent allocator, stable VAs, guard-deferred reclaim,
 value integrity through map cycles, and E2E equivalence with the slab path.
 
-Design: docs/notes/vmm-slab-design-v1.md.
+Design: the vmm-slab-design-v1 design note.
 """
 import pytest
 

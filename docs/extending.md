@@ -153,7 +153,7 @@ checks cannot. See `models/llama3_reference.py`.
 Nothing in a family may hardcode a trainable dtype. Weight layouts pull
 each field's dtype from `dims.dtypes` (a `DTypePolicy` riding the Shaped
 config: per-field `param`/`grad`/`opt` roles, fnmatch overrides, first
-match wins — `docs/notes/dtype-policy-design.md`). dW layouts come from
+match wins — the dtype-policy-design design note). dW layouts come from
 `grad_layout(wl, policy)`, optimizer state from `opt_state_layout(...)`
 (per-field slot sets decided by the OPTIMIZER policy — `[m_f | v_f]`
 under the adamw default, fewer or none for sgdm/sgd/muon; never a flat
@@ -192,7 +192,7 @@ Lowering emits the bare task chain plus the pieces planning needs:
 - **Optimizer placement**: emit each optimizer task immediately after the
   LAST mutation of its gradient (`optimizer_placement="interleaved"`, the
   default) — the legacy all-optimizers-at-the-end order costs a 1.5–2 s
-  GPU-idle PCIe drain per step (docs/notes/step-boundary.md).
+  GPU-idle PCIe drain per step (the step-boundary design note).
 - **Replay contract**: `final_locations` must equal each persistent
   object's initial location so ONE annotated chain replays every optimizer
   step (the boundary invariant; same note, §1).
@@ -437,7 +437,7 @@ embeddings) added to the machinery — reuse, don't reinvent:
   results SILENTLY (the qwen35 gate-gradient hunt).
 - **MoE variants (olmoe / qwen35moe — the pluggable module)**: the MoE
   SwiGLU tail is a self-contained module (`tasks/moe/`,
-  docs/notes/moe-design.md); a family opts in through FIVE points and
+  the moe-design design note); a family opts in through FIVE points and
   writes no MoE math of its own:
   1. layout builders append `moe_weight_specs(dims, moe)` /
      `moe_context_specs(dims, moe)` (stacked expert fields

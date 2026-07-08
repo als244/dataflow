@@ -13,3 +13,6 @@ artifacts/local/
 artifacts/
 rollout.pt
 original_plans/
+refs/
+docs/notes/
+results/

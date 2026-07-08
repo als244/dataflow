@@ -1,7 +1,7 @@
 """Ragged-packing (varlen-first) gates: real engine vs golden with a
 genuinely non-uniform per-round sequence pattern.
 
-Design: docs/notes/varlen-first-design.md. Activations were already
+Design: the varlen-first-design design note. Activations were already
 [total_tokens, d]; these tests pin the SEQUENCE-DEPENDENT semantics under
 ragged packing — rope positions resetting per sequence, block-diagonal
 causal attention (per-seq flash calls + the (heads, tokens) lse layout),

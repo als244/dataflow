@@ -65,7 +65,7 @@ class ShapedLlamaConfig:
     # highest-priority per-field override on top of this.
     opt_policy: object = "adamw"
     # per-field dtype policy for params/grads/opt state (default: all bf16,
-    # the historical convention; docs/notes/dtype-policy-design.md)
+    # the historical convention; the dtype-policy-design design note)
     dtypes: DTypePolicy = DTypePolicy()
     # ragged packing: explicit per-round sequence lengths (sum = tokens
     # per round); None = uniform batch x seq_len

@@ -3,7 +3,7 @@
 The contiguous-slab design pays an address-geometry tax (packed extent >
 ledger peak, measured x1.05-1.21) and admits placement-infeasible programs
 whose byte load fits at every instant. This module removes the contiguity
-constraint with the CUDA VMM API (design: docs/notes/vmm-slab-design-v1.md;
+constraint with the CUDA VMM API (design: the vmm-slab-design-v1 design note;
 microbench: tools/bench_vmm.py — map+setAccess+unmap is 39-52 us per RANGE,
 size-independent, and does not perturb concurrent compute):
 

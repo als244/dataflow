@@ -62,7 +62,7 @@ The engine therefore carries a quiescent ESCAPE VALVE: when truly stuck on
 a pure offset conflict with ledger room available, the blocked instance is
 served dynamically instead (counted as `placement_escapes`, reported per
 run, zero in healthy runs). Full post-mortem:
-[docs/notes/placement-deadlock.md](../../../docs/notes/placement-deadlock.md).
+[the placement-deadlock design note](../../the placement-deadlock design note).
 
 The same inversion class exists one level down, in BYTES: real transfer
 timing can admit individually-legal h2d prefetches whose bytes collectively
@@ -73,7 +73,7 @@ version, untouched by plan directives before its next use) and reloads it
 before use — semantically a sim "deferred prefetch" decided late; the
 budget cap only ever decreases. Counted as `pressure_evictions` (zero in
 healthy runs); deterministic regression via `FakeBackend(time_scale=)`
-timing distortion. See docs/notes/step-boundary.md §5.
+timing distortion. See the step-boundary design note §5.
 
 Placement is an **independent, optional optimization** — the engine takes
 `placement=None` (dynamic slab+arena) or a `Placement` (assigned offsets)
@@ -102,7 +102,7 @@ which transfers wait before filling a reused buffer — and the guard follows
 the BYTES, not the Buffer object: the pool refuses to recycle an address
 range whose guard is still pending (fragmentation flush) and re-attaches
 pending guards across placed-offset incarnations
-(docs/notes/poison-guard-loss.md).
+(the poison-guard-loss design note).
 
 Deadlock (dispatcher blocked or queues stuck with nothing in flight) raises
 `DeadlockError` with the waiting reason and queue contents. Directive-state
@@ -120,7 +120,7 @@ override; tie order at equal times = from_slow done, to_slow done, task done
 
 Strict pacing costs one host wake-up per task on real hardware (~815 µs of
 host work per boundary at 8B scale — measured anatomy in
-docs/notes/perf-headroom.md). A plan-derived dispatch-ahead mode was built,
+the perf-headroom design note). A plan-derived dispatch-ahead mode was built,
 measured (+1.4% best case, negative at tight budgets), and REVERTED — the
 chosen endgame for the boundary tax is CUDA-graph capture per task, for
 which static placement's fixed addresses already satisfy the
