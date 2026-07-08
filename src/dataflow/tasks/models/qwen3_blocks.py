@@ -137,7 +137,8 @@ class Qwen3BlockBwd(BlockBwd):
         t, h, kvh, hd = d.tokens, d.n_heads, d.n_kv_heads, d.head_dim
 
         d_attn = dh_mid @ w["wo"].T
-        acc("wo", a["attn_out"].T @ dh_mid)
+        if acc.wanted("wo"):
+            acc("wo", a["attn_out"].T @ dh_mid)
 
         # rebuild flash-bwd's q/k from saved qm/km + rstds: norm re-apply + rope
         qm2, km2 = a["qm"].view(t * h, hd), a["km"].view(t * kvh, hd)
@@ -175,9 +176,12 @@ class Qwen3BlockBwd(BlockBwd):
 
         h1 = torch.empty_like(x)
         K.rmsnorm_apply(kctx, x, a["rstd_attn"], w["attn_norm_w"], h1)
-        acc("wq", h1.T @ dqm)
-        acc("wk", h1.T @ dkm)
-        acc("wv", h1.T @ dv)
+        if acc.wanted("wq"):
+            acc("wq", h1.T @ dqm)
+        if acc.wanted("wk"):
+            acc("wk", h1.T @ dkm)
+        if acc.wanted("wv"):
+            acc("wv", h1.T @ dv)
         del h1
         dh1 = dqm @ w["wq"].T
         dh1.addmm_(dkm, w["wk"].T)

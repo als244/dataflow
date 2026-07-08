@@ -413,7 +413,8 @@ def main() -> None:
             build_raw(rc_all), fam.build_resolver(dims), backend,
             refresh=args.refresh_profiles,
         ))
-    measured = apply_measured_costs(program, profiles)
+    resolver_ = fam.build_resolver(dims)
+    measured = apply_measured_costs(program, profiles, resolver_)
     print(f"profiled {len(profiles)} unique task signatures in {time.perf_counter()-t0:.1f}s")
 
     args.out.mkdir(parents=True, exist_ok=True)
@@ -443,7 +444,7 @@ def main() -> None:
     def _plan(budget: int):
         if args.force_recompute == "all":
             levels = {rw.object_id: 1 for rw in program.recompute_rewrites}
-            forced = apply_measured_costs(build_raw(levels), profiles)
+            forced = apply_measured_costs(build_raw(levels), profiles, resolver_)
             planned = plan_program(
                 forced, fast_memory_capacity=budget, preplace=args.preplace,
             )
@@ -451,7 +452,7 @@ def main() -> None:
         return _strip_backing(plan_program(
             measured, fast_memory_capacity=budget, recompute=args.recompute,
             build_variant=(
-                lambda levels: apply_measured_costs(build_raw(levels), profiles)
+                lambda levels: apply_measured_costs(build_raw(levels), profiles, resolver_)
             ) if args.recompute else None,
             preplace=args.preplace,
         ))

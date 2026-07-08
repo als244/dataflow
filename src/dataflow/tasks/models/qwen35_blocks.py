@@ -255,7 +255,8 @@ class Qwen35LinBlockBwd(BlockBwd):
             dcore, dz2, dwn, y2,
         )
         del do_normed, z2
-        acc("w_out", y2.view(t, d.value_dim).T @ dxo)
+        if acc.wanted("w_out"):
+            acc("w_out", y2.view(t, d.value_dim).T @ dxo)
         del y2
         acc("lin_norm_w", dwn)
         dz = dz2.view(t, d.lin_v_heads, d.lin_v_head_dim)
@@ -323,8 +324,10 @@ class Qwen35LinBlockBwd(BlockBwd):
         d_ba = torch.cat([db_raw, da.squeeze(0).to(torch.bfloat16)], dim=-1)
         h1 = torch.empty_like(x)
         K.rmsnorm_apply(kctx, x, a["rstd_attn"], w["attn_norm_w"], h1)
-        acc("w_qkvz", h1.T @ d_qkvz)
-        acc("w_ba", h1.T @ d_ba)
+        if acc.wanted("w_qkvz"):
+            acc("w_qkvz", h1.T @ d_qkvz)
+        if acc.wanted("w_ba"):
+            acc("w_ba", h1.T @ d_ba)
         del h1
         dh1 = d_qkvz @ w["w_qkvz"].T
         dh1.addmm_(d_ba, w["w_ba"].T)
@@ -489,7 +492,8 @@ class Qwen35AttnBlockBwd(BlockBwd):
         # --- output gate + o projection ---
         sig = torch.sigmoid(a["gate"].float())
         gated = a["attn_out"] * sig.to(torch.bfloat16)
-        acc("wo", gated.T @ dxo)
+        if acc.wanted("wo"):
+            acc("wo", gated.T @ dxo)
         del gated
         dgated = dxo @ w["wo"].T
         d_attn = (dgated.float() * sig).to(torch.bfloat16)
@@ -528,9 +532,12 @@ class Qwen35AttnBlockBwd(BlockBwd):
         K.rmsnorm_apply(kctx, x, a["rstd_attn"], w["attn_norm_w"], h1)
         d_qg = torch.cat([dqm, d_gate], dim=-1)
         del dqm, d_gate
-        acc("wq", h1.T @ d_qg)
-        acc("wk", h1.T @ dkm)
-        acc("wv", h1.T @ dv)
+        if acc.wanted("wq"):
+            acc("wq", h1.T @ d_qg)
+        if acc.wanted("wk"):
+            acc("wk", h1.T @ dkm)
+        if acc.wanted("wv"):
+            acc("wv", h1.T @ dv)
         del h1
         dh1 = d_qg @ w["wq"].T
         dh1.addmm_(dkm, w["wk"].T)

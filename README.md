@@ -66,7 +66,8 @@ For other benchmarking reference see: [docs/benchmarking.md](docs/benchmarking.m
 
 # High Level Components
 
-Codebase map: [docs/architecture.md](docs/architecture.md); programmatic
+Codebase map: [docs/architecture.md](docs/architecture.md); frozen-parameter training (freeze API, warm-up):
+[docs/frozen_training.md](docs/frozen_training.md); programmatic
 end-to-end walkthrough (config → plan → engine, in Python):
 [docs/usage.md](docs/usage.md).
 

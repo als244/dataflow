@@ -423,6 +423,8 @@ def test_moe_tail_fwd_bwd_vs_reference(shared, aux, mode):
         acc_written.add(name)
         dw[name].copy_(value.to(dw[name].dtype))
 
+    acc.wanted = lambda name: True   # harness: every wgrad wanted
+
     def norm_bwd(dyv, xv, rstd, wv):
         dxv = torch.empty_like(xv)
         dwv = torch.empty(wv.numel(), dtype=torch.float32, device="cuda")
@@ -446,6 +448,8 @@ def test_moe_tail_fwd_bwd_vs_reference(shared, aux, mode):
 
     def acc2(name, value):
         dw2[name].copy_(value.to(dw2[name].dtype))
+
+    acc2.wanted = lambda name: True
 
     dh_mid2 = moe_mlp_tail_bwd(
         _kctx(), K, dims, dy, a, w, dw2, False, acc2, norm_bwd, resid_field="xo",

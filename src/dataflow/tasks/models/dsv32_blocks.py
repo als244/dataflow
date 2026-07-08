@@ -415,7 +415,8 @@ class Dsv32DenseBlockBwd(Dsv32MetaState, Dsv32ProfileFill, Dsv3DenseBlockBwd):
         # runs IN PLACE on the assembled grads (rope-first: col_base=0)
         K.rope_bwd(kctx, dq_idx, dq_idx, pos, hi_, rope, d.rope_base,
                    row_stride=hi_ * di, head_stride=di, col_base=0)
-        acc("w_idx_q", q_lora_n.T @ dq_idx)
+        if acc.wanted("w_idx_q"):
+            acc("w_idx_q", q_lora_n.T @ dq_idx)
         del dq_idx
         K.rope_bwd(kctx, dk_idx, dk_idx, pos, 1, rope, d.rope_base,
                    row_stride=di, head_stride=di, col_base=0)
@@ -432,9 +433,11 @@ class Dsv32DenseBlockBwd(Dsv32MetaState, Dsv32ProfileFill, Dsv3DenseBlockBwd):
         acc("idx_k_ln_b", dk_post_ln.float().sum(0).to(torch.bfloat16))
         dk_pre = rstd * (g - g.mean(-1, keepdim=True)
                          - xhat * (g * xhat).mean(-1, keepdim=True))
-        acc("w_idx_k", h1.T @ dk_pre.to(torch.bfloat16))
+        if acc.wanted("w_idx_k"):
+            acc("w_idx_k", h1.T @ dk_pre.to(torch.bfloat16))
         del k_pre, mu, xc, var, rstd, xhat, g, dk_post_ln, dk_idx, dk_pre
-        acc("w_idx_w", (h1.float().T @ (dwts * (hi_ ** -0.5) * (di ** -0.5))))
+        if acc.wanted("w_idx_w"):
+            acc("w_idx_w", (h1.float().T @ (dwts * (hi_ ** -0.5) * (di ** -0.5))))
         del dwts, q_idx, k_idx, wts
 
 
@@ -447,7 +450,8 @@ class Dsv32DenseBlockBwd(Dsv32MetaState, Dsv32ProfileFill, Dsv3DenseBlockBwd):
         bounds = _seq_bounds(d)
 
         d_attn_v = (dh_mid @ w["wo"].T).contiguous()
-        acc("wo", a["attn_out"].T @ dh_mid)
+        if acc.wanted("wo"):
+            acc("wo", a["attn_out"].T @ dh_mid)
 
         pos = ops.positions_for(d.seq_spec, t, x.device)
         q_lora_n, q_full = _mla_expand_q(kctx, K, d, a["q_a"], a["rstd_qa"], w, pos)
@@ -497,7 +501,8 @@ class Dsv32DenseBlockBwd(Dsv32MetaState, Dsv32ProfileFill, Dsv3DenseBlockBwd):
         dk_rope_pre = torch.empty_like(dk_rope_sum)
         K.rope_bwd(kctx, dk_rope_sum, dk_rope_pre, pos, 1, rope, d.rope_base)
         del dk_rope_sum
-        acc("w_kv_b", latent_n.T @ dkvb)
+        if acc.wanted("w_kv_b"):
+            acc("w_kv_b", latent_n.T @ dkvb)
         dlatent_n = dkvb @ w["w_kv_b"].T
         del dkvb
         latent_pre = a["kv_a"][:, :kvl].contiguous()
@@ -512,7 +517,8 @@ class Dsv32DenseBlockBwd(Dsv32MetaState, Dsv32ProfileFill, Dsv3DenseBlockBwd):
                    row_stride=h * qk, head_stride=qk, col_base=nope)
         dq_pre_m = dq
         del dq
-        acc("w_q_b", q_lora_n.T @ dq_pre_m)
+        if acc.wanted("w_q_b"):
+            acc("w_q_b", q_lora_n.T @ dq_pre_m)
         dq_lora_n = dq_pre_m @ w["w_q_b"].T
         del dq_pre_m, q_lora_n
         dq_lora, d_q_norm = norm_bwd(dq_lora_n, a["q_a"], a["rstd_qa"],
@@ -520,8 +526,11 @@ class Dsv32DenseBlockBwd(Dsv32MetaState, Dsv32ProfileFill, Dsv3DenseBlockBwd):
         del dq_lora_n
         acc("q_a_norm_w", d_q_norm)
 
-        acc("w_q_a", h1.T @ dq_lora)
-        acc("w_kv_a", h1.T @ d_kv_a)
+        if acc.wanted("w_q_a"):
+
+            acc("w_q_a", h1.T @ dq_lora)
+        if acc.wanted("w_kv_a"):
+            acc("w_kv_a", h1.T @ d_kv_a)
         dh1 = dq_lora @ w["w_q_a"].T
         dh1.addmm_(d_kv_a, w["w_kv_a"].T)
         del dq_lora, d_kv_a, h1

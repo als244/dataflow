@@ -155,7 +155,7 @@ class BlockFwd(_Base):
     @staticmethod
     def _stage_up_proj(kctx, K, d, st):
         h2, w, a = st["h2"], st["w"], st["a"]
-        if a is not None:
+        if a is not None and "x1" in a:
             torch.matmul(h2, w["w1"], out=a["x1"])
             torch.matmul(h2, w["w3"], out=a["x3"])
             st["x1"], st["x3"] = a["x1"], a["x3"]
@@ -200,6 +200,19 @@ class BlockFwd(_Base):
                 last = i
         return last + 1
 
+    def recompute_stage_count_present(self) -> int:
+        """Layout-aware boundary: the last stage emitting a PRESENT
+        context field. Under trimmed layouts (dense warm-up saves only
+        the objective's inputs) this shortens past post-attention
+        stages whose emits were trimmed away; with full layouts it
+        equals recompute_stage_count()."""
+        present = {f.name for f in self.cl.fields}
+        last = 0
+        for i, entry in enumerate(self.STAGES):
+            if entry[2] and (set(entry[2]) & present):
+                last = i
+        return last + 1
+
     @classmethod
     def context_fields_emitted(cls) -> set:
         return {f for entry in cls.STAGES for f in entry[2]}
@@ -238,7 +251,8 @@ class BlockRecompute(BlockFwd):
         stage and stop. The block output y is never a backward dependency,
         so the trailing stages (swiglu, down-projection, residual) are
         skipped by construction — not by hand-maintained duplication."""
-        self._run_stages(kctx, x, w, a, count=self.recompute_stage_count(),
+        self._run_stages(kctx, x, w, a,
+                         count=self.recompute_stage_count_present(),
                          extras=extras)
 
 
@@ -263,14 +277,17 @@ def dense_mlp_tail_bwd(kctx, K, dy, h_mid, rstd_ffn, x1, x3, w, acc, norm_bwd):
     s = torch.empty_like(x1)
     K.swiglu_fwd_out(kctx, x1, x3, s)
     ds = dy @ w["w2"].T
-    acc("w2", s.T @ dy)
+    if acc.wanted("w2"):
+        acc("w2", s.T @ dy)
     del s
     dx1 = torch.empty_like(x1)
     dx3 = torch.empty_like(x3)
     K.swiglu_bwd(kctx, ds, x1, x3, dx1, dx3)
     del ds
-    acc("w1", h2.T @ dx1)
-    acc("w3", h2.T @ dx3)
+    if acc.wanted("w1"):
+        acc("w1", h2.T @ dx1)
+    if acc.wanted("w3"):
+        acc("w3", h2.T @ dx3)
     del h2
     dh2 = dx1 @ w["w1"].T
     dh2.addmm_(dx3, w["w3"].T)
@@ -336,7 +353,8 @@ class BlockBwd(_Base):
         d = self.dims
         K = self.kernels
         d_attn = dh_mid @ w["wo"].T
-        acc("wo", a["attn_out"].T @ dh_mid)
+        if acc.wanted("wo"):
+            acc("wo", a["attn_out"].T @ dh_mid)
         dq, dk, dv = ops.flash_bwd(
             d_attn, a["q"], a["k"], a["v"], a["attn_out"], a["lse"],
             d.n_heads, d.n_kv_heads, d.head_dim, d.seq_spec,
@@ -351,9 +369,12 @@ class BlockBwd(_Base):
         del dk
         h1 = torch.empty_like(x)
         K.rmsnorm_apply(kctx, x, a["rstd_attn"], w["attn_norm_w"], h1)
-        acc("wq", h1.T @ dq_r)
-        acc("wk", h1.T @ dk_r)
-        acc("wv", h1.T @ dv)
+        if acc.wanted("wq"):
+            acc("wq", h1.T @ dq_r)
+        if acc.wanted("wk"):
+            acc("wk", h1.T @ dk_r)
+        if acc.wanted("wv"):
+            acc("wv", h1.T @ dv)
         del h1
         dh1 = dq_r @ w["wq"].T
         dh1.addmm_(dk_r, w["wk"].T)

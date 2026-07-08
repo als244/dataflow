@@ -37,10 +37,10 @@ EXPECTED = {
     "dsv3-tiny-ga2": "0235b4af1dcd1378",
     "dsv32-tiny": "c8fff3a4b6125f42",
     "dsv32-tiny-ga2": "fc88bcbcd5b922f2",
-    "dsv32-tiny-dense": "f148f16648a0efeb",
+    "dsv32-tiny-dense": "341958dfae44599e",
     "glm52-tiny": "02de39829135fecd",
     "glm52-tiny-ga2": "97d566e41cfd5a02",
-    "glm52-tiny-warmup": "24ac735bf76864fe",
+    "glm52-tiny-warmup": "a90b9a61fcd51ef8",
 }
 
 

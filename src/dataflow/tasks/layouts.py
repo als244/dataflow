@@ -545,6 +545,27 @@ def _dsv3_attn_weight_specs(dims: Dsv3Dims) -> list[tuple[str, tuple[int, ...]]]
     ]
 
 
+# The indexer objective's saved-context inputs (dense warm-up): the KL
+# backward re-derives everything it needs from these — h1 via
+# (x, rstd_attn), the MLA q/k expansions via the compressed latents,
+# targets via lse. dgrad is DEAD in warm-up, so every other ctx field
+# has no consumer and is trimmed from the layouts (frozen-plan note §3).
+# Too-small here fails LOUDLY (dict KeyError in the warm-up backward,
+# caught by the model-step gates); too-large shows as size drift in the
+# lowering gate.
+DSA_WARMUP_CTX_FIELDS = ("rstd_attn", "q_a", "rstd_qa", "kv_a",
+                         "rstd_kva", "lse")
+
+
+def _warmup_ctx_filter(specs, dims):
+    """Under the indexer-only objective (sparse_mode=False on the DSA
+    dims), keep only the objective's inputs."""
+    if getattr(dims, "sparse_mode", True):
+        return specs
+    keep = set(DSA_WARMUP_CTX_FIELDS)
+    return [s for s in specs if s[0] in keep]
+
+
 def _dsv3_attn_ctx_specs(dims: Dsv3Dims) -> list[tuple[str, tuple[int, ...], str]]:
     """The MLA saved set — COMPRESSED latents, not expanded heads: bwd
     re-expands through w_q_b/w_kv_b, so attention ctx is ~(q_lora +
@@ -576,10 +597,11 @@ def dsv3_dense_weight_layout(dims: Dsv3Dims, layer: int | None = None) -> Packed
 
 def dsv3_dense_context_layout(dims: Dsv3Dims) -> PackedLayout:
     t, ff = dims.tokens, dims.d_ff
-    return PackedLayout.build(_dsv3_attn_ctx_specs(dims) + [
-        ("x1", (t, ff), "bf16"),
-        ("x3", (t, ff), "bf16"),
-    ])
+    return PackedLayout.build(_warmup_ctx_filter(
+        _dsv3_attn_ctx_specs(dims) + [
+            ("x1", (t, ff), "bf16"),
+            ("x3", (t, ff), "bf16"),
+        ], dims))
 
 
 def dsv3_moe_weight_layout(dims: Dsv3Dims, layer: int | None = None) -> PackedLayout:
@@ -702,10 +724,11 @@ def dsv32_dense_weight_layout(dims: Dsv32Dims, layer: int | None = None) -> Pack
 
 def dsv32_dense_context_layout(dims: Dsv32Dims) -> PackedLayout:
     t, ff = dims.tokens, dims.d_ff
-    return PackedLayout.build(_dsv32_attn_ctx_specs(dims) + [
-        ("x1", (t, ff), "bf16"),
-        ("x3", (t, ff), "bf16"),
-    ])
+    return PackedLayout.build(_warmup_ctx_filter(
+        _dsv32_attn_ctx_specs(dims) + [
+            ("x1", (t, ff), "bf16"),
+            ("x3", (t, ff), "bf16"),
+        ], dims))
 
 
 def dsv32_moe_weight_layout(dims: Dsv32Dims, layer: int | None = None) -> PackedLayout:
@@ -720,10 +743,9 @@ def dsv32_moe_weight_layout(dims: Dsv32Dims, layer: int | None = None) -> Packed
 def dsv32_moe_context_layout(dims: Dsv32Dims) -> PackedLayout:
     from .modules.moe.spec import moe_context_specs
 
-    return PackedLayout.build(
+    return PackedLayout.build(_warmup_ctx_filter(
         _dsv32_attn_ctx_specs(dims)
-        + moe_context_specs(dims, dims.moe, meta=True)
-    )
+        + moe_context_specs(dims, dims.moe, meta=True), dims))
 
 
 def glm52_meta_layout(dims: "Glm52Dims", kind: str) -> PackedLayout:

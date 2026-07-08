@@ -138,7 +138,8 @@ class OlmoeBlockBwd(MoEMetaState, MoEProfileFill, BlockBwd):
         K = self.kernels
 
         d_attn = dh_mid @ w["wo"].T
-        acc("wo", a["attn_out"].T @ dh_mid)
+        if acc.wanted("wo"):
+            acc("wo", a["attn_out"].T @ dh_mid)
 
         qn = torch.empty_like(a["qm"])
         K.rmsnorm_apply(kctx, a["qm"], a["rstd_q"], w["q_norm_w"], qn)
@@ -173,9 +174,12 @@ class OlmoeBlockBwd(MoEMetaState, MoEProfileFill, BlockBwd):
 
         h1 = torch.empty_like(x)
         K.rmsnorm_apply(kctx, x, a["rstd_attn"], w["attn_norm_w"], h1)
-        acc("wq", h1.T @ dqm)
-        acc("wk", h1.T @ dkm)
-        acc("wv", h1.T @ dv)
+        if acc.wanted("wq"):
+            acc("wq", h1.T @ dqm)
+        if acc.wanted("wk"):
+            acc("wk", h1.T @ dkm)
+        if acc.wanted("wv"):
+            acc("wv", h1.T @ dv)
         del h1
         dh1 = dqm @ w["wq"].T
         dh1.addmm_(dkm, w["wk"].T)

@@ -112,7 +112,7 @@ class Dsv3DenseBlockFwd(BlockFwd):
     def _stage_mla_q(kctx, K, d, st):
         h1, w, a = st["h1"], st["w"], st["a"]
         t = d.tokens
-        if a is not None:
+        if a is not None and "q_a" in a:
             q_a = a["q_a"]
             torch.matmul(h1, w["w_q_a"], out=q_a)
         else:
@@ -129,7 +129,7 @@ class Dsv3DenseBlockFwd(BlockFwd):
                    row_stride=h * d.qk_head_dim, head_stride=d.qk_head_dim,
                    col_base=nope)
         st.update(q_full=q_full, pos=pos)
-        if a is not None:
+        if a is not None and "rstd_qa" in a:
             a["rstd_qa"].copy_(rstd_qa)
         else:
             st["rstd_qa"] = rstd_qa
@@ -138,7 +138,7 @@ class Dsv3DenseBlockFwd(BlockFwd):
     def _stage_mla_kv(kctx, K, d, st):
         h1, w, a = st.pop("h1"), st["w"], st["a"]
         t = d.tokens
-        if a is not None:
+        if a is not None and "kv_a" in a:
             kv_a = a["kv_a"]
             torch.matmul(h1, w["w_kv_a"], out=kv_a)
         else:
@@ -157,7 +157,7 @@ class Dsv3DenseBlockFwd(BlockFwd):
             [kvb[..., :nope], k_rope.view(t, 1, rope).expand(t, h, rope)], dim=-1,
         ).reshape(t, h * d.qk_head_dim).contiguous()
         st.update(k_full=k_full, v_pad=_pad_v(kvb[..., nope:], d.qk_head_dim))
-        if a is not None:
+        if a is not None and "rstd_kva" in a:
             a["rstd_kva"].copy_(rstd_kva)
         else:
             st["rstd_kva"] = rstd_kva
@@ -174,7 +174,8 @@ class Dsv3DenseBlockFwd(BlockFwd):
         del out_pad
         if a is not None:
             a["lse"].copy_(lse)
-            a["attn_out"].copy_(attn_out)
+            if "attn_out" in a:
+                a["attn_out"].copy_(attn_out)
         st.update(attn_out=attn_out, lse=lse)
 
     @staticmethod
@@ -185,7 +186,7 @@ class Dsv3DenseBlockFwd(BlockFwd):
         attn_out = st.pop("attn_out")
         st.pop("lse", None)
         st.pop("pos", None)
-        if a is not None:
+        if a is not None and "h_mid" in a:
             h_mid = a["h_mid"]
             torch.addmm(x, attn_out, w["wo"], out=h_mid)
         else:
@@ -194,7 +195,8 @@ class Dsv3DenseBlockFwd(BlockFwd):
         h2 = torch.empty_like(h_mid)
         K.rmsnorm_fwd(kctx, h_mid, w["ffn_norm_w"], h2, rstd_ffn)
         if a is not None:
-            a["rstd_ffn"].copy_(rstd_ffn)
+            if "rstd_ffn" in a:
+                a["rstd_ffn"].copy_(rstd_ffn)
         st.update(h_mid=h_mid, h2=h2)
 
     @staticmethod
@@ -250,7 +252,8 @@ class Dsv3DenseBlockBwd(BlockBwd):
         qk, kvl = d.qk_head_dim, d.kv_lora_rank
 
         d_attn_v = dh_mid @ w["wo"].T                       # (t, h*v)
-        acc("wo", a["attn_out"].T @ dh_mid)
+        if acc.wanted("wo"):
+            acc("wo", a["attn_out"].T @ dh_mid)
 
         pos = ops.positions_for(d.seq_spec, t, x.device)
         q_lora_n, q_full = _mla_expand_q(kctx, K, d, a["q_a"], a["rstd_qa"], w, pos)
@@ -282,7 +285,8 @@ class Dsv3DenseBlockBwd(BlockBwd):
         dk_rope_pre = torch.empty_like(dk_rope_sum)
         K.rope_bwd(kctx, dk_rope_sum, dk_rope_pre, pos, 1, rope, d.rope_base)
         del dk_rope_sum
-        acc("w_kv_b", latent_n.T @ dkvb)
+        if acc.wanted("w_kv_b"):
+            acc("w_kv_b", latent_n.T @ dkvb)
         dlatent_n = dkvb @ w["w_kv_b"].T
         del dkvb
         latent_pre = a["kv_a"][:, :kvl].contiguous()
@@ -298,7 +302,8 @@ class Dsv3DenseBlockBwd(BlockBwd):
                    row_stride=h * qk, head_stride=qk, col_base=nope)
         dq_pre = dq
         del dq
-        acc("w_q_b", q_lora_n.T @ dq_pre)
+        if acc.wanted("w_q_b"):
+            acc("w_q_b", q_lora_n.T @ dq_pre)
         dq_lora_n = dq_pre @ w["w_q_b"].T
         del dq_pre, q_lora_n
         dq_lora, d_q_norm = norm_bwd(dq_lora_n, a["q_a"], a["rstd_qa"],
@@ -309,8 +314,10 @@ class Dsv3DenseBlockBwd(BlockBwd):
         # ---- down-projections + attn norm ----
         h1 = torch.empty_like(x)
         K.rmsnorm_apply(kctx, x, a["rstd_attn"], w["attn_norm_w"], h1)
-        acc("w_q_a", h1.T @ dq_lora)
-        acc("w_kv_a", h1.T @ d_kv_a)
+        if acc.wanted("w_q_a"):
+            acc("w_q_a", h1.T @ dq_lora)
+        if acc.wanted("w_kv_a"):
+            acc("w_kv_a", h1.T @ d_kv_a)
         del h1
         dh1 = dq_lora @ w["w_q_a"].T
         dh1.addmm_(d_kv_a, w["w_kv_a"].T)

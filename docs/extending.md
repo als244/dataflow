@@ -46,7 +46,7 @@ their dy, and their saved context entirely. The structural analysis is
 consumed by `build_shaped_program(freeze=...)` via the surgery in
 `training/freeze_program.py` — the dense warm-up is the
 `objective="indexer_kl"` configuration of the same machinery. Gates:
-`tests/training/test_freeze_plan.py`.
+`tests/training/test_freeze_plan.py`. Full guide: [frozen_training.md](frozen_training.md).
 
 ## Where a family's files live (the layout contract)
 

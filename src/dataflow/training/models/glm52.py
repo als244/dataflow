@@ -312,13 +312,17 @@ def _ctx_layout_for(dims: Glm52Dims, kind: str):
     # selection-object grammar: no dsa_idx anywhere (S object) and the
     # routing pack lives in the per-layer SEL object (moe kinds)
     from dataflow.tasks.modules.moe.spec import moe_context_specs
-    from dataflow.tasks.layouts import PackedLayout, _dsv3_attn_ctx_specs
+    from dataflow.tasks.layouts import (
+        PackedLayout,
+        _dsv3_attn_ctx_specs,
+        _warmup_ctx_filter,
+    )
 
     if kind == "gdl":
         return dsv3_dense_context_layout(dims)
-    return PackedLayout.build(
-        _dsv3_attn_ctx_specs(dims) + moe_context_specs(dims, dims.moe, meta=True)
-    )
+    return PackedLayout.build(_warmup_ctx_filter(
+        _dsv3_attn_ctx_specs(dims) + moe_context_specs(dims, dims.moe, meta=True),
+        dims))
 
 
 def _kind_specs(cfg: ShapedGlm52Config, hw: ShapedHardware) -> dict[str, LayerKindSpec]:

@@ -15,11 +15,11 @@ At this run shape (65,536 tokens/round). Token-scaled objects show per-token siz
 | `W_i (dense)` | layer | 106.45 MiB |
 | `dW_i (dense)` | layer/step | 106.45 MiB |
 | `O_i (dense)` | layer | 1.63 MiB |
-| `A (dense)` | layer × round | 2.48 GiB (39.64 KiB/token) |
+| `A (dense)` | layer × round | 104.75 MiB (1.64 KiB/token) |
 | `W_i (moe)` | layer | 1.52 GiB |
 | `dW_i (moe)` | layer/step | 1.52 GiB |
 | `O_i (moe)` | layer | 1.63 MiB |
-| `A (moe)` | layer × round | 2.74 GiB (43.89 KiB/token) |
+| `A (moe)` | layer × round | 104.75 MiB (1.64 KiB/token) |
 | `M (moe)` | layer × round | 5.00 MiB (80.0 B/token) |
 | `W_head` | run | 505.00 MiB |
 | `W_embed` | run | 505.00 MiB |
@@ -32,7 +32,7 @@ At this run shape (65,536 tokens/round). Token-scaled objects show per-token siz
 | W (all weights, incl. embed/head) | 20 | 25.55 GiB |
 | dW (all gradients, per step) | 18 | 14.63 MiB |
 | O (all optimizer state) | 18 | 29.27 MiB |
-| A (all saved activations, one round) | 72 | 195.38 GiB (3.05 MiB/token) |
+| A (all saved activations, one round) | 72 | 7.37 GiB (117.84 KiB/token) |
 | M (all metadata, one round) | 64 | 320.05 MiB (5.00 KiB/token) |
 
 ## Dims
@@ -86,7 +86,7 @@ At this run shape (65,536 tokens/round). Token-scaled objects show per-token siz
 | `w3` | bf16 | (2048, 8192) | 32.00 MiB |
 | `w2` | bf16 | (8192, 2048) | 32.00 MiB |
 
-**`A_.._0` saved context** — 2.48 GiB = **39.64 KiB/token** (per (step, round))
+**`A_.._0` saved context** — 104.75 MiB = **1.64 KiB/token** (per (step, round))
 
 | field | dtype | shape | bytes |
 |---|---|---|---|
@@ -96,11 +96,6 @@ At this run shape (65,536 tokens/round). Token-scaled objects show per-token siz
 | `kv_a` | bf16 | (65536, 288) | 36.00 MiB |
 | `rstd_kva` | fp32 | (65536,) | 256.00 KiB |
 | `lse` | fp32 | (256, 4096) | 4.00 MiB |
-| `attn_out` | bf16 | (65536, 1024) | 128.00 MiB |
-| `h_mid` | bf16 | (65536, 2048) | 256.00 MiB |
-| `rstd_ffn` | fp32 | (65536,) | 256.00 KiB |
-| `x1` | bf16 | (65536, 8192) | 1.00 GiB |
-| `x3` | bf16 | (65536, 8192) | 1.00 GiB |
 
 ### kind `moe` (e.g. layer 2)
 
@@ -129,7 +124,7 @@ At this run shape (65,536 tokens/round). Token-scaled objects show per-token siz
 | `w_s13` | bf16 | (2048, 2048) | 8.00 MiB |
 | `w_s2` | bf16 | (1024, 2048) | 4.00 MiB |
 
-**`A_.._2` saved context** — 2.74 GiB = **43.89 KiB/token** (per (step, round))
+**`A_.._2` saved context** — 104.75 MiB = **1.64 KiB/token** (per (step, round))
 
 | field | dtype | shape | bytes |
 |---|---|---|---|
@@ -139,12 +134,6 @@ At this run shape (65,536 tokens/round). Token-scaled objects show per-token siz
 | `kv_a` | bf16 | (65536, 288) | 36.00 MiB |
 | `rstd_kva` | fp32 | (65536,) | 256.00 KiB |
 | `lse` | fp32 | (256, 4096) | 4.00 MiB |
-| `attn_out` | bf16 | (65536, 1024) | 128.00 MiB |
-| `h_mid` | bf16 | (65536, 2048) | 256.00 MiB |
-| `rstd_ffn` | fp32 | (65536,) | 256.00 KiB |
-| `router_logits` | bf16 | (65536, 128) | 16.00 MiB |
-| `h13` | bf16 | (524288, 2048) | 2.00 GiB |
-| `s13` | bf16 | (65536, 2048) | 256.00 MiB |
 
 **`M_.._2` metadata** — 5.00 MiB = **80.0 B/token** (never recomputed)
 
@@ -177,7 +166,7 @@ At this run shape (65,536 tokens/round). Token-scaled objects show per-token siz
 
 - example task: `block_fwd_0_0_0`
 - inputs: `y_embed_0_0` (256.00 MiB), `W_0` (106.45 MiB)
-- outputs: `y_0_0_0` (256.00 MiB), `A_0_0_0` (2.48 GiB)
+- outputs: `y_0_0_0` (256.00 MiB), `A_0_0_0` (104.75 MiB)
 - mutates: —
 - stages (name — emitted ctx fields):
     0. `attn_norm` — rstd_attn
@@ -225,7 +214,7 @@ At this run shape (65,536 tokens/round). Token-scaled objects show per-token siz
 
 - example task: `block_fwd_0_0_2`
 - inputs: `y_0_0_1` (256.00 MiB), `W_2` (1.52 GiB)
-- outputs: `y_0_0_2` (256.00 MiB), `A_0_0_2` (2.74 GiB), `M_0_0_2` (5.00 MiB)
+- outputs: `y_0_0_2` (256.00 MiB), `A_0_0_2` (104.75 MiB), `M_0_0_2` (5.00 MiB)
 - mutates: —
 - stages (name — emitted ctx fields):
     0. `attn_norm` — rstd_attn
@@ -284,7 +273,7 @@ At this run shape (65,536 tokens/round). Token-scaled objects show per-token siz
 ### `dsamoe_bwd` — `Dsv32WarmupMoeBlockBwd`
 
 - example task: `block_bwd_0_0_17`
-- inputs: `A_0_0_17` (2.74 GiB), `y_0_0_16` (256.00 MiB), `W_17` (1.52 GiB), `M_0_0_17` (5.00 MiB)
+- inputs: `A_0_0_17` (104.75 MiB), `y_0_0_16` (256.00 MiB), `W_17` (1.52 GiB), `M_0_0_17` (5.00 MiB)
 - outputs: `dW_0_17` (832.50 KiB), `loss_0_0` (4 B)
 - mutates: —
 - kernel calls:
@@ -344,7 +333,7 @@ At this run shape (65,536 tokens/round). Token-scaled objects show per-token siz
 ### `dsadense_bwd` — `Dsv32WarmupDenseBlockBwd`
 
 - example task: `block_bwd_0_0_1`
-- inputs: `A_0_0_1` (2.48 GiB), `y_0_0_0` (256.00 MiB), `W_1` (106.45 MiB), `loss_0_0` (4 B)
+- inputs: `A_0_0_1` (104.75 MiB), `y_0_0_0` (256.00 MiB), `W_1` (106.45 MiB), `loss_0_0` (4 B)
 - outputs: `dW_0_1` (832.50 KiB)
 - mutates: `loss_0_0`
 - kernel calls:

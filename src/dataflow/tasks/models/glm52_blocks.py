@@ -68,12 +68,12 @@ from ..modules.moe.stages import MOE_SHARED_NOGATE_STAGES, moe_bias_update, moe_
 
 
 def _glm52_moe_context_layout(dims: Glm52Dims) -> PackedLayout:
-    from ..layouts import _dsv3_attn_ctx_specs
+    from ..layouts import _dsv3_attn_ctx_specs, _warmup_ctx_filter
     from ..modules.moe.spec import moe_context_specs
 
-    return PackedLayout.build(
-        _dsv3_attn_ctx_specs(dims) + moe_context_specs(dims, dims.moe, meta=True)
-    )
+    return PackedLayout.build(_warmup_ctx_filter(
+        _dsv3_attn_ctx_specs(dims) + moe_context_specs(dims, dims.moe, meta=True),
+        dims))
 
 
 def _dm_cols(d) -> int:
@@ -288,7 +288,8 @@ class _Glm52LeaderKL:
         hi_, di = d.index_n_heads, d.index_head_dim
         K.rope_bwd(kctx, dq_idx, dq_idx, pos, hi_, rope, d.rope_base,
                    row_stride=hi_ * di, head_stride=di, col_base=0)
-        acc("w_idx_q", q_lora_n.T @ dq_idx)
+        if acc.wanted("w_idx_q"):
+            acc("w_idx_q", q_lora_n.T @ dq_idx)
         del dq_idx
         K.rope_bwd(kctx, dk_idx, dk_idx, pos, 1, rope, d.rope_base,
                    row_stride=di, head_stride=di, col_base=0)
@@ -304,9 +305,11 @@ class _Glm52LeaderKL:
         acc("idx_k_ln_b", dk_post_ln.float().sum(0).to(torch.bfloat16))
         dk_pre = rstd * (g - g.mean(-1, keepdim=True)
                          - xhat * (g * xhat).mean(-1, keepdim=True))
-        acc("w_idx_k", h1.T @ dk_pre.to(torch.bfloat16))
+        if acc.wanted("w_idx_k"):
+            acc("w_idx_k", h1.T @ dk_pre.to(torch.bfloat16))
         del k_pre, mu, xc, var, rstd, xhat, g, dk_post_ln, dk_pre
-        acc("w_idx_w", (h1.float().T @ (dwts * (hi_ ** -0.5) * (di ** -0.5))))
+        if acc.wanted("w_idx_w"):
+            acc("w_idx_w", (h1.float().T @ (dwts * (hi_ ** -0.5) * (di ** -0.5))))
 
 
 # ---- LEADER kinds (dsv32 blocks + glm52 layouts) ---------------------------

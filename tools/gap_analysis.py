@@ -81,11 +81,12 @@ def main() -> None:
     profiles.update(load_or_profile(
         build_raw(rc_all), build_resolver(dims), backend, contend_pcie=args.contend,
     ))
-    measured = apply_measured_costs(program, profiles)
+    resolver_ = build_resolver(dims)
+    measured = apply_measured_costs(program, profiles, resolver_)
 
     planned = plan_program(
         measured, fast_memory_capacity=int(args.budget * GIB), recompute=True,
-        build_variant=lambda levels: apply_measured_costs(build_raw(levels), profiles),
+        build_variant=lambda levels: apply_measured_costs(build_raw(levels), profiles, resolver_),
     )
     sim_ms = planned.makespan_us / 1e3
     sim_tok = tokens_per_step / (planned.makespan_us / 1e6)

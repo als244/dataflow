@@ -65,7 +65,7 @@ def stage_moe_route(kctx, K, d, st):
     # router_logits is NOT a decision — it stays in the ctx either way.
     meta = st.get("meta")
     dst = meta if meta is not None else a
-    if a is not None:
+    if a is not None and "router_logits" in a:
         logits = a["router_logits"]
         torch.matmul(h2, w["w_router"], out=logits)
     else:
@@ -122,7 +122,7 @@ def stage_moe_dispatch(kctx, K, d, st):
 def stage_moe_experts13(kctx, K, d, st):
     a = st["a"]
     xp = st.pop("xp")
-    if a is not None:
+    if a is not None and "h13" in a:
         # ctx write-through: the aten path pays one copy into the view
         h13 = a["h13"]
         K.moe_grouped_mm_fwd(kctx, xp, st["w"]["w13_experts"], st["offsets"], h13)
@@ -135,7 +135,7 @@ def stage_moe_experts13(kctx, K, d, st):
 def stage_moe_shared(kctx, K, d, st):
     moe, a, w = _spec(d), st["a"], st["w"]
     h2 = st["h2"]
-    if a is not None:
+    if a is not None and "s13" in a:
         s13, gate_pre = a["s13"], a["gate_pre"]
         torch.matmul(h2, w["w_s13"], out=s13)
         torch.matmul(h2, w["w_shared_gate"], out=gate_pre)
@@ -151,7 +151,7 @@ def stage_moe_shared_nogate(kctx, K, d, st):
     emitted-fields tuples are STATIC declarations)."""
     a, w = st["a"], st["w"]
     h2 = st["h2"]
-    if a is not None:
+    if a is not None and "s13" in a:
         s13 = a["s13"]
         torch.matmul(h2, w["w_s13"], out=s13)
     else:
@@ -324,7 +324,8 @@ def moe_mlp_tail_bwd(kctx, K, d, dy, a, w, dw, accum, acc, norm_bwd, *, resid_fi
     del dprob
     dlogits_bf = dlogits.to(torch.bfloat16)
     del dlogits
-    acc("w_router", h2.T @ dlogits_bf)
+    if acc.wanted("w_router"):
+        acc("w_router", h2.T @ dlogits_bf)
     dh2.addmm_(dlogits_bf, w["w_router"].T)
     del dlogits_bf
 
@@ -339,17 +340,20 @@ def moe_mlp_tail_bwd(kctx, K, d, dy, a, w, dw, accum, acc, norm_bwd, *, resid_fi
         del sh_each
         d_sh = dy.clone()
         K.moe_scale_rows(kctx, d_sh, sig)               # dy * sigma, in place
-        acc("w_s2", s_act.T @ d_sh)
+        if acc.wanted("w_s2"):
+            acc("w_s2", s_act.T @ d_sh)
         del s_act
         d_gate = (d_gate_row * sig * (1.0 - sig)).to(torch.bfloat16).unsqueeze(1)
         del d_gate_row, sig
-        acc("w_shared_gate", h2.T @ d_gate)
+        if acc.wanted("w_shared_gate"):
+            acc("w_shared_gate", h2.T @ d_gate)
         ds_act = d_sh @ w["w_s2"].T
         del d_sh
         ds13 = torch.empty((t, 2 * fs), dtype=torch.bfloat16, device=dy.device)
         K.swiglu_packed_bwd(kctx, ds_act, a["s13"], ds13)
         del ds_act
-        acc("w_s13", h2.T @ ds13)
+        if acc.wanted("w_s13"):
+            acc("w_s13", h2.T @ ds13)
         dh2.addmm_(ds13, w["w_s13"].T)
         dh2.addmm_(d_gate, w["w_shared_gate"].T)
         del ds13, d_gate
@@ -359,13 +363,15 @@ def moe_mlp_tail_bwd(kctx, K, d, dy, a, w, dw, accum, acc, norm_bwd, *, resid_fi
         fs = moe.d_ff_shared
         s_act = torch.empty((t, fs), dtype=torch.bfloat16, device=dy.device)
         K.swiglu_packed_fwd(kctx, a["s13"], s_act)
-        acc("w_s2", s_act.T @ dy)
+        if acc.wanted("w_s2"):
+            acc("w_s2", s_act.T @ dy)
         del s_act
         ds_act = dy @ w["w_s2"].T
         ds13 = torch.empty((t, 2 * fs), dtype=torch.bfloat16, device=dy.device)
         K.swiglu_packed_bwd(kctx, ds_act, a["s13"], ds13)
         del ds_act
-        acc("w_s13", h2.T @ ds13)
+        if acc.wanted("w_s13"):
+            acc("w_s13", h2.T @ ds13)
         dh2.addmm_(ds13, w["w_s13"].T)
         del ds13
     del h2

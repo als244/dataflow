@@ -110,7 +110,9 @@ class _Base:
         every write skips. The freeze-plan verifier gate and the
         per-family ladders own the no-silent-typo guarantee."""
         if dw is None:
-            return lambda name, value: None
+            noop = lambda name, value: None  # noqa: E731
+            noop.wanted = lambda name: False
+            return noop
 
         def acc(name: str, value: torch.Tensor) -> None:
             if name not in dw:
@@ -120,6 +122,10 @@ class _Base:
             else:
                 dw[name].copy_(value.to(dw[name].dtype))
 
+        # expensive call sites guard the wgrad GEMM itself:
+        #   if acc.wanted("wq"): acc("wq", h1.T @ dq)
+        # frozen fields then skip the COMPUTATION, not just the write
+        acc.wanted = lambda name: name in dw
         return acc
 
     def _meta_state(self, ctx) -> dict | None:

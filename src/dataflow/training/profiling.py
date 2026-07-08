@@ -39,13 +39,34 @@ class TaskProfile:
     max_us: float = 0.0
 
 
-def _signature(task: TaskSpec, sizes: dict[str, int]) -> tuple:
-    return (
+def _signature(task: TaskSpec, sizes: dict[str, int],
+               resolver=None) -> tuple:
+    """Cost-equivalence key. Sizes alone under-discriminate FROZEN
+    plans: two trainable-field subsets with equal byte totals (wq vs
+    wk) would share a timing while skipping DIFFERENT wgrad GEMMs. The
+    freeze FINGERPRINT — the backward's trainable dW field names, read
+    from the executable's own policy-filtered grad layout — separates
+    them. It is EMPTY (and the signature byte-identical to the
+    historical form) whenever nothing in the task's weight layout is
+    frozen, so default-policy profile caches never invalidate."""
+    fp: tuple = ()
+    if resolver is not None and task.group == "backward" \
+            and task.compute_block_key.endswith("_bwd"):
+        try:
+            ex = resolver(task)
+            gl = ex.gl_for(task)
+            wl = ex.wl_for(task)
+            if len(gl.fields) < len(wl.fields):
+                fp = tuple(f.name for f in gl.fields)
+        except Exception:
+            fp = ()
+    base = (
         task.compute_block_key,
         tuple(sorted(sizes[i] for i in task.inputs)),
         tuple(sorted(o.size_bytes for o in task.outputs)),
         bool(task.mutates),
     )
+    return base + ((fp,) if fp else ())
 
 
 def thermal_soak(seconds: float = 1.0) -> None:
@@ -149,7 +170,7 @@ def profile_program(
     profiles: dict[tuple, TaskProfile] = {}
 
     for task in program.tasks:
-        sig = _signature(task, sizes)
+        sig = _signature(task, sizes, resolver)
         if sig in profiles:
             continue
         # Distinct buffers per role slot, allocated for THIS signature and
@@ -225,11 +246,12 @@ def profile_program(
     return profiles
 
 
-def apply_measured_costs(program: Program, profiles: dict[tuple, TaskProfile]) -> Program:
+def apply_measured_costs(program: Program, profiles: dict[tuple, TaskProfile],
+                         resolver=None) -> Program:
     sizes = program.object_sizes()
     new_tasks = []
     for task in program.tasks:
-        p = profiles[_signature(task, sizes)]
+        p = profiles[_signature(task, sizes, resolver)]
         new_tasks.append(replace(
             task,
             runtime_us=p.runtime_us,
@@ -310,7 +332,7 @@ def load_or_profile(
     import torch
 
     sizes = program.object_sizes()
-    signatures = sorted({repr(_signature(t, sizes)) for t in program.tasks})
+    signatures = sorted({repr(_signature(t, sizes, resolver)) for t in program.tasks})
     if kernel_set is None and hasattr(resolver, "kernel_set"):
         kernel_set = resolver.kernel_set.describe()
     env = {
