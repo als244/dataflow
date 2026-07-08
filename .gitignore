@@ -12,3 +12,4 @@ dist/
 artifacts/local/
 artifacts/
 rollout.pt
+original_plans/
