@@ -145,10 +145,25 @@ class _Base:
         return norm_bwd
 
 
+def _fill_tokens(ex, ctx: TaskContext) -> None:
+    d = ex.dims
+    for oid, b in ctx.inputs.items():
+        if "tokens" in oid:
+            g = torch.Generator(device="cuda")
+            g.manual_seed(0xE_B_ED ^ d.tokens)
+            v = torch_view(b, (d.tokens,), torch.int32)
+            v.copy_(torch.randint(0, d.vocab_size, (d.tokens,),
+                                  generator=g, dtype=torch.int32,
+                                  device=v.device))
+
+
 @dataclass(frozen=True)
 class EmbedFwd(_Base):
     """Token-embedding lookup: tokens + W_embed -> the first hidden
     state."""
+
+    def profile_fill(self, ctx: TaskContext) -> None:
+        _fill_tokens(self, ctx)
     def launch(self, ctx: TaskContext) -> None:
         d = self.dims
         with torch.cuda.stream(external_stream(ctx.stream)):
@@ -558,6 +573,14 @@ class EmbedBwd(_Base):
     @property
     def egl(self) -> PackedLayout:
         return grad_layout(embed_weight_layout(self.dims), self.dims.dtypes, ns="embed")
+
+    def profile_fill(self, ctx: TaskContext) -> None:
+        # The profiler's generic int32 zero-fill sends every token to
+        # vocab row 0, collapsing the sorted segment reduction into ONE
+        # t-long segment — measured 30 ms vs the ~1 ms real runs see
+        # with spread tokens (40x cost bias in the plan). Seed a
+        # reproducible uniform token draw instead.
+        _fill_tokens(self, ctx)
 
     def launch(self, ctx: TaskContext) -> None:
         d = self.dims

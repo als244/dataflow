@@ -253,7 +253,7 @@ def apply_measured_costs(program: Program, profiles: dict[tuple, TaskProfile]) -
 # bump when task-internals change measured behavior (runtime or workspace):
 # the cache key cannot see code, so this is the manual invalidation lever.
 # rev 2: BlockRecompute stops at w1/w3 (down-proj/swiglu/y removed).
-PROFILE_CACHE_REV = "1"  # bump whenever kernel/task costs change (invalidates all cached profiles)
+PROFILE_CACHE_REV = "2"  # bump whenever kernel/task costs change (invalidates all cached profiles)
 
 
 def load_or_profile(
