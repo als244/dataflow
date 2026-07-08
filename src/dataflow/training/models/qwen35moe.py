@@ -246,11 +246,20 @@ def build_shaped_qwen35moe(
         f"qwen35moe-shaped-{cfg.n_layers}L-d{cfg.d_model}-s{cfg.seq_len}-b{cfg.batch}"
         f"-r{cfg.grad_accum_rounds}-steps{cfg.num_steps}"
     )
+    from ..freeze_plan import derive_freeze_plan
+
+    dims_fp, fl_fp = family_layouts(cfg)
+    freeze_plan = derive_freeze_plan(
+        dims_fp, cfg.n_layers,
+        lambda i: [f.name for f in fl_fp.block_weight_at(i).fields],
+        tied_embeddings=bool(getattr(cfg, "tied_embeddings", False)),
+    )
     return build_shaped_program(
         cfg, hw=hw, family="qwen35moe-shaped",
         fast_memory_capacity=fast_memory_capacity,
         recompute_levels=recompute_levels, name=label,
         kinds=_kind_specs(cfg, hw), kind_of=dims.kind_of,
+        freeze=freeze_plan,
     )
 
 

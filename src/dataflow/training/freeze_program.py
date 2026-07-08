@@ -46,7 +46,6 @@ def to_frozen_form(program: Program, plan) -> Program:
 # ---------------------------------------------------------------- CE
 
 def _ce_frozen_form(program: Program, plan) -> Program:
-    n = plan.n_layers
     dead: set[str] = set()
     drop_tasks: set[str] = set()
 

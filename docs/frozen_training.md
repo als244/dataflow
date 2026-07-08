@@ -64,6 +64,11 @@ Three cooperating layers, each consuming the same policy oracle
    layer is FULLY frozen, derivation returns `None` and the program is
    byte-identical to an unfrozen build (partial layers need no
    structural change).
+Every family's builder derives its plan (all nine — the derivation
+returns `None` on default policies, so unfrozen programs are
+byte-identical), and the DSA families derive CE plans in sparse mode
+too, so structural freezes compose with sparse attention.
+
 3. **The surgery** (`training/freeze_program.py`, dispatched by
    `build_shaped_program(freeze=plan)`): drops truncated layers'
    backward AND recompute tasks, their saved contexts (A) and
@@ -90,8 +95,9 @@ Memory: dW and O scale with the trainable set (a fully frozen mini
 layer contributes ZERO gradient/optimizer bytes); truncated layers
 additionally save nothing per round. Compute: frozen wgrad GEMMs never
 execute; under guards-first, pass-through layers still pay their
-dgrads (a dedicated dgrad-only backward variant is a planned
-refinement).
+dgrads — those are genuinely needed to reach trainable layers below,
+and the remaining skippable work (small norm recomputes feeding only
+wgrads) was judged not worth dedicated backward variants.
 
 ## 4. Profiling under freeze plans
 
@@ -145,6 +151,12 @@ configuration, not a separate system:
   from). At the documentation shape this takes glm52-mini's per-round
   A from ~195 GiB to ~7.4 GiB; the recompute boundary shortens to the
   last stage emitting a saved field (`recompute_stage_count_present`).
+- The sparse-stage `train_indexer=False` ablation (RL post-training
+  consumes saved selections verbatim) is the same mechanism: the knob
+  composes `freeze(base=cfg.opt_policy, fields=<indexer fields>)` onto
+  the policy — the five idx fields vanish from dW/O — while remaining
+  the compute switch (no KL backward, no dM chain). There is no other
+  freezing mechanism anywhere.
 - Everything above about freezing applies unchanged: frozen embedding
   and head hold their bytes but own no gradients, optimizer tasks
   exist only for the indexer-bearing layers, and the goldens train the

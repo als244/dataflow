@@ -149,3 +149,81 @@ def test_model_step_truncated_ga2():
     cfg = _tiny(grad_accum_rounds=2,
                 opt_policy=freeze(layers=(0,), embed=True))
     check_model_step(cfg, fast_memory_capacity=_CAP, tol=3e-2).assert_ok()
+
+
+def test_model_step_pair_freeze():
+    """(field, layer)-pair axis, end to end: different fields frozen on
+    different layers -> per-layer dW layouts differ exactly per policy;
+    engine matches the policy-dispatched golden."""
+    from dataflow.tasks.layouts import grad_layout, weight_layout
+
+    cfg = _tiny(opt_policy=freeze(pairs=(("wo", 0), ("w1", 1))))
+    prog = lower_llama3(cfg)
+    sizes = prog.object_sizes()
+    d = dims_of(cfg)
+    for i in (0, 1):
+        want = grad_layout(weight_layout(d, layer=i), d.dtypes, layer=i,
+                           opt_policy=d.opt_policy).total_bytes
+        assert sizes[f"dW_0_{i}"] == want
+    assert sizes["dW_0_0"] != sizes["dW_0_1"]   # wo and w1 differ in bytes
+    check_model_step(cfg, fast_memory_capacity=_CAP, tol=3e-2).assert_ok()
+
+
+def test_fleet_truncated_prefix_lowers():
+    """Every family derives FreezePlans in its builder: layer 0 + embed
+    frozen -> layer 0's backward, its A, and embed_bwd are gone; the
+    program still validates. (Engine semantics are covered by the llama3
+    and olmoe E2E gates — this pins the structural wiring fleet-wide.)"""
+    from dataflow.core.validate import validate_program
+    from dataflow.training.families import family
+
+    for fname in ("qwen3", "qwen35", "qwen35moe", "qwen3moe", "olmoe",
+                  "dsv3", "dsv32", "glm52"):
+        fam = family(fname)
+        cfg = dataclasses.replace(fam.config_type.tiny(),
+                                  opt_policy=freeze(layers=(0,), embed=True))
+        prog = fam.lower(cfg)
+        validate_program(prog)
+        ids = set(prog.task_by_id())
+        sizes = prog.object_sizes()
+        assert "block_bwd_0_0_0" not in ids, fname
+        assert "A_0_0_0" not in sizes, fname
+        assert not any(t.startswith("embed_bwd") for t in ids), fname
+
+
+def test_model_step_truncated_olmoe():
+    """Truncation through a MoE family's engine path: layer 0 (router,
+    experts and all) + embedding frozen — the MoE tail's guarded direct
+    dw writes and the aux injection above the boundary must still match
+    the golden."""
+    from dataflow.training.models.olmoe import ShapedOlmoeConfig
+
+    cfg = dataclasses.replace(ShapedOlmoeConfig.tiny(),
+                              opt_policy=freeze(layers=(0,), embed=True))
+    check_model_step(cfg, fast_memory_capacity=_CAP, tol=3e-2).assert_ok()
+
+
+def test_train_indexer_unified_into_policy():
+    """train_indexer=False is now a freeze-policy composition: the five
+    indexer fields vanish from dW/O layouts (before: present, zeroed,
+    and skipped by a resolver special-case). The family ablation gates
+    prove step parity; this pins the storage consequence."""
+    from dataflow.tasks.layouts import (
+        dsv32_dense_weight_layout,
+        grad_layout,
+    )
+    from dataflow.training.models.dsv32 import (
+        ShapedDsv32Config,
+        dims_of_dsv32,
+        lower_dsv32,
+    )
+
+    cfg = dataclasses.replace(ShapedDsv32Config.tiny(), train_indexer=False)
+    dims = dims_of_dsv32(cfg)
+    gl = grad_layout(dsv32_dense_weight_layout(dims), dims.dtypes, layer=0,
+                     opt_policy=dims.opt_policy)
+    names = {f.name for f in gl.fields}
+    assert not names & {"w_idx_q", "w_idx_k", "idx_k_ln_w",
+                        "idx_k_ln_b", "w_idx_w"}
+    prog = lower_dsv32(cfg)
+    assert prog.object_sizes()["dW_0_0"] == gl.total_bytes

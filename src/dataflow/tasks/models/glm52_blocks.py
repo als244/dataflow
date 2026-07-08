@@ -673,16 +673,6 @@ def build_glm52_resolver(
         # defaults every field to "frozen"; idx fields -> adamw). The
         # router-bias speed rule is frozen with everything else.
         bias_special = {}
-    if not dims.train_indexer:
-        # frozen indexer: skip AdamW ENTIRELY for its fields (no decay);
-        # follower packs lack the fields, so the special never fires there
-        def _frozen(kctx, kernels, w_view, g_view):
-            pass
-
-        for name in ("w_idx_q", "w_idx_k", "idx_k_ln_w", "idx_k_ln_b",
-                     "w_idx_w"):
-            bias_special[name] = _frozen
-
     _WL = {
         "gdl": dsv32_dense_weight_layout,
         "gml": dsv32_moe_weight_layout,

@@ -310,11 +310,20 @@ def build_shaped_dsv3(
 ):
     hw = hw or ShapedHardware()
     dims = dims_of_dsv3(cfg)
+    from ..freeze_plan import derive_freeze_plan
+
+    dims_fp, fl_fp = family_layouts(cfg)
+    freeze_plan = derive_freeze_plan(
+        dims_fp, cfg.n_layers,
+        lambda i: [f.name for f in fl_fp.block_weight_at(i).fields],
+        tied_embeddings=bool(getattr(cfg, "tied_embeddings", False)),
+    )
     return build_shaped_program(
         cfg, hw=hw, family="dsv3-shaped",
         kinds=_kind_specs(cfg, hw), kind_of=dims.kind_of,
         fast_memory_capacity=fast_memory_capacity,
         recompute_levels=recompute_levels, name=name,
+        freeze=freeze_plan,
     )
 
 

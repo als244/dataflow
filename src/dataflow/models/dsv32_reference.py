@@ -53,16 +53,6 @@ _IDX_FIELDS = ("w_idx_q", "w_idx_k", "idx_k_ln_w", "idx_k_ln_b", "w_idx_w")
 class GoldenDsv32(GoldenDsv3):
     dims: Dsv32Dims  # re-typed
 
-    def _opt_obj(self, obj: str, leaves) -> None:
-        # dense warm-up freezing now lives in dims.opt_policy (default
-        # "frozen", idx -> adamw) — the base policy dispatch handles it.
-        if not getattr(self.dims, "train_indexer", True) and any(
-                n in leaves for n in _IDX_FIELDS):
-            rest = {k: v for k, v in leaves.items() if k not in _IDX_FIELDS}
-            super()._opt_obj(obj, rest)
-            return
-        super()._opt_obj(obj, leaves)
-
     def train_step(self, tokens, targets) -> float:
         if getattr(self.dims, "sparse_mode", True):
             return super().train_step(tokens, targets)

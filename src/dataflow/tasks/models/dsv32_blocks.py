@@ -478,14 +478,9 @@ class Dsv32DenseBlockBwd(Dsv32MetaState, Dsv32ProfileFill, Dsv3DenseBlockBwd):
         # ---- indexer KL injection (detached seam: touches ONLY idx weights)
         h1 = torch.empty_like(x)
         K.rmsnorm_apply(kctx, x, a["rstd_attn"], w["attn_norm_w"], h1)
-        if not d.train_indexer:
-            # ablation knob (Shein): frozen indexer — no KL, deterministic
-            # ZERO grads (the optimizer additionally skips these fields
-            # entirely via update_specials, so not even weight decay runs)
-            for name in ("w_idx_q", "w_idx_k", "idx_k_ln_w", "idx_k_ln_b",
-                         "w_idx_w"):
-                if name in w:  # glm52 followers carry no indexer fields
-                    acc(name, torch.zeros_like(w[name]))
+        # train_indexer=False: the freeze policy already removed the idx
+        # fields from dW/O (nothing to zero, nothing to step) — only the
+        # KL computation itself is skipped here
         if d.train_indexer:
             self._indexer_kl_bwd(kctx, d, a, x, w, acc, h1, q_lora_n,
                                  q_full, k_full, idx, lse, bounds, pos,
@@ -629,13 +624,8 @@ class _WarmupKLMixin:
         d = self.dims
         K = self.kernels
         # frozen fields have NO dW storage (policy-filtered grad layout);
-        # followers carry no dW object at all — dw arrives None there
-        if not d.train_indexer:
-            if dw and not accum:
-                for name in _IDX_FIELDS:
-                    if name in dw:
-                        dw[name].zero_()
-            return
+        # followers carry no dW object at all — dw arrives None there.
+        # (warm-up + train_indexer=False is rejected at resolver build.)
         acc = (self._acc_fn(dw, accum) if dw
                else (lambda name, value: None))
         t = d.tokens
@@ -744,15 +734,6 @@ def build_dsv32_resolver(
         # defaults every field to "frozen"; idx fields -> adamw). The
         # router-bias speed rule is frozen with everything else.
         bias_special = {}
-    if not dims.train_indexer:
-        # frozen indexer: skip AdamW ENTIRELY for its fields (no decay)
-        def _frozen(kctx, kernels, w_view, g_view):
-            pass
-
-        for name in ("w_idx_q", "w_idx_k", "idx_k_ln_w", "idx_k_ln_b",
-                     "w_idx_w"):
-            bias_special[name] = _frozen
-
     def _opt_layout(d, task, size):
         layer = AdamWStep.layer_of(task)
         if d.kind_of(layer) == "dense":

@@ -213,11 +213,20 @@ def build_shaped_qwen3moe(
     name: str | None = None,
 ):
     hw = hw or ShapedHardware()
+    from ..freeze_plan import derive_freeze_plan
+
+    dims_fp, fl_fp = family_layouts(cfg)
+    freeze_plan = derive_freeze_plan(
+        dims_fp, cfg.n_layers,
+        lambda i: [f.name for f in fl_fp.block_weight_at(i).fields],
+        tied_embeddings=bool(getattr(cfg, "tied_embeddings", False)),
+    )
     return build_shaped_program(
         cfg, hw=hw, family="qwen3moe-shaped",
         kinds={"moe": _kind_spec(cfg, hw)},
         fast_memory_capacity=fast_memory_capacity,
         recompute_levels=recompute_levels, name=name,
+        freeze=freeze_plan,
     )
 
 

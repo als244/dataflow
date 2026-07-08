@@ -256,6 +256,21 @@ def moe_spec_of(cfg: ShapedGlm52Config) -> MoESpec:
     )
 
 
+def _sparse_opt_policy(cfg):
+    # train_indexer=False expresses itself THROUGH the freeze policy:
+    # idx fields frozen -> no dW storage, no O slots, no optimizer step.
+    # (Retired: the resolver's update_specials no-op and the goldens'
+    # _opt_obj filter branches.) The knob remains the COMPUTE switch:
+    # blocks skip the KL backward; lowering emits no dM chain.
+    if cfg.train_indexer:
+        return cfg.opt_policy
+    from dataflow.tasks.optim import freeze
+
+    return freeze(base=cfg.opt_policy,
+                  fields=("w_idx_q", "w_idx_k", "idx_k_ln_w",
+                          "idx_k_ln_b", "w_idx_w"))
+
+
 def dims_of_glm52(cfg: ShapedGlm52Config) -> Glm52Dims:
     types = tuple(cfg.indexer_types)
     if len(types) != cfg.n_layers:
@@ -281,7 +296,8 @@ def dims_of_glm52(cfg: ShapedGlm52Config) -> Glm52Dims:
         overrides=(("w_idx_q", "adamw"), ("w_idx_k", "adamw"), ("idx_k_ln_w", "adamw"), ("idx_k_ln_b", "adamw"), ("w_idx_w", "adamw"),),
     )
     return Glm52Dims(
-        opt_policy=cfg.opt_policy if cfg.sparse_mode else warmup_policy,
+        opt_policy=(_sparse_opt_policy(cfg) if cfg.sparse_mode
+                    else warmup_policy),
         d_model=cfg.d_model, n_heads=cfg.n_heads,
         q_lora_rank=cfg.q_lora_rank, kv_lora_rank=cfg.kv_lora_rank,
         qk_nope_dim=cfg.qk_nope_dim, qk_rope_dim=cfg.qk_rope_dim,
@@ -402,6 +418,19 @@ def _kind_specs(cfg: ShapedGlm52Config, hw: ShapedHardware) -> dict[str, LayerKi
     }
 
 
+def _ce_plan(cfg):
+    # sparse mode honors user freezes structurally too (truncation etc.);
+    # default policies derive to None (byte-identical programs)
+    from ..freeze_plan import derive_freeze_plan
+
+    dims_fp, fl_fp = family_layouts(cfg)
+    return derive_freeze_plan(
+        dims_fp, cfg.n_layers,
+        lambda i: [f.name for f in fl_fp.block_weight_at(i).fields],
+        tied_embeddings=bool(getattr(cfg, "tied_embeddings", False)),
+    )
+
+
 def _warmup_plan(dims, n_layers):
     """Dense warm-up as a FreezePlan: all-frozen-except-indexer policy
     (already injected on dims), indexer-KL objective, loss contributed
@@ -443,7 +472,8 @@ def build_shaped_glm52(
         fast_memory_capacity=fast_memory_capacity,
         recompute_levels=recompute_levels, name=name,
         meta_shared=shares,
-        freeze=(None if cfg.sparse_mode else _warmup_plan(dims, cfg.n_layers)),
+        freeze=(_ce_plan(cfg) if cfg.sparse_mode
+                else _warmup_plan(dims, cfg.n_layers)),
     )
 
 

@@ -51,21 +51,9 @@ from dataflow.tasks.modules.mla_reference import mla_qkv_reference
 from dataflow.tasks.modules.moe.reference import moe_mlp_reference, moe_topk_reference
 
 
-_IDX_FIELDS = ("w_idx_q", "w_idx_k", "idx_k_ln_w", "idx_k_ln_b", "w_idx_w")
-
-
 @dataclass
 class GoldenGlm52(GoldenDsv3):
     dims: Glm52Dims  # re-typed
-
-    def _opt_obj(self, obj, leaves):
-        # frozen indexer: idx fields sit out of AdamW entirely (their
-        # autograd grads are None — scores were detached); followers'
-        # packs simply lack the fields
-        if not getattr(self.dims, "train_indexer", True) and any(
-                n in leaves for n in _IDX_FIELDS):
-            leaves = {k: v for k, v in leaves.items() if k not in _IDX_FIELDS}
-        super()._opt_obj(obj, leaves)
 
     def block_layout(self, layer: int | None = None) -> PackedLayout:
         if layer is None:
@@ -82,20 +70,6 @@ class GoldenGlm52(GoldenDsv3):
         self._group_scores = None   # leader's live scores (autograd node)
         self._group_mask = None
         return super().loss_terms(tokens, targets)
-
-    _IDX_FIELDS = ("w_idx_q", "w_idx_k", "idx_k_ln_w", "idx_k_ln_b",
-                   "w_idx_w")
-
-    def _opt_obj(self, obj: str, leaves) -> None:
-        # dense warm-up freezing now lives in dims.opt_policy (default
-        # "frozen", idx -> adamw) — the base policy dispatch handles it.
-        if not getattr(self.dims, "train_indexer", True) and any(
-                n in leaves for n in self._IDX_FIELDS):
-            rest = {k: v for k, v in leaves.items()
-                    if k not in self._IDX_FIELDS}
-            super()._opt_obj(obj, rest)
-            return
-        super()._opt_obj(obj, leaves)
 
     def train_step(self, tokens, targets) -> float:
         if getattr(self.dims, "sparse_mode", True):
