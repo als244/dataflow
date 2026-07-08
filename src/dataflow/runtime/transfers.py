@@ -145,6 +145,13 @@ class TransferEngine:
                 return  # assigned offset still live; blocks like capacity
             self.queue.popleft()
             self.ledger.charge("fast", job.size_bytes)
+            # the DESTINATION RESERVATION — the transfer-lane twin of a
+            # task-output reserve; its order vs blocked task reserves is
+            # the reserve-order-inversion diagnostic
+            self.trace.events.append(TraceEvent(
+                t=self.backend.host_now_us(), kind="transfer_reserve",
+                object_id=job.object_id, detail=self.direction,
+            ))
             if blocked:
                 dst_buffer = self.pool.get_escaped("fast", job.size_bytes, tag=job.object_id)
             else:
