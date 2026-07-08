@@ -95,6 +95,7 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
 - inputs: `tokens_0_0` (262,144B), `W_embed` (65,536B)
 - outputs: `y_embed_0_0` (8,388,608B)
 - mutates: —
+- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): index_select
 
 ### `block_fwd` — `BlockFwd`
 
@@ -110,7 +111,7 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
     4. `up_proj` — x1, x3  ← derived recompute boundary
     5. `swiglu` — —
     6. `down_resid` — —
-- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_fwd → rope_fwd×2 → rmsnorm_fwd → swiglu_fwd_out
+- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_fwd → mm → rope_fwd → mm → rope_fwd → mm → _scaled_dot_product_flash_attention → addmm → rmsnorm_fwd → mm×2 → swiglu_fwd_out → addmm
 
 ### `head_loss` — `HeadLoss`
 
@@ -118,7 +119,7 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
 - inputs: `y_0_0_1` (8,388,608B), `targets_0_0` (262,144B), `W_head` (65,792B)
 - outputs: `dy_0_0_1` (8,388,608B), `loss_0_0` (4B), `dW_head_0` (65,792B)
 - mutates: —
-- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_fwd → ce_loss_fwd_bwd → rmsnorm_bwd
+- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_fwd → mm → ce_loss_fwd_bwd → mm×2 → rmsnorm_bwd
 
 ### `optimizer_head` — `AdamWStep`
 
@@ -134,7 +135,7 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
 - inputs: `dy_0_0_1` (8,388,608B), `A_0_0_1` (77,070,336B), `y_0_0_0` (8,388,608B), `W_1` (86,528B)
 - outputs: `dy_0_0_0` (8,388,608B), `dW_0_1` (86,528B)
 - mutates: —
-- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_apply → swiglu_fwd_out → swiglu_bwd → rmsnorm_bwd → rope_bwd×2 → rmsnorm_apply → rmsnorm_bwd
+- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_apply → swiglu_fwd_out → mm×2 → swiglu_bwd → mm×3 → rmsnorm_bwd → mm×2 → _scaled_dot_product_flash_attention_backward → rope_bwd×2 → rmsnorm_apply → mm×4 → rmsnorm_bwd
 
 ### `optimizer_block` — `AdamWStep`
 

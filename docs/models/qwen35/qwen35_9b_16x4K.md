@@ -148,6 +148,7 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
 - inputs: `tokens_0_0` (262,144B), `W_embed` (2,034,237,440B)
 - outputs: `y_embed_0_0` (536,870,912B)
 - mutates: —
+- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): index_select
 
 ### `linattn_fwd` — `Qwen35LinBlockFwd`
 
@@ -166,7 +167,7 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
     7. `up_proj` — x1, x3  ← derived recompute boundary
     8. `swiglu` — —
     9. `down_resid` — —
-- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_fwd → causal_conv1d_silu_fwd → gated_rmsnorm_fwd → rmsnorm_fwd → swiglu_fwd_out
+- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_fwd → mm×2 → causal_conv1d_silu_fwd → fla::l2norm_fwd×2 → fla::chunk_gated_delta_rule_fwd → gated_rmsnorm_fwd → addmm → rmsnorm_fwd → mm×2 → swiglu_fwd_out → addmm
 
 ### `gattn_fwd` — `Qwen35AttnBlockFwd`
 
@@ -184,7 +185,7 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
     6. `up_proj` — x1, x3  ← derived recompute boundary
     7. `swiglu` — —
     8. `down_resid` — —
-- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_fwd×3 → rope_fwd×2 → rmsnorm_fwd → swiglu_fwd_out
+- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_fwd → mm×3 → rmsnorm_fwd×2 → rope_fwd×2 → _scaled_dot_product_flash_attention → addmm → rmsnorm_fwd → mm×2 → swiglu_fwd_out → addmm
 
 ### `head_loss` — `HeadLoss`
 
@@ -192,7 +193,7 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
 - inputs: `y_0_0_31` (536,870,912B), `targets_0_0` (262,144B), `W_head` (2,034,245,632B)
 - outputs: `dy_0_0_31` (536,870,912B), `loss_0_0` (4B), `dW_head_0` (2,034,245,632B)
 - mutates: —
-- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_fwd → ce_loss_fwd_bwd → rmsnorm_bwd
+- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_fwd → mm → ce_loss_fwd_bwd → mm×2 → rmsnorm_bwd
 
 ### `optimizer_head` — `AdamWStep`
 
@@ -208,7 +209,7 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
 - inputs: `dy_0_0_31` (536,870,912B), `A_0_0_31` (5,647,106,048B), `y_0_0_30` (536,870,912B), `W_31` (419,447,808B)
 - outputs: `dy_0_0_30` (536,870,912B), `dW_0_31` (419,447,808B)
 - mutates: —
-- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_apply → swiglu_fwd_out → swiglu_bwd → rmsnorm_bwd → rmsnorm_apply×2 → rope_fwd×2 → rope_bwd×2 → rmsnorm_bwd×2 → rmsnorm_apply → rmsnorm_bwd
+- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_apply → swiglu_fwd_out → mm×2 → swiglu_bwd → mm×3 → rmsnorm_bwd → mm×2 → rmsnorm_apply×2 → rope_fwd×2 → _scaled_dot_product_flash_attention_backward → rope_bwd×2 → rmsnorm_bwd×2 → rmsnorm_apply → mm×4 → rmsnorm_bwd
 
 ### `optimizer_block` — `AdamWStep`
 
@@ -224,7 +225,7 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
 - inputs: `dy_0_0_30` (536,870,912B), `A_0_0_30` (6,199,705,600B), `y_0_0_29` (536,870,912B), `W_30` (436,814,592B)
 - outputs: `dy_0_0_29` (536,870,912B), `dW_0_30` (436,814,592B)
 - mutates: —
-- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_apply → swiglu_fwd_out → swiglu_bwd → rmsnorm_bwd → gated_rmsnorm_bwd → causal_conv1d_silu_fwd → causal_conv1d_silu_bwd → rmsnorm_apply → rmsnorm_bwd
+- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_apply → swiglu_fwd_out → mm×2 → swiglu_bwd → mm×3 → rmsnorm_bwd → mm → gated_rmsnorm_bwd → mm → causal_conv1d_silu_fwd → fla::l2norm_fwd×2 → fla::chunk_gated_delta_rule_bwd → fla::l2norm_bwd×2 → causal_conv1d_silu_bwd → rmsnorm_apply → mm×3 → rmsnorm_bwd
 
 ### `embed_bwd` — `EmbedBwd`
 

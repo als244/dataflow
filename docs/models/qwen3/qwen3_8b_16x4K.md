@@ -100,6 +100,7 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
 - inputs: `tokens_0_0` (262,144B), `W_embed` (1,244,659,712B)
 - outputs: `y_embed_0_0` (536,870,912B)
 - mutates: —
+- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): index_select
 
 ### `block_fwd` — `Qwen3BlockFwd`
 
@@ -116,7 +117,7 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
     5. `up_proj` — x1, x3  ← derived recompute boundary
     6. `swiglu` — —
     7. `down_resid` — —
-- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_fwd×3 → rope_fwd×2 → rmsnorm_fwd → swiglu_fwd_out
+- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_fwd → mm×3 → rmsnorm_fwd×2 → rope_fwd×2 → _scaled_dot_product_flash_attention → addmm → rmsnorm_fwd → mm×2 → swiglu_fwd_out → addmm
 
 ### `head_loss` — `HeadLoss`
 
@@ -124,7 +125,7 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
 - inputs: `y_0_0_35` (536,870,912B), `targets_0_0` (262,144B), `W_head` (1,244,667,904B)
 - outputs: `dy_0_0_35` (536,870,912B), `loss_0_0` (4B), `dW_head_0` (1,244,667,904B)
 - mutates: —
-- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_fwd → ce_loss_fwd_bwd → rmsnorm_bwd
+- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_fwd → mm → ce_loss_fwd_bwd → mm×2 → rmsnorm_bwd
 
 ### `optimizer_head` — `AdamWStep`
 
@@ -140,7 +141,7 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
 - inputs: `dy_0_0_35` (536,870,912B), `A_0_0_35` (5,119,672,320B), `y_0_0_34` (536,870,912B), `W_35` (385,892,864B)
 - outputs: `dy_0_0_34` (536,870,912B), `dW_0_35` (385,892,864B)
 - mutates: —
-- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_apply → swiglu_fwd_out → swiglu_bwd → rmsnorm_bwd → rmsnorm_apply×2 → rope_fwd×2 → rope_bwd×2 → rmsnorm_bwd×2 → rmsnorm_apply → rmsnorm_bwd
+- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_apply → swiglu_fwd_out → mm×2 → swiglu_bwd → mm×3 → rmsnorm_bwd → mm×2 → rmsnorm_apply×2 → rope_fwd×2 → _scaled_dot_product_flash_attention_backward → rope_bwd×2 → rmsnorm_bwd×2 → rmsnorm_apply → mm×4 → rmsnorm_bwd
 
 ### `optimizer_block` — `AdamWStep`
 

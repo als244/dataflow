@@ -181,6 +181,7 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
 - inputs: `tokens_0_0` (262,144B), `W_embed` (1,903,165,440B)
 - outputs: `y_embed_0_0` (805,306,368B)
 - mutates: —
+- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): index_select
 
 ### `dsadense_fwd` — `Dsv32DenseBlockFwd`
 
@@ -198,7 +199,7 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
     6. `up_proj` — x1, x3  ← derived recompute boundary
     7. `swiglu` — —
     8. `down_resid` — —
-- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_fwd×2 → rope_fwd → rmsnorm_apply → rope_fwd×2 → rmsnorm_fwd → rope_fwd → dsa_index_scores → dsa_topk → dsa_sparse_attn_fwd → rmsnorm_fwd → swiglu_fwd_out
+- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_fwd → mm → rmsnorm_fwd → mm → rope_fwd → rmsnorm_apply → mm → rope_fwd → mm → rope_fwd → mm×2 → rmsnorm_fwd → rope_fwd → mm → dsa_index_scores → dsa_topk → dsa_sparse_attn_fwd → addmm → rmsnorm_fwd → mm×2 → swiglu_fwd_out → addmm
 
 ### `dsamoe_fwd` — `Dsv32MoeBlockFwd`
 
@@ -218,7 +219,7 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
     8. `moe_experts13` — h13
     9. `moe_shared` — s13  ← derived recompute boundary
     10. `moe_experts2_combine` — —
-- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_fwd×2 → rope_fwd → rmsnorm_apply → rope_fwd×2 → rmsnorm_fwd → rope_fwd → dsa_index_scores → dsa_topk → dsa_sparse_attn_fwd → rmsnorm_fwd → moe_topk_sigmoid_noaux → moe_sort → moe_dispatch_fwd → moe_grouped_mm_fwd → swiglu_packed_fwd → moe_grouped_mm_fwd → swiglu_packed_fwd → moe_combine_fwd
+- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_fwd → mm → rmsnorm_fwd → mm → rope_fwd → rmsnorm_apply → mm → rope_fwd → mm → rope_fwd → mm×2 → rmsnorm_fwd → rope_fwd → mm → dsa_index_scores → dsa_topk → dsa_sparse_attn_fwd → addmm → rmsnorm_fwd → mm → moe_topk_sigmoid_noaux → moe_sort → moe_dispatch_fwd → moe_grouped_mm_fwd → mm → swiglu_packed_fwd → moe_grouped_mm_fwd → swiglu_packed_fwd → mm → moe_combine_fwd
 
 ### `head_loss` — `HeadLoss`
 
@@ -226,7 +227,7 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
 - inputs: `y_0_0_77` (805,306,368B), `targets_0_0` (262,144B), `W_head` (1,903,177,728B)
 - outputs: `dy_0_0_77` (805,306,368B), `loss_0_0` (4B), `dW_head_0` (1,903,177,728B)
 - mutates: —
-- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_fwd → ce_loss_fwd_bwd → rmsnorm_bwd
+- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_fwd → mm → ce_loss_fwd_bwd → mm×2 → rmsnorm_bwd
 
 ### `optimizer_head` — `AdamWStep`
 
@@ -242,7 +243,7 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
 - inputs: `dy_0_0_77` (805,306,368B), `A_0_0_77` (8,179,941,376B), `y_0_0_76` (805,306,368B), `W_77` (19,755,203,072B), `M_0_0_77` (542,115,072B)
 - outputs: `dy_0_0_76` (805,306,368B), `dW_0_77` (19,755,203,072B)
 - mutates: —
-- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_apply → moe_dispatch_fwd×2 → swiglu_packed_fwd → moe_grouped_mm_dgrad → moe_rowdot → moe_scale_rows → moe_grouped_mm_wgrad → moe_scale_rows → swiglu_packed_bwd → moe_grouped_mm_wgrad → moe_grouped_mm_dgrad → moe_dispatch_bwd → moe_router_bwd_sigmoid → moe_seq_aux_grad → swiglu_packed_fwd → swiglu_packed_bwd → rmsnorm_bwd → rmsnorm_apply → rope_fwd → rmsnorm_apply → rope_fwd → dsa_sparse_attn_bwd → rmsnorm_apply → rope_fwd×2 → dsa_index_scores → dsa_probs_sum → dsa_index_bwd → rope_bwd×3 → rmsnorm_bwd → rope_bwd → rmsnorm_bwd×2
+- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_apply → moe_dispatch_fwd×2 → swiglu_packed_fwd → moe_grouped_mm_dgrad → moe_rowdot → moe_scale_rows → moe_grouped_mm_wgrad → moe_scale_rows → swiglu_packed_bwd → moe_grouped_mm_wgrad → moe_grouped_mm_dgrad → moe_dispatch_bwd → moe_router_bwd_sigmoid → moe_seq_aux_grad → mm → swiglu_packed_fwd → mm×2 → swiglu_packed_bwd → mm → rmsnorm_bwd → mm×2 → rmsnorm_apply → mm → rope_fwd → rmsnorm_apply → rope_fwd → mm → sort → scatter_add_ → dsa_sparse_attn_bwd → rmsnorm_apply → mm → rope_fwd → mm → rope_fwd → mm → dsa_index_scores → _softmax → dsa_probs_sum → dsa_index_bwd → rope_bwd → mm → rope_bwd → mm×3 → rope_bwd → mm×2 → rmsnorm_bwd → rope_bwd → mm×2 → rmsnorm_bwd → mm×3 → rmsnorm_bwd
 
 ### `optimizer_block` — `AdamWStep`
 
@@ -258,7 +259,7 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
 - inputs: `dy_0_0_2` (805,306,368B), `A_0_0_2` (6,535,774,208B), `y_0_0_1` (805,306,368B), `W_2` (802,190,848B), `M_0_0_2` (536,870,912B)
 - outputs: `dy_0_0_1` (805,306,368B), `dW_0_2` (802,190,848B)
 - mutates: —
-- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_apply → swiglu_fwd_out → swiglu_bwd → rmsnorm_bwd → rmsnorm_apply → rope_fwd → rmsnorm_apply → rope_fwd → dsa_sparse_attn_bwd → rmsnorm_apply → rope_fwd×2 → dsa_index_scores → dsa_probs_sum → dsa_index_bwd → rope_bwd×3 → rmsnorm_bwd → rope_bwd → rmsnorm_bwd×2
+- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_apply → swiglu_fwd_out → mm×2 → swiglu_bwd → mm×3 → rmsnorm_bwd → mm×2 → rmsnorm_apply → mm → rope_fwd → rmsnorm_apply → rope_fwd → mm → sort → scatter_add_ → dsa_sparse_attn_bwd → rmsnorm_apply → mm → rope_fwd → mm → rope_fwd → mm → dsa_index_scores → _softmax → dsa_probs_sum → dsa_index_bwd → rope_bwd → mm → rope_bwd → mm×3 → rope_bwd → mm×2 → rmsnorm_bwd → rope_bwd → mm×2 → rmsnorm_bwd → mm×3 → rmsnorm_bwd
 
 ### `embed_bwd` — `EmbedBwd`
 

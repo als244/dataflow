@@ -92,12 +92,16 @@ def field_table(layout, title: str, note: str = "",
 
 
 class RecordingKernels:
-    """Proxy over the resolved KernelSet: logs op names per task key."""
+    """Proxy over the resolved KernelSet: logs op names per task key.
+    While a registry op executes, aten tracing is SUPPRESSED so the
+    fused kernel appears once under its own name instead of its
+    internal tensor plumbing."""
 
     def __init__(self, real):
         self._real = real
         self.log: dict[str, list[str]] = {}
         self.current: str | None = None
+        self.in_registry_op = False
 
     def __getattr__(self, op):
         real_fn = getattr(self._real, op)
@@ -107,9 +111,98 @@ class RecordingKernels:
         def wrapper(*a, **k):
             if self.current is not None:
                 self.log.setdefault(self.current, []).append(op)
-            return real_fn(*a, **k)
+            prev = self.in_registry_op
+            self.in_registry_op = True
+            try:
+                return real_fn(*a, **k)
+            finally:
+                self.in_registry_op = prev
 
         return wrapper
+
+
+# aten compute ops worth showing in a task's kernel sequence (plain
+# tensor plumbing — views, copies, fills — is deliberately excluded)
+_ATEN_TRACE = {
+    "mm", "addmm", "bmm", "baddbmm", "matmul", "linear", "einsum",
+    "convolution", "conv1d", "scaled_dot_product_attention",
+    "_scaled_dot_product_flash_attention",
+    "_scaled_dot_product_efficient_attention",
+    "_scaled_dot_product_flash_attention_backward",
+    "_scaled_dot_product_efficient_attention_backward",
+    "_flash_attention_backward", "convolution_backward",
+    "embedding_dense_backward",
+    "sort", "argsort", "topk", "cumsum", "bincount",
+    "index_select", "index_add", "index_add_", "scatter_add",
+    "scatter_add_", "index_copy", "index_copy_", "logsumexp", "softmax",
+    "_softmax", "embedding",
+}
+
+
+def _aten_trace_mode(proxy):
+    import torch
+    from torch.utils._python_dispatch import TorchDispatchMode
+
+    class AtenTrace(TorchDispatchMode):
+        def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+            kwargs = kwargs or {}
+            if proxy.current is not None and not proxy.in_registry_op:
+                ns = getattr(func, "namespace", "aten")
+                name = func.overloadpacket.__name__
+                if ns != "aten":
+                    proxy.log.setdefault(proxy.current, []).append(
+                        f"{ns}::{name}")
+                elif name in _ATEN_TRACE:
+                    proxy.log.setdefault(proxy.current, []).append(name)
+            return func(*args, **kwargs)
+
+    return AtenTrace()
+
+
+# third-party fused entry points invoked DIRECTLY by blocks (raw
+# triton — invisible to both the registry proxy and aten dispatch).
+# The second and last hand-maintained map in this generator; the
+# qwen35 module header documents these direct-call contracts.
+_DIRECT_TRACE = (
+    ("fla.ops.gated_delta_rule.chunk", "chunk_gated_delta_rule_fwd"),
+    ("fla.ops.gated_delta_rule.chunk", "chunk_gated_delta_rule_bwd"),
+    ("fla.modules.l2norm", "l2norm_fwd"),
+    ("fla.modules.l2norm", "l2norm_bwd"),
+)
+
+
+def _patch_direct_calls(proxy):
+    import contextlib
+    import importlib
+
+    @contextlib.contextmanager
+    def cm():
+        undo = []
+        for mod_name, fn_name in _DIRECT_TRACE:
+            try:
+                mod = importlib.import_module(mod_name)
+                real = getattr(mod, fn_name)
+            except Exception:
+                continue
+
+            def make(real, label):
+                def wrapper(*a, **k):
+                    if proxy.current is not None and \
+                            not proxy.in_registry_op:
+                        proxy.log.setdefault(proxy.current, []).append(
+                            label)
+                    return real(*a, **k)
+                return wrapper
+
+            setattr(mod, fn_name, make(real, f"fla::{fn_name}"))
+            undo.append((mod, fn_name, real))
+        try:
+            yield
+        finally:
+            for mod, fn_name, real in undo:
+                setattr(mod, fn_name, real)
+
+    return cm()
 
 
 def compress(seq: list[str]) -> str:
@@ -145,15 +238,20 @@ def record_kernel_seqs(fam, cfg, dims, prog) -> dict[str, str]:
             seen.add(self.key)
             proxy.current = self.key if first else None
             try:
-                self.inner.launch(ctx)
+                if proxy.current is not None:
+                    with _aten_trace_mode(proxy):
+                        self.inner.launch(ctx)
+                else:
+                    self.inner.launch(ctx)
             finally:
                 proxy.current = None
 
     def resolver(task):
         return Tag(base(task), task.compute_block_key)
 
-    profile_program(prog, resolver, CudaBackend(),
-                    warmup=0, repeats=1, soak_seconds=0)
+    with _patch_direct_calls(proxy):
+        profile_program(prog, resolver, CudaBackend(),
+                        warmup=0, repeats=1, soak_seconds=0)
     return {k: compress(v) for k, v in proxy.log.items()}
 
 
