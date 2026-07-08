@@ -262,6 +262,6 @@ def lower_qwen3moe(
     return apply_exact_sizes(shaped, "qwen3moe-exact", size_of=size_of_factory(dims, fl))
 
 
-def initial_values_qwen3moe(program: Program, cfg: ShapedQwen3MoeConfig, backend, *, seed: int = 0):
+def initial_values_qwen3moe(program: Program, cfg: ShapedQwen3MoeConfig, backend, *, seed: int = 0, into=None):
     dims, fl = family_layouts(cfg)
-    return initial_values_from_layouts(program, dims, fl, backend, seed=seed)
+    return initial_values_from_layouts(program, dims, fl, backend, seed=seed, into=into)

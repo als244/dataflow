@@ -609,6 +609,7 @@ def main() -> None:
     # trained state — wall/device/fidelity are unaffected (same shapes and
     # kernels); per-row LOSSES are no longer fresh-seed comparable.
     shared_values = fam.initial_values(build_raw(), cfg, backend, seed=11)
+    _values_dirty = [False]   # True once any train() has stepped the weights
 
     for gib in budget_list:
         # QUOTING CONVENTION (Shein, 2026-07-03): sweeps are quoted in DEVICE
@@ -686,6 +687,15 @@ def main() -> None:
         torch.cuda.reset_peak_memory_stats()  # scratch peak of THIS run only
         from dataflow.runtime.placement import PlacementError
 
+        # from-init discipline: every measured train() starts from the
+        # SAME seeded weights on the SAME data — loss trajectories stay
+        # comparable across rows and clean of prior budgets/reruns
+        # (in-place refill: no re-pinning)
+        if _values_dirty[0]:
+            fam.initial_values(planned.program, cfg, backend, seed=11,
+                               into=shared_values)
+        _values_dirty[0] = True
+
         try:
             report = train(
                 planned.program, cfg, backend, steps=args.steps, seed=11,
@@ -757,6 +767,10 @@ def main() -> None:
             placement = None
             torch.cuda.empty_cache()
             torch.cuda.reset_peak_memory_stats()
+            # from-init discipline for the rerun too: fresh seeded
+            # weights + the same fixed data, not a continuation
+            fam.initial_values(planned.program, cfg, backend, seed=11,
+                               into=shared_values)
             report = train(
                 planned.program, cfg, backend, steps=args.steps, seed=11,
                 decoupled_targets=args.decoupled_targets,

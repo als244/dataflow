@@ -229,22 +229,33 @@ def fill_weight_fields(buf, layout, gen, *, special=None) -> None:
 
 
 def initial_values_from_layouts(program: Program, dims, fl: FamilyLayouts,
-                                backend, *, seed: int = 0):
+                                backend, *, seed: int = 0, into=None):
     """Allocate + fill pinned buffers for every initial object: per-field
     weight init at storage dtypes (``fill_weight_fields``), optimizer state
     zeroed, tokens/targets uniform ints. Returns {object_id: Buffer} for
-    ``Engine.execute(initial_buffers=...)``."""
+    ``Engine.execute(initial_buffers=...)``.
+
+    ``into``: refill an EXISTING values dict in place instead of
+    allocating — deterministic seeded init makes this byte-equivalent
+    to a fresh call at a fraction of the cost (no re-pinning). Bench
+    sweeps use it so every measured train() starts from-init: loss
+    trajectories stay clean of prior rows/reruns."""
     import torch
 
     from dataflow.tasks.interop import torch_view
 
     gen = torch.Generator().manual_seed(seed)
-    buffers = {}
+    buffers = into if into is not None else {}
     for spec in program.initial_objects:
-        if spec.id in buffers:
+        if into is None and spec.id in buffers:
             continue
-        buf = backend.alloc("backing", spec.size_bytes)
-        buffers[spec.id] = buf
+        if into is not None:
+            if spec.id not in buffers:
+                buffers[spec.id] = backend.alloc("backing", spec.size_bytes)
+            buf = buffers[spec.id]
+        else:
+            buf = backend.alloc("backing", spec.size_bytes)
+            buffers[spec.id] = buf
         if spec.id.startswith("W_") and spec.id not in ("W_embed", "W_head"):
             layer = int(spec.id.split("_")[1])
             fill_weight_fields(buf, fl.block_weight_at(layer), gen,

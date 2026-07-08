@@ -54,11 +54,12 @@ healthy run therefore starts at ~ln(vocab) (+ init logit variance;
 ~12.6 for llama3-8b) and DECLINES as the model memorizes the fixed
 set — a live end-to-end learning signal in every throughput row. On
 truly fresh random data the loss must sit flat at ~ln(vocab): no
-model can beat the entropy floor of unpredictable targets. If a row's
-`headroom_reruns` > 0, its train() ran again on already-trained
-weights over the same seed-derived data, so its losses CONTINUE the
-memorization curve (possibly starting near zero) rather than
-restarting at ln(vocab).
+model can beat the entropy floor of unpredictable targets. Every measured
+train() starts FROM-INIT (weights refilled in place before each
+budget row and each auto-headroom rerun), so all rows of a sweep
+show the SAME loss trajectory — divergence between rows is a
+correctness signal, not noise. `headroom_reruns` records plan
+churn only.
 
 `--decoupled-targets` switches the stream to independently drawn
 targets (still fixed across steps): pure memorization with zero causal

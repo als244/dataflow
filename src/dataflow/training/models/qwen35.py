@@ -279,6 +279,6 @@ def lower_qwen35(
     return apply_exact_sizes(shaped, "qwen35-exact", size_of=size_of_factory(dims, fl))
 
 
-def initial_values_qwen35(program: Program, cfg: ShapedQwen35Config, backend, *, seed: int = 0):
+def initial_values_qwen35(program: Program, cfg: ShapedQwen35Config, backend, *, seed: int = 0, into=None):
     dims, fl = family_layouts(cfg)
-    return initial_values_from_layouts(program, dims, fl, backend, seed=seed)
+    return initial_values_from_layouts(program, dims, fl, backend, seed=seed, into=into)

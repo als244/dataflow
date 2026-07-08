@@ -522,6 +522,6 @@ def lower_glm52(
     return apply_exact_sizes(shaped, "glm52-exact", size_of=size_of)
 
 
-def initial_values_glm52(program: Program, cfg: ShapedGlm52Config, backend, *, seed: int = 0):
+def initial_values_glm52(program: Program, cfg: ShapedGlm52Config, backend, *, seed: int = 0, into=None):
     dims, fl = family_layouts(cfg)
-    return initial_values_from_layouts(program, dims, fl, backend, seed=seed)
+    return initial_values_from_layouts(program, dims, fl, backend, seed=seed, into=into)

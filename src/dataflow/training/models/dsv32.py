@@ -455,6 +455,6 @@ def lower_dsv32(
                              size_of=size_of_factory(dims, fl))
 
 
-def initial_values_dsv32(program: Program, cfg: ShapedDsv32Config, backend, *, seed: int = 0):
+def initial_values_dsv32(program: Program, cfg: ShapedDsv32Config, backend, *, seed: int = 0, into=None):
     dims, fl = family_layouts(cfg)
-    return initial_values_from_layouts(program, dims, fl, backend, seed=seed)
+    return initial_values_from_layouts(program, dims, fl, backend, seed=seed, into=into)

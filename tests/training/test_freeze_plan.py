@@ -273,3 +273,29 @@ def test_bench_default_stream_semantics():
     assert torch.equal(dt0, dt1) and torch.equal(dy0, dy1)  # repeat
     assert not torch.equal(dy0.view(-1, 8)[:, :-1],
                            dt0.view(-1, 8)[:, 1:])          # NOT shifted
+
+
+def test_initial_values_refill_identity():
+    """into= refill is byte-identical to a fresh init (deterministic
+    seeded fill), so bench's from-init discipline (refill before every
+    measured train()) truly restarts the model."""
+    import torch
+
+    from dataflow.runtime.device.cuda import CudaBackend
+    from dataflow.tasks.interop import torch_view
+    from dataflow.training.families import resolve_family
+
+    cfg = _tiny()
+    fam = resolve_family(cfg)
+    prog = lower_llama3(cfg)
+    backend = CudaBackend()
+    fresh = fam.initial_values(prog, cfg, backend, seed=7)
+    dirty = fam.initial_values(prog, cfg, backend, seed=7)
+    for k, buf in dirty.items():   # simulate training: scribble weights
+        torch_view(buf, (buf.size_bytes,), torch.uint8).random_(0, 255)
+    refilled = fam.initial_values(prog, cfg, backend, seed=7, into=dirty)
+    assert refilled is dirty
+    for k in fresh:
+        a = torch_view(fresh[k], (fresh[k].size_bytes,), torch.uint8)
+        b = torch_view(dirty[k], (dirty[k].size_bytes,), torch.uint8)
+        assert torch.equal(a, b), k

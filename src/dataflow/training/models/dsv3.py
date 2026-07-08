@@ -369,6 +369,6 @@ def lower_dsv3(
     return apply_exact_sizes(shaped, "dsv3-exact", size_of=size_of_factory(dims, fl))
 
 
-def initial_values_dsv3(program: Program, cfg: ShapedDsv3Config, backend, *, seed: int = 0):
+def initial_values_dsv3(program: Program, cfg: ShapedDsv3Config, backend, *, seed: int = 0, into=None):
     dims, fl = family_layouts(cfg)
-    return initial_values_from_layouts(program, dims, fl, backend, seed=seed)
+    return initial_values_from_layouts(program, dims, fl, backend, seed=seed, into=into)
