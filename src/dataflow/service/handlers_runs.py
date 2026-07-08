@@ -47,7 +47,8 @@ class RunRecord:
     pressure_evictions: int = 0
     placement_escapes: int = 0
     error: dict | None = None
-    torch_reserved_peak: int = 0        # device-scratch component of peak
+    torch_reserved_peak: int = 0        # device-scratch RESERVED (cache incl.)
+    torch_allocated_peak: int = 0       # device-scratch LIVE (apples-to-apples)
     placement_extent_bytes: int = 0     # placed device slab component
     fetched: dict = field(default_factory=dict)
     trace_tail: list = field(default_factory=list)
@@ -66,6 +67,7 @@ class RunRecord:
             "pressure_evictions": self.pressure_evictions,
             "placement_escapes": self.placement_escapes,
             "torch_reserved_peak": self.torch_reserved_peak,
+            "torch_allocated_peak": self.torch_allocated_peak,
             "placement_extent_bytes": self.placement_extent_bytes,
             "error": self.error,
         }
@@ -251,6 +253,7 @@ def install(server) -> None:
                 import torch
 
                 rec.torch_reserved_peak = torch.cuda.max_memory_reserved()
+                rec.torch_allocated_peak = torch.cuda.max_memory_allocated()
             except Exception:
                 rec.torch_reserved_peak = 0
             rec.slab_overflows = result.slab_overflows
