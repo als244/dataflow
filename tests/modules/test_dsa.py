@@ -1,5 +1,5 @@
 """DSA op-level pins (GPU): lightning indexer + sparse-core conventions,
-BEFORE any block executable exists (M-H1, sparse mode first).
+BEFORE any block executable exists (sparse mode first).
 
 Pins: the score formula against a hand-computed loop (rope-first layout,
 LayerNorm, fp32 weight chain H^-.5*d^-.5, ReLU); selection tie-break +

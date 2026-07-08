@@ -1,7 +1,7 @@
 # Architecture
 
-Full project plan: [PLAN_V4.md](../PLAN_V4.md). This document is the standing
-map of the codebase; per-layer contracts live in each subpackage's README.
+The standing map of the codebase; per-layer contracts live in each
+subpackage's README.
 
 ## What this project is
 

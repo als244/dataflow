@@ -100,7 +100,7 @@ PY
 #    your test module follows the 11-gate canon (extending.md §8);
 #    verify_family runs it + the contract check + the coverage audit
 python tools/verify_family.py --plugin mypkg.dataflow_plugin \
-    --family mymodel --module mypkg/tests/test_mymodel_math.py
+    --family mymodel --module mypkg/tests/test_mymodel.py
 
 # 2. throughput: single cells or a full sweep
 python tools/bench_train.py --plugin mypkg.dataflow_plugin \
@@ -139,7 +139,7 @@ move into your package:
 | `training/<family>.py` | `mypkg/mymodel_training.py` | `build_shaped_program`, `LayerKindSpec`, `MetaShare`, `FamilyLayouts`, `size_of_factory`, `initial_values_from_layouts` — the whole lowering toolkit is importable |
 | `training/families.py` entry | the plugin module above | `register_family` |
 | `tools/bench_train.py` CONFIGS | the plugin module above | `register_bench_config` |
-| `tests/tasks/test_<family>_math.py` | `mypkg/tests/test_mymodel_math.py` | copy the NEWEST builtin family's module as the template; `check_block_backward` / `check_model_step` import from `dataflow.training.testing.gradcheck` |
+| `tests/models/test_<family>.py` | `mypkg/tests/test_mymodel.py` | copy the NEWEST builtin family's module as the template; `check_block_backward` / `check_model_step` import from `dataflow.training.testing.gradcheck` |
 
 Config rule, relaxed for external families: `resolve_family` dispatches
 EXACT type first, then isinstance — so your config MAY subclass a

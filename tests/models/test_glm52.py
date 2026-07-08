@@ -1,5 +1,5 @@
-"""DeepSeek-V3 family ladder (GPU): golden + full programs through the
-real engine. Block-level MLA/moe pins live in test_mla_math.py.
+"""DeepSeek-V3.2 family ladder (DSA sparse mode) (GPU): golden + full programs through the
+real engine. Block-level MLA/moe pins live in tests/modules/test_mla.py.
 
 Family-specific pins here: MIXED depth (dense + moe kinds in one chain),
 sigmoid_noaux_tc end to end (bias counts through the dW slot, the sign
@@ -29,22 +29,22 @@ pytestmark = pytest.mark.gpu
 
 
 def _tiny_cfg(**over):
-    from dataflow.training.dsv3 import ShapedDsv3Config
+    from dataflow.training.glm52 import ShapedGlm52Config
 
-    return replace(ShapedDsv3Config.tiny(), **over)
+    return replace(ShapedGlm52Config.tiny(), **over)
 
 
 def _tiny_dims(cfg=None):
-    from dataflow.training.dsv3 import dims_of_dsv3
+    from dataflow.training.glm52 import dims_of_glm52
 
-    return dims_of_dsv3(cfg if cfg is not None else _tiny_cfg())
+    return dims_of_glm52(cfg if cfg is not None else _tiny_cfg())
 
 
 # --- golden self-consistency -----------------------------------------------------
 
 
-def test_golden_dsv3_trains():
-    from dataflow.models.dsv3_reference import GoldenDsv3
+def test_golden_glm52_trains():
+    from dataflow.models.glm52_reference import GoldenGlm52
     from dataflow.tasks.layouts import head_weight_layout
 
     cfg = _tiny_cfg()
@@ -70,10 +70,10 @@ def test_golden_dsv3_trains():
         n = dims.vocab_size * dims.d_model
         return (torch.randn(n, generator=gen) * 0.02).to(torch.bfloat16).view(torch.uint8)
 
-    golden = GoldenDsv3.from_packed_bytes(
+    golden = GoldenGlm52.from_packed_bytes(
         dims, cfg.n_layers, table(),
         [packed(golden_layout) for golden_layout in
-         (GoldenDsv3(dims=dims, n_layers=cfg.n_layers).block_layout(i)
+         (GoldenGlm52(dims=dims, n_layers=cfg.n_layers).block_layout(i)
           for i in range(cfg.n_layers))],
         packed(head_weight_layout(dims)),
     )
@@ -97,75 +97,82 @@ def test_golden_dsv3_trains():
 # --- lowering ----------------------------------------------------------------------
 
 
-def test_dsv3_lowering_validates_and_plans():
+def test_glm52_lowering_validates_and_plans():
     from dataflow.core import validate_program
     from dataflow.training.families import resolve_family
     from dataflow.training.planning import plan_program, simulate_program
 
     cfg = _tiny_cfg()
     fam = resolve_family(cfg)
-    assert fam.name == "dsv3"
+    assert fam.name == "glm52"
     program = fam.lower(cfg)
     validate_program(program)
-    assert program.metadata["family"] == "dsv3-shaped"
+    assert program.metadata["family"] == "glm52-shaped"
     keys = {t.compute_block_key for t in program.tasks}
-    assert {"mladense_fwd", "mlamoe_fwd", "mlamoe_bwd", "head_loss"} <= keys
-    # depth mix: exactly first_k_dense dense blocks
-    n_dense = sum(1 for t in program.tasks if t.compute_block_key == "mladense_fwd")
-    assert n_dense == cfg.first_k_dense * cfg.grad_accum_rounds
+    assert {"gdl_fwd", "gml_fwd", "gmf_fwd", "gmf_bwd", "head_loss"} <= keys
+    # role mix (tiny: F F S S F S, first_k=1): 1 gdl, 2 gml, 3 gmf
+    per = cfg.grad_accum_rounds
+    assert sum(1 for t in program.tasks if t.compute_block_key == "gdl_fwd") == 1 * per
+    assert sum(1 for t in program.tasks if t.compute_block_key == "gml_fwd") == 2 * per
+    assert sum(1 for t in program.tasks if t.compute_block_key == "gmf_fwd") == 3 * per
     planned = plan_program(program, fast_memory_capacity=8 * 1024 * 1024)
     log = simulate_program(planned.program)
     assert max(iv.end for iv in log.task_intervals) > 0
 
 
-def test_dsv3_full_scale_presets_lower_and_validate():
+def test_glm52_full_scale_presets_lower_and_validate():
     from dataflow.core import validate_program
-    from dataflow.training.dsv3 import ShapedDsv3Config, lower_dsv3
+    from dataflow.training.glm52 import ShapedGlm52Config, lower_glm52
 
-    for ctor, layers in ((ShapedDsv3Config.dsv3_mini, 18),
-                         (ShapedDsv3Config.dsv3_671b, 61),
-                         (ShapedDsv3Config.kimi_k2, 61)):
+    for ctor, layers in ((ShapedGlm52Config.glm52_mini, 18),
+                         (ShapedGlm52Config.glm52, 78)):
         cfg = ctor(seq_len=128)
-        program = lower_dsv3(cfg)
+        program = lower_glm52(cfg)
         validate_program(program)
         n_blocks = sum(1 for t in program.tasks
                        if t.compute_block_key.endswith("_fwd")
-                       and t.compute_block_key.startswith("mla"))
+                       and t.compute_block_key.startswith("g"))
         assert n_blocks == layers
 
 
-def test_dsv3_partial_ownership_lowering_rejected():
+def test_glm52_partial_ownership_lowering_rejected():
     import dataclasses
     import unittest.mock as mock
 
-    from dataflow.training.dsv3 import dims_of_dsv3, lower_dsv3
+    from dataflow.training.glm52 import dims_of_glm52, lower_glm52
 
     cfg = _tiny_cfg()
-    part = dataclasses.replace(dims_of_dsv3(cfg).moe, expert_ids=(0, 1, 2))
+    part = dataclasses.replace(dims_of_glm52(cfg).moe, expert_ids=(0, 1, 2))
     with pytest.raises(NotImplementedError):
-        with mock.patch("dataflow.training.dsv3.moe_spec_of", return_value=part):
-            lower_dsv3(cfg)
+        with mock.patch("dataflow.training.glm52.moe_spec_of", return_value=part):
+            lower_glm52(cfg)
 
 
 # --- full program through the real engine ------------------------------------------
 
 
-_BIAS_ATOL = {"w_router_bias": 2.5e-3}  # 2.5x speed: +-2 steps + fp slack
+_BIAS_ATOL = {
+    "w_router_bias": 2.5e-3,  # 2.5x speed: +-2 steps + fp slack
+    # LayerNorm bias: zero-init, sub-noise KL grads -> AdamW first-step
+    # sign lottery (the dt_bias class; measured rel 0.4986 from sign
+    # flips on ~1e-6 grads while every other field sat at 1e-3)
+    "idx_k_ln_b": 2.5e-4,
+}
 
 
-def test_dsv3_model_step_vs_golden():
+def test_glm52_model_step_vs_golden():
     check_model_step(_tiny_cfg(), fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
                      field_atol=_BIAS_ATOL).assert_ok()
 
 
-def test_dsv3_aux_zero_model_step_vs_golden():
+def test_glm52_aux_zero_model_step_vs_golden():
     check_model_step(
         _tiny_cfg(aux_coef=0.0), fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
         field_atol=_BIAS_ATOL,
     ).assert_ok()
 
 
-def test_dsv3_plan_invariance():
+def test_glm52_plan_invariance():
     cfg = _tiny_cfg()
     r1 = check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
                           field_atol=_BIAS_ATOL)
@@ -180,14 +187,14 @@ def test_dsv3_plan_invariance():
         r.assert_ok()
 
 
-def test_dsv3_batch2_packed_sequences_vs_golden():
+def test_glm52_batch2_packed_sequences_vs_golden():
     cfg = _tiny_cfg(batch=2, seq_len=64)
     check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
                      field_atol=_BIAS_ATOL).assert_ok()
 
 
-def test_dsv3_ga2_matches_golden():
-    from dataflow.models.dsv3_reference import GoldenDsv3
+def test_glm52_ga2_matches_golden():
+    from dataflow.models.glm52_reference import GoldenGlm52
     from dataflow.runtime import Engine
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.runtime.device.fake import FakeBackend
@@ -206,7 +213,7 @@ def test_dsv3_ga2_matches_golden():
         buf = values[name]
         return torch_view(buf, (buf.size_bytes,), torch.uint8).clone()
 
-    golden = GoldenDsv3.from_packed_bytes(
+    golden = GoldenGlm52.from_packed_bytes(
         dims, cfg.n_layers, pinned("W_embed"),
         [pinned(f"W_{i}") for i in range(cfg.n_layers)], pinned("W_head"),
     )
@@ -247,14 +254,16 @@ def test_dsv3_ga2_matches_golden():
         rec = result.objects.get(object_id)
         slot = rec.backing or rec.fast
         layout, leaves = golden.final_leaves(object_id)
-        return max(
-            rel_l2(
-                torch_view(slot.buffer, f.shape, TORCH_DTYPE_BY_NAME[f.dtype],
-                           offset_bytes=f.offset_bytes),
-                leaves[f.name],
-            )
-            for f in layout.fields
-        )
+        worst = 0.0
+        for f in layout.fields:
+            got = torch_view(slot.buffer, f.shape, TORCH_DTYPE_BY_NAME[f.dtype],
+                             offset_bytes=f.offset_bytes)
+            if f.name in _BIAS_ATOL:  # sign-lottery fields: absolute envelope
+                d = (got.float().cpu() - leaves[f.name].float().cpu()).abs().max()
+                assert float(d) <= _BIAS_ATOL[f.name], (f.name, float(d))
+                continue
+            worst = max(worst, rel_l2(got, leaves[f.name]))
+        return worst
 
     assert worst_field_err("W_embed") < 3e-2
     for i in range(cfg.n_layers):
@@ -297,10 +306,9 @@ def _run(engine_kwargs=None, program=None, seed=7, resolver_wrapper=None):
     for obj_id in ["W_embed", "W_head"] + [f"W_{i}" for i in range(cfg.n_layers)]:
         rec = result.objects.get(obj_id)
         slot = rec.backing or rec.fast
-        # BYTES, not bf16: fp32 fields (w_router_bias) reinterpreted as
-        # bf16 can alias NaN bit patterns and torch.equal fails NaN != NaN
-        # on identical bytes (this file passed by bit-pattern luck until
-        # the dsv32 harness fix; the luck ran out 2026-07-07)
+        # BYTES, not bf16: fp32 fields (w_idx_w, w_router_bias) reinterpreted
+        # as bf16 can alias NaN bit patterns, and torch.equal says NaN != NaN
+        # even on identical bytes (dsv3's test passed by bit-pattern luck)
         out[obj_id] = torch_view(slot.buffer, (rec.size_bytes,), torch.uint8).clone()
     loss_rec = result.objects.get("loss_0_0")
     out["loss"] = float(torch_view((loss_rec.backing or loss_rec.fast).buffer, (1,), torch.float32)[0])
@@ -324,7 +332,7 @@ def _assert_same(a: dict, b: dict, tol: float = 1e-3):
         assert err < tol, f"{k}: rel_l2={err}"
 
 
-def test_dsv3_fixed_seed_bitwise_deterministic():
+def test_glm52_fixed_seed_bitwise_deterministic():
     a = _run()
     b = _run()
     assert a["loss"] == b["loss"]
@@ -333,7 +341,7 @@ def test_dsv3_fixed_seed_bitwise_deterministic():
             assert torch.equal(a[k], b[k]), k
 
 
-def test_dsv3_measured_costs_replan_still_golden():
+def test_glm52_measured_costs_replan_still_golden():
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.training.families import resolve_family
     from dataflow.training.planning import plan_program
@@ -353,8 +361,8 @@ def test_dsv3_measured_costs_replan_still_golden():
     _assert_same(again, base)
 
 
-def test_dsv3_multistep_matches_golden_and_loss_decreases():
-    from dataflow.models.dsv3_reference import GoldenDsv3
+def test_glm52_multistep_matches_golden_and_loss_decreases():
+    from dataflow.models.glm52_reference import GoldenGlm52
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.tasks.interop import torch_view
     from dataflow.training.families import resolve_family
@@ -381,7 +389,7 @@ def test_dsv3_multistep_matches_golden_and_loss_decreases():
         buf = snapshot[name]
         return torch_view(buf, (buf.size_bytes,), torch.uint8).clone()
 
-    golden = GoldenDsv3.from_packed_bytes(
+    golden = GoldenGlm52.from_packed_bytes(
         dims, cfg.n_layers, pinned("W_embed"),
         [pinned(f"W_{i}") for i in range(cfg.n_layers)], pinned("W_head"),
     )
@@ -399,14 +407,166 @@ def test_dsv3_multistep_matches_golden_and_loss_decreases():
     assert all(n == 0 for n in report.step_slab_overflows[1:]), report.step_slab_overflows
 
 
-def test_dsv3_poison_on_free_changes_nothing():
+
+def test_glm52_leader_follower_pair_ladder():
+    """THE IndexShare math gate, isolated at block level: a gml LEADER +
+    gmf FOLLOWER chain vs golden autograd of the two-block compose with
+    L_multi = (KL(p_leader||sigma) + KL(p_follower||sigma)) / 2. Runs the
+    runtime bwds in reverse order (follower creates dM with its target;
+    leader consumes and chains sigma - (p_own + dM)/2 through its indexer
+    weights) and compares EVERY gradient."""
+    from dataflow.models.glm52_reference import GoldenGlm52
+    from dataflow.tasks.dsa_reference import dsa_mask_from_idx
+    from dataflow.tasks.glm52_blocks import (
+        Glm52MfBlockBwd,
+        Glm52MfBlockFwd,
+        Glm52MlBlockBwd,
+        Glm52MlBlockFwd,
+    )
+    from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME
+    from dataflow.tasks.kernels import KernelCtx, resolve_kernels
+    from dataflow.tasks.layouts import glm52_meta_layout, grad_layout
+
+    # pattern chosen so the gml leader at layer 1 serves EXACTLY one
+    # follower (group {1, 2}, N=2) — the chain below is the whole group
+    cfg = _tiny_cfg(indexer_types=("full", "full", "shared", "full", "full", "shared"))
+    dims = _tiny_dims(cfg)
+    kernels = resolve_kernels()
+    kctx = KernelCtx()
+    ld_fwd, ld_bwd = Glm52MlBlockFwd(dims, kernels), Glm52MlBlockBwd(dims, kernels)
+    f_fwd, f_bwd = Glm52MfBlockFwd(dims, kernels), Glm52MfBlockBwd(dims, kernels)
+
+    gen = torch.Generator(device="cuda").manual_seed(77)
+
+    def mk_weights(wl):
+        w = {}
+        for f in wl.fields:
+            n = int(torch.tensor(f.shape).prod())
+            dt = TORCH_DTYPE_BY_NAME[f.dtype]
+            if f.name.endswith("_norm_w") or f.name == "idx_k_ln_w":
+                w[f.name] = torch.ones(f.shape, device="cuda", dtype=dt)
+            elif f.name in ("w_router_bias", "idx_k_ln_b"):
+                w[f.name] = torch.zeros(f.shape, device="cuda", dtype=dt)
+            else:
+                w[f.name] = (torch.randn(n, generator=gen, device="cuda") * 0.06
+                             ).to(dt).view(f.shape)
+        return w
+
+    w_ld = mk_weights(ld_fwd.wl)
+    w_f = mk_weights(f_fwd.wl)
+    x = (torch.randn(dims.tokens, dims.d_model, generator=gen, device="cuda") * 0.5
+         ).to(torch.bfloat16)
+    dy2 = (torch.randn(dims.tokens, dims.d_model, generator=gen, device="cuda") * 0.5
+           ).to(torch.bfloat16)
+
+    def mk_ctx(cl):
+        return {f.name: torch.empty(f.shape, dtype=TORCH_DTYPE_BY_NAME[f.dtype],
+                                    device="cuda") for f in cl.fields}
+
+    def mk_meta(kind):
+        m_l = glm52_meta_layout(dims, kind)
+        return {f.name: torch.empty(f.shape, dtype=TORCH_DTYPE_BY_NAME[f.dtype],
+                                    device="cuda") for f in m_l.fields}
+
+    meta_ld = mk_meta("gml")
+    meta_f = mk_meta("gmf")
+    a1, a2 = mk_ctx(ld_fwd.cl), mk_ctx(f_fwd.cl)
+    y1 = torch.empty_like(x)
+    y2 = torch.empty_like(x)
+    ld_fwd._forward(kctx, x, w_ld, y1, a1, extras={"meta": dict(meta_ld)})
+    f_fwd._forward(kctx, y1, w_f, y2, a2,
+                   extras={"meta": dict(meta_f),
+                           "shared_idx": meta_ld["dsa_idx"]})
+
+    gl_ld = grad_layout(ld_fwd.wl, dims.dtypes)
+    gl_f = grad_layout(f_fwd.wl, dims.dtypes)
+    dw_ld = {f.name: torch.zeros(f.shape, device="cuda", dtype=TORCH_DTYPE_BY_NAME[f.dtype])
+             for f in gl_ld.fields}
+    dw_f = {f.name: torch.zeros(f.shape, device="cuda", dtype=TORCH_DTYPE_BY_NAME[f.dtype])
+            for f in gl_f.fields}
+    dm = torch.empty(dims.tokens, dims.index_topk, dtype=torch.float32, device="cuda")
+    dx1 = torch.empty_like(x)   # grad into y1 from the follower
+    dx0 = torch.empty_like(x)
+    # reverse order: follower bwd creates dM, leader bwd consumes it
+    f_bwd._backward(kctx, dy2, a2, y1, w_f, dx1, dw_f, accum=False,
+                    meta={"meta": meta_f, "shared_idx": meta_ld["dsa_idx"],
+                          "_dm_view": dm, "_dm_create": True, "_kl_n": 2})
+    ld_bwd._backward(kctx, dx1, a1, x, w_ld, dx0, dw_ld, accum=False,
+                     meta={"meta": meta_ld, "_dm_view": dm, "_kl_n": 2})
+
+    # ---- golden compose ----
+    leaves_ld = {n: (t_.detach().clone().requires_grad_()
+                     if n != "w_router_bias" else t_) for n, t_ in w_ld.items()}
+    leaves_f = {n: (t_.detach().clone().requires_grad_()
+                    if n != "w_router_bias" else t_) for n, t_ in w_f.items()}
+    x_ref = x.clone().requires_grad_()
+    golden = GoldenGlm52(dims=dims, n_layers=cfg.n_layers)
+    golden._layer_ptr = 1          # gml leader sits at layer 1 in tiny
+    golden._group_scores = None
+    golden._group_mask = None
+    # pin the runtime's selections/routings
+    from dataflow.tasks.dsa_reference import dsa_index_scores_reference
+    from dataflow.tasks.mla_reference import mla_qkv_reference
+    from dataflow.tasks import ops as _ops
+
+    h1_ref = _ops.rmsnorm_reference(x_ref, leaves_ld["attn_norm_w"])
+    q_lora_ref, *_ = mla_qkv_reference(h1_ref, leaves_ld, dims)
+    scores = dsa_index_scores_reference(h1_ref.detach(), q_lora_ref.detach(),
+                                        leaves_ld, dims)
+    mask = dsa_mask_from_idx(meta_ld["dsa_idx"].long(), dims, dims.tokens)
+    golden._group_scores, golden._group_mask = scores, mask
+    golden._pin_mask = True
+
+    def golden_block(x_in, leaves, layer, route_ids):
+        golden._layer_ptr = layer
+        # reuse the pinned group state for both members
+        gs, gm = golden._group_scores, golden._group_mask
+        y_ref, aux = golden.block_forward(x_in, leaves, route_ids=route_ids)
+        if golden._layer_ptr == layer + 1 and dims.role_of(layer) == "full":
+            # block_forward recomputed scores/mask from its own graph for
+            # the leader; RE-PIN the mask-based state to the runtime's
+            golden._group_scores = golden._group_scores if gs is None else golden._group_scores
+        return y_ref, aux
+
+    # simpler: call block_forward directly with pinned state — the leader
+    # call would overwrite the pinned mask with its own selection, so pin
+    # AFTER by monkey-adjusting: run leader with its natural computation
+    # but force the mask to the runtime's selection
+    import dataflow.models.glm52_reference as GR
+
+    orig_topk = GR.dsa_topk_reference
+    try:
+        GR.dsa_topk_reference = lambda s, k: meta_ld["dsa_idx"].long()
+        golden._layer_ptr = 1
+        y1_ref, aux1 = golden.block_forward(
+            x_ref, leaves_ld, route_ids=meta_ld["route_ids"])
+        y2_ref, aux2 = golden.block_forward(
+            y1_ref, leaves_f, route_ids=meta_f["route_ids"])
+    finally:
+        GR.dsa_topk_reference = orig_topk
+    (aux1 + aux2).backward(retain_graph=True)
+    y2_ref.backward(dy2)
+
+    errors = {"fwd:y1": rel_l2(y1, y1_ref.detach()), "fwd:y2": rel_l2(y2, y2_ref.detach()),
+              "bwd:dx0": rel_l2(dx0, x_ref.grad)}
+    for name, dw in (("ld", dw_ld), ("f", dw_f)):
+        leaves = leaves_ld if name == "ld" else leaves_f
+        for fname, g in dw.items():
+            if fname == "w_router_bias":
+                continue
+            errors[f"{name}:d{fname}"] = rel_l2(g, leaves[fname].grad)
+    bad = {k: round(v, 4) for k, v in errors.items() if v > 4e-2}
+    assert not bad, bad
+
+
+def test_glm52_poison_on_free_changes_nothing():
     base = _run()
     poisoned = _run(engine_kwargs={"poison_on_free": True})
     _assert_same(poisoned, base)
     assert poisoned["loss"] == poisoned["loss"]  # not NaN
 
 
-def test_dsv3_interleaving_stress_changes_nothing():
+def test_glm52_interleaving_stress_changes_nothing():
     from dataflow.runtime.device.cuda_spin import SpinKernel
 
     def wrapper(resolver, backend):
@@ -427,3 +587,20 @@ def test_dsv3_interleaving_stress_changes_nothing():
     base = _run()
     jittered = _run(resolver_wrapper=wrapper)
     _assert_same(jittered, base)
+
+
+def test_glm52_frozen_indexer_ablation():
+    """train_indexer=False: model-step matches the frozen golden, the
+    leader indexer fields are BIT-FROZEN across the step, and lowering
+    emits NO dM chain (no KL => no metadata gradient)."""
+    from dataflow.training.families import resolve_family
+
+    cfg = _tiny_cfg(train_indexer=False)
+    fam = resolve_family(cfg)
+    prog = fam.lower(cfg)
+    assert not [o for o in prog.initial_objects if o.id.startswith("dM_")]
+    assert not [oid for task in prog.task_by_id().values()
+                for oid in (task.outputs and [o.id for o in task.outputs] or [])
+                if str(oid).startswith("dM_")]
+    check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
+                     field_atol=_BIAS_ATOL).assert_ok()

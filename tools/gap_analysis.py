@@ -104,7 +104,7 @@ def main() -> None:
     from dataflow.core import save_program
     save_program(planned.program, args.out / "annotated.json")
 
-    # non-fatal like m4_train (0336654): imposing real timings on the sim's
+    # non-fatal like bench_train: imposing real timings on the sim's
     # reserve-at-start accounting can be infeasible for plans the real
     # engine ran fine — the diagnostic must not cost the analysis
     try:

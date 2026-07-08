@@ -1,6 +1,6 @@
 """Per-op MoE kernel bench: our registry impls vs flextrain's kernels.
 
-The M-B acceptance gate (plan): each default impl within ~10% of its
+Acceptance gate: each default impl within ~10% of its
 flextrain counterpart at the target shapes, or understood/justified.
 flextrain's kernel file is loaded DIRECTLY from refs/flextrain (it only
 needs torch+triton — no flextrain package import), so this runs in the

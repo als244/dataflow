@@ -544,7 +544,7 @@ def test_spec_validation():
         MoESpec(n_experts=8, top_k=2, d_ff_expert=32, n_shared_experts=2)
 
 
-# --- sigmoid_noaux_tc (DeepSeek-V3) — M-G2 pins ------------------------------------
+# --- sigmoid_noaux_tc (DeepSeek-V3) pins ------------------------------------
 
 
 def test_topk_sigmoid_noaux_kernel_vs_reference_and_semantics():

@@ -1,4 +1,4 @@
-"""M2 gate: real-GPU synthetic execution vs simulator prediction.
+"""Engine gate: real-GPU synthetic execution vs simulator prediction.
 
 Flow: measure real PCIe bandwidths -> build + plan a shaped program whose
 transfer model uses the measured numbers -> simulate (prediction) -> execute
@@ -7,9 +7,9 @@ physically true) -> compare makespan/intervals, quantify host-side overhead
 (GPU idle gaps between consecutive compute tasks), and measure overlap.
 
 Usage:
-    python tools/m2_gate.py --config small --fast-gib 2
-    python tools/m2_gate.py --config 8b --fast-gib 16 [--recompute]
-    python tools/m2_gate.py ... --completion-mode hostfn   # compare token modes
+    python tools/engine_gate.py --config small --fast-gib 2
+    python tools/engine_gate.py --config 8b --fast-gib 16 [--recompute]
+    python tools/engine_gate.py ... --completion-mode hostfn   # compare token modes
 """
 from __future__ import annotations
 

@@ -36,7 +36,7 @@ CUDA∩HIP common subset so an AMD backend is a mechanical addition.
 - `cuda.py` — cuda-python (`cuda.bindings.runtime`). Nonblocking streams,
   timing events, `cudaMalloc`/`cudaHostAlloc`, `cudaMemcpyAsync`,
   `cudaEventElapsedTime` timebase. Two completion modes, measured on the
-  RTX 5090 (M2 gate, small config):
+  RTX 5090 (engine gate, small config):
   - `poll` (default): control thread polls per-stream head events with
     `cudaEventQuery` (~µs wake latency; idle-gap p50 231µs incl. handler +
     launch; replay-fidelity gap +1.8%).
@@ -51,7 +51,7 @@ CUDA∩HIP common subset so an AMD backend is a mechanical addition.
   verified ratio ~1.001-1.004. `make_spin_resolver(backend)` turns every
   task into a spin of its planned runtime for synthetic real-GPU runs.
 
-## M2 gate results (RTX 5090, 2026-07-02)
+## Engine gate results (RTX 5090, 2026-07-02)
 
 Full 8B-shaped chain (103 tasks, 16 GiB budget, measured-bidi plan):
 

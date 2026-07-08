@@ -12,7 +12,7 @@ Op signatures (rows = tokens*lin_v_heads, d = lin_v_head_dim; all contiguous):
 Default implementation wraps fla's fused Triton kernels
 (``fla.modules.fused_norm_gate``, activation="swish", is_rms_norm=True) —
 pinned bit-identical fwd / bf16-tolerance bwd against
-``ops.gated_rmsnorm_reference`` by tests/tasks/test_qwen35_math.py. The
+``ops.gated_rmsnorm_reference`` by tests/models/test_qwen35.py. The
 eager fallback runs the reference forms (autograd for bwd).
 """
 from __future__ import annotations

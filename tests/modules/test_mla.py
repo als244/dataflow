@@ -1,5 +1,5 @@
 """MLA op-level pins (GPU): the DeepSeek-V3 attention reference and its
-load-bearing conventions, BEFORE any block executable exists (M-G1).
+load-bearing conventions, BEFORE any block executable exists.
 
 Pins: padded-v exactness (flash/SDPA at shared head_dim with zero-padded
 values == unpadded math, output AND gradients), shared-k_rope broadcast

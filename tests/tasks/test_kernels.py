@@ -198,7 +198,7 @@ def test_ce_fused(rows, vocab):
 def test_ce_fused_past_int32_elements():
     """rows x vocab > 2^31: the row offset must be computed in int64.
 
-    Regression for the M5.2 bs16 crash — qwen3.5's 248,320 vocab overflows
+    Regression for the bs16 crash — qwen3.5's 248,320 vocab overflows
     int32 pointer math at row 8,650 (illegal memory access pre-fix). Needs
     ~8.7 GB free VRAM for logits + dlogits; verifies rows past the boundary
     against a per-row fp32 reference.

@@ -226,7 +226,7 @@ def main() -> None:
     from dataflow.training.profiling import apply_measured_costs, cached_pcie, load_or_profile
     from dataflow.training.llama3 import ShapedLlamaConfig
 
-    from m4_train import CONFIGS  # same config registry as the sweeps
+    from bench_train import CONFIGS  # same config registry as the sweeps
 
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--config", choices=sorted(CONFIGS), default="8b-s1k-bs8ga8")

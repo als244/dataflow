@@ -411,7 +411,7 @@ def test_qwen35_plan_invariance():
     to its working set that the interleaved optimizer's in-flight O_i
     prefetches strand the ledger under real timing and the pressure-eviction
     valve ping-pongs (every resident has a near next-use at tiny scale — no
-    far-future Belady candidate) until DeadlockError. Known M4.9-class
+    far-future Belady candidate) until DeadlockError. Known byte-timing-inversion-class
     timing-inversion corner, loud not silent; 9B budgets show 0 evictions.
     12 MiB still forces offload traffic + the forced-recompute plan."""
     from dataflow.training.testing.gradcheck import check_model_step

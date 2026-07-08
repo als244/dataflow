@@ -51,7 +51,7 @@ details: `tasks/README.md`; the generated fleet inventory of every
 registered op (impls, priorities, signatures):
 [kernel_registry.md](kernel_registry.md).
 
-Gate — ladder level 1 (see `tests/tasks/test_llama3_math.py`): launch
+Gate — ladder level 1 (see `tests/models/test_llama3.py`): launch
 output vs reference forward; hand-written backward vs autograd on the
 reference; `rel_l2` with bf16-honest tolerances (2–3e-2). Every registry
 impl passes the same test.
@@ -224,7 +224,7 @@ charged, not silently uploaded before the clock starts).
 Gates, in order:
 1. ladder level 3: `check_model_step` at a few budgets — **plan-invariance**
    (different plans, identical math) is the highest-leverage async check;
-2. `tests/tasks/test_m3_gate.py` style poison-on-free + interleaving-stress
+2. `tests/runtime/test_engine_stress.py` style poison-on-free + interleaving-stress
    runs;
 3. throughput: add named configs to `tools/bench_train.py` `CONFIGS`, then
    run a sweep (`tools/bench_frontier.py --presets <yours> --shapes
@@ -430,7 +430,7 @@ embeddings) added to the machinery — reuse, don't reinvent:
   `check_model_step` branches on the config flag.
 - **Third-party fused kernels** (fla, flash-attn, ...): pin the exact
   fwd/bwd contracts in the family's test module BEFORE the blocks call
-  them (see tests/tasks/test_qwen35_math.py part 1), then wrap them as
+  them (see tests/models/test_qwen35.py part 1), then wrap them as
   registry ops so the kernel-set stamp covers them. Every tensor handed
   to a Triton kernel must be `.contiguous()` — a strided column slice
   out of a packed context is read with the wrong stride and corrupts
@@ -448,7 +448,7 @@ embeddings) added to the machinery — reuse, don't reinvent:
      family-invariant seam; combine emits nothing so derived recompute
      truncates it);
   3. the block backward overrides ONLY `_mlp_bwd` ->
-     `moe_mlp_tail_bwd(...)` (the M-A template split) and mixes in
+     `moe_mlp_tail_bwd(...)` (the dense-tail template split) and mixes in
      `MoEProfileFill` — REQUIRED: packed contexts carry int32 routing
      fields the profiler would otherwise feed garbage (illegal memory
      access) and routing costs must be balanced+reproducible;
@@ -474,7 +474,7 @@ embeddings) added to the machinery — reuse, don't reinvent:
   registry capability flags (`caps["flash_mla"]`).
 
 The family test module's canonical ladder (copy the newest family's —
-`tests/tasks/test_glm52_math.py` — not the oldest):
+`tests/models/test_glm52.py` — not the oldest):
 
 1. op-level pins (each new op: launch vs reference fwd, hand-bwd vs
    autograd; constructed tie rows for any top-k).

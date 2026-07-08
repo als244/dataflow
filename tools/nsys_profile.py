@@ -92,7 +92,7 @@ def main() -> None:
                         help="run `nsys stats` summaries after profiling")
     parser.add_argument("--annotated", type=Path, default=None,
                         help="profile an exact SAVED plan (passed through to "
-                             "m4_train --annotated; --config must match)")
+                             "bench_train --annotated; --config must match)")
     args = parser.parse_args()
 
     if shutil.which("nsys") is None:

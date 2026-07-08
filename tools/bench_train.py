@@ -195,7 +195,7 @@ CONFIGS = {
     "dsv32-mini-s4k-bs4ga4": ShapedDsv32Config.dsv32_mini(
         seq_len=4096, batch=4, grad_accum_rounds=4,
     ),
-    # dense warm-up phase (M-H3): frozen main, indexer-only training
+    # dense warm-up phase: frozen main, indexer-only training
     "dsv32-mini-s4k-dense-bs16ga1": ShapedDsv32Config.dsv32_mini(
         seq_len=4096, batch=16, grad_accum_rounds=1, sparse_mode=False,
     ),
@@ -255,7 +255,7 @@ def main() -> None:
     parser.add_argument(
         "--recompute", action=argparse.BooleanOptionalAction, default=True,
         help="recompute planning (simulator-verified greedy selection over "
-             "the rewrite table). ON by default since M5.2 — the qwen35 s1k "
+             "the rewrite table). ON by default — the qwen35 s1k "
              "sweeps ran without it and shipped a save-all plan that was "
              "h2d-bound (the m52-perf-gap-findings design note); the planner "
              "chooses 0 recompute when save-all genuinely wins, so leaving "
@@ -265,7 +265,7 @@ def main() -> None:
     parser.add_argument(
         "--force-recompute", choices=["all"], default=None,
         help="bypass the recompute planner and pin every rewrite to its "
-             "recompute level (M5.2 contention probe: the greedy planner "
+             "recompute level (contention probe finding: the greedy planner "
              "prices transfers at uncontended profiled costs, so it "
              "underestimates what recompute buys on transfer-heavy plans)",
     )

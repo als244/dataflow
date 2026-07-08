@@ -1,12 +1,18 @@
-"""Qwen3-MoE correctness ladder (GPU): third family on the pluggable MoE
-module, mirrored on test_olmoe_math.py.
+"""DeepSeek-V3 family ladder (GPU): golden + full programs through the
+real engine. Block-level MLA/moe pins live in tests/modules/test_mla.py.
 
-Family-specific pins: qwen3's PER-HEAD qk-norm inherited verbatim (dense
-qwen3 classes; per-head rstds), GQA exercised in the tiny config (4 q /
-2 kv heads — the real models are 32/4 and 64/4), topk_then_softmax
-routing (norm_topk_prob=true), aux at 0.001, NO shared expert, recompute
-reproducing the routing decision bit-exactly, fixed-seed engine
-determinism.
+Family-specific pins here: MIXED depth (dense + moe kinds in one chain),
+sigmoid_noaux_tc end to end (bias counts through the dW slot, the sign
+rule applied by the optimizer's per-field special — golden mirrors it
+exactly, so multistep parity IS the bias-rule test), sequence-wise aux,
+fixed-seed bitwise determinism.
+
+w_router_bias gate envelope: sign(mean - count) is DISCONTINUOUS — a
++-1-token near-tie selection flip (the known, tolerance-covered class)
+that lands a count on the mean boundary flips a whole +-speed bias step
+(measured: rel 0.378 = sqrt(1/7), exactly one slot). Same phenomenon as
+qwen35moe's dt_bias sign lottery; the honest comparison is the
+field_atol envelope |db| <= 2*speed + slack, not a relative bound.
 """
 import math
 from dataclasses import replace
@@ -23,44 +29,52 @@ pytestmark = pytest.mark.gpu
 
 
 def _tiny_cfg(**over):
-    from dataflow.training.qwen3moe import ShapedQwen3MoeConfig
+    from dataflow.training.dsv3 import ShapedDsv3Config
 
-    return replace(ShapedQwen3MoeConfig.tiny(), **over)
+    return replace(ShapedDsv3Config.tiny(), **over)
 
 
 def _tiny_dims(cfg=None):
-    from dataflow.training.qwen3moe import dims_of_qwen3moe
+    from dataflow.training.dsv3 import dims_of_dsv3
 
-    return dims_of_qwen3moe(cfg if cfg is not None else _tiny_cfg())
+    return dims_of_dsv3(cfg if cfg is not None else _tiny_cfg())
 
 
 # --- golden self-consistency -----------------------------------------------------
 
 
-def test_golden_qwen3moe_trains():
-    from dataflow.models.qwen3moe_reference import GoldenQwen3Moe
-    from dataflow.tasks.layouts import head_weight_layout, qwen3moe_weight_layout
+def test_golden_dsv3_trains():
+    from dataflow.models.dsv3_reference import GoldenDsv3
+    from dataflow.tasks.layouts import head_weight_layout
 
     cfg = _tiny_cfg()
     dims = _tiny_dims(cfg)
     gen = torch.Generator().manual_seed(0)
 
     def packed(layout):
-        flat = (torch.randn(layout.total_bytes // 2, generator=gen) * 0.02).to(torch.bfloat16)
+        flat = torch.zeros(layout.total_bytes, dtype=torch.uint8)
+        fb = flat.view(torch.uint8)
         for f in layout.fields:
+            n = int(torch.tensor(f.shape).prod())
+            if f.dtype == "fp32":
+                v = torch.zeros(n, dtype=torch.float32)  # the balance bias
+                fb[f.offset_bytes:f.offset_bytes + f.nbytes] = v.view(torch.uint8)
+                continue
+            vals = (torch.randn(n, generator=gen) * 0.02).to(torch.bfloat16)
             if f.name.endswith("_norm_w"):
-                start = f.offset_bytes // 2
-                n = int(torch.tensor(f.shape).prod())
-                flat[start : start + n] = 1.0
-        return flat.view(torch.uint8)
+                vals = torch.ones(n, dtype=torch.bfloat16)
+            fb[f.offset_bytes:f.offset_bytes + f.nbytes] = vals.view(torch.uint8)
+        return flat
 
     def table():
         n = dims.vocab_size * dims.d_model
         return (torch.randn(n, generator=gen) * 0.02).to(torch.bfloat16).view(torch.uint8)
 
-    golden = GoldenQwen3Moe.from_packed_bytes(
+    golden = GoldenDsv3.from_packed_bytes(
         dims, cfg.n_layers, table(),
-        [packed(qwen3moe_weight_layout(dims)) for _ in range(cfg.n_layers)],
+        [packed(golden_layout) for golden_layout in
+         (GoldenDsv3(dims=dims, n_layers=cfg.n_layers).block_layout(i)
+          for i in range(cfg.n_layers))],
         packed(head_weight_layout(dims)),
     )
     toks = torch.randint(0, dims.vocab_size, (dims.tokens,), generator=gen).cuda()
@@ -71,208 +85,109 @@ def test_golden_qwen3moe_trains():
     assert all(x == x for x in losses)
     assert abs(losses[0] - math.log(dims.vocab_size)) < 0.5
     assert losses[-1] < losses[0]
+    # the balance bias moved (skewed routing at random init) but only by
+    # multiples of the update speed
+    moved = [b["w_router_bias"] for b in golden.w_blocks if "w_router_bias" in b]
+    assert moved and any(m.abs().sum() > 0 for m in moved)
+    for m in moved:
+        steps = m / cfg.bias_update_speed
+        assert torch.allclose(steps, steps.round(), atol=1e-4)
 
 
-# --- ladder 2: block fwd/recompute/bwd vs golden autograd (with aux) --------------
+# --- lowering ----------------------------------------------------------------------
 
 
-def _block_state(dims, wl, seed):
-    from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME
-
-    gen = torch.Generator(device="cuda").manual_seed(seed)
-    views = {}
-    for f in wl.fields:
-        n = int(torch.tensor(f.shape).prod())
-        dt = TORCH_DTYPE_BY_NAME[f.dtype]
-        if f.name.endswith("_norm_w"):
-            views[f.name] = torch.ones(f.shape, device="cuda", dtype=dt)
-        else:
-            views[f.name] = (
-                torch.randn(n, generator=gen, device="cuda") * 0.06
-            ).to(dt).view(f.shape)
-    x = (torch.randn(dims.tokens, dims.d_model, generator=gen, device="cuda") * 0.5).to(torch.bfloat16)
-    dy = (torch.randn(dims.tokens, dims.d_model, generator=gen, device="cuda") * 0.5).to(torch.bfloat16)
-    return views, x, dy
-
-
-_INT_CTX_FIELDS = ("route_ids", "route_order", "route_offsets")
-
-
-def test_qwen3moe_block_ladder2():
-    from dataflow.models.qwen3moe_reference import GoldenQwen3Moe
-    from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME
-    from dataflow.tasks.kernels import KernelCtx, resolve_kernels
-    from dataflow.tasks.layouts import grad_layout
-    from dataflow.tasks.qwen3moe_blocks import (
-        Qwen3MoeBlockBwd,
-        Qwen3MoeBlockFwd,
-        Qwen3MoeBlockRecompute,
-    )
-
-    cfg = _tiny_cfg()
-    dims = _tiny_dims(cfg)
-    kernels = resolve_kernels()
-    kctx = KernelCtx()
-    fwd = Qwen3MoeBlockFwd(dims, kernels)
-    bwd = Qwen3MoeBlockBwd(dims, kernels)
-    wl, cl = fwd.wl, fwd.cl
-
-    w, x, dy = _block_state(dims, wl, seed=23)
-    a = {
-        f.name: torch.empty(f.shape, dtype=TORCH_DTYPE_BY_NAME[f.dtype], device="cuda")
-        for f in cl.fields
-    }
-    y = torch.empty_like(x)
-    from dataflow.tasks.moe.spec import moe_meta_layout
-
-    m_l = moe_meta_layout(dims, dims.moe)
-    meta_views = {f.name: torch.empty(f.shape, dtype=TORCH_DTYPE_BY_NAME[f.dtype],
-                                      device="cuda") for f in m_l.fields}
-    fwd._forward(kctx, x, w, y, a, extras={"meta": dict(meta_views)})
-
-    # recompute equivalence: the ROUTING DECISION must reproduce bit-exactly
-    a2 = {
-        f.name: torch.empty(f.shape, dtype=TORCH_DTYPE_BY_NAME[f.dtype], device="cuda")
-        for f in cl.fields
-    }
-    Qwen3MoeBlockRecompute(dims, kernels)._run_stages(
-        kctx, x, w, a2, count=Qwen3MoeBlockRecompute.recompute_stage_count(),
-        extras={"meta": dict(meta_views), "meta_ready": True},
-    )
-    torch.cuda.synchronize()
-    errors = {}
-    for name in a:
-        if name in _INT_CTX_FIELDS:
-            assert torch.equal(a2[name], a[name]), f"recompute int field {name}"
-        else:
-            errors[f"recompute:{name}"] = rel_l2(a2[name], a[name])
-
-    gl = grad_layout(wl, dims.dtypes)
-    dwv = {
-        f.name: torch.zeros(f.shape, device="cuda", dtype=TORCH_DTYPE_BY_NAME[f.dtype])
-        for f in gl.fields
-    }
-    dx = torch.empty_like(x)
-    bwd._backward(kctx, dy, a, x, w, dx, dwv, accum=False,
-                  meta={"meta": meta_views})
-
-    golden = GoldenQwen3Moe(dims=dims, n_layers=cfg.n_layers)
-    leaves = {n: t.detach().clone().requires_grad_() for n, t in w.items()}
-    x_ref = x.clone().requires_grad_()
-    y_ref, aux_ref = golden.block_forward(x_ref, leaves, route_ids=meta_views["route_ids"])
-    y_ref.backward(dy, retain_graph=True)
-    aux_ref.backward()
-
-    errors["fwd:y"] = rel_l2(y, y_ref)
-    errors["bwd:dx"] = rel_l2(dx, x_ref.grad)
-    for name in dwv:
-        errors[f"bwd:d{name}"] = rel_l2(dwv[name], leaves[name].grad)
-
-    bwd._backward(kctx, dy, a, x, w, dx, dwv, accum=True,
-                  meta={"meta": meta_views})
-    for name in dwv:
-        errors[f"accum:2x:{name}"] = rel_l2(dwv[name], 2.0 * leaves[name].grad)
-
-    bad = {k: round(v, 4) for k, v in errors.items() if v > 4e-2}
-    assert not bad, bad
-
-
-# --- structure + lowering ----------------------------------------------------------
-
-
-def test_qwen3moe_stage_context_completeness():
-    from dataflow.tasks.layouts import qwen3moe_context_layout
-    from dataflow.tasks.qwen3moe_blocks import Qwen3MoeBlockFwd
-
-    cl = qwen3moe_context_layout(_tiny_dims())
-    declared = {f.name for f in cl.fields}
-    emitted = Qwen3MoeBlockFwd.context_fields_emitted()
-    assert declared == emitted, declared ^ emitted
-    assert Qwen3MoeBlockFwd.recompute_stage_count() < len(Qwen3MoeBlockFwd.STAGES)
-    names = [s[0] for s in Qwen3MoeBlockFwd.STAGES]
-    assert names[Qwen3MoeBlockFwd.recompute_stage_count():] == ["moe_experts2_combine"]
-
-
-def test_qwen3moe_lowering_validates_and_plans():
+def test_dsv3_lowering_validates_and_plans():
     from dataflow.core import validate_program
     from dataflow.training.families import resolve_family
     from dataflow.training.planning import plan_program, simulate_program
 
     cfg = _tiny_cfg()
     fam = resolve_family(cfg)
-    assert fam.name == "qwen3moe"
+    assert fam.name == "dsv3"
     program = fam.lower(cfg)
     validate_program(program)
-    assert program.metadata["family"] == "qwen3moe-shaped"
-    ids = {spec.id for spec in program.initial_objects}
-    assert {"W_embed", "W_head", "O_head"} <= ids  # untied
+    assert program.metadata["family"] == "dsv3-shaped"
     keys = {t.compute_block_key for t in program.tasks}
-    assert {"q3moeattn_fwd", "q3moeattn_bwd", "head_loss"} <= keys
+    assert {"mladense_fwd", "mlamoe_fwd", "mlamoe_bwd", "head_loss"} <= keys
+    # depth mix: exactly first_k_dense dense blocks
+    n_dense = sum(1 for t in program.tasks if t.compute_block_key == "mladense_fwd")
+    assert n_dense == cfg.first_k_dense * cfg.grad_accum_rounds
     planned = plan_program(program, fast_memory_capacity=8 * 1024 * 1024)
     log = simulate_program(planned.program)
     assert max(iv.end for iv in log.task_intervals) > 0
 
 
-def test_qwen3moe_full_scale_presets_lower_and_validate():
-    """30B (48L) and 235B are definition-validated: lowering + exact sizes
-    succeed even though neither trains on this host (183 GiB / 1.4 TiB
-    pinned — documented in training/qwen3moe.py)."""
+def test_dsv3_full_scale_presets_lower_and_validate():
     from dataflow.core import validate_program
-    from dataflow.training.qwen3moe import ShapedQwen3MoeConfig, lower_qwen3moe
+    from dataflow.training.dsv3 import ShapedDsv3Config, lower_dsv3
 
-    for cfg in (ShapedQwen3MoeConfig.qwen3moe_30b(seq_len=128),
-                ShapedQwen3MoeConfig.qwen3moe_235b(seq_len=128)):
-        program = lower_qwen3moe(cfg)
+    for ctor, layers in ((ShapedDsv3Config.dsv3_mini, 18),
+                         (ShapedDsv3Config.dsv3_671b, 61),
+                         (ShapedDsv3Config.kimi_k2, 61)):
+        cfg = ctor(seq_len=128)
+        program = lower_dsv3(cfg)
         validate_program(program)
-        n_blocks = sum(1 for t in program.tasks if t.compute_block_key == "q3moeattn_fwd")
-        assert n_blocks == cfg.n_layers
+        n_blocks = sum(1 for t in program.tasks
+                       if t.compute_block_key.endswith("_fwd")
+                       and t.compute_block_key.startswith("mla"))
+        assert n_blocks == layers
 
 
-def test_qwen3moe_partial_ownership_lowering_rejected():
+def test_dsv3_partial_ownership_lowering_rejected():
     import dataclasses
     import unittest.mock as mock
 
-    from dataflow.training.qwen3moe import dims_of_qwen3moe, lower_qwen3moe
+    from dataflow.training.dsv3 import dims_of_dsv3, lower_dsv3
 
     cfg = _tiny_cfg()
-    part = dataclasses.replace(dims_of_qwen3moe(cfg).moe, expert_ids=(0, 1, 2))
+    part = dataclasses.replace(dims_of_dsv3(cfg).moe, expert_ids=(0, 1, 2))
     with pytest.raises(NotImplementedError):
-        with mock.patch("dataflow.training.qwen3moe.moe_spec_of", return_value=part):
-            lower_qwen3moe(cfg)
+        with mock.patch("dataflow.training.dsv3.moe_spec_of", return_value=part):
+            lower_dsv3(cfg)
 
 
-# --- ladder 3: full program through the real engine --------------------------------
+# --- full program through the real engine ------------------------------------------
 
 
-def test_qwen3moe_model_step_vs_golden():
-    check_model_step(_tiny_cfg(), fast_memory_capacity=64 * 1024 * 1024, tol=3e-2).assert_ok()
+_BIAS_ATOL = {"w_router_bias": 2.5e-3}  # 2.5x speed: +-2 steps + fp slack
 
 
-def test_qwen3moe_aux_zero_model_step_vs_golden():
+def test_dsv3_model_step_vs_golden():
+    check_model_step(_tiny_cfg(), fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
+                     field_atol=_BIAS_ATOL).assert_ok()
+
+
+def test_dsv3_aux_zero_model_step_vs_golden():
     check_model_step(
         _tiny_cfg(aux_coef=0.0), fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
+        field_atol=_BIAS_ATOL,
     ).assert_ok()
 
 
-def test_qwen3moe_plan_invariance():
+def test_dsv3_plan_invariance():
     cfg = _tiny_cfg()
-    r1 = check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2)
-    r2 = check_model_step(cfg, fast_memory_capacity=8 * 1024 * 1024, tol=3e-2)
+    r1 = check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
+                          field_atol=_BIAS_ATOL)
+    r2 = check_model_step(cfg, fast_memory_capacity=8 * 1024 * 1024, tol=3e-2,
+                          field_atol=_BIAS_ATOL)
     levels = {f"A_0_0_{i}": 1 for i in range(cfg.n_layers)}
     r3 = check_model_step(
         cfg, fast_memory_capacity=8 * 1024 * 1024, recompute_levels=levels, tol=3e-2,
+        field_atol=_BIAS_ATOL,
     )
     for r in (r1, r2, r3):
         r.assert_ok()
 
 
-def test_qwen3moe_batch2_packed_sequences_vs_golden():
+def test_dsv3_batch2_packed_sequences_vs_golden():
     cfg = _tiny_cfg(batch=2, seq_len=64)
-    check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2).assert_ok()
+    check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
+                     field_atol=_BIAS_ATOL).assert_ok()
 
 
-def test_qwen3moe_ga2_matches_golden():
-    from dataflow.models.qwen3moe_reference import GoldenQwen3Moe
+def test_dsv3_ga2_matches_golden():
+    from dataflow.models.dsv3_reference import GoldenDsv3
     from dataflow.runtime import Engine
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.runtime.device.fake import FakeBackend
@@ -291,10 +206,11 @@ def test_qwen3moe_ga2_matches_golden():
         buf = values[name]
         return torch_view(buf, (buf.size_bytes,), torch.uint8).clone()
 
-    golden = GoldenQwen3Moe.from_packed_bytes(
+    golden = GoldenDsv3.from_packed_bytes(
         dims, cfg.n_layers, pinned("W_embed"),
         [pinned(f"W_{i}") for i in range(cfg.n_layers)], pinned("W_head"),
     )
+    golden._pending_counts = []
     total = None
     for r in range(cfg.grad_accum_rounds):
         toks = torch_view(values[f"tokens_0_{r}"], (dims.tokens,), torch.int32).long().cuda()
@@ -305,8 +221,20 @@ def test_qwen3moe_ga2_matches_golden():
     total.backward()
     golden.step_count = 1
     golden._adamw_obj("embed", golden.w_embed)
+    # bias rule on the STEP AGGREGATE counts (both rounds), mirroring the
+    # runtime's dW accumulation; counts were captured per round in order
+    n_moe = sum(1 for b in golden.w_blocks if "w_router_bias" in b)
+    per_round = [golden._pending_counts[i::n_moe] for i in range(n_moe)] \
+        if n_moe else []
+    moe_i = 0
     for i, leaves in enumerate(golden.w_blocks):
         golden._adamw_obj(f"block_{i}", leaves)
+        if "w_router_bias" in leaves:
+            agg = sum(per_round[moe_i])
+            b = leaves["w_router_bias"]
+            b.data.add_(torch.sign(agg.mean() - agg).to(b.dtype),
+                        alpha=cfg.bias_update_speed)
+            moe_i += 1
     golden._adamw_obj("head", golden.w_head)
 
     dry = Engine(FakeBackend()).execute(planned.program, initial_buffers=values)
@@ -338,7 +266,7 @@ def test_qwen3moe_ga2_matches_golden():
         backend.free(buf)
 
 
-# --- engine-level gates: determinism / measured-replan / multistep ------------------
+# --- engine gates -------------------------------------------------------------------
 
 
 def _run(engine_kwargs=None, program=None, seed=7, resolver_wrapper=None):
@@ -369,7 +297,11 @@ def _run(engine_kwargs=None, program=None, seed=7, resolver_wrapper=None):
     for obj_id in ["W_embed", "W_head"] + [f"W_{i}" for i in range(cfg.n_layers)]:
         rec = result.objects.get(obj_id)
         slot = rec.backing or rec.fast
-        out[obj_id] = torch_view(slot.buffer, (rec.size_bytes // 2,), torch.bfloat16).clone()
+        # BYTES, not bf16: fp32 fields (w_router_bias) reinterpreted as
+        # bf16 can alias NaN bit patterns and torch.equal fails NaN != NaN
+        # on identical bytes (this file passed by bit-pattern luck until
+        # the dsv32 harness fix; the luck ran out 2026-07-07)
+        out[obj_id] = torch_view(slot.buffer, (rec.size_bytes,), torch.uint8).clone()
     loss_rec = result.objects.get("loss_0_0")
     out["loss"] = float(torch_view((loss_rec.backing or loss_rec.fast).buffer, (1,), torch.float32)[0])
     result.close()
@@ -384,11 +316,15 @@ def _assert_same(a: dict, b: dict, tol: float = 1e-3):
     for k in a:
         if k == "loss":
             continue
-        err = rel_l2(a[k], b[k])
+        if torch.equal(a[k], b[k]):        # byte-identical fast path
+            continue
+        va = torch.nan_to_num(a[k].view(torch.bfloat16).float())
+        vb = torch.nan_to_num(b[k].view(torch.bfloat16).float())
+        err = rel_l2(va, vb)
         assert err < tol, f"{k}: rel_l2={err}"
 
 
-def test_qwen3moe_fixed_seed_bitwise_deterministic():
+def test_dsv3_fixed_seed_bitwise_deterministic():
     a = _run()
     b = _run()
     assert a["loss"] == b["loss"]
@@ -397,7 +333,7 @@ def test_qwen3moe_fixed_seed_bitwise_deterministic():
             assert torch.equal(a[k], b[k]), k
 
 
-def test_qwen3moe_measured_costs_replan_still_golden():
+def test_dsv3_measured_costs_replan_still_golden():
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.training.families import resolve_family
     from dataflow.training.planning import plan_program
@@ -417,8 +353,8 @@ def test_qwen3moe_measured_costs_replan_still_golden():
     _assert_same(again, base)
 
 
-def test_qwen3moe_multistep_matches_golden_and_loss_decreases():
-    from dataflow.models.qwen3moe_reference import GoldenQwen3Moe
+def test_dsv3_multistep_matches_golden_and_loss_decreases():
+    from dataflow.models.dsv3_reference import GoldenDsv3
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.tasks.interop import torch_view
     from dataflow.training.families import resolve_family
@@ -445,7 +381,7 @@ def test_qwen3moe_multistep_matches_golden_and_loss_decreases():
         buf = snapshot[name]
         return torch_view(buf, (buf.size_bytes,), torch.uint8).clone()
 
-    golden = GoldenQwen3Moe.from_packed_bytes(
+    golden = GoldenDsv3.from_packed_bytes(
         dims, cfg.n_layers, pinned("W_embed"),
         [pinned(f"W_{i}") for i in range(cfg.n_layers)], pinned("W_head"),
     )
@@ -463,14 +399,14 @@ def test_qwen3moe_multistep_matches_golden_and_loss_decreases():
     assert all(n == 0 for n in report.step_slab_overflows[1:]), report.step_slab_overflows
 
 
-def test_qwen3moe_poison_on_free_changes_nothing():
+def test_dsv3_poison_on_free_changes_nothing():
     base = _run()
     poisoned = _run(engine_kwargs={"poison_on_free": True})
     _assert_same(poisoned, base)
     assert poisoned["loss"] == poisoned["loss"]  # not NaN
 
 
-def test_qwen3moe_interleaving_stress_changes_nothing():
+def test_dsv3_interleaving_stress_changes_nothing():
     from dataflow.runtime.device.cuda_spin import SpinKernel
 
     def wrapper(resolver, backend):

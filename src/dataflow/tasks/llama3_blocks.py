@@ -354,7 +354,7 @@ def dense_mlp_tail_bwd(kctx, K, dy, h_mid, rstd_ffn, x1, x3, w, acc, norm_bwd):
     gradient WITH the incoming ``dy`` added. Kernel-call order is
     byte-identical to the per-family copies it replaced.
 
-    Scratch discipline (M5.2): del each (t, .) temporary at last use so the
+    Scratch discipline: del each (t, .) temporary at last use so the
     caching allocator recycles it within the task; additive joins run in
     place (addmm_/add_, the forward's epilogue convention).
     """

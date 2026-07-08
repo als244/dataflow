@@ -9,7 +9,7 @@ Completion tokens: the engine registers (event, token, priority) per stream;
   ~us-scale wake latency at the cost of spinning while blocked.
 - ``hostfn``: cudaLaunchHostFunc pushes tokens from CUDA's callback thread
   (measured ~160-270 us delivery latency on this machine). Kept for
-  comparison; the M2 gate reports both.
+  comparison; the engine gate reports both.
 
 Timebase: an origin event recorded+synced at first stream creation;
 `event_time_us` = cudaEventElapsedTime(origin, ev) in microseconds. All

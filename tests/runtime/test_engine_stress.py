@@ -1,4 +1,4 @@
-"""M3 gate extras (GPU): poison-on-free, interleaving stress, measured-cost
+"""Engine stress gates (GPU): poison-on-free, interleaving stress, measured-cost
 replanning — all must leave the math golden."""
 import pytest
 

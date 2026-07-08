@@ -1,5 +1,5 @@
 """OLMoE correctness ladder (GPU): the first family on the pluggable MoE
-module, mirrored on test_qwen35_math.py.
+module, mirrored on tests/models/test_qwen35.py.
 
 Family-specific pins: full-row qk-norm (one rstd per token), the MoE tail
 spliced after resid1_norm2, aux load-balance gradient injection (the
@@ -216,7 +216,7 @@ def test_olmoe_lowering_validates_and_plans():
 
 def test_olmoe_partial_ownership_lowering_rejected():
     """Accounting for partial expert ownership is plumbed and unit-tested
-    (test_moe_math.py); the PROGRAM path refuses until a multi-rank
+    (tests/modules/test_moe.py); the PROGRAM path refuses until a multi-rank
     runtime exists."""
     import dataclasses
     import unittest.mock as mock

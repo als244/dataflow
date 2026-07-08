@@ -6,7 +6,7 @@ while the shared embed/head/loss/optimizer executables are reused verbatim
 (the head reads the TIED ``W_embed`` object — same packed [table |
 final_norm_w] layout).
 
-Every fla call follows the contracts pinned by tests/tasks/test_qwen35_math.py:
+Every fla call follows the contracts pinned by tests/models/test_qwen35.py:
 - ``chunk_gated_delta_rule_fwd`` returns
   ``(g_post, o, A_int, final_state, initial_state, g_input)``; the blocks
   save g_post/A_int/core_out and DISCARD g_input (it equals the raw ``a``
@@ -236,7 +236,7 @@ class Qwen35LinBlockBwd(BlockBwd):
     def _attn_bwd(self, kctx, dxo, a, x, w, acc, norm_bwd, dx_out) -> None:
         # DeltaNet part; the shared dense MLP tail already ran via
         # BlockBwd._backward's template (_mlp_bwd, xo plays h_mid).
-        # Scratch discipline (M5.2: bs32 measured 9.5 GiB of task-internal
+        # Scratch discipline (bs32 measured 9.5 GiB of task-internal
         # torch scratch): every (t, .) temporary is del'd at its LAST use so
         # the caching allocator can recycle it within the task, and additive
         # joins run in place (addmm_/add_ — same epilogue convention the

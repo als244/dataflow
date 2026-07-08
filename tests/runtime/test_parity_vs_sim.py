@@ -1,4 +1,4 @@
-"""M1 gate: the engine on the fake backend must reproduce the simulator
+"""Parity gate: the engine on the fake backend must reproduce the simulator
 exactly — task intervals, transfer intervals (including naming), and peak
 fast memory — on annotated programs from tiny to full 8B scale.
 """
@@ -68,7 +68,7 @@ def test_parity_tiny_grad_accum():
 
 
 def test_parity_8b_16gib():
-    """The headline M1 gate: full llama3-8B-shaped chain."""
+    """The headline parity gate: full llama3-8B-shaped chain."""
     result, log = run_both(plan(ShapedLlamaConfig.llama3_8b(), 16 * GIB))
     assert result.makespan_us == pytest.approx(
         max(iv.end for iv in log.task_intervals), abs=0.0

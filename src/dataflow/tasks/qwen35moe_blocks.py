@@ -1,5 +1,5 @@
 """Qwen3.5-MoE block executables: the dense hybrid's attention parts
-VERBATIM (subclassed from qwen35_blocks — the M-A template split's payoff),
+VERBATIM (subclassed from qwen35_blocks — the dense-tail template split's payoff),
 with the dense SwiGLU tail swapped for the pluggable MoE module.
 
 Forward: the dense kinds' stage prefixes (through ``ffn_norm``) +

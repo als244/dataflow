@@ -151,7 +151,7 @@ def _qwen35() -> Family:
         return GoldenQwen35
 
     # heterogeneous (lin/full kinds) — the per-kind block ladders live in
-    # tests/tasks/test_qwen35_math.py, so no generic gradcheck bundle here
+    # tests/models/test_qwen35.py, so no generic gradcheck bundle here
     return Family(
         name="qwen35",
         config_type=ShapedQwen35Config,
@@ -173,7 +173,7 @@ def _olmoe() -> Family:
         return GoldenOlmoe
 
     # MoE family — the block ladder needs the aux-loss term in the golden
-    # objective, so it lives in tests/tasks/test_olmoe_math.py rather than
+    # objective, so it lives in tests/models/test_olmoe.py rather than
     # the generic check_block_backward harness (no gradcheck bundle)
     return Family(
         name="olmoe",
@@ -201,7 +201,7 @@ def _qwen35moe() -> Family:
         return GoldenQwen35Moe
 
     # heterogeneous MoE (linmoe/gattnmoe kinds) — per-kind ladders live in
-    # tests/tasks/test_qwen35moe_math.py
+    # tests/models/test_qwen35moe.py
     return Family(
         name="qwen35moe",
         config_type=ShapedQwen35MoeConfig,
@@ -228,7 +228,7 @@ def _qwen3moe() -> Family:
         return GoldenQwen3Moe
 
     # MoE family (aux objective) — block ladder lives in
-    # tests/tasks/test_qwen3moe_math.py (no gradcheck bundle)
+    # tests/models/test_qwen3moe.py (no gradcheck bundle)
     return Family(
         name="qwen3moe",
         config_type=ShapedQwen3MoeConfig,
@@ -255,7 +255,7 @@ def _dsv3() -> Family:
         return GoldenDsv3
 
     # MLA + hybrid dense/MoE depth + sigmoid_noaux_tc — block ladder lives
-    # in tests/tasks/test_mla_math.py, family ladder in test_dsv3_math.py
+    # in tests/modules/test_mla.py, family ladder in tests/models/test_dsv3.py
     return Family(
         name="dsv3",
         config_type=ShapedDsv3Config,
@@ -282,7 +282,7 @@ def _dsv32() -> Family:
         return GoldenDsv32
 
     # dsv3 + DSA (lightning indexer, sparse mode) — ladders in
-    # tests/tasks/test_dsa_math.py + test_dsv32_math.py
+    # tests/modules/test_dsa.py + tests/models/test_dsv32.py
     return Family(
         name="dsv32",
         config_type=ShapedDsv32Config,
@@ -310,7 +310,7 @@ def _glm52() -> Family:
         return GoldenGlm52
 
     # IndexShare: cross-layer selection via M/dM objects — ladder in
-    # tests/tasks/test_glm52_math.py + tests/training/test_glm52_lowering.py
+    # tests/models/test_glm52.py + tests/models/test_glm52_lowering.py
     return Family(
         name="glm52",
         config_type=ShapedGlm52Config,

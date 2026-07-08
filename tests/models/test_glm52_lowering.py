@@ -1,4 +1,4 @@
-"""glm52 (IndexShare) lowering gates — CPU-only (M-I1).
+"""glm52 (IndexShare) lowering gates — CPU-only.
 
 Pins the M/dM metadata grammar: every layer's discrete artifacts live in
 its M object (never recomputed — Shein invariant); IndexShare followers

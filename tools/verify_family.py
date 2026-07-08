@@ -52,12 +52,12 @@ CANON = [
 # older families keep op/ladder coverage in shared modules — scanned as
 # part of the family's audit surface
 EXTRA_MODULES = {
-    "dsv3": ["tests/tasks/test_mla_math.py", "tests/tasks/test_moe_math.py"],
-    "dsv32": ["tests/tasks/test_dsa_math.py", "tests/tasks/test_moe_math.py"],
-    "glm52": ["tests/tasks/test_dsa_math.py", "tests/tasks/test_moe_math.py"],
-    "olmoe": ["tests/tasks/test_moe_math.py"],
-    "qwen3moe": ["tests/tasks/test_moe_math.py"],
-    "qwen35moe": ["tests/tasks/test_moe_math.py"],
+    "dsv3": ["tests/modules/test_mla.py", "tests/modules/test_moe.py"],
+    "dsv32": ["tests/modules/test_dsa.py", "tests/modules/test_moe.py"],
+    "glm52": ["tests/modules/test_dsa.py", "tests/modules/test_moe.py"],
+    "olmoe": ["tests/modules/test_moe.py"],
+    "qwen3moe": ["tests/modules/test_moe.py"],
+    "qwen35moe": ["tests/modules/test_moe.py"],
 }
 # fleet-level gates: exercised through the shared engine/runtime tests
 # (they run real programs); a family missing one in ITS module gets a
@@ -80,7 +80,7 @@ def main() -> None:
                     help="path to the family's canonical test module "
                          "(external families: your module lives in YOUR "
                          "repo — pass it here; builtin default is "
-                         "tests/tasks/test_{family}_math.py)")
+                         "tests/models/test_{family}.py)")
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--audit-only", action="store_true",
                     help="coverage audit without running the tests")
@@ -99,7 +99,7 @@ def main() -> None:
         return
 
     mod = (Path(args.module) if args.module
-           else REPO / f"tests/tasks/test_{args.family}_math.py")
+           else REPO / f"tests/models/test_{args.family}.py")
     if not mod.exists():
         sys.exit(f"MISSING {mod} — a family without its canonical test "
                  f"module is unverified. Copy the NEWEST family's module "

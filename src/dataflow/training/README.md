@@ -50,7 +50,7 @@ measurement (profiling), and the correctness harness (gradcheck).
   semantics) and `check_model_step` (full annotated program through the real
   engine vs the golden model: loss, final params, optimizer state).
 
-## The E2E recipe (what the M3 gate runs)
+## The E2E recipe (what the model-step gate runs)
 
 ```python
 program = lower_llama3(cfg)                          # exact sizes

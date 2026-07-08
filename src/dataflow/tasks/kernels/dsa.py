@@ -31,7 +31,7 @@ sorts stay on device):
 The (t,t) score/prob matrices are PER-SEQUENCE (seq_bounds host ints,
 plan-time constants) and row-chunked; nothing materializes across
 sequences. Optimized triton/gather-absorbed/FlashMLA impls arrive in
-M-H2 behind the same op names.
+behind the same op names.
 """
 from __future__ import annotations
 

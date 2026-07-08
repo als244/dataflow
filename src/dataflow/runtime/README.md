@@ -109,7 +109,7 @@ Deadlock (dispatcher blocked or queues stuck with nothing in flight) raises
 violations raise `ExecutionError`. `final_locations` are verified at the end
 (latest-version bytes present at the required location) — strict by default.
 
-## Parity contract (M1 gate — enforced by tests/runtime/)
+## Parity contract (enforced by tests/runtime/)
 
 On the fake (virtual-clock) backend, the engine reproduces
 `dataflow_sim.engine.simulator` *exactly*: task intervals, transfer intervals

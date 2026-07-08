@@ -13,7 +13,7 @@ agreed at every envelope; the one inside-noise call (dev-14, 1.0% margin) was
 flagged and settled by a real run. With contended profiles (the default since
 2026-07-06) raw sim is CONSERVATIVE: measured wall ran +2.6..+6.6% above it,
 tightening as budgets grow. Margins under ~2% are within that noise — the
-tool flags them; settle top-2 with `m4_train --device-gib`.
+tool flags them; settle top-2 with `bench_train --device-gib`.
 
 The model is specified the way the registry thinks about it: --family names
 a REGISTERED FAMILY (llama3, qwen3, qwen35 — the grammar/lowering/kernels),
@@ -42,7 +42,7 @@ import json
 import os
 import time
 
-# match m4_train's allocator convention: the big-round MoE shapes (bs64ga1:
+# match bench_train's allocator convention: the big-round MoE shapes (bs64ga1:
 # many ~2 GiB tail temporaries) fragment the default allocator and OOM the
 # profiling launch well under capacity — expandable segments fixed exactly
 # this class in the alloc A/B study
@@ -345,7 +345,7 @@ def main() -> None:
         if best:
             line += f"   best: bs{best['bs']}ga{best['ga']}"
             if margin is not None and margin <= 2:
-                line += f"  (margin {margin:.1f}% ~ noise: verify top-2 with m4_train)"
+                line += f"  (margin {margin:.1f}% ~ noise: verify top-2 with bench_train)"
         print(line)
         results.append(dict(
             device_gib=env_gib,

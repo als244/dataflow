@@ -14,7 +14,7 @@ fetched 2026-07-07):
   integration therefore uses FlashMLA for fwd + recompute and keeps our
   deterministic masked-flash kernels for the backward.
 - sm100 additionally ships dense MHA prefill fwd+bwd — relevant to the
-  M-H3 dense-warmup mode on that hardware, not wired here.
+  dense-warmup mode on that hardware, not wired here.
 
 This module lands the seam, not the full absorbed pipeline: a NEW op
 ``dsa_sparse_attn_fwd_absorbed`` in the absorbed layout, registered
@@ -22,7 +22,7 @@ behind ``requires=flash_mla`` so it resolves only on capable machines.
 The dsv32 blocks keep the MHA-expanded stages on sm120; the
 absorbed-mode block variant (latents stay compressed end-to-end,
 q-absorption GEMMs, absorbed-space backward + un-absorption chains) is
-the big-machine milestone that consumes this op (plan M-H2b).
+the future big-machine absorbed-mode work that consumes this op.
 
 Assumptions to pin ON the sm90 machine (parity test below, auto-skipped
 elsewhere):
