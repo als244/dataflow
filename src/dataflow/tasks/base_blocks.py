@@ -103,7 +103,18 @@ class _Base:
     # the create-vs-accumulate grad writer and the rmsnorm backward step.
 
     def _acc_fn(self, dw, accum: bool):
+        """create-vs-accumulate grad writer. FROZEN fields simply are
+        not in ``dw`` (the grad layout is policy-filtered) and their
+        writes SKIP — the layout is the freeze switch; a fully frozen
+        pass-through layer has no dW object at all (dw is None) and
+        every write skips. The freeze-plan verifier gate and the
+        per-family ladders own the no-silent-typo guarantee."""
+        if dw is None:
+            return lambda name, value: None
+
         def acc(name: str, value: torch.Tensor) -> None:
+            if name not in dw:
+                return                      # frozen field: no storage
             if accum:
                 dw[name].add_(value.to(dw[name].dtype))
             else:

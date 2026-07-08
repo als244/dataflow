@@ -23,6 +23,31 @@ op → block executable (staged) → golden reference → lowering → planned p
 with a gradcheck gate at each level. Nothing reaches throughput work until
 its math is pinned to an autograd reference.
 
+## Freezing parameters (FreezePlan)
+
+Freezing is part of the OPTIMIZER POLICY — the `freeze()` composer in
+`tasks/optim.py` is the front door:
+
+```python
+from dataflow.tasks.optim import freeze
+cfg = replace(cfg, opt_policy=freeze(layers=range(0, 16)))   # bottom 16
+cfg = replace(cfg, opt_policy=freeze(fields=("wq",)))        # fleet-wide field
+cfg = replace(cfg, opt_policy=freeze(pairs=(("wo", 3),)))    # (field, layer)
+cfg = replace(cfg, opt_policy=freeze(base="muon", embed=True))
+```
+
+Everything derives from the policy: frozen fields get no dW storage,
+no optimizer state, and no update (partial layers carry SHRUNKEN dW/O
+packed over the trainable fields); fully frozen layers with trainable
+layers below keep a dgrad-only backward (no dW object; wgrads skip);
+fully frozen layers with NOTHING below training lose their backward,
+their dy, and their saved context entirely. The structural analysis is
+`training/freeze_plan.py` (`derive_freeze_plan` -> `FreezePlan`),
+consumed by `build_shaped_program(freeze=...)` via the surgery in
+`training/freeze_program.py` — the dense warm-up is the
+`objective="indexer_kl"` configuration of the same machinery. Gates:
+`tests/training/test_freeze_plan.py`.
+
 ## Where a family's files live (the layout contract)
 
 One family = one module in each of these locations (plus registration):

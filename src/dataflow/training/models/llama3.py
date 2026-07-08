@@ -143,11 +143,20 @@ def build_shaped_llama3(
 ) -> Program:
     """Llama3 through the generic builder: one dense-transformer kind."""
     hw = hw or ShapedHardware()
+    from ..freeze_plan import derive_freeze_plan
+
+    d = dims_of(cfg)
+    plan = derive_freeze_plan(
+        d, cfg.n_layers,
+        lambda i: [f.name for f in weight_layout(d, layer=i).fields],
+        tied_embeddings=bool(getattr(cfg, "tied_embeddings", False)),
+    )
     return build_shaped_program(
         cfg, hw=hw, family="llama3-shaped",
         kinds={"block": roofline_block_kind_spec(cfg, hw)},
         fast_memory_capacity=fast_memory_capacity,
         recompute_levels=recompute_levels, name=name,
+        freeze=plan,
     )
 
 

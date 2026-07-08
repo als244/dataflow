@@ -378,3 +378,77 @@ def reference_field_step(dims, hyper, *, ns, layer, name, w, state,
         OPTIMIZERS[rule].step(None, _rk(), hp, step,
                               w.data.view(-1), g.view(-1), states,
                               tuple(w.shape))
+
+
+def freeze(base=None, *, fields: tuple = (), layers=(), pairs: tuple = (),
+           embed: bool = False, head: bool = False):
+    """Compose a freeze SPEC over a base optimizer policy — the
+    ergonomic front door for ``opt_policy``. Returns an OptPolicy whose
+    frozen fields resolve to the "frozen" rule and whose trainable
+    fields resolve through ``base`` (default adamw; "muon" for the
+    recipe; any policy object works).
+
+    Examples:
+        freeze(layers=range(0, 16))                  # bottom 16 layers
+        freeze(fields=("wq",))                       # one field, fleet-wide
+        freeze(pairs=(("wo", 3), ("w1", 7)))         # targeted (field, layer)
+        freeze(base="muon", layers=range(0, 8))      # muon on what trains
+        freeze(embed=True, layers=range(0, 4))       # embedding + prefix
+
+    ``embed``/``head`` freeze the embedding/head weights (their fields
+    resolve under the "embed."/"head." key namespace, exactly as the
+    optimizer executes them)."""
+    base_pol = resolve_opt_policy(base)
+    field_overrides = tuple((f, "frozen") for f in fields)
+    if embed:
+        field_overrides += (("embed.*", "frozen"),)
+    if head:
+        field_overrides += (("head.*", "frozen"),)
+    layer_set = tuple(sorted(set(layers)))
+    pair_overrides: dict[int, tuple] = {}
+    for f, layer in pairs:
+        pair_overrides.setdefault(layer, ())
+        pair_overrides[layer] += ((f, "frozen"),)
+
+    layer_rules = []
+    if layer_set:
+        layer_rules.append((layer_set, OptPolicy(default="frozen")))
+    for layer, ovr in sorted(pair_overrides.items()):
+        layer_rules.append(((layer,),
+                            _Composed(base_pol, ovr)))
+    if not layer_rules and not field_overrides:
+        return base_pol
+    return _Composed(base_pol, field_overrides, tuple(layer_rules))
+
+
+class _Composed:
+    """A freeze layer over an arbitrary base policy: frozen overrides
+    are consulted first (fnmatch + per-layer), everything else defers
+    to the base. Duck-types the policy protocol (for_field /
+    validate)."""
+
+    def __init__(self, base, overrides=(), layer_rules=()):
+        self.base = base
+        self.overrides = tuple(overrides)
+        self.layer_rules = tuple(layer_rules)
+
+    def for_field(self, key: str, layer=None, shape=None) -> str:
+        # field-level freezes are layer-independent: they apply even
+        # inside a layer-rule match
+        for pat, name in self.overrides:
+            if fnmatch(key, pat):
+                return name
+        if layer is not None:
+            for layers_, sub in self.layer_rules:
+                if layer in layers_:
+                    return sub.for_field(key, None, shape) \
+                        if not isinstance(sub, OptPolicy) \
+                        else sub.for_field(key, layer, shape)
+        return self.base.for_field(key, layer, shape)
+
+    def validate(self):
+        return self
+
+    def __repr__(self):
+        return (f"freeze(base={self.base!r}, overrides={self.overrides}, "
+                f"layers={tuple(ls for ls, _ in self.layer_rules)})")

@@ -398,6 +398,21 @@ def _kind_specs(cfg: ShapedGlm52Config, hw: ShapedHardware) -> dict[str, LayerKi
     }
 
 
+def _warmup_plan(dims, n_layers):
+    """Dense warm-up as a FreezePlan: all-frozen-except-indexer policy
+    (already injected on dims), indexer-KL objective, loss contributed
+    by the LEADERS (followers deposit into dM instead)."""
+    from ..freeze_plan import derive_freeze_plan
+
+    contributors = tuple(i for i in range(n_layers)
+                         if dims.leader_of(i) == i)
+    return derive_freeze_plan(
+        dims, n_layers,
+        lambda i: [f.name for f in _weight_layout_for(dims, dims.kind_of(i)).fields],
+        objective="indexer_kl", loss_contributors=contributors,
+    )
+
+
 def build_shaped_glm52(
     cfg: ShapedGlm52Config,
     *,
@@ -424,7 +439,7 @@ def build_shaped_glm52(
         fast_memory_capacity=fast_memory_capacity,
         recompute_levels=recompute_levels, name=name,
         meta_shared=shares,
-        indexer_only_objective=not cfg.sparse_mode,
+        freeze=(None if cfg.sparse_mode else _warmup_plan(dims, cfg.n_layers)),
     )
 
 

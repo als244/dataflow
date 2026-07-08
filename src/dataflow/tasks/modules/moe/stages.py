@@ -261,7 +261,8 @@ def moe_mlp_tail_bwd(kctx, K, d, dy, a, w, dw, accum, acc, norm_bwd, *, resid_fi
 
     srw = a["route_w"].reshape(-1)[order.long()].float().contiguous()  # (rows,)
     K.moe_scale_rows(kctx, dyp, srw)                # raw -> scaled, in place
-    K.moe_grouped_mm_wgrad(kctx, sact, dyp, offsets, dw["w2_experts"], accumulate=accum)
+    if dw is not None and "w2_experts" in dw:       # frozen: no storage, skip
+        K.moe_grouped_mm_wgrad(kctx, sact, dyp, offsets, dw["w2_experts"], accumulate=accum)
     del sact, dyp
     K.moe_scale_rows(kctx, dsact, srw)              # raw -> scaled, in place
     del srw
@@ -269,7 +270,8 @@ def moe_mlp_tail_bwd(kctx, K, d, dy, a, w, dw, accum, acc, norm_bwd, *, resid_fi
     dh13 = torch.empty((rows, 2 * f), dtype=torch.bfloat16, device=dy.device)
     K.swiglu_packed_bwd(kctx, dsact, a["h13"], dh13)
     del dsact
-    K.moe_grouped_mm_wgrad(kctx, xp, dh13, offsets, dw["w13_experts"], accumulate=accum)
+    if dw is not None and "w13_experts" in dw:
+        K.moe_grouped_mm_wgrad(kctx, xp, dh13, offsets, dw["w13_experts"], accumulate=accum)
     del xp
     dxp = K.moe_grouped_mm_dgrad(kctx, dh13, w["w13_experts"], offsets)
     del dh13
@@ -291,11 +293,12 @@ def moe_mlp_tail_bwd(kctx, K, d, dy, a, w, dw, accum, acc, norm_bwd, *, resid_fi
         # family's dtype-policy override): grad-accum aggregation for
         # free; the optimizer's per-field special applies the V3 sign
         # rule to the STEP total — AdamW math never touches the bias
-        cnt = (offsets[1:] - offsets[:-1]).to(torch.float32)
-        if accum:
-            dw["w_router_bias"].add_(cnt)
-        else:
-            dw["w_router_bias"].copy_(cnt)
+        if dw is not None and "w_router_bias" in dw:
+            cnt = (offsets[1:] - offsets[:-1]).to(torch.float32)
+            if accum:
+                dw["w_router_bias"].add_(cnt)
+            else:
+                dw["w_router_bias"].copy_(cnt)
         if moe.aux_coef > 0:
             from ... import ops as _ops
 

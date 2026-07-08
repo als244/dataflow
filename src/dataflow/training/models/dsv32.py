@@ -342,6 +342,21 @@ def _kind_specs(cfg: ShapedDsv32Config, hw: ShapedHardware) -> dict[str, LayerKi
     return {"dense": dense, "moe": moe}
 
 
+def _warmup_plan(dims, n_layers):
+    """Dense warm-up as a FreezePlan: all-frozen-except-indexer policy
+    (already injected on dims), indexer-KL objective, every layer
+    contributes its own KL."""
+    from ..freeze_plan import derive_freeze_plan
+
+    def fields_of(i):
+        wl = (dsv32_dense_weight_layout(dims) if dims.kind_of(i) == "dense"
+              else dsv32_moe_weight_layout(dims))
+        return [f.name for f in wl.fields]
+
+    return derive_freeze_plan(dims, n_layers, fields_of,
+                              objective="indexer_kl")
+
+
 def build_shaped_dsv32(
     cfg: ShapedDsv32Config,
     *,
@@ -359,7 +374,7 @@ def build_shaped_dsv32(
         kinds=_kind_specs(cfg, hw), kind_of=dims.kind_of,
         fast_memory_capacity=fast_memory_capacity,
         recompute_levels=recompute_levels, name=name,
-        indexer_only_objective=not cfg.sparse_mode,
+        freeze=(None if cfg.sparse_mode else _warmup_plan(dims, cfg.n_layers)),
     )
 
 
