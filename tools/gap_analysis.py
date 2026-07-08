@@ -33,7 +33,7 @@ from dataflow.training.profiling import apply_measured_costs, cached_pcie, load_
 from dataflow.training.replay import replay_gap_pct
 from dataflow.training.train_loop import train
 
-from m4_train import CONFIGS  # noqa: E402  (tools/ sibling import)
+from bench_train import CONFIGS  # noqa: E402  (tools/ sibling import)
 
 GIB = 1024**3
 

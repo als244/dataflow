@@ -55,7 +55,8 @@ event-log bundle for the cell you care about:
 `tools/export_measured_run.py` packages the measured event log
 together with the sim's prediction into one uploadable file — the
 webapp renders the real run in the same panels and diffs the two,
-which is exactly how the sim-vs-real fidelity gap is inspected.
+which is exactly how the sim-vs-real fidelity gap is inspected
+(full guide: [docs/exporting_runs.md](docs/exporting_runs.md)).
 
 For benchmarking reference see: [docs/benchmarking.md](docs/benchmarking.md) (or `--help`).
 
