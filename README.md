@@ -37,22 +37,25 @@ python tools/bench_frontier.py \
 
 Output: 
 - `TABLES.md` 
-    - Per Cell: real tok/s throughput; sim tok/s prediction, measured memory peak, chosen micro batch/grad accum shape, recompute task fraction plus
+    - Per Cell: real tok/s throughput, sim tok/s prediction, measured memory peak, chosen micro batch/grad accum shape, recompute task fraction
 - Per-Cell Files:
     - The exact dataflow program (`program.json`)
     - Its annotated plan (`plan.json`)
     - The measured summary row (`measured.json`)
 
-Everything is inspectable in the
-[webapp simulator](https://dataflowsim.sunshein.net/): upload a cell's
-`program.json` to see the SIMULATOR's expectations for that plan
-(predicted task/transfer timeline and memory trace from the measured
-task costs). To see the TRUE timeline, capture a real run and export
-it (`tools/gap_analysis.py` then `tools/export_measured_run.py`
-produce a `.measured.json` containing both the measured event log and
-the sim's prediction) — the webapp renders the real run in the same
-panels and diffs the two, which is exactly how the sim-vs-real
-fidelity gap is inspected.
+After the sweep, everything is inspectable in the
+[webapp simulator](https://dataflowsim.sunshein.net/). Upload a cell's
+`program.json` to see the SIMULATOR's expectations for that exact
+plan — the predicted task/transfer timeline and memory trace, priced
+from the measured task costs. (The cell's `measured.json` is the
+numeric summary row — real tok/s, peaks, fidelity — not an event
+log.) To inspect the TRUE timeline of a real run, generate the
+event-log bundle for the cell you care about:
+`tools/gap_analysis.py` re-runs its plan with tracing, and
+`tools/export_measured_run.py` packages the measured event log
+together with the sim's prediction into one uploadable file — the
+webapp renders the real run in the same panels and diffs the two,
+which is exactly how the sim-vs-real fidelity gap is inspected.
 
 For benchmarking reference see: [docs/benchmarking.md](docs/benchmarking.md) (or `--help`).
 
@@ -92,7 +95,9 @@ The initial intended workload is high-throughput DNN training in low
 GPU-memory regimes. A library of builtin model families (Llama 3,
 OLMoE, Qwen 3, Qwen 3 MoE, Qwen 3.5, Qwen 3.5 MoE, DeepSeek V3,
 DeepSeek V3.2, GLM 5.2 — full preset table with parameter counts:
-[docs/builtin_models.md](docs/builtin_models.md)) *lowers* a model +
+[docs/builtin_models.md](docs/builtin_models.md); per-family deep
+references with every task's objects, stages, and measured kernel
+sequences: [docs/models/](docs/models/README.md)) *lowers* a model +
 training configuration
 (sequence length, batch, grad-accum rounds, dtype policy, optimizer
 policy) into the Program format the engine expects.

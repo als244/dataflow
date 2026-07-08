@@ -78,7 +78,10 @@ that one description:
 Ordering rule: emit context fields as early as their values are final — the
 recompute boundary is only as tight as your last emission. The
 generated inventory of every family's compute keys and executables:
-[task_kinds.md](task_kinds.md).
+[task_kinds.md](task_kinds.md); the per-family DEEP references
+(object field tables, stage lists, measured kernel sequences —
+regenerated per family by `tools/gen_model_docs.py`, plugins
+included): [models/](models/README.md).
 
 The rest of the block contract:
 
