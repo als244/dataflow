@@ -29,7 +29,7 @@ import torch
 from dataflow.runtime.device.cuda import CudaBackend
 from dataflow.training.families import resolve_family
 from dataflow.training.planning import plan_program
-from dataflow.training.profiling import apply_measured_costs, cached_pcie, load_or_profile
+from dataflow.training.profiling import apply_measured_costs, cached_pcie, host_backing_cap_bytes, load_or_profile
 from dataflow.training.replay import replay_gap_pct
 from dataflow.training.train_loop import train
 
@@ -44,6 +44,8 @@ def main() -> None:
     parser.add_argument("--budget", type=float, default=18.0)
     parser.add_argument("--steps", type=int, default=3)
     parser.add_argument("--recompute", action="store_true", default=True)
+    parser.add_argument("--backing-leeway-gib", type=float, default=10.0,
+                        help="host-memory leeway for the auto backing cap")
     parser.add_argument("--backing-gib", type=float, default=None,
                         help="pinned-host cap in GiB; default None = unlimited, matching bench_train")
     parser.add_argument("--contend", action="store_true",
@@ -60,13 +62,15 @@ def main() -> None:
     backend = CudaBackend()
     pcie = cached_pcie(backend)
 
+    backing_cap = (int(args.backing_gib * GIB) if args.backing_gib
+                   else host_backing_cap_bytes(reserve_gib=args.backing_leeway_gib))
+
     def build_raw(levels=None):
         return replace(
             fam.lower(cfg, recompute_levels=levels),
             bandwidth_from_slow=pcie.bidi_h2d,
             bandwidth_to_slow=pcie.bidi_d2h,
-            backing_memory_capacity=(int(args.backing_gib * GIB)
-                                     if args.backing_gib else None),
+            backing_memory_capacity=backing_cap,
         )
 
     program = build_raw()
@@ -87,7 +91,8 @@ def main() -> None:
     sim_tok = tokens_per_step / (planned.makespan_us / 1e6)
 
     torch.cuda.empty_cache()
-    report = train(planned.program, cfg, backend, steps=args.steps, seed=11)
+    run_program = replace(planned.program, backing_memory_capacity=None)
+    report = train(run_program, cfg, backend, steps=args.steps, seed=11)
     real_us = report.steady_state_makespan_us
     real_tok = tokens_per_step / (real_us / 1e6)
     trace = report.last_trace
@@ -104,7 +109,14 @@ def main() -> None:
         "makespan_us": trace.makespan_us(),
     }) + "\n")
     from dataflow.core import save_program
-    save_program(planned.program, args.out / "annotated.json")
+    stamped = replace(planned.program, backing_memory_capacity=None, metadata={
+        **dict(planned.program.metadata),
+        "planned_budget_gib": args.budget,
+        "budget_semantics": "ledger",
+        "backing_plan_cap_gib": round(backing_cap / GIB, 2),
+        "backing_cap_source": "flag" if args.backing_gib else "auto-host",
+    })
+    save_program(stamped, args.out / "annotated.json")
 
     # non-fatal like bench_train: imposing real timings on the sim's
     # reserve-at-start accounting can be infeasible for plans the real

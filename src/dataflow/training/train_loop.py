@@ -23,7 +23,7 @@ from dataflow.runtime import Engine
 from dataflow.runtime.device.fake import FakeBackend
 from dataflow.runtime.engine import Session
 from dataflow.tasks.interop import torch_view
-from dataflow.tasks.llama3_blocks import AdamWHyper
+from dataflow.tasks.base_blocks import AdamWHyper
 from dataflow.training.families import resolve_family
 from dataflow.training.llama3 import ShapedLlamaConfig
 

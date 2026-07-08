@@ -152,7 +152,7 @@ def shapes_oracle(presets, devs, seq_tag, seqs_per_step, out_dir=None,
 
 
 def run_cells(presets, devs, modes, shapes, seq_tag, steps, pace,
-              rerun, cells, dry_run, raw_dir=None):
+              rerun, cells, dry_run, extra_args=(), raw_dir=None):
     """One bench_train subprocess per (family, shape, mode); envelopes
     sharing a shape batched into a single invocation."""
     for fam in presets:
@@ -171,6 +171,7 @@ def run_cells(presets, devs, modes, shapes, seq_tag, steps, pace,
                        "--config", f"{fam}-{seq_tag}-{shape}",
                        "--device-gib", ",".join(map(str, ds)),
                        "--steps", str(steps)]
+                cmd += list(extra_args)
                 if raw_dir is not None:
                     cmd += ["--out", str(raw_dir)]
                 if mode != "static":
@@ -285,7 +286,13 @@ def main() -> None:
     ap.add_argument("--render-only", action="store_true")
     ap.add_argument("--dry-run", action="store_true",
                     help="print the bench_train commands without running")
-    ap.add_argument("--pace-seconds", type=int, default=40,
+    ap.add_argument("--backing-gib", type=float, default=None,
+                    help="forwarded to bench_train: explicit pinned-host "
+                         "plan-cap (default: auto from host memory)")
+    ap.add_argument("--backing-leeway-gib", type=float, default=None,
+                    help="forwarded to bench_train: leeway for the auto "
+                         "backing cap (bench_train default 10)")
+    ap.add_argument("--pace-seconds", type=int, default=5,
                     help="sleep between invocations (oomd pressure decay)")
     ap.add_argument("--reuse-shared", action="store_true",
                     help="ALSO scan the shared artifacts/bench pool for "
@@ -350,9 +357,14 @@ def main() -> None:
         pass                          # no out-dir: pool scan is the default
 
     if (args.run or args.rerun or args.dry_run) and not args.render_only:
+        extra = []
+        if args.backing_gib:
+            extra += ["--backing-gib", f"{args.backing_gib:g}"]
+        if args.backing_leeway_gib is not None:
+            extra += ["--backing-leeway-gib", f"{args.backing_leeway_gib:g}"]
         run_cells(presets, devs, modes, shapes, seq_tag, args.num_steps,
                   args.pace_seconds, args.rerun, cells, args.dry_run,
-                  raw_dir=raw_dir)
+                  extra_args=extra, raw_dir=raw_dir)
         if not args.dry_run:
             cells = load_cells(presets, args.allow_illegal)
 

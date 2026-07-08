@@ -27,7 +27,7 @@ from dataflow.tasks.layouts import (
     qwen35_attn_weight_layout,
     qwen35_lin_weight_layout,
 )
-from dataflow.tasks.llama3_blocks import AdamWHyper
+from dataflow.tasks.base_blocks import AdamWHyper
 from dataflow.models.llama3_reference import Leaves, unpack_leaves
 
 

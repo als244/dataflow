@@ -25,7 +25,7 @@ from .layouts import (
     qwen35moe_lin_context_layout,
     qwen35moe_lin_weight_layout,
 )
-from .llama3_blocks import AdamWHyper, AdamWStep, EmbedBwd, EmbedFwd, HeadLoss
+from .base_blocks import AdamWHyper, AdamWStep, EmbedBwd, EmbedFwd, HeadLoss
 from .moe.stages import MOE_SHARED_STAGES, MoEMetaState, MoEProfileFill, moe_mlp_tail_bwd
 from .qwen35_blocks import (
     Qwen35AttnBlockBwd,

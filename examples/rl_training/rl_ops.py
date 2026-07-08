@@ -25,7 +25,7 @@ import torch
 
 from dataflow.tasks.interop import torch_view
 from dataflow.tasks.layouts import PackedLayout, grad_layout, head_weight_layout
-from dataflow.tasks.llama3_blocks import _Base, head_chunk_rows
+from dataflow.tasks.base_blocks import _Base, head_chunk_rows
 
 PPO_CLIP_EPS = 0.2
 

@@ -45,7 +45,8 @@ from .layouts import (
     dsv32_moe_weight_layout,
     glm52_meta_layout,
 )
-from .llama3_blocks import AdamWHyper, AdamWStep, BlockRecompute, EmbedBwd, EmbedFwd, HeadLoss
+from .base_blocks import AdamWHyper, AdamWStep, EmbedBwd, EmbedFwd, HeadLoss
+from .llama3_blocks import BlockRecompute
 from .dsv3_blocks import Dsv3DenseBlockFwd, Dsv3MoeBlockBwd, Dsv3MoeBlockFwd
 from .dsv32_blocks import (
     Dsv32DenseBlockBwd,

@@ -253,6 +253,35 @@ def apply_measured_costs(program: Program, profiles: dict[tuple, TaskProfile]) -
 # bump when task-internals change measured behavior (runtime or workspace):
 # the cache key cannot see code, so this is the manual invalidation lever.
 # rev 2: BlockRecompute stops at w1/w3 (down-proj/swiglu/y removed).
+def host_backing_cap_bytes(*, reserve_gib: float = 10.0) -> int:
+    """Planning cap for pinned-host backing, derived from the host's
+    CURRENTLY AVAILABLE memory (MemAvailable) minus a flat leeway
+    (default 10 GiB) for the OS, torch host buffers, and profiling
+    scratch.
+
+    This is a PLANNING bound only: it keeps PressureFit from emitting
+    plans whose offload footprint could never be pinned (which would
+    otherwise fail at run time, mid-pin). The runtime itself pins by
+    plan DEMAND (pool prewarm) when program.backing_memory_capacity is
+    None — callers should plan WITH this cap and execute with the
+    capacity stripped, because a set capacity makes the engine pin the
+    FULL capacity as one up-front slab (engine.add_slab)."""
+    import os
+
+    avail = None
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    avail = int(line.split()[1]) * 1024
+                    break
+    except OSError:
+        pass
+    if avail is None:  # non-Linux fallback
+        avail = os.sysconf("SC_AVPHYS_PAGES") * os.sysconf("SC_PAGE_SIZE")
+    return int(max(0, avail - reserve_gib * 1024 ** 3))
+
+
 PROFILE_CACHE_REV = "2"  # bump whenever kernel/task costs change (invalidates all cached profiles)
 
 

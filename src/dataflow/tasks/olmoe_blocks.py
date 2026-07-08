@@ -32,16 +32,8 @@ from .layouts import (
     olmoe_context_layout,
     olmoe_weight_layout,
 )
-from .llama3_blocks import (
-    AdamWHyper,
-    AdamWStep,
-    BlockBwd,
-    BlockFwd,
-    BlockRecompute,
-    EmbedBwd,
-    EmbedFwd,
-    HeadLoss,
-)
+from .base_blocks import AdamWHyper, AdamWStep, EmbedBwd, EmbedFwd, HeadLoss
+from .llama3_blocks import BlockBwd, BlockFwd, BlockRecompute
 from .moe.stages import MOE_STAGES, MoEMetaState, MoEProfileFill, moe_mlp_tail_bwd
 
 

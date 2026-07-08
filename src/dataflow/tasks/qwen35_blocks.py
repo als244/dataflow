@@ -49,16 +49,8 @@ from .layouts import (
     qwen35_lin_context_layout,
     qwen35_lin_weight_layout,
 )
-from .llama3_blocks import (
-    AdamWHyper,
-    AdamWStep,
-    BlockBwd,
-    BlockFwd,
-    BlockRecompute,
-    EmbedBwd,
-    EmbedFwd,
-    HeadLoss,
-)
+from .base_blocks import AdamWHyper, AdamWStep, EmbedBwd, EmbedFwd, HeadLoss
+from .llama3_blocks import BlockBwd, BlockFwd, BlockRecompute
 
 
 def _cu_seqlens(dims: Qwen35Dims, device) -> tuple:

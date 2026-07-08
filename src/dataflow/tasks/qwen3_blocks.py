@@ -23,16 +23,8 @@ from dataflow.core import TaskSpec
 from . import ops
 from .kernels import KernelSet, resolve_kernels
 from .layouts import PackedLayout, Qwen3Dims, qwen3_context_layout, qwen3_weight_layout
-from .llama3_blocks import (
-    AdamWHyper,
-    AdamWStep,
-    BlockBwd,
-    BlockFwd,
-    BlockRecompute,
-    EmbedBwd,
-    EmbedFwd,
-    HeadLoss,
-)
+from .base_blocks import AdamWHyper, AdamWStep, EmbedBwd, EmbedFwd, HeadLoss
+from .llama3_blocks import BlockBwd, BlockFwd, BlockRecompute
 
 
 @dataclass(frozen=True)

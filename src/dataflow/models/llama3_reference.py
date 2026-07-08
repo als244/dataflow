@@ -27,7 +27,7 @@ from dataflow.tasks.layouts import (
     head_weight_layout,
     weight_layout,
 )
-from dataflow.tasks.llama3_blocks import AdamWHyper
+from dataflow.tasks.base_blocks import AdamWHyper
 
 Leaves = dict[str, torch.Tensor]
 

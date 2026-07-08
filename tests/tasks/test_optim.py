@@ -152,7 +152,7 @@ def test_mixed_policy_model_step_vs_hand_replica():
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.runtime.device.fake import FakeBackend
     from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME, torch_view
-    from dataflow.tasks.llama3_blocks import AdamWHyper
+    from dataflow.tasks.base_blocks import AdamWHyper
     from dataflow.training.families import resolve_family
     from dataflow.training.llama3 import ShapedLlamaConfig
     from dataflow.training.planning import plan_program
@@ -252,7 +252,7 @@ def test_muon_recipe_string_model_step_vs_hand_replica():
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.runtime.device.fake import FakeBackend
     from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME, torch_view
-    from dataflow.tasks.llama3_blocks import AdamWHyper
+    from dataflow.tasks.base_blocks import AdamWHyper
     from dataflow.training.families import resolve_family
     from dataflow.training.llama3 import ShapedLlamaConfig
     from dataflow.training.planning import plan_program
@@ -340,7 +340,7 @@ def test_layer_indexed_policy_sizes_and_model_step():
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.runtime.device.fake import FakeBackend
     from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME, torch_view
-    from dataflow.tasks.llama3_blocks import AdamWHyper
+    from dataflow.tasks.base_blocks import AdamWHyper
     from dataflow.training.families import resolve_family
     from dataflow.training.llama3 import ShapedLlamaConfig
     from dataflow.training.planning import plan_program
@@ -443,7 +443,8 @@ def test_hyper_overrides_and_schedule_model_step():
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.runtime.device.fake import FakeBackend
     from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME, torch_view
-    from dataflow.tasks.llama3_blocks import AdamWHyper, build_resolver
+    from dataflow.tasks.base_blocks import AdamWHyper
+    from dataflow.tasks.llama3_blocks import build_resolver
     from dataflow.tasks.optim import LRSchedule
     from dataflow.training.families import resolve_family
     from dataflow.training.llama3 import ShapedLlamaConfig

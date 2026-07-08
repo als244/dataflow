@@ -36,7 +36,7 @@ from dataflow.core.convert import to_webapp_program
 from dataflow.runtime.device.cuda import CudaBackend
 from dataflow.training.families import resolve_family
 from dataflow.training.planning import plan_program
-from dataflow.training.profiling import apply_measured_costs, cached_pcie, load_or_profile
+from dataflow.training.profiling import apply_measured_costs, cached_pcie, host_backing_cap_bytes, load_or_profile
 from dataflow.training.replay import replay_gap_pct
 from dataflow.training.llama3 import ShapedLlamaConfig
 from dataflow.training.olmoe import ShapedOlmoeConfig
@@ -292,6 +292,11 @@ def main() -> None:
     )
     parser.add_argument("--baseline", action="store_true", help="also time the plain-torch golden model")
     parser.add_argument(
+        "--backing-leeway-gib", type=float, default=10.0,
+        help="host-memory leeway subtracted from MemAvailable when "
+             "deriving the automatic backing plan-cap (only used when "
+             "--backing-gib is unset)")
+    parser.add_argument(
         "--backing-gib", type=float, default=None,
         help="cap pinned-host bytes; sim verification then rejects plans whose "
              "offload footprint exceeds host RAM (essential at high grad-accum: "
@@ -374,12 +379,24 @@ def main() -> None:
     print(f"PCIe GB/s: uni {pcie.uni_h2d/1e3:.1f}/{pcie.uni_d2h/1e3:.1f}  "
           f"bidi {pcie.bidi_h2d/1e3:.1f}/{pcie.bidi_d2h/1e3:.1f}")
 
+    # planning cap on pinned-host backing: explicit flag wins; default =
+    # derived from available host memory so PressureFit never emits a
+    # plan the host cannot pin. The cap is PLAN-ONLY — the annotated
+    # program is stripped back to None before execution because a set
+    # capacity makes the engine pin the FULL capacity as one slab
+    # (engine.add_slab); with None it prewarms pinned buffers to plan
+    # demand instead.
+    backing_cap = (int(args.backing_gib * GIB) if args.backing_gib
+                   else host_backing_cap_bytes(reserve_gib=args.backing_leeway_gib))
+    print(f"backing plan-cap: {backing_cap / GIB:.1f} GiB"
+          + ("" if args.backing_gib else " (auto from host MemAvailable)"))
+
     def build_raw(levels=None):
         return replace(
             fam.lower(cfg, recompute_levels=levels),
             bandwidth_from_slow=pcie.bidi_h2d,
             bandwidth_to_slow=pcie.bidi_d2h,
-            backing_memory_capacity=int(args.backing_gib * GIB) if args.backing_gib else None,
+            backing_memory_capacity=backing_cap,
         )
 
     program = build_raw()
@@ -417,6 +434,11 @@ def main() -> None:
     _sys.stdout = _Tee(_sys.stdout, args.out / "logs" / _log_name)
     _sys.stderr = _Tee(_sys.stderr, args.out / "logs" / ("err-" + _log_name))
 
+    def _strip_backing(planned):
+        # plan-cap only: execute with capacity None -> demand pinning
+        return replace(planned, program=replace(
+            planned.program, backing_memory_capacity=None))
+
     def _plan(budget: int):
         if args.force_recompute == "all":
             levels = {rw.object_id: 1 for rw in program.recompute_rewrites}
@@ -424,14 +446,14 @@ def main() -> None:
             planned = plan_program(
                 forced, fast_memory_capacity=budget, preplace=args.preplace,
             )
-            return replace(planned, recompute_levels=levels)
-        return plan_program(
+            return _strip_backing(replace(planned, recompute_levels=levels))
+        return _strip_backing(plan_program(
             measured, fast_memory_capacity=budget, recompute=args.recompute,
             build_variant=(
                 lambda levels: apply_measured_costs(build_raw(levels), profiles)
             ) if args.recompute else None,
             preplace=args.preplace,
-        )
+        ))
 
 
     # fixed device overhead (CUDA context + resident pages) — measured for
@@ -757,7 +779,17 @@ def main() -> None:
         print("losses:", [round(x, 4) for x in report.losses])
 
         stem = f"{planned.program.name}-{gib:g}gib"
-        save_program(planned.program, args.out / f"{stem}.annotated.json")
+        stamped = replace(planned.program, metadata={
+            **dict(planned.program.metadata),
+            # tie the saved plan to its capacities (row mirrors these)
+            "budget_gib": row["budget_gib"],
+            "budget_semantics": row["budget_semantics"],
+            "planned_budget_gib": row["planned_budget_gib"],
+            "backing_plan_cap_gib": round(backing_cap / GIB, 2),
+            "backing_cap_source": "flag" if args.backing_gib else "auto-host",
+            "placement": args.placement,
+        })
+        save_program(stamped, args.out / f"{stem}.annotated.json")
         row["plan_path"] = str(args.out / f"{stem}.annotated.json")
         row["webapp_path"] = str(args.out / f"{stem}.webapp.json")
         (args.out / f"{stem}.webapp.json").write_text(

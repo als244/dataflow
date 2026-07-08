@@ -23,14 +23,8 @@ from .layouts import (
     qwen3moe_context_layout,
     qwen3moe_weight_layout,
 )
-from .llama3_blocks import (
-    AdamWHyper,
-    AdamWStep,
-    BlockRecompute,
-    EmbedBwd,
-    EmbedFwd,
-    HeadLoss,
-)
+from .base_blocks import AdamWHyper, AdamWStep, EmbedBwd, EmbedFwd, HeadLoss
+from .llama3_blocks import BlockRecompute
 from .moe.stages import MOE_STAGES, MoEMetaState, MoEProfileFill, moe_mlp_tail_bwd
 from .qwen3_blocks import Qwen3BlockBwd, Qwen3BlockFwd
 

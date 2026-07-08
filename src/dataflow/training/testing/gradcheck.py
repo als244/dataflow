@@ -17,7 +17,7 @@ from dataclasses import dataclass
 
 import torch
 
-from dataflow.tasks.llama3_blocks import AdamWHyper  # noqa: F401 (re-export)
+from dataflow.tasks.base_blocks import AdamWHyper  # noqa: F401
 
 
 def rel_l2(actual: torch.Tensor, expected: torch.Tensor) -> float:

@@ -37,7 +37,8 @@ invocation.)
 | `--config` | a `bench_train` CONFIGS name (`{preset}-s{seq}k-bs{B}ga{G}`) |
 | `--budget` | fast-memory LEDGER in GiB — note this is the planner budget, NOT `bench_train --device-gib`'s device envelope (no fixed/scratch derivation here; pick a cell's `planned_budget_gib` from its `measured.json` to reproduce that cell's plan; an infeasibly small ledger fails loudly at planning) |
 | `--steps` | training steps to trace (default 3) |
-| `--backing-gib` | pinned-host cap in GiB (default: unlimited, matching `bench_train` — a finite cap BELOW the config's backing demand makes planning infeasible) |
+| `--backing-gib` | pinned-host PLAN-cap in GiB. Default: derived from the host's available memory (MemAvailable) minus `--backing-leeway-gib`, so the planner never emits a plan the host cannot pin. Plan-only: the executed program is stripped back to capacity None, so the RUNTIME pins by plan demand, not by this cap (a set capacity would pin the full amount as one slab). A cap below the config's backing demand makes planning fail loudly. |
+| `--backing-leeway-gib` | leeway subtracted from MemAvailable for the auto cap (default 10) |
 | `--contend` | profile with PCIe contention (matches the sweep convention) |
 | `--out` | output directory |
 

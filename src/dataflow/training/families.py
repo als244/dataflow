@@ -78,12 +78,7 @@ class Family:
 
 def _llama3() -> Family:
     from dataflow.tasks.layouts import context_layout, weight_layout
-    from dataflow.tasks.llama3_blocks import (
-        BlockBwd,
-        BlockFwd,
-        BlockRecompute,
-        build_resolver,
-    )
+    from dataflow.tasks.llama3_blocks import BlockBwd, BlockFwd, BlockRecompute, build_resolver
     from .llama3 import dims_of, initial_values, lower_llama3
     from .llama3 import ShapedLlamaConfig
 
