@@ -79,55 +79,48 @@ policy) into the Program format the engine expects.
 Lowering decomposes each training step into tasks over named objects.
 Notation: `i` is the layer index — the intra-round task id equals the
 layer id, and every block task is named `{kind}_{step}_{round}_{layer}`
-(e.g. `block_fwd_0_1_7`). Per layer `i` the objects are:
+(e.g. `block_fwd_0_1_7`). The objects:
 
 - `W_i` (parameters) and `O_i` (optimizer state) — persistent across
-  the whole run;
-- `A_i` (saved activation context) and `M_i` — one instance per
-  (step, round) as needed; `dW_i` (parameter gradients) — one per
-  step, accumulated across rounds;
-- `M_i` holds **computed metadata that shouldn't be recomputed** (e.g.
-  MoE router assignments, selected indices for sparse attention):
-  small, cheap to store, and consumed verbatim by recompute and
-  backward so they always see the forward's exact discrete choices.
+  the whole run; updated in place by optimizer tasks.
+- `dW_i` (parameter gradients) — created fresh each step (round 0
+  creates, later grad-accumulation rounds accumulate into it).
+- `A_i` (saved activation context) — one per (step, round).
+- `M_i` — computed metadata that shouldn't be recomputed (MoE router
+  assignments, sparse-attention index selections); one per
+  (step, round) where the layer makes discrete choices.
 
-Per layer kind the task vocabulary is forward, recompute, and backward,
-bracketed by embed and head/loss tasks and followed by optimizer tasks.
-Heterogeneous models get distinct task kinds per distinct layer type.
+Task kinds, in chain order (heterogeneous models get distinct block
+task kinds per distinct layer type):
 
-- **Forward**
-  - inputs: layer input hidden state `x_i`, parameters `W_i`
-  - outputs: next hidden state `x_{i+1}`, saved context `A_i`
-    (+ `M_i` where the layer makes discrete choices)
-  - mutates: —
-- **Recompute** (replaces a dropped `A_i` when the plan chose not to
-  keep it)
-  - inputs: the same `x_i` and `W_i` (+ `M_i`, consumed as-is)
-  - outputs: repopulated `A_i` (float context only — never `M_i`)
-  - mutates: —
-- **Backward**
-  - inputs: upstream hidden-state gradient `dy_{i+1}`, `A_i`
-    (+ `M_i`), `W_i`, `x_i`
-  - outputs: downstream gradient `dy_i`; `dW_i` on the first
-    grad-accumulation round
-  - mutates: `dW_i` on later rounds (accumulation)
-- **Optimizer** (one task per layer; composes every parameter field's
-  update, with per-field optimizer choice, hyperparameters, and state
-  sizing set by the config's optimizer policy)
-  - inputs: `W_i`, `dW_i`, `O_i`
-  - outputs: —
-  - mutates: `W_i`, `O_i` in place (a fully stateless assignment drops
-    `O_i` entirely)
 - **Embed**
   - inputs: `tokens`, `W_embed`
   - outputs: the first hidden state `x_0`
-  - mutates: —
-- **Head + Loss** (fused: final norm, LM head, loss, and head backward
-  in one token-chunked task — no (tokens, vocab) tensor is ever
-  materialized)
+- **Forward** (per layer)
+  - inputs: layer input hidden state `x_i`, parameters `W_i`
+  - outputs: next hidden state `x_{i+1}`, `A_i` (+ `M_i`)
+- **Head + Loss** — a SINGLE fused task: final norm + LM head forward
+  + loss + head backward, token-chunked so no (tokens, vocab) tensor
+  is ever materialized
   - inputs: last hidden state, `targets`, `W_head`
   - outputs: `loss`, the first upstream gradient, `dW_head`
-  - mutates: —
+- **Recompute** (per layer; only where the plan dropped `A_i`)
+  - inputs: the same `x_i` and `W_i` (+ `M_i`, consumed as-is)
+  - outputs: repopulated `A_i` (float context only — never `M_i`)
+- **Backward** (per layer)
+  - inputs: upstream gradient `dy_{i+1}`, `A_i` (+ `M_i`), `W_i`, `x_i`
+  - outputs: downstream gradient `dy_i`; `dW_i` on round 0
+  - mutates: `dW_i` on later rounds (accumulation)
+- **Embed Backward**
+  - inputs: the gradient reaching the embedding, `tokens`
+  - outputs: `dW_embed` on round 0; mutates it on later rounds
+- **Optimizer** (one task per layer, plus embed and head; composes
+  every parameter field's update, with per-field optimizer choice,
+  hyperparameters, and state sizing set by the config's optimizer
+  policy)
+  - inputs: `W_i`, `dW_i`, `O_i`
+  - mutates: `W_i`, `O_i` in place (a fully stateless assignment drops
+    `O_i` entirely)
 
 Correctness of every family is pinned against isolated plain-autograd
 reference models at three levels (per op, per task, per model step);
