@@ -25,6 +25,27 @@ Layer kinds (18 layers): `dense dense moe moe moe moe moe moe moe moe moe moe mo
 | `rope_base` | 10000.0 |
 | `opt_policy` | adamw |
 
+## Object summary
+
+At the documentation run shape (65,536 tokens/round). Details per kind below.
+
+| object | scope | bytes | bytes/token |
+|---|---|---|---|
+| `W_i (dense)` | layer | 110,765,568 | — |
+| `dW_i (dense)` | layer/step | 110,765,568 | — |
+| `O_i (dense)` | layer | 221,531,136 | — |
+| `A (dense)` | layer × round | 2,660,237,312 | 40,592.0 |
+| `W_i (moe)` | layer | 1,633,822,720 | — |
+| `dW_i (moe)` | layer/step | 1,633,822,720 | — |
+| `O_i (moe)` | layer | 3,267,645,440 | — |
+| `A (moe)` | layer × round | 2,945,449,984 | 44,944.0 |
+| `M (moe)` | layer × round | 5,243,648 | 80.0 |
+| `W_head` | run | 529,534,976 | — |
+| `W_embed` | run | 529,530,880 | — |
+| `O_embed` | run | 1,059,061,760 | — |
+| `O_head` | run | 1,059,069,952 | — |
+| `hidden state (y)` | boundary buffer | 268,435,456 | 4,096.0 |
+
 ## Objects, per layer kind
 
 `dW_i` mirrors `W_i`'s fields at the grad dtypes; `O_i` holds the optimizer policy's state slots per field (adamw default: `m_f`+`v_f` at the opt dtype; sgd fields contribute none — see extending.md §6). `A_i`/`M_i` exist per (step, round).

@@ -236,12 +236,15 @@ def gen_family(name: str, record: bool) -> str:
             out.append(f"| `{f.name}` | {v} |")
     out.append("")
 
-    # ---- objects per layer kind ----
-    out += ["## Objects, per layer kind", "",
-            "`dW_i` mirrors `W_i`'s fields at the grad dtypes; `O_i` holds "
-            "the optimizer policy's state slots per field (adamw default: "
-            "`m_f`+`v_f` at the opt dtype; sgd fields contribute none — "
-            "see extending.md §6). `A_i`/`M_i` exist per (step, round).", ""]
+    # ---- objects per layer kind (collect summary rows as we go) ----
+    summary: list[tuple[str, str, int]] = []   # (object, per, bytes)
+    detail = ["## Objects, per layer kind", "",
+              "`dW_i` mirrors `W_i`'s fields at the grad dtypes; `O_i` holds "
+              "the optimizer policy's state slots per field (adamw default: "
+              "`m_f`+`v_f` at the opt dtype; sgd fields contribute none — "
+              "see extending.md §6). `A_i`/`M_i` exist per (step, round).", ""]
+    out_main = out
+    out = detail
     for kind, layer in rep_layer.items():
         fwd_key = None
         for t in tasks.values():
@@ -263,13 +266,48 @@ def gen_family(name: str, record: bool) -> str:
         ml = _meta_layout(name, dims, layer)
         out += field_table(ml, f"`M_.._{layer}` metadata",
                            "never recomputed", per_token=dims.tokens)
+        if wl is not None:
+            from dataflow.tasks.layouts import grad_layout, opt_state_layout
+
+            summary.append((f"W_i ({kind})", "layer", wl.total_bytes))
+            summary.append((f"dW_i ({kind})", "layer/step",
+                            grad_layout(wl, dims.dtypes, layer=layer)
+                            .total_bytes))
+            summary.append((f"O_i ({kind})", "layer",
+                            opt_state_layout(wl, dims.dtypes, layer=layer,
+                                             opt_policy=getattr(
+                                                 dims, "opt_policy", None))
+                            .total_bytes))
+        if cl is not None:
+            summary.append((f"A ({kind})", "layer × round", cl.total_bytes))
+        if ml is not None and ml.fields:
+            summary.append((f"M ({kind})", "layer × round", ml.total_bytes))
 
     # embed/head weights
     try:
         from dataflow.tasks.layouts import head_weight_layout
-        out += field_table(head_weight_layout(dims), "`W_head`")
+        hl = head_weight_layout(dims)
+        out += field_table(hl, "`W_head`")
+        summary.append(("W_head", "run", hl.total_bytes))
     except Exception:
         pass
+    for oid in ("W_embed", "O_embed", "O_head"):
+        if oid in sizes:
+            summary.append((oid, "run", sizes[oid]))
+    summary.append(("hidden state (y)", "boundary buffer",
+                    dims.tokens * dims.d_model * 2))
+
+    out = out_main
+    out += ["## Object summary", "",
+            f"At the documentation run shape ({dims.tokens:,} "
+            f"tokens/round). Details per kind below.", "",
+            "| object | scope | bytes | bytes/token |", "|---|---|---|---|"]
+    for label, per, b in summary:
+        pt = (f"{b / dims.tokens:,.1f}"
+              if ("round" in per or "boundary" in per) else "—")
+        out.append(f"| `{label}` | {per} | {b:,} | {pt} |")
+    out.append("")
+    out += detail
 
     # ---- tasks ----
     out += ["## Tasks", ""]

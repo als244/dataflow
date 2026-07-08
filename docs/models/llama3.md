@@ -20,6 +20,22 @@ Layer kinds (32 layers): `block block block block block block block block block 
 | `rope_base` | 500000.0 |
 | `opt_policy` | adamw |
 
+## Object summary
+
+At the documentation run shape (65,536 tokens/round). Details per kind below.
+
+| object | scope | bytes | bytes/token |
+|---|---|---|---|
+| `W_i (block)` | layer | 436,224,000 | — |
+| `dW_i (block)` | layer/step | 436,224,000 | — |
+| `O_i (block)` | layer | 872,448,000 | — |
+| `A (block)` | layer × round | 5,646,057,472 | 86,152.0 |
+| `W_head` | run | 1,050,681,344 | — |
+| `W_embed` | run | 1,050,673,152 | — |
+| `O_embed` | run | 2,101,346,304 | — |
+| `O_head` | run | 2,101,362,688 | — |
+| `hidden state (y)` | boundary buffer | 536,870,912 | 8,192.0 |
+
 ## Objects, per layer kind
 
 `dW_i` mirrors `W_i`'s fields at the grad dtypes; `O_i` holds the optimizer policy's state slots per field (adamw default: `m_f`+`v_f` at the opt dtype; sgd fields contribute none — see extending.md §6). `A_i`/`M_i` exist per (step, round).

@@ -29,6 +29,26 @@ Layer kinds (32 layers): `lin lin lin full lin lin lin full lin lin lin full lin
 | `rope_base` | 10000000.0 |
 | `opt_policy` | adamw |
 
+## Object summary
+
+At the documentation run shape (65,536 tokens/round). Details per kind below.
+
+| object | scope | bytes | bytes/token |
+|---|---|---|---|
+| `W_i (lin)` | layer | 436,814,592 | — |
+| `dW_i (lin)` | layer/step | 436,814,592 | — |
+| `O_i (lin)` | layer | 873,629,184 | — |
+| `A (lin)` | layer × round | 6,199,705,600 | 94,600.0 |
+| `W_i (full)` | layer | 419,447,808 | — |
+| `dW_i (full)` | layer/step | 419,447,808 | — |
+| `O_i (full)` | layer | 838,895,616 | — |
+| `A (full)` | layer × round | 5,647,106,048 | 86,168.0 |
+| `W_head` | run | 2,034,245,632 | — |
+| `W_embed` | run | 2,034,237,440 | — |
+| `O_embed` | run | 4,068,474,880 | — |
+| `O_head` | run | 4,068,491,264 | — |
+| `hidden state (y)` | boundary buffer | 536,870,912 | 8,192.0 |
+
 ## Objects, per layer kind
 
 `dW_i` mirrors `W_i`'s fields at the grad dtypes; `O_i` holds the optimizer policy's state slots per field (adamw default: `m_f`+`v_f` at the opt dtype; sgd fields contribute none — see extending.md §6). `A_i`/`M_i` exist per (step, round).
