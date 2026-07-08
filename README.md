@@ -66,6 +66,84 @@ separate CUDA streams, so movement overlaps execution; the engine is
 deterministic and name-agnostic — everything model-specific lives in
 the program and the resolver, not in the engine.
 
+
+## Building a Dataflow Program for ML Training
+
+The initial intended workload is high-throughput DNN training in low
+GPU-memory regimes. A library of builtin model families (Llama 3,
+OLMoE, Qwen 3, Qwen 3 MoE, Qwen 3.5, Qwen 3.5 MoE, DeepSeek V3,
+DeepSeek V3.2, GLM 5.2) *lowers* a model + training configuration
+(sequence length, batch, grad-accum rounds, dtype policy, optimizer
+policy) into the Program format the engine expects.
+
+Lowering decomposes each training step into tasks over named objects.
+Notation: `i` is the layer index — the intra-round task id equals the
+layer id, and every block task is named `{kind}_{step}_{round}_{layer}`
+(e.g. `block_fwd_0_1_7`). Per layer `i` the objects are:
+
+- `W_i` (parameters) and `O_i` (optimizer state) — persistent across
+  the whole run;
+- `A_i` (saved activation context) and `M_i` — one instance per
+  (step, round) as needed; `dW_i` (parameter gradients) — one per
+  step, accumulated across rounds;
+- `M_i` holds **computed metadata that shouldn't be recomputed** (e.g.
+  MoE router assignments, selected indices for sparse attention):
+  small, cheap to store, and consumed verbatim by recompute and
+  backward so they always see the forward's exact discrete choices.
+
+Per layer kind the task vocabulary is forward, recompute, and backward,
+bracketed by embed and head/loss tasks and followed by optimizer tasks.
+Heterogeneous models get distinct task kinds per distinct layer type.
+
+- **Forward**
+  - inputs: layer input hidden state `x_i`, parameters `W_i`
+  - outputs: next hidden state `x_{i+1}`, saved context `A_i`
+    (+ `M_i` where the layer makes discrete choices)
+  - mutates: —
+- **Recompute** (replaces a dropped `A_i` when the plan chose not to
+  keep it)
+  - inputs: the same `x_i` and `W_i` (+ `M_i`, consumed as-is)
+  - outputs: repopulated `A_i` (float context only — never `M_i`)
+  - mutates: —
+- **Backward**
+  - inputs: upstream hidden-state gradient `dy_{i+1}`, `A_i`
+    (+ `M_i`), `W_i`, `x_i`
+  - outputs: downstream gradient `dy_i`; `dW_i` on the first
+    grad-accumulation round
+  - mutates: `dW_i` on later rounds (accumulation)
+- **Optimizer** (one task per layer; composes every parameter field's
+  update, with per-field optimizer choice, hyperparameters, and state
+  sizing set by the config's optimizer policy)
+  - inputs: `W_i`, `dW_i`, `O_i`
+  - outputs: —
+  - mutates: `W_i`, `O_i` in place (a fully stateless assignment drops
+    `O_i` entirely)
+- **Embed**
+  - inputs: `tokens`, `W_embed`
+  - outputs: the first hidden state `x_0`
+  - mutates: —
+- **Head + Loss** (fused: final norm, LM head, loss, and head backward
+  in one token-chunked task — no (tokens, vocab) tensor is ever
+  materialized)
+  - inputs: last hidden state, `targets`, `W_head`
+  - outputs: `loss`, the first upstream gradient, `dW_head`
+  - mutates: —
+
+Correctness of every family is pinned against isolated plain-autograd
+reference models at three levels (per op, per task, per model step);
+`python tools/verify_family.py --family <name>` runs the whole
+ladder. 
+
+
+To add a family — builtin or from your own package — see
+[docs/extending.md](docs/extending.md) and
+[docs/extending_external.md](docs/extending_external.md); for programs
+outside the standard training shape (e.g. RL post-training from saved
+rollouts, with worked per-family examples under
+[examples/rl_training](examples/rl_training/RL_TRAINING_EXAMPLE.md)),
+see [docs/extending_programs.md](docs/extending_programs.md).
+
+
 ## Memory Planning: PressureFit
 
 PressureFit is the GENERAL planning policy: given any bare task chain
@@ -91,63 +169,3 @@ greedy search — each candidate assignment is re-lowered and priced in
 `dataflow_sim` on measured task costs before it is accepted. Custom
 (non-training) programs skip this stage and place recompute tasks
 explicitly.
-
-## Building a Dataflow Program for ML Training
-
-The initial intended workload is high-throughput DNN training in low
-GPU-memory regimes. A library of builtin model families (Llama 3,
-OLMoE, Qwen 3, Qwen 3 MoE, Qwen 3.5, Qwen 3.5 MoE, DeepSeek V3,
-DeepSeek V3.2, GLM 5.2) *lowers* a model + training configuration
-(sequence length, batch, grad-accum rounds, dtype policy, optimizer
-policy) into the Program format the engine expects.
-
-Lowering decomposes each training step into tasks over named objects —
-parameters `W_i`, optimizer state `O_i`, gradients `dW_i`, saved
-activations `A_i`, and (for MoE / sparse-attention models) small
-metadata objects `M_i` holding discrete decisions. Per layer kind the
-task vocabulary is: forward, recompute, backward, plus embed, head/loss,
-and optimizer tasks. Heterogeneous models get distinct task kinds per
-distinct layer type.
-
-- **Forward** (`block_fwd_{step}_{round}_{layer}`)
-  - inputs: layer input hidden state `x_i`, parameters `W_i`
-    (+ a leader's `M` for glm52's shared selections)
-  - outputs: next hidden state `x_{i+1}`, saved context `A_i`
-    (+ `M_i` where the layer makes discrete choices — MoE routing,
-    sparse-attention index selection)
-  - mutates: —
-- **Recompute** (replaces a dropped `A_i` when the plan chose not to
-  keep it)
-  - inputs: the SAME `x_i` and `W_i` (+ `M_i` — consumed, never
-    re-derived: discrete selections are cheap to store and the
-    backward must see the forward's exact choices bit-identically)
-  - outputs: repopulated `A_i` (float context ONLY)
-  - mutates: —
-- **Backward**
-  - inputs: upstream hidden-state gradient `dy_{i+1}`, `A_i`
-    (+ `M_i`), `W_i`, `x_i`
-  - outputs: downstream gradient `dy_i`; `dW_i` on the FIRST
-    grad-accumulation round
-  - mutates: `dW_i` on later rounds (accumulation)
-- **Optimizer** (one task per layer; composes every parameter field's
-  update, with per-field optimizer choice, hyperparameters, and state
-  sizing set by the config's optimizer policy)
-  - inputs: `W_i`, `dW_i`, `O_i`
-  - outputs: —
-  - mutates: `W_i`, `O_i` in place (a fully stateless assignment drops
-    `O_i` entirely)
-- **Embed / Head+Loss** bracket the chain: embed consumes `tokens` and
-  `W_embed` to produce the first hidden state; the fused head task
-  consumes the last hidden state, `targets`, and `W_head` to produce
-  the loss, the first upstream gradient, and `dW_head`.
-
-Correctness of every family is pinned against isolated plain-autograd
-reference models at three levels (per op, per task, per model step);
-`python tools/verify_family.py --family <name>` runs the whole
-ladder. To add a family — builtin or from your own package — see
-[docs/extending.md](docs/extending.md) and
-[docs/extending_external.md](docs/extending_external.md); for programs
-outside the standard training shape (e.g. RL post-training from saved
-rollouts, with worked per-family examples under
-[examples/rl_training](examples/rl_training/RL_TRAINING_EXAMPLE.md)),
-see [docs/extending_programs.md](docs/extending_programs.md).
