@@ -217,6 +217,7 @@ def build_shaped_program(
     recompute_levels: Mapping[str, int] | None = None,
     name: str | None = None,
     meta_shared=None,
+    indexer_only_objective: bool = False,
 ) -> Program:
     """Build the (bare) shaped program for the given recompute levels.
 
@@ -480,11 +481,23 @@ def build_shaped_program(
                 opt_block(i)
             opt_head()
 
+    if indexer_only_objective:
+        # dense warm-up: the objective is the indexer KL alone. The
+        # specialized surgery (no head/targets/dy; loss = KL accumulator
+        # threaded through contributor backwards) lives in
+        # warmup_program.py — this builder stays the common case.
+        from .warmup_program import to_indexer_warmup
+
+        followers = frozenset(meta_producer_of)
+        _warmup_transform = lambda prog: to_indexer_warmup(prog, followers=followers)  # noqa: E731
+    else:
+        _warmup_transform = None
+
     label = name or (
         f"{family}-{cfg.n_layers}L-d{cfg.d_model}-s{cfg.seq_len}-b{cfg.batch}"
         f"-r{cfg.grad_accum_rounds}-steps{cfg.num_steps}"
     )
-    return Program(
+    program = Program(
         name=label,
         initial_objects=tuple(initial),
         tasks=tuple(tasks),
@@ -506,3 +519,4 @@ def build_shaped_program(
             },
         },
     )
+    return _warmup_transform(program) if _warmup_transform else program

@@ -100,18 +100,35 @@ class GoldenGlm52(GoldenDsv3):
     def train_step(self, tokens, targets) -> float:
         if getattr(self.dims, "sparse_mode", True):
             return super().train_step(tokens, targets)
-        # dense warm-up: CE reported but the ONLY moving weights are the
-        # leaders' indexers (grads solely from L^I_multi through the
-        # detachment seam); router-bias speed rule frozen too
+        # dense warm-up: the OBJECTIVE is L^I_multi alone — no head, no
+        # CE, no dy chain (matching the specialized program). Trained
+        # and reported as the per-group CENTROID KL: its sigma-gradient
+        # equals the member-sum form, and its VALUE is exactly the
+        # engine's loss accumulator. ``targets`` is unused.
         self._pending_counts = []
         for p_ in self.parameters():
             p_.grad = None
-        ce, aux_total = self.loss_terms(tokens, targets)
-        (ce + aux_total).backward()
+        kl_total = self.warmup_kl(tokens)
+        kl_total.backward()
         self.step_count += 1
         for i, leaves in enumerate(self.w_blocks):
             self._opt_obj(f"block_{i}", leaves)
-        return float(ce.detach())
+        return float(kl_total.detach())
+
+    def warmup_kl(self, tokens) -> "torch.Tensor":
+        """Forward through the blocks (no head), then one KL per GROUP
+        against the member-averaged full-prefix target."""
+        self._wu_groups = []
+        self._layer_ptr = 0
+        x = self.w_embed["w"][tokens.long()]
+        for w in self.w_blocks:
+            x, _ = self.block_forward(x, w)
+        total = None
+        for g in self._wu_groups:
+            centroid = g["psum"] / g["n"]
+            kl = dsa_indexer_kl_reference(g["scores"], g["mask"], centroid)
+            total = kl if total is None else total + kl
+        return total
 
     def _leader_selection(self, h1, q_lora, w, t: int, device):
         """Group leader's shared pair (scores, mask). Indexer inputs are
@@ -126,13 +143,23 @@ class GoldenGlm52(GoldenDsv3):
         return scores, dsa_selection_mask_reference(scores, d, t, device)
 
     def _member_kl(self, i: int, scores, mask, q_full, k_full, t: int):
-        """This member's contribution to the group objective: its own
-        attention rows on the shared live set, weighted 1/N — summed over
-        members this IS L^I_multi against the group-averaged target."""
+        """SPARSE mode: this member's contribution to the group
+        objective — its own attention rows on the shared live set,
+        weighted 1/N; summed over members this IS L^I_multi.
+
+        DENSE WARM-UP: members only deposit their full-prefix rows into
+        the group centroid (finalized once per group in warmup_kl —
+        gradient sigma - centroid is IDENTICAL to the member-sum form,
+        and the value matches the engine's loss accumulator)."""
         d = self.dims
         if not getattr(d, "train_indexer", True):
             return torch.zeros((), device=q_full.device)
         p = dsa_attention_rows_reference(q_full, k_full, mask, d, t)
+        if not getattr(d, "sparse_mode", True):
+            g = self._wu_groups[-1]
+            g["psum"] = p if g["psum"] is None else g["psum"] + p
+            g["n"] += 1
+            return torch.zeros((), device=q_full.device)
         n = len(d.group_members(d.leader_of(i)))
         return dsa_indexer_kl_reference(scores, mask, p) / n
 
@@ -154,6 +181,12 @@ class GoldenGlm52(GoldenDsv3):
         if d.role_of(i) == "full":
             self._group_scores, self._group_mask = \
                 self._leader_selection(h1, q_lora, w, t, x.device)
+            if not getattr(d, "sparse_mode", True):
+                if not hasattr(self, "_wu_groups"):
+                    self._wu_groups = []
+                self._wu_groups.append({"scores": self._group_scores,
+                                        "mask": self._group_mask,
+                                        "psum": None, "n": 0})
         scores, mask = self._group_scores, self._group_mask
 
         qf = q_full.reshape(t, h * qk)
@@ -174,4 +207,6 @@ class GoldenGlm52(GoldenDsv3):
                                    route_ids=route_ids, seq_lens=lens)
         if route_ids is None:
             self._note_router_counts(h2, w)   # inherited (GoldenDsv3)
+        if not getattr(d, "sparse_mode", True):
+            return y, kl          # warm-up objective excludes the aux term
         return y, aux + kl

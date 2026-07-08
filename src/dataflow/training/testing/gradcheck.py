@@ -195,7 +195,8 @@ def check_model_step(
         leaves.append(pinned("W_head"))
     golden = fam.golden().from_packed_bytes(dims, cfg.n_layers, *leaves)
     tokens = torch_view(values["tokens_0_0"], (dims.tokens,), torch.int32).long().cuda()
-    targets = torch_view(values["targets_0_0"], (dims.tokens,), torch.int32).long().cuda()
+    targets = (torch_view(values["targets_0_0"], (dims.tokens,), torch.int32).long().cuda()
+               if "targets_0_0" in values else tokens.clone())  # warm-up: no CE, unused
     golden_loss = golden.train_step(tokens.cuda(), targets.cuda())
 
     dry = Engine(FakeBackend()).execute(planned.program, initial_buffers=values)

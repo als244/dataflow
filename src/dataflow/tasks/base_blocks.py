@@ -186,8 +186,6 @@ class HeadLoss(_Base):
     convention as grad-accum rounds.
     """
 
-    FROZEN = False
-
     @property
     def hl(self) -> PackedLayout:
         return head_weight_layout(self.dims)
@@ -207,7 +205,7 @@ class HeadLoss(_Base):
             accum = bool(ctx.task.mutates)
             dy = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
             loss = torch_view(self._out(ctx, 1), (1,), torch.float32)
-            dwh = None if self.FROZEN else self.hgl.views(
+            dwh = self.hgl.views(
                 ctx.mutates[ctx.task.mutates[0]] if accum else self._out(ctx, 2)
             )
             chunk = head_chunk_rows(d.vocab_size)
@@ -227,38 +225,24 @@ class HeadLoss(_Base):
                     kctx, logits, targets[lo:hi], part, dlogits, total_rows=d.tokens,
                 )
                 loss_acc += part
-                if not self.FROZEN:
-                    dw_c = dlogits.T @ yn                    # (V, d)
-                    if accum or lo > 0:
-                        dwh["w"].add_(dw_c.to(dwh["w"].dtype))
-                    else:
-                        dwh["w"].copy_(dw_c.to(dwh["w"].dtype))
-                    del dw_c
+                dw_c = dlogits.T @ yn                        # (V, d)
+                if accum or lo > 0:
+                    dwh["w"].add_(dw_c.to(dwh["w"].dtype))
+                else:
+                    dwh["w"].copy_(dw_c.to(dwh["w"].dtype))
                 dyn = dlogits @ wh["w"]                      # (c, d)
-                del logits, dlogits
+                del logits, dlogits, dw_c
                 K.rmsnorm_bwd(kctx, dyn, y_c, rstd, wh["final_norm_w"], dy[lo:hi], dnorm_c)
                 dnorm_acc += dnorm_c
                 # del before the next iteration's allocs: Python rebinding
                 # would otherwise keep the previous chunk's buffers live
                 # while the new ones allocate (2x peak)
                 del yn, rstd, dyn
-            if not self.FROZEN:
-                if accum:
-                    dwh["final_norm_w"].add_(dnorm_acc.to(dwh["final_norm_w"].dtype))
-                else:
-                    dwh["final_norm_w"].copy_(dnorm_acc.to(dwh["final_norm_w"].dtype))
+            if accum:
+                dwh["final_norm_w"].add_(dnorm_acc.to(dwh["final_norm_w"].dtype))
+            else:
+                dwh["final_norm_w"].copy_(dnorm_acc.to(dwh["final_norm_w"].dtype))
             loss.copy_(loss_acc)
-
-
-@dataclass(frozen=True)
-class FrozenHeadLoss(HeadLoss):
-    """Warm-up head: CE loss + dy_last only. No dW_head is computed,
-    viewed, or written — the lowering prunes the dW_head object and the
-    head/embed optimizer tasks when the optimizer policy freezes them,
-    so the task carries two outputs (dy, loss). The dw GEMM per chunk
-    (the head's dominant backward cost) is skipped."""
-
-    FROZEN = True
 
 
 @dataclass(frozen=True)

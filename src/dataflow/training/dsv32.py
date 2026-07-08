@@ -180,7 +180,8 @@ class ShapedDsv32Config:
         """Dense warm-up as a first-class preset: full causal attention,
         main model frozen (per-layer dW/O collapse to the indexer
         fields), FULL-PREFIX KL. Unique task graph vs the sparse preset:
-        FrozenHeadLoss, no embed_bwd, embed/head optimizers pruned."""
+        NO head/CE (the loss object carries the KL objective), no dy
+        chain, no embed_bwd, embed/head optimizers pruned."""
         return cls.dsv32_mini(seq_len=seq_len, batch=batch,
                               grad_accum_rounds=grad_accum_rounds,
                               num_steps=num_steps, sparse_mode=False)
@@ -358,6 +359,7 @@ def build_shaped_dsv32(
         kinds=_kind_specs(cfg, hw), kind_of=dims.kind_of,
         fast_memory_capacity=fast_memory_capacity,
         recompute_levels=recompute_levels, name=name,
+        indexer_only_objective=not cfg.sparse_mode,
     )
 
 

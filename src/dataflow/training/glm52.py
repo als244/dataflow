@@ -229,7 +229,8 @@ class ShapedGlm52Config:
         """The paper's dense warm-up stage as a first-class preset: full
         causal attention, main model frozen (no dW/O beyond the leaders'
         indexer fields), leaders train on group-averaged FULL-PREFIX
-        targets. Unique task graph vs the sparse preset: FrozenHeadLoss,
+        targets. Unique task graph vs the sparse preset: NO head/CE (the
+        loss object carries the group-KL objective), no dy chain,
         no embed_bwd, follower/embed/head optimizer tasks pruned."""
         return cls.glm52_mini(seq_len=seq_len, batch=batch,
                               grad_accum_rounds=grad_accum_rounds,
@@ -423,6 +424,7 @@ def build_shaped_glm52(
         fast_memory_capacity=fast_memory_capacity,
         recompute_levels=recompute_levels, name=name,
         meta_shared=shares,
+        indexer_only_objective=not cfg.sparse_mode,
     )
 
 

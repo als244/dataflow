@@ -281,24 +281,11 @@ At this run shape (65,536 tokens/round). Token-scaled objects show per-token siz
         28. `mm`
         29. `moe_combine_fwd`
 
-### `head_loss` — `FrozenHeadLoss`
-
-- example task: `head_loss_0_0`
-- inputs: `y_0_0_17` (256.00 MiB), `targets_0_0` (256.00 KiB), `W_head` (505.00 MiB)
-- outputs: `dy_0_0_17` (256.00 MiB), `loss_0_0` (4 B)
-- mutates: —
-- kernel calls:
-    0. `rmsnorm_fwd`
-    1. `mm`
-    2. `ce_loss_fwd_bwd`
-    3. `mm ×2`
-    4. `rmsnorm_bwd`
-
 ### `dsamoe_bwd` — `Dsv32WarmupMoeBlockBwd`
 
 - example task: `block_bwd_0_0_17`
-- inputs: `dy_0_0_17` (256.00 MiB), `A_0_0_17` (2.74 GiB), `y_0_0_16` (256.00 MiB), `W_17` (1.52 GiB), `M_0_0_17` (5.00 MiB)
-- outputs: `dy_0_0_16` (256.00 MiB), `dW_0_17` (832.50 KiB)
+- inputs: `A_0_0_17` (2.74 GiB), `y_0_0_16` (256.00 MiB), `W_17` (1.52 GiB), `M_0_0_17` (5.00 MiB)
+- outputs: `dW_0_17` (832.50 KiB), `loss_0_0` (4 B)
 - mutates: —
 - kernel calls:
     0. `rmsnorm_apply`
@@ -357,9 +344,9 @@ At this run shape (65,536 tokens/round). Token-scaled objects show per-token siz
 ### `dsadense_bwd` — `Dsv32WarmupDenseBlockBwd`
 
 - example task: `block_bwd_0_0_1`
-- inputs: `dy_0_0_1` (256.00 MiB), `A_0_0_1` (2.48 GiB), `y_0_0_0` (256.00 MiB), `W_1` (106.45 MiB)
-- outputs: `dy_0_0_0` (256.00 MiB), `dW_0_1` (832.50 KiB)
-- mutates: —
+- inputs: `A_0_0_1` (2.48 GiB), `y_0_0_0` (256.00 MiB), `W_1` (106.45 MiB), `loss_0_0` (4 B)
+- outputs: `dW_0_1` (832.50 KiB)
+- mutates: `loss_0_0`
 - kernel calls:
     0. `rmsnorm_apply`
     1. `swiglu_fwd_out`

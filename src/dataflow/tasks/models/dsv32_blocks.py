@@ -42,8 +42,7 @@ from ..layouts import (
     dsv32_moe_weight_layout,
     dsv32_meta_layout,
 )
-from ..base_blocks import (AdamWHyper, AdamWStep, EmbedBwd, EmbedFwd,
-                          FrozenHeadLoss, HeadLoss)
+from ..base_blocks import AdamWHyper, AdamWStep, EmbedBwd, EmbedFwd, HeadLoss
 from .llama3_blocks import BlockRecompute
 from .dsv3_blocks import (
     Dsv3DenseBlockBwd,
@@ -393,6 +392,18 @@ class Dsv32DenseBlockBwd(Dsv32MetaState, Dsv32ProfileFill, Dsv3DenseBlockBwd):
                 bits_by_seq=seq_bits,
             )
             p = p / p.sum(-1, keepdim=True).clamp_min(1e-20)
+            lv = a.get("_loss_view")
+            if lv is not None:
+                # warm-up reported objective: KL(p || sigma) on the live
+                # set, accumulated across contributors into loss_{s}_{r}
+                kl = (p * (p.clamp_min(1e-20).log()
+                           - sig.clamp_min(1e-20).log())) \
+                    .masked_fill(~live, 0.0).sum()
+                if a.get("_loss_create"):
+                    lv.copy_(kl.reshape(1))
+                    a["_loss_create"] = False
+                else:
+                    lv.add_(kl.reshape(1))
             d_scores = (sig - p).masked_fill(~live, 0.0)
             K.dsa_index_bwd(
                 kctx, d_scores, q_idx[lo:hi], k_idx[lo:hi], wts[lo:hi],
@@ -565,15 +576,50 @@ class _WarmupKLMixin:
     KL injection runs (report formula 3), re-deriving the MLA expansions
     it needs from the saved context."""
 
+    def launch(self, ctx) -> None:
+        # warm-up bwd contract: inputs (A, x, W[, M..., dM..., loss]);
+        # no dy in, no dy out (the chain carries no gradients — the
+        # objective is layer-local). dW create/accumulate and the loss
+        # accumulator are discovered by id, never position.
+        d = self.dims
+        es, kctx = self._stream_ctx(ctx)
+        with torch.cuda.stream(es):
+            a = self.cl.views(self._in(ctx, 0))
+            x = torch_view(self._in(ctx, 1), (d.tokens, d.d_model),
+                           torch.bfloat16)
+            w = self.wl_for(ctx.task).views(self._in(ctx, 2))
+            dw = None
+            accum = False
+            for m in ctx.task.mutates:
+                if m.startswith("dW_"):
+                    dw = self.gl_for(ctx.task).views(ctx.mutates[m])
+                    accum = True
+            if dw is None:
+                for j, o in enumerate(ctx.task.outputs):
+                    if o.id.startswith("dW_"):
+                        dw = self.gl_for(ctx.task).views(self._out(ctx, j))
+            meta = self._meta_state(ctx) or {}
+            lv, lcreate = None, False
+            for j, o in enumerate(ctx.task.outputs):
+                if o.id.startswith("loss_"):
+                    lv, lcreate = torch_view(self._out(ctx, j), (1,),
+                                             torch.float32), True
+            for m in ctx.task.mutates:
+                if m.startswith("loss_"):
+                    lv = torch_view(ctx.mutates[m], (1,), torch.float32)
+            meta["_loss_view"] = lv
+            meta["_loss_create"] = lcreate
+            self._backward(kctx, None, a, x, w, None, dw, accum, meta=meta)
+
     def _backward(self, kctx, dy, a, x, w, dx_out, dw, accum, meta=None):
         if meta:
             a = {**a, **meta.get("meta", {})}
-            for k in ("_dm_view", "_dm_create", "_kl_n"):
+            for k in ("_dm_view", "_dm_create", "_kl_n",
+                      "_loss_view", "_loss_create"):
                 if k in meta:
                     a[k] = meta[k]
         d = self.dims
         K = self.kernels
-        dx_out.zero_()
         # frozen fields have NO dW storage (policy-filtered grad layout);
         # followers carry no dW object at all — dw arrives None there
         if not d.train_indexer:
@@ -731,8 +777,7 @@ def build_dsv32_resolver(
     table = {
         "embed_fwd": EmbedFwd(dims, kernels),
         **blocks,
-        "head_loss": (HeadLoss(dims, kernels) if dims.sparse_mode
-                      else FrozenHeadLoss(dims, kernels)),
+        "head_loss": HeadLoss(dims, kernels),
         "embed_bwd": EmbedBwd(dims, kernels),
         "optimizer_block": AdamWStep(
             dims, kernels, hyper, layout_for=_opt_layout,

@@ -66,18 +66,30 @@ class GoldenDsv32(GoldenDsv3):
     def train_step(self, tokens, targets) -> float:
         if getattr(self.dims, "sparse_mode", True):
             return super().train_step(tokens, targets)
-        # dense warm-up: CE reported but the ONLY moving weights are the
-        # indexer's (its grads come solely from L_I — the CE path never
-        # reaches it through the detachment seam); bias rule frozen too
+        # dense warm-up: the OBJECTIVE is the indexer KL alone — the
+        # specialized program has no head, no CE, no dy chain. The
+        # reported loss is the summed per-layer KL(p || sigma), exactly
+        # the engine's loss_{s}_{r} accumulator. ``targets`` is unused.
         self._pending_counts = []
         for p_ in self.parameters():
             p_.grad = None
-        ce, aux_total = self.loss_terms(tokens, targets)
-        (ce + aux_total).backward()
+        kl_total = self.warmup_kl(tokens)
+        kl_total.backward()
         self.step_count += 1
         for i, leaves in enumerate(self.w_blocks):
             self._opt_obj(f"block_{i}", leaves)
-        return float(ce.detach())
+        return float(kl_total.detach())
+
+    def warmup_kl(self, tokens) -> "torch.Tensor":
+        """Forward through the blocks (no head) summing each layer's
+        KL — for dsv32 the training objective and the reported value
+        coincide (every layer is its own group)."""
+        x = self.w_embed["w"][tokens.long()]
+        total = None
+        for w in self.w_blocks:
+            x, kl = self.block_forward(x, w)
+            total = kl if total is None else total + kl
+        return total
 
     def block_layout(self, layer: int | None = None) -> PackedLayout:
         if layer is not None and self.dims.kind_of(layer) == "dense":
@@ -137,4 +149,6 @@ class GoldenDsv32(GoldenDsv3):
             if not hasattr(self, "_pending_counts"):
                 self._pending_counts = []
             self._pending_counts.append(cnt)
+        if not getattr(d, "sparse_mode", True):
+            return y, kl          # warm-up objective excludes the aux term
         return y, aux + kl

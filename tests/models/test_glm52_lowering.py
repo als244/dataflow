@@ -99,6 +99,11 @@ def test_dense_warmup_and_frozen_indexer_modes():
         assert b == idx_dw, (oid, b, idx_dw)
     assert "dW_head" not in sizes and "dW_embed" not in sizes
     task_ids = set(prog.task_by_id())
+    # indexer-only objective: no head, no CE, no dy chain — the loss
+    # object is the KL accumulator threaded through contributor bwds
+    assert not any(t.startswith("head_loss") for t in task_ids)
+    assert not any(k.startswith(("targets_", "dy_")) for k in sizes)
+    assert sizes.get("loss_0_0") == 4
     assert not any(t.startswith("embed_bwd") for t in task_ids)
     assert not any(t.startswith(("optimizer_embed", "optimizer_head"))
                    for t in task_ids)

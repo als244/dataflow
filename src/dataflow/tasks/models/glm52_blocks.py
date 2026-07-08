@@ -45,8 +45,7 @@ from ..layouts import (
     dsv32_moe_weight_layout,
     glm52_meta_layout,
 )
-from ..base_blocks import (AdamWHyper, AdamWStep, EmbedBwd, EmbedFwd,
-                          FrozenHeadLoss, HeadLoss)
+from ..base_blocks import AdamWHyper, AdamWStep, EmbedBwd, EmbedFwd, HeadLoss
 from .llama3_blocks import BlockRecompute
 from .dsv3_blocks import Dsv3DenseBlockFwd, Dsv3MoeBlockBwd, Dsv3MoeBlockFwd
 from .dsv32_blocks import (
@@ -514,7 +513,19 @@ class _Glm52WarmupLeaderKL:
             # group centroid: own full rows + followers' deposited rows
             total = (p + dm[lo:hi, :length]) / n
             iscores.masked_fill_(~live, float("-inf"))
-            iscores.sub_(torch.logsumexp(iscores, -1, keepdim=True)).exp_()
+            iscores.sub_(torch.logsumexp(iscores, -1, keepdim=True))
+            lv = a.get("_loss_view")
+            if lv is not None:
+                # reported objective: KL(centroid || sigma) per group —
+                # iscores holds log-sigma at this point
+                kl = (total * (total.clamp_min(1e-20).log() - iscores)) \
+                    .masked_fill(~live, 0.0).sum()
+                if a.get("_loss_create"):
+                    lv.copy_(kl.reshape(1))
+                    a["_loss_create"] = False
+                else:
+                    lv.add_(kl.reshape(1))
+            iscores.exp_()
             d_scores = iscores.sub_(total).masked_fill_(~live, 0.0)
             K.dsa_index_bwd(
                 kctx, d_scores, q_idx[lo:hi], k_idx[lo:hi], wts[lo:hi],
@@ -711,8 +722,7 @@ def build_glm52_resolver(
     table = {
         "embed_fwd": EmbedFwd(dims, kernels),
         **blocks,
-        "head_loss": (HeadLoss(dims, kernels) if dims.sparse_mode
-                      else FrozenHeadLoss(dims, kernels)),
+        "head_loss": HeadLoss(dims, kernels),
         "embed_bwd": EmbedBwd(dims, kernels),
         "optimizer_block": AdamWStep(
             dims, kernels, hyper, layout_for=_opt_layout,

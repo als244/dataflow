@@ -122,7 +122,9 @@ def train(
     round_views = [
         (
             torch_view(values[f"tokens_0_{r}"], (dims.tokens,), torch.int32),
-            torch_view(values[f"targets_0_{r}"], (dims.tokens,), torch.int32),
+            # indexer-only warm-up programs carry no targets (no head/CE)
+            (torch_view(values[f"targets_0_{r}"], (dims.tokens,), torch.int32)
+             if f"targets_0_{r}" in values else None),
         )
         for r in range(rounds)
     ]
@@ -133,7 +135,8 @@ def train(
             for r, (tokens_view, targets_view) in enumerate(round_views):
                 tokens, targets = token_stream(step * rounds + r)
                 tokens_view.copy_(tokens)
-                targets_view.copy_(targets)
+                if targets_view is not None:
+                    targets_view.copy_(targets)
             # optimizer bias correction advances with the global step
             stepped = _with_step(annotated, step)
 

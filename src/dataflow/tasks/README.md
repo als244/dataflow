@@ -9,7 +9,7 @@ never imports the simulator.
 
 | where | what |
 |---|---|
-| `base_blocks.py` | family-NEUTRAL executables: `_Base`, embed fwd/bwd, `HeadLoss`/`FrozenHeadLoss`, the per-field-policy optimizer step |
+| `base_blocks.py` | family-NEUTRAL executables: `_Base`, embed fwd/bwd, `HeadLoss`, the per-field-policy optimizer step |
 | `models/` | one module per model family (`<family>_blocks.py`): stages, backwards, resolver. `models/llama3_blocks.py` also hosts the `Block*` templates every family subclasses (their default STAGES are llama's) |
 | `modules/` | shared building-block modules: the pluggable `moe/` package, `dsa_reference.py`, `mla_reference.py` |
 | `kernels/` | the registry op implementations (eager/triton/aten/fla) |
