@@ -154,3 +154,18 @@ def test_plan_invariance():
     )
     for r in (r1, r2, r3):
         r.assert_ok()
+
+
+def test_model_step_muon_policy_golden_parity():
+    """opt_policy="muon" through the REAL engine vs the policy-dispatched
+    golden: matrix fields (wq/wk/wv/wo/w1/w2/w3) take the registry muon
+    step (bf16 momentum, nesterov, NS5, Moonshot scaling — both sides run
+    the same aten math), norms and embed/head resolve to adamw via the
+    recipe's fragment rules (embed/head through their ns-prefixed keys).
+    This is the muon-training golden gate the optimizer abstraction was
+    missing."""
+    from dataclasses import replace
+
+    cfg = replace(ShapedLlamaConfig.tiny(), opt_policy="muon")
+    check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024,
+                     tol=3e-2).assert_ok()

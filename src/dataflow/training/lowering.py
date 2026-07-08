@@ -54,14 +54,16 @@ def size_of_factory(dims, fl: FamilyLayouts):
     n = fl.n_layers
     wl_i = [fl.block_weight_at(i) for i in range(n)]
     a_i = [fl.block_context_at(i).total_bytes for i in range(n)]
-    dw_i = [grad_layout(wl_i[i], p, layer=i).total_bytes for i in range(n)]
+    op = getattr(dims, "opt_policy", None)
+    dw_i = [grad_layout(wl_i[i], p, layer=i, opt_policy=op).total_bytes
+            for i in range(n)]
     m_i = ([fl.block_meta_at(i).total_bytes for i in range(n)]
            if fl.block_meta_at is not None else None)
     op = getattr(dims, "opt_policy", None)
     o_i = [opt_state_layout(wl_i[i], p, layer=i, opt_policy=op).total_bytes
            for i in range(n)]
-    dw_e = grad_layout(fl.embed, p, ns=fl.embed_ns).total_bytes
-    dw_h = grad_layout(fl.head, p, ns="head").total_bytes
+    dw_e = grad_layout(fl.embed, p, ns=fl.embed_ns, opt_policy=op).total_bytes
+    dw_h = grad_layout(fl.head, p, ns="head", opt_policy=op).total_bytes
     o_e = opt_state_layout(fl.embed, p, ns=fl.embed_ns,
                            opt_policy=op).total_bytes
     o_h = opt_state_layout(fl.head, p, ns="head",
@@ -140,31 +142,56 @@ def apply_exact_sizes(
     objs = tuple(fix_obj(o) for o in shaped.initial_objects)
     # a fully-STATELESS optimizer assignment (e.g. sgd for every field
     # of a layer) sizes that O object to zero — drop it and scrub it
-    # from its optimizer task rather than shipping a 0-byte object
+    # from its optimizer task rather than shipping a 0-byte object.
+    # The same rule generalizes to GRADIENTS under frozen optimizer
+    # policies (warm-up): a dW whose policy-filtered grad layout sizes
+    # to zero is never created — its round-0 output, accumulate
+    # mutates, and optimizer input all scrub, and tasks left
+    # purposeless (embed_bwd with no outputs; an optimizer whose dW
+    # vanished) drop from the chain entirely.
     dead = {o.id for o in objs
             if o.id.startswith("O_") and o.size_bytes == 0}
+    for task in shaped.tasks:
+        for out in task.outputs:
+            if out.id.startswith("dW_") and (size_of(out.id) or 0) == 0:
+                dead.add(out.id)
     if dead:
         objs = tuple(o for o in objs if o.id not in dead)
     final = {k: v for k, v in shaped.final_locations.items()
              if k not in dead}
 
     def scrub(t: TaskSpec) -> TaskSpec:
-        if not dead or not (set(t.inputs) | set(t.mutates)) & dead:
+        touched = (set(t.inputs) | set(t.mutates)
+                   | {o.id for o in t.outputs}) & dead
+        if not dead or not touched:
             return t
         return replace(
             t,
             inputs=tuple(i for i in t.inputs if i not in dead),
             mutates=tuple(m for m in t.mutates if m not in dead),
+            outputs=tuple(o for o in t.outputs if o.id not in dead),
         )
 
+    def alive(t: TaskSpec) -> bool:
+        if not t.outputs and not t.mutates:
+            return False              # e.g. embed_bwd stripped of its dW
+        if t.group == "optimizer" and not any(
+                i.startswith("dW_") for i in t.inputs):
+            # frozen layer/embed/head: nothing to apply
+            return False
+        return True
+
+    tasks = tuple(
+        scrub(fix_task(t, step_of(t.id)) if t.group == "optimizer"
+              else fix_task(t, 0))
+        for t in shaped.tasks
+    )
+    if dead:
+        tasks = tuple(t for t in tasks if alive(t))
     return replace(
         shaped,
         initial_objects=objs,
-        tasks=tuple(
-            scrub(fix_task(t, step_of(t.id)) if t.group == "optimizer"
-                  else fix_task(t, 0))
-            for t in shaped.tasks
-        ),
+        tasks=tasks,
         recompute_rewrites=new_rewrites,
         final_locations=final,
         metadata={**shaped.metadata, "lowering": lowering_tag},

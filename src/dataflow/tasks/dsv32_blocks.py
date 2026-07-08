@@ -42,7 +42,8 @@ from .layouts import (
     dsv32_moe_weight_layout,
     dsv32_meta_layout,
 )
-from .base_blocks import AdamWHyper, AdamWStep, EmbedBwd, EmbedFwd, HeadLoss
+from .base_blocks import (AdamWHyper, AdamWStep, EmbedBwd, EmbedFwd,
+                          FrozenHeadLoss, HeadLoss)
 from .llama3_blocks import BlockRecompute
 from .dsv3_blocks import (
     Dsv3DenseBlockBwd,
@@ -572,18 +573,17 @@ class _WarmupKLMixin:
                     a[k] = meta[k]
         d = self.dims
         K = self.kernels
-        if not accum:
-            for name, view in dw.items():
-                if name not in _IDX_FIELDS:
-                    view.zero_()
         dx_out.zero_()
+        # frozen fields have NO dW storage (policy-filtered grad layout);
+        # followers carry no dW object at all — dw arrives None there
         if not d.train_indexer:
-            if not accum:
+            if dw and not accum:
                 for name in _IDX_FIELDS:
                     if name in dw:
                         dw[name].zero_()
             return
-        acc = self._acc_fn(dw, accum)
+        acc = (self._acc_fn(dw, accum) if dw
+               else (lambda name, value: None))
         t = d.tokens
         bounds = _seq_bounds(d)
         pos = ops.positions_for(d.seq_spec, t, x.device)
@@ -686,17 +686,10 @@ def build_dsv32_resolver(
                                  speed=dims.moe.bias_update_speed),
     }
     if not dims.sparse_mode:
-        # freeze the main model (paper warm-up): AdamW no-ops for EVERY
-        # non-indexer field — embed/head/bias included. Gradients still
-        # compute (grammar unchanged); they are simply never applied.
-        def _frozen_main(kctx, kernels, w_view, g_view):
-            pass
-
-        names = set()
-        for wl in (dsv32_dense_weight_layout(dims),
-                   dsv32_moe_weight_layout(dims)):
-            names |= {f.name for f in wl.fields}
-        bias_special = {n: _frozen_main for n in names - set(_IDX_FIELDS)}
+        # warm-up freezing lives in the OPTIMIZER POLICY (dims.opt_policy
+        # defaults every field to "frozen"; idx fields -> adamw). The
+        # router-bias speed rule is frozen with everything else.
+        bias_special = {}
     if not dims.train_indexer:
         # frozen indexer: skip AdamW ENTIRELY for its fields (no decay)
         def _frozen(kctx, kernels, w_view, g_view):
@@ -733,17 +726,13 @@ def build_dsv32_resolver(
             "dsamoe_bwd": Dsv32WarmupMoeBlockBwd(dims, kernels),
         }
 
-        def _frozen_w(kctx, kernels_, w_view, g_view):
-            pass
-
-        opt_embed = AdamWStep(dims, kernels, hyper, kind="embed",
-                              update_specials={"w": _frozen_w})
-        opt_head = AdamWStep(dims, kernels, hyper, kind="head",
-                             update_specials={"w": _frozen_w})
+        opt_embed = AdamWStep(dims, kernels, hyper, kind="embed")
+        opt_head = AdamWStep(dims, kernels, hyper, kind="head")
     table = {
         "embed_fwd": EmbedFwd(dims, kernels),
         **blocks,
-        "head_loss": HeadLoss(dims, kernels),
+        "head_loss": (HeadLoss(dims, kernels) if dims.sparse_mode
+                      else FrozenHeadLoss(dims, kernels)),
         "embed_bwd": EmbedBwd(dims, kernels),
         "optimizer_block": AdamWStep(
             dims, kernels, hyper, layout_for=_opt_layout,

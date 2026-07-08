@@ -253,12 +253,24 @@ def _lse_spec(dims, n_heads: int) -> tuple[str, tuple[int, ...], str]:
 
 
 def grad_layout(weight: PackedLayout, policy: DTypePolicy,
-                ns: str | None = None, layer: int | None = None) -> PackedLayout:
-    """dW layout mirroring a weight layout field-by-field at grad dtypes."""
+                ns: str | None = None, layer: int | None = None,
+                opt_policy=None) -> PackedLayout:
+    """dW layout mirroring a weight layout field-by-field at grad dtypes.
+    Fields whose OPTIMIZER rule is "frozen" drop out entirely — frozen
+    params need no gradient storage (warm-up phases: dW collapses to the
+    trainable fields; a fully-frozen layer's dW sizes to zero and the
+    lowering prunes the object and its optimizer task)."""
     key = (lambda n: f"{ns}.{n}") if ns else (lambda n: n)
+    fields = weight.fields
+    if opt_policy is not None:
+        from .optim import resolve_opt_policy
+
+        op = resolve_opt_policy(opt_policy)
+        fields = [f for f in fields
+                  if op.for_field(key(f.name), layer, f.shape) != "frozen"]
     return PackedLayout.build(
         [(f.name, f.shape, policy.for_field(key(f.name), layer).grad)
-         for f in weight.fields]
+         for f in fields]
     )
 
 

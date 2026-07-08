@@ -52,8 +52,7 @@ class GoldenLlama3:
     w_blocks: list[Leaves] = field(default_factory=list)
     w_head: Leaves = None  # type: ignore[assignment]
     step_count: int = 0
-    _adam_m: dict[str, torch.Tensor] = field(default_factory=dict)
-    _adam_v: dict[str, torch.Tensor] = field(default_factory=dict)
+    _opt_state: dict[str, dict] = field(default_factory=dict)
 
     # --- family layout hooks (overridden by subclasses) -----------------------
 
@@ -122,25 +121,27 @@ class GoldenLlama3:
         return self.dims.dtypes.for_field(f"{ns}.{name}" if ns else name, layer)
 
     def _adamw_obj(self, obj: str, leaves: Leaves) -> None:
-        """Per-field AdamW mirroring the runtime executor: the gradient
-        rounds through its grad STORAGE dtype first, moments live at the
-        opt dtype, fp32 math in ops.adamw_step."""
-        hp = self.hyper
+        """Per-field optimizer step mirroring the runtime executor's
+        POLICY DISPATCH (name kept for subclass back-compat): each field
+        resolves through dims.opt_policy exactly as AdamWStep.launch does
+        — embed/head fields carry their ns-prefixed key ("embed.w"), so
+        the muon recipe routes them to adamw by construction. Gradients
+        round through their grad STORAGE dtype; slots live at the opt
+        dtype (adamw m+v, muon m, sgd none, frozen nothing at all)."""
+        from dataflow.tasks.optim import reference_field_step
+
+        ns = obj if obj in ("embed", "head") else None
+        layer = int(obj.split("_")[1]) if obj.startswith("block_") else None
         for name, w in leaves.items():
             dts = self._field_dtypes(obj, name)
             key = f"{obj}.{name}"
-            if key not in self._adam_m:
-                odt = TORCH_DTYPE_BY_NAME[dts.opt]
-                self._adam_m[key] = torch.zeros_like(w, dtype=odt)
-                self._adam_v[key] = torch.zeros_like(w, dtype=odt)
-            g = w.grad.to(TORCH_DTYPE_BY_NAME[dts.grad])
-            with torch.no_grad():
-                ops.adamw_step(
-                    w.data.view(-1), g.view(-1),
-                    self._adam_m[key].view(-1), self._adam_v[key].view(-1),
-                    lr=hp.lr, beta1=hp.beta1, beta2=hp.beta2, eps=hp.eps,
-                    weight_decay=hp.weight_decay, step=self.step_count,
-                )
+            reference_field_step(
+                self.dims, self.hyper, ns=ns, layer=layer, name=name, w=w,
+                state=self._opt_state.setdefault(key, {}),
+                step=self.step_count,
+                grad_dtype=TORCH_DTYPE_BY_NAME[dts.grad],
+                opt_dtype=TORCH_DTYPE_BY_NAME[dts.opt],
+            )
 
     def train_step(self, tokens: torch.Tensor, targets: torch.Tensor) -> float:
         for p in self.parameters():

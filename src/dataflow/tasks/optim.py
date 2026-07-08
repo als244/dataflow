@@ -164,11 +164,17 @@ def _muon_step(kctx, kernels, hp, step_i, w, g, states, shape):
     w.copy_(w32.to(w.dtype))
 
 
+def _frozen_step(kctx, kernels, hp, step_i, w, g, states, shape):
+    """Freeze-as-policy: no state, no update. Warm-up phases assign this
+    as the default so O layouts collapse to the trainable fields."""
+
+
 OPTIMIZERS: dict[str, OptimizerDef] = {
     "adamw": OptimizerDef("adamw", ("m", "v"), _adamw_step),
     "sgd": OptimizerDef("sgd", (), _sgd_step),
     "sgdm": OptimizerDef("sgdm", ("m",), _sgdm_step),
     "muon": OptimizerDef("muon", ("m",), _muon_step),
+    "frozen": OptimizerDef("frozen", (), _frozen_step),
 }
 
 
@@ -323,3 +329,52 @@ def resolve_opt_policy(p):
             return MUON_RECIPE
         return OptPolicy(default=p).validate()
     return p.validate()
+
+
+def reference_field_step(dims, hyper, *, ns, layer, name, w, state,
+                         step, grad_dtype, opt_dtype) -> None:
+    """GOLDEN-side per-field optimizer step — mirrors AdamWStep.launch's
+    policy dispatch exactly: the same ns-prefixed policy key (that
+    namespacing is what routes embed/head to adamw under the muon
+    recipe), the same hyper_for overrides, the same schedule scaling.
+
+    ``state`` is the field's slot dict; slots are created lazily at the
+    opt dtype per the resolved rule. adamw runs the eager reference
+    (ops.adamw_step) to keep the golden's established bit behavior;
+    every other rule runs the SAME step fn the engine dispatches
+    (muon's matrix path is the registry aten kernel — the only impl)."""
+    from dataclasses import replace as _rep
+
+    from . import ops as _ops
+    from .kernels import resolve_kernels as _rk
+
+    key = f"{ns}.{name}" if ns else name
+    pol = resolve_opt_policy(getattr(dims, "opt_policy", None))
+    rule = pol.for_field(key, layer, tuple(w.shape))
+    if rule == "frozen":
+        return
+    hp = hyper_for(pol, key, layer, hyper)
+    sched = getattr(hyper, "schedule", None)
+    if sched is not None:
+        s = sched.scale(step)
+        if s != 1.0:
+            hp = _rep(hp, lr=hp.lr * s,
+                      muon_lr=(hp.muon_lr * s if hp.muon_lr else hp.muon_lr))
+    g = w.grad.to(grad_dtype)
+    for slot in OPTIMIZERS[rule].slots:
+        if slot not in state:
+            state[slot] = torch.zeros_like(w, dtype=opt_dtype)
+    with torch.no_grad():
+        if rule == "adamw":
+            _ops.adamw_step(
+                w.data.view(-1), g.view(-1),
+                state["m"].view(-1), state["v"].view(-1),
+                lr=hp.lr, beta1=hp.beta1, beta2=hp.beta2, eps=hp.eps,
+                weight_decay=hp.weight_decay, step=step,
+            )
+            return
+        states = {slot: state[slot].view(-1)
+                  for slot in OPTIMIZERS[rule].slots}
+        OPTIMIZERS[rule].step(None, _rk(), hp, step,
+                              w.data.view(-1), g.view(-1), states,
+                              tuple(w.shape))

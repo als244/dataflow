@@ -45,7 +45,8 @@ from .layouts import (
     dsv32_moe_weight_layout,
     glm52_meta_layout,
 )
-from .base_blocks import AdamWHyper, AdamWStep, EmbedBwd, EmbedFwd, HeadLoss
+from .base_blocks import (AdamWHyper, AdamWStep, EmbedBwd, EmbedFwd,
+                          FrozenHeadLoss, HeadLoss)
 from .llama3_blocks import BlockRecompute
 from .dsv3_blocks import Dsv3DenseBlockFwd, Dsv3MoeBlockBwd, Dsv3MoeBlockFwd
 from .dsv32_blocks import (
@@ -654,17 +655,10 @@ def build_glm52_resolver(
                                  speed=dims.moe.bias_update_speed),
     }
     if not dims.sparse_mode:
-        # warm-up freeze (paper): AdamW no-ops for EVERY non-indexer
-        # field — embed/head/router-bias included. The warm-up blocks
-        # never even compute those wgrads (dW arrives zeroed).
-        def _frozen_main(kctx, kernels_, w_view, g_view):
-            pass
-
-        names = set()
-        for wl_fn in (dsv32_dense_weight_layout, dsv32_moe_weight_layout,
-                      dsv3_moe_weight_layout):
-            names |= {f.name for f in wl_fn(dims).fields}
-        bias_special = {n: _frozen_main for n in names - set(_IDX_FIELDS)}
+        # warm-up freezing lives in the OPTIMIZER POLICY (dims.opt_policy
+        # defaults every field to "frozen"; idx fields -> adamw). The
+        # router-bias speed rule is frozen with everything else.
+        bias_special = {}
     if not dims.train_indexer:
         # frozen indexer: skip AdamW ENTIRELY for its fields (no decay);
         # follower packs lack the fields, so the special never fires there
@@ -712,17 +706,13 @@ def build_glm52_resolver(
             "gmf_bwd": Glm52WarmupMfBlockBwd(dims, kernels),
         }
 
-        def _frozen_w(kctx, kernels_, w_view, g_view):
-            pass
-
-        opt_embed = AdamWStep(dims, kernels, hyper, kind="embed",
-                              update_specials={"w": _frozen_w})
-        opt_head = AdamWStep(dims, kernels, hyper, kind="head",
-                             update_specials={"w": _frozen_w})
+        opt_embed = AdamWStep(dims, kernels, hyper, kind="embed")
+        opt_head = AdamWStep(dims, kernels, hyper, kind="head")
     table = {
         "embed_fwd": EmbedFwd(dims, kernels),
         **blocks,
-        "head_loss": HeadLoss(dims, kernels),
+        "head_loss": (HeadLoss(dims, kernels) if dims.sparse_mode
+                      else FrozenHeadLoss(dims, kernels)),
         "embed_bwd": EmbedBwd(dims, kernels),
         "optimizer_block": AdamWStep(
             dims, kernels, hyper, layout_for=_opt_layout,

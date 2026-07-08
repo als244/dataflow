@@ -40,8 +40,7 @@ class GoldenQwen35:
     w_head: Leaves = None   # untied only
     w_blocks: list[Leaves] = field(default_factory=list)
     step_count: int = 0
-    _adam_m: dict[str, torch.Tensor] = field(default_factory=dict)
-    _adam_v: dict[str, torch.Tensor] = field(default_factory=dict)
+    _opt_state: dict[str, dict] = field(default_factory=dict)
 
     @property
     def tied(self) -> bool:
@@ -152,24 +151,19 @@ class GoldenQwen35:
         return self.dims.dtypes.for_field(f"{ns}.{name}" if ns else name, layer)
 
     def _adamw_obj(self, obj: str, ns: str | None, leaves: Leaves) -> None:
-        hp = self.hyper
+        from dataflow.tasks.optim import reference_field_step
+
         layer = int(obj.split("_")[1]) if obj.startswith("block_") else None
         for name, w in leaves.items():
-            dts = self._field_dtypes(ns, name, layer)
+            dts = self._field_dtypes(obj, ns, name)
             key = f"{obj}.{name}"
-            if key not in self._adam_m:
-                odt = TORCH_DTYPE_BY_NAME[dts.opt]
-                self._adam_m[key] = torch.zeros_like(w, dtype=odt)
-                self._adam_v[key] = torch.zeros_like(w, dtype=odt)
-            g = w.grad.to(TORCH_DTYPE_BY_NAME[dts.grad])
-            with torch.no_grad():
-                ops.adamw_step(
-                    w.data.view(-1), g.view(-1),
-                    self._adam_m[key].view(-1), self._adam_v[key].view(-1),
-                    lr=hp.lr, beta1=hp.beta1, beta2=hp.beta2, eps=hp.eps,
-                    weight_decay=hp.weight_decay, step=self.step_count,
-                )
-
+            reference_field_step(
+                self.dims, self.hyper, ns=ns, layer=layer, name=name, w=w,
+                state=self._opt_state.setdefault(key, {}),
+                step=self.step_count,
+                grad_dtype=TORCH_DTYPE_BY_NAME[dts.grad],
+                opt_dtype=TORCH_DTYPE_BY_NAME[dts.opt],
+            )
     def train_step(self, tokens: torch.Tensor, targets: torch.Tensor) -> float:
         for p in self.parameters():
             p.grad = None

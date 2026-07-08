@@ -26,6 +26,7 @@ from typing import Mapping
 
 import torch
 
+from dataflow.tasks.optim import OptPolicy
 from dataflow.core import Program
 from dataflow.tasks.layouts import (
     Dsv32Dims,
@@ -227,8 +228,16 @@ def moe_spec_of(cfg: ShapedDsv32Config) -> MoESpec:
 
 
 def dims_of_dsv32(cfg: ShapedDsv32Config) -> Dsv32Dims:
+    # dense warm-up: freezing is an OPTIMIZER POLICY — every field
+    # defaults to "frozen" (zero grad storage, zero opt state; the
+    # lowering prunes empty dW/O objects and purposeless optimizer/
+    # embed_bwd tasks) and only the indexer trains, with adamw.
+    warmup_policy = OptPolicy(
+        default="frozen",
+        overrides=(("w_idx_q", "adamw"), ("w_idx_k", "adamw"), ("idx_k_ln_w", "adamw"), ("idx_k_ln_b", "adamw"), ("w_idx_w", "adamw"),),
+    )
     return Dsv32Dims(
-        opt_policy=cfg.opt_policy,
+        opt_policy=cfg.opt_policy if cfg.sparse_mode else warmup_policy,
         d_model=cfg.d_model, n_heads=cfg.n_heads,
         q_lora_rank=cfg.q_lora_rank, kv_lora_rank=cfg.kv_lora_rank,
         qk_nope_dim=cfg.qk_nope_dim, qk_rope_dim=cfg.qk_rope_dim,

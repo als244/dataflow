@@ -81,6 +81,36 @@ def test_dense_warmup_and_frozen_indexer_modes():
     assert not any(oid.startswith("M_") and oid.rsplit("_", 1)[1] == "0"
                    for oid in sizes), \
         "gdl (dense leader, layer 0) must have no M in warm-up"
+    # LEAN GRADS: frozen params carry no dW/O. Followers (gmf) have no
+    # dW at all; leaders' dW is indexer-only; dW_head/dW_embed and the
+    # embed_bwd + frozen optimizer tasks are pruned outright.
+    from dataflow.tasks.layouts import dsv32_dense_weight_layout, grad_layout
+    from dataflow.training.glm52 import dims_of_glm52
+
+    wdims = dims_of_glm52(rep(ShapedGlm52Config.tiny(), sparse_mode=False))
+    idx_dw = grad_layout(dsv32_dense_weight_layout(wdims), wdims.dtypes,
+                         layer=0, opt_policy=wdims.opt_policy).total_bytes
+    dws = {k: v for k, v in sizes.items() if k.startswith("dW_")}
+    follower_layers = {i for i in range(cfg.n_layers)
+                       if wdims.kind_of(i) == "gmf"}
+    for oid, b in dws.items():
+        layer = int(oid.rsplit("_", 1)[1])
+        assert layer not in follower_layers, f"follower {oid} should be pruned"
+        assert b == idx_dw, (oid, b, idx_dw)
+    assert "dW_head" not in sizes and "dW_embed" not in sizes
+    task_ids = set(prog.task_by_id())
+    assert not any(t.startswith("embed_bwd") for t in task_ids)
+    assert not any(t.startswith(("optimizer_embed", "optimizer_head"))
+                   for t in task_ids)
+    for i in follower_layers:
+        assert not any(t.startswith("optimizer_") and t.endswith(f"_{i}")
+                       for t in task_ids), f"frozen layer {i} optimizer stays"
+    # O objects: leaders idx-only (adamw m+v), followers none
+    for i in range(cfg.n_layers):
+        if i in follower_layers:
+            assert f"O_{i}" not in sizes
+        else:
+            assert sizes.get(f"O_{i}", 0) > 0
     # frozen indexer is a SUPPORTED mode (RL post-training consumes
     # saved selections verbatim): lowers cleanly, emits no dM chain
     prog = lower_glm52(rep(ShapedGlm52Config.tiny(), train_indexer=False))
