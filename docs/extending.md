@@ -23,6 +23,28 @@ op → block executable (staged) → golden reference → lowering → planned p
 with a gradcheck gate at each level. Nothing reaches throughput work until
 its math is pinned to an autograd reference.
 
+## Where a family's files live (the layout contract)
+
+One family = one module in each of these locations (plus registration):
+
+| file | contents |
+|---|---|
+| `src/dataflow/training/models/<family>.py` | Shaped config + presets (classmethods), Dims, LayerKindSpecs, `lower_<family>`, `initial_values_<family>` |
+| `src/dataflow/tasks/models/<family>_blocks.py` | block executables (STAGES forwards, recomputes, backwards) + `build_<family>_resolver` |
+| `src/dataflow/models/<family>_reference.py` | the golden: reference forward + policy-dispatched optimizer replica |
+| `tests/models/test_<family>.py` | the family's 11-gate ladder (canonical module `tools/verify_family.py` runs) |
+| `src/dataflow/training/families.py` | the registration entry tying the five surfaces together |
+
+Shared machinery a family composes but never edits: task templates and
+family-neutral executables (`tasks/base_blocks.py`,
+`tasks/models/llama3_blocks.py` for the `Block*` templates), shared
+building-block modules (`tasks/modules/` — moe package, dsa/mla
+references), kernels (`tasks/kernels/`), layouts (`tasks/layouts.py`),
+the program builders (`training/shaped_program.py`,
+`training/warmup_program.py`), and the shared block-math suites
+(`tests/modules/`). External (plugin) families mirror the same shape
+in their own package — see extending_external.md.
+
 ## 1. Write an op (`tasks/ops.py`)
 
 An op is two functions plus cost knowledge:
@@ -127,7 +149,7 @@ layers CONSUME one layer's M, declare `MetaShare(producer, consumers,
 grad_bytes)` and pass `meta_shared=` to `build_shaped_program` — consumers
 gain the producer's M as an input on fwd/rc/bwd, and a `dM_{s}_{r}_{prod}`
 accumulator is chained dW-style in reverse bwd order (last consumer
-creates, middles mutate, producer consumes). See `training/glm52.py` +
+creates, middles mutate, producer consumes). See `training/models/glm52.py` +
 `tasks/models/glm52_blocks.py` for the full worked example (leader/follower
 blocks, centroid gradient through dM).
 
@@ -187,7 +209,7 @@ Lowering emits the bare task chain plus the pieces planning needs:
   layout backs each weight object, per layer; init specials) and call
   `size_of_factory` / `initial_values_from_layouts`. ONE module per
   family holds all of it — config, kind specs, dims mapping, layouts
-  declaration (`training/llama3.py` / `qwen3.py` / `qwen35.py`,
+  declaration (`training/models/llama3.py` / `qwen3.py` / `qwen35.py`,
   ~130-230 lines each, pure declarations).
 - **Optimizer placement**: emit each optimizer task immediately after the
   LAST mutation of its gradient (`optimizer_placement="interleaved"`, the

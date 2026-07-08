@@ -60,8 +60,8 @@ from dataflow.tasks.layouts import (
 )
 from dataflow.tasks.modules.moe.spec import MoESpec
 
-from .lowering import FamilyLayouts, apply_exact_sizes, initial_values_from_layouts, size_of_factory
-from .shaped_program import (
+from ..lowering import FamilyLayouts, apply_exact_sizes, initial_values_from_layouts, size_of_factory
+from ..shaped_program import (
     BF16,
     LayerKindSpec,
     MetaShare,

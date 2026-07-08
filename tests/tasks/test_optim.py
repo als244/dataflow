@@ -125,7 +125,7 @@ def test_policy_dispatch_and_validation():
 def test_opt_state_layout_slots_follow_policy():
     from dataflow.tasks.layouts import opt_state_layout, weight_layout
     from dataflow.training.families import resolve_family as _rf
-    from dataflow.training.llama3 import ShapedLlamaConfig
+    from dataflow.training.models.llama3 import ShapedLlamaConfig
 
     dims = _rf(ShapedLlamaConfig.tiny()).dims_of(ShapedLlamaConfig.tiny())
     wl = weight_layout(dims)
@@ -154,7 +154,7 @@ def test_mixed_policy_model_step_vs_hand_replica():
     from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME, torch_view
     from dataflow.tasks.base_blocks import AdamWHyper
     from dataflow.training.families import resolve_family
-    from dataflow.training.llama3 import ShapedLlamaConfig
+    from dataflow.training.models.llama3 import ShapedLlamaConfig
     from dataflow.training.planning import plan_program
     from dataflow.training.testing.gradcheck import rel_l2
 
@@ -254,7 +254,7 @@ def test_muon_recipe_string_model_step_vs_hand_replica():
     from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME, torch_view
     from dataflow.tasks.base_blocks import AdamWHyper
     from dataflow.training.families import resolve_family
-    from dataflow.training.llama3 import ShapedLlamaConfig
+    from dataflow.training.models.llama3 import ShapedLlamaConfig
     from dataflow.training.planning import plan_program
     from dataflow.training.testing.gradcheck import rel_l2
     from dataflow.tasks.optim import _ns_orthogonalize, resolve_opt_policy
@@ -342,7 +342,7 @@ def test_layer_indexed_policy_sizes_and_model_step():
     from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME, torch_view
     from dataflow.tasks.base_blocks import AdamWHyper
     from dataflow.training.families import resolve_family
-    from dataflow.training.llama3 import ShapedLlamaConfig
+    from dataflow.training.models.llama3 import ShapedLlamaConfig
     from dataflow.training.planning import plan_program
     from dataflow.training.testing.gradcheck import rel_l2
 
@@ -447,7 +447,7 @@ def test_hyper_overrides_and_schedule_model_step():
     from dataflow.tasks.models.llama3_blocks import build_resolver
     from dataflow.tasks.optim import LRSchedule
     from dataflow.training.families import resolve_family
-    from dataflow.training.llama3 import ShapedLlamaConfig
+    from dataflow.training.models.llama3 import ShapedLlamaConfig
     from dataflow.training.planning import plan_program
     from dataflow.training.testing.gradcheck import rel_l2
 

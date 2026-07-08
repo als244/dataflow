@@ -29,13 +29,13 @@ pytestmark = pytest.mark.gpu
 
 
 def _tiny_cfg(**over):
-    from dataflow.training.glm52 import ShapedGlm52Config
+    from dataflow.training.models.glm52 import ShapedGlm52Config
 
     return replace(ShapedGlm52Config.tiny(), **over)
 
 
 def _tiny_dims(cfg=None):
-    from dataflow.training.glm52 import dims_of_glm52
+    from dataflow.training.models.glm52 import dims_of_glm52
 
     return dims_of_glm52(cfg if cfg is not None else _tiny_cfg())
 
@@ -122,7 +122,7 @@ def test_glm52_lowering_validates_and_plans():
 
 def test_glm52_full_scale_presets_lower_and_validate():
     from dataflow.core import validate_program
-    from dataflow.training.glm52 import ShapedGlm52Config, lower_glm52
+    from dataflow.training.models.glm52 import ShapedGlm52Config, lower_glm52
 
     for ctor, layers in ((ShapedGlm52Config.glm52_mini, 18),
                          (ShapedGlm52Config.glm52, 78)):
@@ -139,12 +139,12 @@ def test_glm52_partial_ownership_lowering_rejected():
     import dataclasses
     import unittest.mock as mock
 
-    from dataflow.training.glm52 import dims_of_glm52, lower_glm52
+    from dataflow.training.models.glm52 import dims_of_glm52, lower_glm52
 
     cfg = _tiny_cfg()
     part = dataclasses.replace(dims_of_glm52(cfg).moe, expert_ids=(0, 1, 2))
     with pytest.raises(NotImplementedError):
-        with mock.patch("dataflow.training.glm52.moe_spec_of", return_value=part):
+        with mock.patch("dataflow.training.models.glm52.moe_spec_of", return_value=part):
             lower_glm52(cfg)
 
 

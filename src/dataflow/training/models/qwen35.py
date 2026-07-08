@@ -24,8 +24,8 @@ from dataflow.tasks.layouts import (
     qwen35_lin_context_layout,
     qwen35_lin_weight_layout,
 )
-from .lowering import FamilyLayouts, apply_exact_sizes, initial_values_from_layouts, size_of_factory
-from .shaped_program import LayerKindSpec, ShapedHardware, build_shaped_program
+from ..lowering import FamilyLayouts, apply_exact_sizes, initial_values_from_layouts, size_of_factory
+from ..shaped_program import LayerKindSpec, ShapedHardware, build_shaped_program
 
 
 BF16 = 2

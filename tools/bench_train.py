@@ -38,15 +38,15 @@ from dataflow.training.families import resolve_family
 from dataflow.training.planning import plan_program
 from dataflow.training.profiling import apply_measured_costs, cached_pcie, host_backing_cap_bytes, load_or_profile
 from dataflow.training.replay import replay_gap_pct
-from dataflow.training.llama3 import ShapedLlamaConfig
-from dataflow.training.olmoe import ShapedOlmoeConfig
-from dataflow.training.qwen3 import ShapedQwen3Config
-from dataflow.training.qwen35 import ShapedQwen35Config
-from dataflow.training.qwen35moe import ShapedQwen35MoeConfig
-from dataflow.training.qwen3moe import ShapedQwen3MoeConfig
-from dataflow.training.dsv3 import ShapedDsv3Config
-from dataflow.training.dsv32 import ShapedDsv32Config
-from dataflow.training.glm52 import ShapedGlm52Config
+from dataflow.training.models.llama3 import ShapedLlamaConfig
+from dataflow.training.models.olmoe import ShapedOlmoeConfig
+from dataflow.training.models.qwen3 import ShapedQwen3Config
+from dataflow.training.models.qwen35 import ShapedQwen35Config
+from dataflow.training.models.qwen35moe import ShapedQwen35MoeConfig
+from dataflow.training.models.qwen3moe import ShapedQwen3MoeConfig
+from dataflow.training.models.dsv3 import ShapedDsv3Config
+from dataflow.training.models.dsv32 import ShapedDsv32Config
+from dataflow.training.models.glm52 import ShapedGlm52Config
 from dataflow.training.train_loop import train
 
 GIB = 1024**3

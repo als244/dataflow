@@ -23,13 +23,13 @@ pytestmark = pytest.mark.gpu
 
 
 def _tiny_cfg(**over):
-    from dataflow.training.qwen3moe import ShapedQwen3MoeConfig
+    from dataflow.training.models.qwen3moe import ShapedQwen3MoeConfig
 
     return replace(ShapedQwen3MoeConfig.tiny(), **over)
 
 
 def _tiny_dims(cfg=None):
-    from dataflow.training.qwen3moe import dims_of_qwen3moe
+    from dataflow.training.models.qwen3moe import dims_of_qwen3moe
 
     return dims_of_qwen3moe(cfg if cfg is not None else _tiny_cfg())
 
@@ -216,9 +216,9 @@ def test_qwen3moe_lowering_validates_and_plans():
 def test_qwen3moe_full_scale_presets_lower_and_validate():
     """30B (48L) and 235B are definition-validated: lowering + exact sizes
     succeed even though neither trains on this host (183 GiB / 1.4 TiB
-    pinned — documented in training/qwen3moe.py)."""
+    pinned — documented in training/models/qwen3moe.py)."""
     from dataflow.core import validate_program
-    from dataflow.training.qwen3moe import ShapedQwen3MoeConfig, lower_qwen3moe
+    from dataflow.training.models.qwen3moe import ShapedQwen3MoeConfig, lower_qwen3moe
 
     for cfg in (ShapedQwen3MoeConfig.qwen3moe_30b(seq_len=128),
                 ShapedQwen3MoeConfig.qwen3moe_235b(seq_len=128)):
@@ -232,12 +232,12 @@ def test_qwen3moe_partial_ownership_lowering_rejected():
     import dataclasses
     import unittest.mock as mock
 
-    from dataflow.training.qwen3moe import dims_of_qwen3moe, lower_qwen3moe
+    from dataflow.training.models.qwen3moe import dims_of_qwen3moe, lower_qwen3moe
 
     cfg = _tiny_cfg()
     part = dataclasses.replace(dims_of_qwen3moe(cfg).moe, expert_ids=(0, 1, 2))
     with pytest.raises(NotImplementedError):
-        with mock.patch("dataflow.training.qwen3moe.moe_spec_of", return_value=part):
+        with mock.patch("dataflow.training.models.qwen3moe.moe_spec_of", return_value=part):
             lower_qwen3moe(cfg)
 
 

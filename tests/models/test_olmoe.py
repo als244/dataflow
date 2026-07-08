@@ -23,13 +23,13 @@ pytestmark = pytest.mark.gpu
 
 
 def _tiny_cfg(**over):
-    from dataflow.training.olmoe import ShapedOlmoeConfig
+    from dataflow.training.models.olmoe import ShapedOlmoeConfig
 
     return replace(ShapedOlmoeConfig.tiny(), **over)
 
 
 def _tiny_dims(cfg=None):
-    from dataflow.training.olmoe import dims_of_olmoe
+    from dataflow.training.models.olmoe import dims_of_olmoe
 
     return dims_of_olmoe(cfg if cfg is not None else _tiny_cfg())
 
@@ -221,12 +221,12 @@ def test_olmoe_partial_ownership_lowering_rejected():
     import dataclasses
     import unittest.mock as mock
 
-    from dataflow.training.olmoe import dims_of_olmoe, lower_olmoe
+    from dataflow.training.models.olmoe import dims_of_olmoe, lower_olmoe
 
     cfg = _tiny_cfg()
     part = dataclasses.replace(dims_of_olmoe(cfg).moe, expert_ids=(0, 1, 2))
     with pytest.raises(NotImplementedError):
-        with mock.patch("dataflow.training.olmoe.moe_spec_of", return_value=part):
+        with mock.patch("dataflow.training.models.olmoe.moe_spec_of", return_value=part):
             lower_olmoe(cfg)
 
 

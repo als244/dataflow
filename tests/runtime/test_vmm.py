@@ -185,7 +185,7 @@ def test_parked_reuse_and_eviction_accounting(backend):
 def test_e2e_mini_vmm_matches_static():
     """Full train() on the mini config: vmm losses == static losses bitwise
     (same kernels, same order; only addresses differ)."""
-    from dataflow.training.llama3 import ShapedLlamaConfig
+    from dataflow.training.models.llama3 import ShapedLlamaConfig
     from dataflow.training.planning import plan_program
     from dataflow.training.train_loop import train
     from dataflow.training.families import resolve_family

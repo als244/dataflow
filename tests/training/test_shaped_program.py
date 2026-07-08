@@ -1,5 +1,5 @@
 from dataflow.core import validate_program
-from dataflow.training.llama3 import ShapedLlamaConfig, build_shaped_llama3
+from dataflow.training.models.llama3 import ShapedLlamaConfig, build_shaped_llama3
 
 GIB = 1024**3
 

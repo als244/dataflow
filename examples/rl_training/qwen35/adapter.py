@@ -5,7 +5,7 @@ handling heterogeneous layer kinds and a standalone golden class."""
 import torch
 
 from dataflow.models.qwen35_reference import GoldenQwen35
-from dataflow.training.qwen35 import ShapedQwen35Config
+from dataflow.training.models.qwen35 import ShapedQwen35Config
 
 name = "qwen35"
 

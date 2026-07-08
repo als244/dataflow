@@ -14,7 +14,7 @@ if not torch.cuda.is_available():
     pytest.skip("no CUDA device", allow_module_level=True)
 
 from dataflow.tasks.layouts import DTypePolicy, ParamDTypes  # noqa: E402
-from dataflow.training.llama3 import ShapedLlamaConfig  # noqa: E402
+from dataflow.training.models.llama3 import ShapedLlamaConfig  # noqa: E402
 from dataflow.training.testing.gradcheck import check_block_backward, check_model_step  # noqa: E402
 
 pytestmark = pytest.mark.gpu
@@ -38,7 +38,7 @@ def _llama_cfg(**over):
 
 
 def test_mixed_policy_layout_shapes():
-    from dataflow.training.llama3 import dims_of
+    from dataflow.training.models.llama3 import dims_of
     from dataflow.tasks.layouts import grad_layout, opt_state_layout, weight_layout
 
     dims = dims_of(_llama_cfg())
@@ -56,7 +56,7 @@ def test_mixed_policy_layout_shapes():
 
 
 def test_llama_block_ladder2_mixed_policy():
-    from dataflow.training.llama3 import dims_of
+    from dataflow.training.models.llama3 import dims_of
 
     check_block_backward(dims_of(_llama_cfg())).assert_ok()
 
@@ -68,7 +68,7 @@ def test_llama_model_step_mixed_policy():
 def test_qwen35_model_step_mixed_policy():
     from dataclasses import replace
 
-    from dataflow.training.qwen35 import ShapedQwen35Config
+    from dataflow.training.models.qwen35 import ShapedQwen35Config
 
     policy = DTypePolicy(
         default=ParamDTypes(opt="fp32"),
@@ -93,7 +93,7 @@ DEPTH = DTypePolicy(
 
 
 def test_depth_dependent_layer_sizes_diverge():
-    from dataflow.training.llama3 import lower_llama3
+    from dataflow.training.models.llama3 import lower_llama3
 
     prog = lower_llama3(_llama_cfg(dtypes=DEPTH))
     sizes = {o.id: o.size_bytes for o in prog.initial_objects}
@@ -113,7 +113,7 @@ def test_llama_model_step_depth_dependent():
 def test_qwen35_model_step_depth_dependent():
     from dataclasses import replace
 
-    from dataflow.training.qwen35 import ShapedQwen35Config
+    from dataflow.training.models.qwen35 import ShapedQwen35Config
 
     policy = DTypePolicy(
         default=ParamDTypes(),

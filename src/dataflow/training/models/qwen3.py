@@ -19,8 +19,8 @@ from dataflow.tasks.layouts import (
     qwen3_context_layout,
     qwen3_weight_layout,
 )
-from .lowering import FamilyLayouts, apply_exact_sizes, initial_values_from_layouts, size_of_factory
-from .shaped_program import ShapedHardware, build_shaped_program, roofline_block_kind_spec
+from ..lowering import FamilyLayouts, apply_exact_sizes, initial_values_from_layouts, size_of_factory
+from ..shaped_program import ShapedHardware, build_shaped_program, roofline_block_kind_spec
 
 
 @dataclass(frozen=True)

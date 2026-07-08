@@ -10,9 +10,9 @@ if not torch.cuda.is_available():
 from dataflow.models.llama3_reference import GoldenLlama3  # noqa: E402
 from dataflow.runtime.device.cuda import CudaBackend  # noqa: E402
 from dataflow.tasks.interop import torch_view  # noqa: E402
-from dataflow.training.llama3 import dims_of, lower_llama3  # noqa: E402
+from dataflow.training.models.llama3 import dims_of, lower_llama3  # noqa: E402
 from dataflow.training.planning import plan_program  # noqa: E402
-from dataflow.training.llama3 import ShapedLlamaConfig  # noqa: E402
+from dataflow.training.models.llama3 import ShapedLlamaConfig  # noqa: E402
 from dataflow.training.testing.gradcheck import rel_l2  # noqa: E402
 from dataflow.training.train_loop import train  # noqa: E402
 
@@ -43,7 +43,7 @@ def test_multistep_matches_golden_and_loss_decreases():
 
     # golden N-step trajectory from the same initial bytes: rebuild the
     # initial pinned values in isolation to snapshot them first
-    from dataflow.training.llama3 import initial_values
+    from dataflow.training.models.llama3 import initial_values
 
     snapshot_values = initial_values(planned.program, CFG, backend, seed=5)
 

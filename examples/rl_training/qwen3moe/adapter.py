@@ -7,7 +7,7 @@ import torch
 
 from dataflow.models.qwen3moe_reference import GoldenQwen3Moe
 from dataflow.tasks.modules.moe.spec import moe_meta_layout
-from dataflow.training.qwen3moe import ShapedQwen3MoeConfig
+from dataflow.training.models.qwen3moe import ShapedQwen3MoeConfig
 
 name = "qwen3moe"
 

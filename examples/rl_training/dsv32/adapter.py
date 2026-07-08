@@ -9,7 +9,7 @@ import torch
 
 from dataflow.models.dsv32_reference import GoldenDsv32
 from dataflow.tasks.layouts import dsv32_meta_layout
-from dataflow.training.dsv32 import ShapedDsv32Config
+from dataflow.training.models.dsv32 import ShapedDsv32Config
 
 name = "dsv32"
 

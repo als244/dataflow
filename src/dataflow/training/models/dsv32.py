@@ -42,8 +42,8 @@ from dataflow.tasks.layouts import (
 )
 from dataflow.tasks.modules.moe.spec import MoESpec
 
-from .lowering import FamilyLayouts, apply_exact_sizes, initial_values_from_layouts, size_of_factory
-from .shaped_program import BF16, LayerKindSpec, ShapedHardware, build_shaped_program
+from ..lowering import FamilyLayouts, apply_exact_sizes, initial_values_from_layouts, size_of_factory
+from ..shaped_program import BF16, LayerKindSpec, ShapedHardware, build_shaped_program
 
 _DSV32_DTYPES = DTypePolicy(overrides=(
     ("w_router_bias", ParamDTypes("fp32", "fp32", "fp32")),

@@ -22,13 +22,13 @@ pytestmark = pytest.mark.gpu
 
 
 def _tiny_cfg(**over):
-    from dataflow.training.qwen35moe import ShapedQwen35MoeConfig
+    from dataflow.training.models.qwen35moe import ShapedQwen35MoeConfig
 
     return replace(ShapedQwen35MoeConfig.tiny(), **over)
 
 
 def _tiny_dims(cfg=None):
-    from dataflow.training.qwen35moe import dims_of_qwen35moe
+    from dataflow.training.models.qwen35moe import dims_of_qwen35moe
 
     return dims_of_qwen35moe(cfg if cfg is not None else _tiny_cfg())
 

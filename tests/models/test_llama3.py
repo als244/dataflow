@@ -9,7 +9,7 @@ if not torch.cuda.is_available():
 
 from dataflow.tasks import ops  # noqa: E402
 from dataflow.tasks.layouts import LlamaDims  # noqa: E402
-from dataflow.training.llama3 import ShapedLlamaConfig  # noqa: E402
+from dataflow.training.models.llama3 import ShapedLlamaConfig  # noqa: E402
 from dataflow.training.testing.gradcheck import (  # noqa: E402
     check_block_backward,
     check_model_step,

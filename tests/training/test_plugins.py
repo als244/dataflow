@@ -18,7 +18,7 @@ STUB = textwrap.dedent('''
     from dataclasses import dataclass
 
     from dataflow.training.families import Family, register_family
-    from dataflow.training.llama3 import ShapedLlamaConfig, lower_llama3
+    from dataflow.training.models.llama3 import ShapedLlamaConfig, lower_llama3
     from dataflow.training.presets import register_bench_config
 
 

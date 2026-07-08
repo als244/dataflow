@@ -2,7 +2,7 @@ from functools import partial
 
 from dataflow.core import validate_program
 from dataflow.training.planning import plan_program, simulate_program
-from dataflow.training.llama3 import ShapedLlamaConfig, build_shaped_llama3
+from dataflow.training.models.llama3 import ShapedLlamaConfig, build_shaped_llama3
 
 TINY_CAP = 600_000  # bytes; tight enough to force movement on the tiny config
 

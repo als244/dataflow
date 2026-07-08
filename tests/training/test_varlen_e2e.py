@@ -15,7 +15,7 @@ if not torch.cuda.is_available():
     pytest.skip("no CUDA device", allow_module_level=True)
 
 from dataflow.tasks import ops  # noqa: E402
-from dataflow.training.llama3 import ShapedLlamaConfig  # noqa: E402
+from dataflow.training.models.llama3 import ShapedLlamaConfig  # noqa: E402
 from dataflow.training.testing.gradcheck import check_model_step, rel_l2  # noqa: E402
 
 pytestmark = pytest.mark.gpu
@@ -61,7 +61,7 @@ def test_qwen35_model_step_ragged():
     reset via ragged cu_seqlens, gated attention block-diagonal."""
     from dataclasses import replace
 
-    from dataflow.training.qwen35 import ShapedQwen35Config
+    from dataflow.training.models.qwen35 import ShapedQwen35Config
 
     cfg = replace(ShapedQwen35Config.tiny(), seq_lens=RAGGED)
     check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2).assert_ok()

@@ -35,8 +35,8 @@ from dataflow.tasks.layouts import (
     head_weight_layout,
     weight_layout,
 )
-from .lowering import FamilyLayouts, apply_exact_sizes, initial_values_from_layouts, size_of_factory
-from .shaped_program import ShapedHardware, build_shaped_program, roofline_block_kind_spec
+from ..lowering import FamilyLayouts, apply_exact_sizes, initial_values_from_layouts, size_of_factory
+from ..shaped_program import ShapedHardware, build_shaped_program, roofline_block_kind_spec
 
 
 @dataclass(frozen=True)

@@ -34,9 +34,9 @@ from dataflow.tasks.layouts import (
 )
 from dataflow.tasks.modules.moe.spec import MoESpec, moe_meta_layout
 
-from .lowering import FamilyLayouts, apply_exact_sizes, initial_values_from_layouts, size_of_factory
+from ..lowering import FamilyLayouts, apply_exact_sizes, initial_values_from_layouts, size_of_factory
 from .qwen35 import _a_log_init, _dt_bias_init
-from .shaped_program import BF16, LayerKindSpec, ShapedHardware, build_shaped_program
+from ..shaped_program import BF16, LayerKindSpec, ShapedHardware, build_shaped_program
 
 
 @dataclass(frozen=True)

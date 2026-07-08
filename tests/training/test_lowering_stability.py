@@ -8,15 +8,15 @@ import json
 from dataclasses import replace
 
 from dataflow.core.jsonio import program_to_dict
-from dataflow.training.llama3 import ShapedLlamaConfig, lower_llama3
-from dataflow.training.olmoe import ShapedOlmoeConfig, lower_olmoe
-from dataflow.training.qwen3 import ShapedQwen3Config, lower_qwen3
-from dataflow.training.qwen35 import ShapedQwen35Config, lower_qwen35
-from dataflow.training.qwen35moe import ShapedQwen35MoeConfig, lower_qwen35moe
-from dataflow.training.qwen3moe import ShapedQwen3MoeConfig, lower_qwen3moe
-from dataflow.training.dsv3 import ShapedDsv3Config, lower_dsv3
-from dataflow.training.dsv32 import ShapedDsv32Config, lower_dsv32
-from dataflow.training.glm52 import ShapedGlm52Config, lower_glm52
+from dataflow.training.models.llama3 import ShapedLlamaConfig, lower_llama3
+from dataflow.training.models.olmoe import ShapedOlmoeConfig, lower_olmoe
+from dataflow.training.models.qwen3 import ShapedQwen3Config, lower_qwen3
+from dataflow.training.models.qwen35 import ShapedQwen35Config, lower_qwen35
+from dataflow.training.models.qwen35moe import ShapedQwen35MoeConfig, lower_qwen35moe
+from dataflow.training.models.qwen3moe import ShapedQwen3MoeConfig, lower_qwen3moe
+from dataflow.training.models.dsv3 import ShapedDsv3Config, lower_dsv3
+from dataflow.training.models.dsv32 import ShapedDsv32Config, lower_dsv32
+from dataflow.training.models.glm52 import ShapedGlm52Config, lower_glm52
 
 # Constants last updated DELIBERATELY for the fused head_loss lowering
 # (head_fwd/loss_bwd/head_bwd -> ONE token-chunked task; logits/dlogits
