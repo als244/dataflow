@@ -15,6 +15,13 @@ through dM.
 Layer identity comes from a call counter reset in loss_terms (the base
 iterates blocks without indices — same order-dependent-state style as
 the bias counts capture).
+
+TWO TRAINING MODES, one golden: SPARSE (leader top-k shared by the
+group; members' gathered rows average into L^I_multi) and DENSE
+WARM-UP (causal masks, full-prefix rows, mains frozen via
+dims.opt_policy). Mode branches live in dsa_selection_mask_reference
+and the optimizer policy — block_forward reads identically in both.
+
 """
 from __future__ import annotations
 
@@ -25,11 +32,13 @@ import torch
 from dataflow.models.dsv3_reference import GoldenDsv3
 from dataflow.tasks import ops
 from dataflow.tasks.modules.dsa_reference import (
+    dsa_attention_rows_reference,
+    dsa_topk_reference,
+    dsa_mask_from_idx,
+    dsa_selection_mask_reference,
     dsa_index_scores_reference,
     dsa_indexer_kl_reference,
-    dsa_mask_from_idx,
     dsa_sparse_attention_reference,
-    dsa_topk_reference,
 )
 from dataflow.tasks.layouts import (
     Glm52Dims,
@@ -104,6 +113,29 @@ class GoldenGlm52(GoldenDsv3):
             self._opt_obj(f"block_{i}", leaves)
         return float(ce.detach())
 
+    def _leader_selection(self, h1, q_lora, w, t: int, device):
+        """Group leader's shared pair (scores, mask). Indexer inputs are
+        DETACHED (the paper's seam: CE never reaches the indexer); a
+        frozen indexer detaches the scores themselves. The mask states
+        the TWO TRAINING MODES in one place: sparse top-k live set vs
+        dense warm-up causal (dsa_selection_mask_reference)."""
+        d = self.dims
+        scores = dsa_index_scores_reference(h1.detach(), q_lora.detach(), w, d)
+        if not getattr(d, "train_indexer", True):
+            scores = scores.detach()
+        return scores, dsa_selection_mask_reference(scores, d, t, device)
+
+    def _member_kl(self, i: int, scores, mask, q_full, k_full, t: int):
+        """This member's contribution to the group objective: its own
+        attention rows on the shared live set, weighted 1/N — summed over
+        members this IS L^I_multi against the group-averaged target."""
+        d = self.dims
+        if not getattr(d, "train_indexer", True):
+            return torch.zeros((), device=q_full.device)
+        p = dsa_attention_rows_reference(q_full, k_full, mask, d, t)
+        n = len(d.group_members(d.leader_of(i)))
+        return dsa_indexer_kl_reference(scores, mask, p) / n
+
     def block_forward(
         self, x: torch.Tensor, w: dict[str, torch.Tensor],
         route_ids: torch.Tensor | None = None,
@@ -116,21 +148,12 @@ class GoldenGlm52(GoldenDsv3):
         h1 = ops.rmsnorm_reference(x, w["attn_norm_w"])
         q_lora, q_full, k_full, v_pad = mla_qkv_reference(h1, w, d)
 
-        train_idx = getattr(d, "train_indexer", True)
+        # IndexShare: the group LEADER computes scores + the mode's mask
+        # once and caches them; every member (leader included) reads the
+        # shared pair below
         if d.role_of(i) == "full":
-            scores = dsa_index_scores_reference(h1.detach(), q_lora.detach(), w, d)
-            if not train_idx:
-                scores = scores.detach()
-            if getattr(d, "sparse_mode", True):
-                sel = dsa_topk_reference(scores.detach(), d.index_topk)
-                mask = dsa_mask_from_idx(sel, d, t)
-            else:
-                # dense warm-up: attention AND the KL target over the
-                # full causal prefix (report formula 3)
-                from dataflow.tasks.modules.dsa_reference import _causal_mask
-
-                mask = _causal_mask(d, t, x.device)
-            self._group_scores, self._group_mask = scores, mask
+            self._group_scores, self._group_mask = \
+                self._leader_selection(h1, q_lora, w, t, x.device)
         scores, mask = self._group_scores, self._group_mask
 
         qf = q_full.reshape(t, h * qk)
@@ -140,25 +163,7 @@ class GoldenGlm52(GoldenDsv3):
         attn = attn.view(t, h, qk)[..., :v].reshape(t, h * v)
         h_mid = x + attn @ w["wo"]
 
-        # this member's target on the shared live set (detached)
-        with torch.no_grad():
-            p = torch.zeros(t, t, device=x.device)
-            scale = qk ** -0.5
-            q3 = q_full.detach().float()
-            k3 = k_full.detach().float()
-            lo = 0
-            for L in ops.seq_lens_of(d.seq_spec, t):
-                hi = lo + L
-                for hh in range(h):
-                    lg = (q3[lo:hi, hh] @ k3[lo:hi, hh].T) * scale
-                    p[lo:hi, lo:hi] += torch.softmax(
-                        lg + mask[lo:hi, lo:hi], dim=-1)
-                lo = hi
-        n = len(d.group_members(d.leader_of(i)))
-        if train_idx:
-            kl = dsa_indexer_kl_reference(scores, mask, p) / n
-        else:
-            kl = torch.zeros((), device=x.device)
+        kl = self._member_kl(i, scores, mask, q_full, k_full, t)
 
         h2 = ops.rmsnorm_reference(h_mid, w["ffn_norm_w"])
         if "w13_experts" not in w:
@@ -168,17 +173,5 @@ class GoldenGlm52(GoldenDsv3):
         y, aux = moe_mlp_reference(h2, w, d.moe, h_mid,
                                    route_ids=route_ids, seq_lens=lens)
         if route_ids is None:
-            with torch.no_grad():
-                logits = h2 @ w["w_router"]
-                _, ids = moe_topk_reference(
-                    logits, d.moe.top_k, d.moe.routing_mode,
-                    bias=w["w_router_bias"].float(),
-                    n_group=d.moe.n_group, topk_group=d.moe.topk_group,
-                    routed_scaling=d.moe.routed_scaling,
-                )
-                cnt = torch.bincount(ids.reshape(-1),
-                                     minlength=d.moe.n_experts).float()
-            if not hasattr(self, "_pending_counts"):
-                self._pending_counts = []
-            self._pending_counts.append(cnt)
+            self._note_router_counts(h2, w)   # inherited (GoldenDsv3)
         return y, aux + kl

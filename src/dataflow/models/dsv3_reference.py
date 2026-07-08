@@ -42,6 +42,17 @@ class GoldenDsv3(GoldenOlmoe):
             return tuple(d.seq_lens)
         return (d.seq_len,) * (d.tokens // d.seq_len)
 
+    def _note_router_counts(self, h2: torch.Tensor, w) -> None:
+        """Record this layer's per-expert assignment counts (detached) for
+        the noaux router-bias speed rule applied at optimizer time.
+        Inherited by every noaux-family golden (dsv32, glm52)."""
+        from dataflow.tasks.modules.moe.reference import router_counts_reference
+
+        if not hasattr(self, "_pending_counts"):
+            self._pending_counts = []
+        self._pending_counts.append(
+            router_counts_reference(h2, w, self.dims.moe))
+
     def block_forward(
         self, x: torch.Tensor, w: dict[str, torch.Tensor],
         route_ids: torch.Tensor | None = None,
@@ -61,21 +72,7 @@ class GoldenDsv3(GoldenOlmoe):
         # capture the step's discrete assignment counts for the bias rule
         # (mirrors the runtime's counts-through-the-dW-slot aggregation)
         if route_ids is None:
-            from dataflow.tasks.modules.moe.reference import moe_topk_reference
-
-            with torch.no_grad():
-                logits = h2 @ w["w_router"]
-                _, ids = moe_topk_reference(
-                    logits, d.moe.top_k, d.moe.routing_mode,
-                    bias=w["w_router_bias"].float(),
-                    n_group=d.moe.n_group, topk_group=d.moe.topk_group,
-                    routed_scaling=d.moe.routed_scaling,
-                )
-                cnt = torch.bincount(ids.reshape(-1),
-                                     minlength=d.moe.n_experts).float()
-            if not hasattr(self, "_pending_counts"):
-                self._pending_counts = []
-            self._pending_counts.append(cnt)
+            self._note_router_counts(h2, w)
         return y, aux
 
     def _opt_obj(self, obj: str, leaves) -> None:

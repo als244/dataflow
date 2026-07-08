@@ -9,6 +9,15 @@ reported — the runtime injects the same gradients analytically).
 Training-schedule note: the indexer trains at the shared AdamW lr (the
 paper uses a separate lr) — the runtime does the same, so parity gates
 compare like against like.
+
+TWO TRAINING MODES, one golden: SPARSE (top-k of the indexer's
+scores selects the attention live set; per-layer KL on gathered
+targets) and DENSE WARM-UP (sparse_mode=False: causal attention,
+full-prefix KL targets, mains frozen via dims.opt_policy — only the
+indexer steps). The mode branches live in
+dsa_selection_mask_reference and the optimizer policy, not in this
+file's control flow.
+
 """
 from __future__ import annotations
 
@@ -19,11 +28,13 @@ import torch
 from dataflow.models.dsv3_reference import GoldenDsv3
 from dataflow.tasks import ops
 from dataflow.tasks.modules.dsa_reference import (
+    dsa_attention_rows_reference,
+    dsa_topk_reference,
+    dsa_mask_from_idx,
+    dsa_selection_mask_reference,
     dsa_index_scores_reference,
     dsa_indexer_kl_reference,
-    dsa_mask_from_idx,
     dsa_sparse_attention_reference,
-    dsa_topk_reference,
 )
 from dataflow.tasks.layouts import (
     Dsv32Dims,
@@ -83,16 +94,11 @@ class GoldenDsv32(GoldenDsv3):
         h1 = ops.rmsnorm_reference(x, w["attn_norm_w"])
         q_lora, q_full, k_full, v_pad = mla_qkv_reference(h1, w, d)
 
+        # indexer scores (input DETACHED — the paper's seam: CE never
+        # reaches the indexer) + the mode's mask (sparse top-k live set
+        # vs dense warm-up causal — dsa_selection_mask_reference)
         scores = dsa_index_scores_reference(h1.detach(), q_lora.detach(), w, d)
-        if getattr(d, "sparse_mode", True):
-            sel = dsa_topk_reference(scores.detach(), d.index_topk)
-            mask = dsa_mask_from_idx(sel, d, t)
-        else:
-            # dense warm-up: attention over the FULL causal prefix; the
-            # KL target likewise (report formula 3)
-            from dataflow.tasks.modules.dsa_reference import _causal_mask
-
-            mask = _causal_mask(d, t, x.device)
+        mask = dsa_selection_mask_reference(scores, d, t, x.device)
         train_idx = getattr(d, "train_indexer", True)
 
         qf = q_full.reshape(t, h * qk)
@@ -102,23 +108,10 @@ class GoldenDsv32(GoldenDsv3):
         attn = attn.view(t, h, qk)[..., :v].reshape(t, h * v)
         h_mid = x + attn @ w["wo"]
 
-        with torch.no_grad():
-            if not train_idx:
-                p = None
-            else:
-                p = torch.zeros(t, t, device=x.device)
-            scale = qk ** -0.5
-            q3 = q_full.detach().float()
-            k3 = k_full.detach().float()
-            lo = 0
-            for L in (ops.seq_lens_of(d.seq_spec, t) if train_idx else ()):
-                hi = lo + L
-                for hh in range(h):
-                    lg = (q3[lo:hi, hh] @ k3[lo:hi, hh].T) * scale
-                    p[lo:hi, lo:hi] += torch.softmax(
-                        lg + mask[lo:hi, lo:hi], dim=-1)
-                lo = hi
+        # per-layer indexer objective: KL(p || sigma) with p = this
+        # layer's own attention rows on the mask's live set
         if train_idx:
+            p = dsa_attention_rows_reference(q_full, k_full, mask, d, t)
             kl = dsa_indexer_kl_reference(scores, mask, p)
         else:
             kl = torch.zeros((), dtype=torch.float32, device=x.device)

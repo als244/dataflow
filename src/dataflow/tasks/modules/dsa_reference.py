@@ -154,3 +154,40 @@ def dsa_indexer_kl_reference(
     logsig = torch.log_softmax(index_scores + sel_mask, dim=-1)
     plogp = torch.where(p > 0, p * p.clamp_min(1e-20).log(), p.new_zeros(()))
     return (plogp - p * logsig.masked_fill(~live, 0.0)).sum()
+
+
+def dsa_selection_mask_reference(scores: torch.Tensor, d, t: int,
+                                 device) -> torch.Tensor:
+    """Additive attention mask for the current TRAINING MODE — the two
+    paths, stated once:
+
+    SPARSE (d.sparse_mode=True): top-k of the DETACHED indexer scores
+    selects the live set; attention and the KL target both live on it.
+    DENSE WARM-UP: the full causal prefix (report formula 3) — no
+    selection exists anywhere in the program."""
+    if getattr(d, "sparse_mode", True):
+        sel = dsa_topk_reference(scores.detach(), d.index_topk)
+        return dsa_mask_from_idx(sel, d, t)
+    return _causal_mask(d, t, device)
+
+
+def dsa_attention_rows_reference(q_full: torch.Tensor, k_full: torch.Tensor,
+                                 mask: torch.Tensor, d, t: int) -> torch.Tensor:
+    """This member's attention distributions on the mask's live set,
+    head-summed in detached fp32 — the KL TARGET (the p in
+    KL(p || sigma)). Ragged-aware; O(h * L^2) reference loop by design."""
+    h, qk = d.n_heads, d.qk_head_dim
+    with torch.no_grad():
+        p = torch.zeros(t, t, device=q_full.device)
+        scale = qk ** -0.5
+        q3 = q_full.detach().float()
+        k3 = k_full.detach().float()
+        lo = 0
+        for L in ops.seq_lens_of(d.seq_spec, t):
+            hi = lo + L
+            for hh in range(h):
+                lg = (q3[lo:hi, hh] @ k3[lo:hi, hh].T) * scale
+                p[lo:hi, lo:hi] += torch.softmax(
+                    lg + mask[lo:hi, lo:hi], dim=-1)
+            lo = hi
+    return p

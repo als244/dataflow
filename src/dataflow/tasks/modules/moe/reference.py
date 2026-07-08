@@ -205,3 +205,18 @@ def moe_mlp_reference(
             base = resid + sh_each                   # V3: plain additive shared
 
     return (base.float() + routed).to(h2.dtype), aux
+
+
+def router_counts_reference(h2: torch.Tensor, w, moe) -> torch.Tensor:
+    """Per-expert assignment counts for the routing the runtime will
+    realize (detached) — consumed by the noaux bias-speed update rule."""
+    with torch.no_grad():
+        logits = h2 @ w["w_router"]
+        _, ids = moe_topk_reference(
+            logits, moe.top_k, moe.routing_mode,
+            bias=w["w_router_bias"].float(),
+            n_group=moe.n_group, topk_group=moe.topk_group,
+            routed_scaling=moe.routed_scaling,
+        )
+        return torch.bincount(ids.reshape(-1),
+                              minlength=moe.n_experts).float()
