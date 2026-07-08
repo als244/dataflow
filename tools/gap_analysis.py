@@ -44,7 +44,8 @@ def main() -> None:
     parser.add_argument("--budget", type=float, default=18.0)
     parser.add_argument("--steps", type=int, default=3)
     parser.add_argument("--recompute", action="store_true", default=True)
-    parser.add_argument("--backing-gib", type=float, default=100.0)
+    parser.add_argument("--backing-gib", type=float, default=None,
+                        help="pinned-host cap in GiB; default None = unlimited, matching bench_train")
     parser.add_argument("--contend", action="store_true",
                         help="profile under saturated bidirectional PCIe traffic "
                              "(bounds the cost model from the pessimistic side)")
@@ -64,7 +65,8 @@ def main() -> None:
             fam.lower(cfg, recompute_levels=levels),
             bandwidth_from_slow=pcie.bidi_h2d,
             bandwidth_to_slow=pcie.bidi_d2h,
-            backing_memory_capacity=int(args.backing_gib * GIB),
+            backing_memory_capacity=(int(args.backing_gib * GIB)
+                                     if args.backing_gib else None),
         )
 
     program = build_raw()

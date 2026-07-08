@@ -37,7 +37,7 @@ invocation.)
 | `--config` | a `bench_train` CONFIGS name (`{preset}-s{seq}k-bs{B}ga{G}`) |
 | `--budget` | fast-memory LEDGER in GiB — note this is the planner budget, NOT `bench_train --device-gib`'s device envelope (no fixed/scratch derivation here; pick a cell's `planned_budget_gib` from its `measured.json` to reproduce that cell's plan; an infeasibly small ledger fails loudly at planning) |
 | `--steps` | training steps to trace (default 3) |
-| `--backing-gib` | pinned-host budget (default 100) |
+| `--backing-gib` | pinned-host cap in GiB (default: unlimited, matching `bench_train` — a finite cap BELOW the config's backing demand makes planning infeasible) |
 | `--contend` | profile with PCIe contention (matches the sweep convention) |
 | `--out` | output directory |
 

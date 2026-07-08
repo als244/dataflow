@@ -62,12 +62,13 @@ def build_nsys_cmd(args, report: Path) -> list[str]:
     cmd += [
         sys.executable, "tools/bench_train.py",
         "--config", args.config,
-        "--budgets", f"{args.budget:g}",
+        "--device-gib", f"{args.budget:g}",
         "--steps", str(args.steps),
         "--recompute",
-        "--backing-gib", f"{args.backing_gib:g}",
         "--out", str(args.out / "run-artifacts"),
     ]
+    if args.backing_gib:
+        cmd += ["--backing-gib", f"{args.backing_gib:g}"]
     if args.annotated is not None:
         cmd += ["--annotated", str(args.annotated)]
     return cmd
@@ -80,7 +81,8 @@ def main() -> None:
     parser.add_argument("--config", default="8b-s1k-bs8ga8")
     parser.add_argument("--budget", type=float, default=24.0)
     parser.add_argument("--steps", type=int, default=3)
-    parser.add_argument("--backing-gib", type=float, default=100.0)
+    parser.add_argument("--backing-gib", type=float, default=None,
+                        help="pinned-host cap in GiB; default None = unlimited, matching bench_train")
     parser.add_argument("--out", type=Path, default=Path("artifacts/nsys"))
     parser.add_argument("--capture", choices=["steps", "full"], default="steps",
                         help="steps: only the training loop (default); "
