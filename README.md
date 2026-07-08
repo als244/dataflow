@@ -103,10 +103,11 @@ task kinds per distinct layer type):
   + loss + head backward, token-chunked so no (tokens, vocab) tensor
   is ever materialized
   - inputs: last hidden state, `targets`, `W_head`
-  - outputs: `loss`, the first upstream gradient, `dW_head`
+  - outputs: `loss`, the first upstream gradient; `dW_head` on round 0
+  - mutates: `dW_head` on later rounds (accumulation)
 - **Recompute** (per layer; only where the plan dropped `A_i`)
   - inputs: the same `x_i` and `W_i` (+ `M_i`, consumed as-is)
-  - outputs: repopulated `A_i` (float context only — never `M_i`)
+  - outputs: repopulated `A_i` as created during forwards
 - **Backward** (per layer)
   - inputs: upstream gradient `dy_{i+1}`, `A_i` (+ `M_i`), `W_i`, `x_i`
   - outputs: downstream gradient `dy_i`; `dW_i` on round 0
@@ -119,8 +120,7 @@ task kinds per distinct layer type):
   hyperparameters, and state sizing set by the config's optimizer
   policy)
   - inputs: `W_i`, `dW_i`, `O_i`
-  - mutates: `W_i`, `O_i` in place (a fully stateless assignment drops
-    `O_i` entirely)
+  - mutates: `W_i`, `O_i`
 
 Correctness of every family is pinned against isolated plain-autograd
 reference models at three levels (per op, per task, per model step);
@@ -139,7 +139,7 @@ see [docs/extending_programs.md](docs/extending_programs.md).
 
 ## Memory Planning: PressureFit
 
-PressureFit is the GENERAL planning policy: given any bare task chain
+[PressureFit](https://github.com/als244/dataflow_sim/blob/master/docs/policy/pressurefit.md) is the general planning policy: given any bare task chain
 and a fast-memory budget, it annotates every task's release / offload /
 prefetch directives so the program executes within budget while keeping
 transfers overlapped with compute. It reads only task order, object
@@ -152,7 +152,7 @@ measured once and cached), and the simulator's makespan prediction for
 the chosen plan is reported next to every real measurement — the
 sim-vs-real gap is tracked as a first-class fidelity metric.
 
-## Recompute Planning (training workloads)
+## Recompute Planning (for training workloads)
 
 For DNN training chains specifically, a second planner runs BEFORE
 PressureFit: it decides, per layer, whether to keep saved activations
