@@ -321,6 +321,21 @@ def main() -> None:
              "into a GPU-idle PCIe phase)",
     )
     parser.add_argument(
+        "--freeze-layers", type=int, default=0,
+        help="freeze layers 0..N-1 via the optimizer policy "
+             "(docs/frozen_training.md). Without --freeze-embed these are "
+             "dgrad-only pass-through layers (wgrads skipped); with it the "
+             "prefix TRUNCATES (no backwards/dW/O/A below layer N at all).")
+    parser.add_argument(
+        "--freeze-embed", action="store_true",
+        help="freeze the embedding too (turns a frozen prefix from "
+             "pass-through into truncated)")
+    parser.add_argument(
+        "--freeze-head", action="store_true",
+        help="freeze the LM head: head_loss still runs (CE needs the "
+             "forward and its dy) but dW_head/O_head vanish and the "
+             "head optimizer task is pruned")
+    parser.add_argument(
         "--preplace", choices=["task0", "greedy"], default="task0",
         help="PressureFit t=0 placement: task0 (default; only task 0's "
              "inputs pre-placed, the rest arrive as planned prefetches) or "
@@ -340,6 +355,12 @@ def main() -> None:
     from dataflow.tasks.kernels import resolve_kernels
 
     cfg = replace(CONFIGS[args.config], optimizer_placement=args.optimizer)
+    if args.freeze_layers or args.freeze_embed or args.freeze_head:
+        from dataflow.tasks.optim import freeze
+
+        cfg = replace(cfg, opt_policy=freeze(
+            base=cfg.opt_policy, layers=range(args.freeze_layers),
+            embed=args.freeze_embed, head=args.freeze_head))
     fam = resolve_family(cfg)
     dims = fam.dims_of(cfg)
     tokens_per_step = float(cfg.tokens * cfg.grad_accum_rounds)
@@ -420,7 +441,13 @@ def main() -> None:
     args.out.mkdir(parents=True, exist_ok=True)
     # every invocation leaves its full console log under the output dir
     (args.out / "logs").mkdir(exist_ok=True)
-    _log_name = (f"{args.config}-{args.device_gib.replace(',', '_')}dev"
+    _freeze_tag = (f"-fz{args.freeze_layers}"
+                   + ("e" if args.freeze_embed else "")
+                   + ("h" if args.freeze_head else "")
+                   if (args.freeze_layers or args.freeze_embed
+                       or args.freeze_head) else "")
+    _log_name = (f"{args.config}{_freeze_tag}"
+                 f"-{args.device_gib.replace(',', '_')}dev"
                  f"-{args.placement}.log")
 
     class _Tee:
@@ -799,6 +826,9 @@ def main() -> None:
         )
 
     result = {"config": args.config, "steps": args.steps, "pcie": pcie.__dict__,
+              "freeze_layers": args.freeze_layers,
+              "freeze_embed": bool(args.freeze_embed),
+              "freeze_head": bool(args.freeze_head),
               "optimizer_placement": args.optimizer, "preplace": args.preplace,
               "kernel_set": kernel_set, "sweep": rows}
 
@@ -836,8 +866,9 @@ def main() -> None:
     tag = "_".join(f"{b:g}" for b in quoted_budgets) \
         + ("dev" if device_meta else "") + ("-rc" if args.recompute else "") \
         + (f"-{args.placement}" if args.placement != "static" else "")
-    (args.out / f"bench-{args.config}-{tag}.summary.json").write_text(json.dumps(result, indent=2) + "\n")
-    print(f"\nwrote {args.out}/bench-{args.config}-{tag}.summary.json")
+    (args.out / f"bench-{args.config}{_freeze_tag}-{tag}.summary.json").write_text(
+        json.dumps(result, indent=2) + "\n")
+    print(f"\nwrote {args.out}/bench-{args.config}{_freeze_tag}-{tag}.summary.json")
 
 
 if __name__ == "__main__":

@@ -162,5 +162,13 @@ configuration, not a separate system:
   exist only for the indexer-bearing layers, and the goldens train the
   identical centroid-KL objective for the parity gates.
 
+## 7. Benchmarking frozen configurations
+
+`tools/bench_train.py` exposes the common shapes directly:
+`--freeze-layers N` (pass-through prefix), `--freeze-layers N
+--freeze-embed` (truncated prefix), `--freeze-head`. Frozen backward
+signatures re-profile automatically (the freeze fingerprint); unfrozen
+signatures hit the existing cache.
+
 Generated per-preset references (task graph, object tables, measured
 kernel sequences): `docs/models/<family>/<preset>_16x4K.md`.

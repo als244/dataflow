@@ -209,7 +209,8 @@ class HeadLoss(_Base):
 
     @property
     def hgl(self) -> PackedLayout:
-        return grad_layout(self.hl, self.dims.dtypes, ns="head")
+        return grad_layout(self.hl, self.dims.dtypes, ns="head",
+                           opt_policy=getattr(self.dims, "opt_policy", None))
 
     def launch(self, ctx: TaskContext) -> None:
         d = self.dims
@@ -222,9 +223,15 @@ class HeadLoss(_Base):
             accum = bool(ctx.task.mutates)
             dy = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
             loss = torch_view(self._out(ctx, 1), (1,), torch.float32)
-            dwh = self.hgl.views(
-                ctx.mutates[ctx.task.mutates[0]] if accum else self._out(ctx, 2)
-            )
+            # frozen head: the dW_head object does not exist (policy-
+            # filtered layout scrubbed it) — CE fwd + dy still run,
+            # head wgrads skip entirely
+            if accum:
+                dwh = self.hgl.views(ctx.mutates[ctx.task.mutates[0]])
+            elif len(ctx.task.outputs) > 2:
+                dwh = self.hgl.views(self._out(ctx, 2))
+            else:
+                dwh = None
             chunk = head_chunk_rows(d.vocab_size)
             loss_acc = torch.zeros(1, dtype=torch.float32, device=y.device)
             part = torch.empty(1, dtype=torch.float32, device=y.device)
@@ -242,23 +249,28 @@ class HeadLoss(_Base):
                     kctx, logits, targets[lo:hi], part, dlogits, total_rows=d.tokens,
                 )
                 loss_acc += part
-                dw_c = dlogits.T @ yn                        # (V, d)
-                if accum or lo > 0:
-                    dwh["w"].add_(dw_c.to(dwh["w"].dtype))
-                else:
-                    dwh["w"].copy_(dw_c.to(dwh["w"].dtype))
+                if dwh is not None and "w" in dwh:
+                    dw_c = dlogits.T @ yn                    # (V, d)
+                    if accum or lo > 0:
+                        dwh["w"].add_(dw_c.to(dwh["w"].dtype))
+                    else:
+                        dwh["w"].copy_(dw_c.to(dwh["w"].dtype))
+                    del dw_c
                 dyn = dlogits @ wh["w"]                      # (c, d)
-                del logits, dlogits, dw_c
+                del logits, dlogits
                 K.rmsnorm_bwd(kctx, dyn, y_c, rstd, wh["final_norm_w"], dy[lo:hi], dnorm_c)
                 dnorm_acc += dnorm_c
                 # del before the next iteration's allocs: Python rebinding
                 # would otherwise keep the previous chunk's buffers live
                 # while the new ones allocate (2x peak)
                 del yn, rstd, dyn
-            if accum:
-                dwh["final_norm_w"].add_(dnorm_acc.to(dwh["final_norm_w"].dtype))
-            else:
-                dwh["final_norm_w"].copy_(dnorm_acc.to(dwh["final_norm_w"].dtype))
+            if dwh is not None and "final_norm_w" in dwh:
+                if accum:
+                    dwh["final_norm_w"].add_(
+                        dnorm_acc.to(dwh["final_norm_w"].dtype))
+                else:
+                    dwh["final_norm_w"].copy_(
+                        dnorm_acc.to(dwh["final_norm_w"].dtype))
             loss.copy_(loss_acc)
 
 

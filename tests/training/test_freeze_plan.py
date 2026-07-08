@@ -227,3 +227,18 @@ def test_train_indexer_unified_into_policy():
                         "idx_k_ln_b", "w_idx_w"}
     prog = lower_dsv32(cfg)
     assert prog.object_sizes()["dW_0_0"] == gl.total_bytes
+
+
+def test_model_step_frozen_head():
+    """Frozen LM head: head_loss still runs (CE + dy_last), but dW_head/
+    O_head vanish and the head wgrad GEMM is skipped inside the chunk
+    loop (found by --freeze-head bench smoke: the launch used to index
+    the dW output positionally)."""
+    cfg = _tiny(opt_policy=freeze(head=True))
+    prog = lower_llama3(cfg)
+    ids = set(prog.task_by_id())
+    sizes = prog.object_sizes()
+    assert any(t_.startswith("head_loss") for t_ in ids)
+    assert "dW_head_0" not in sizes and "O_head" not in sizes
+    assert not any(t_.startswith("optimizer_head") for t_ in ids)
+    check_model_step(cfg, fast_memory_capacity=_CAP, tol=3e-2).assert_ok()

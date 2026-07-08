@@ -47,6 +47,15 @@ python tools/bench_frontier.py \
 
 `--help` is authoritative; this table is kept in sync:
 
+Freeze flags (`docs/frozen_training.md`): `--freeze-layers N` freezes
+layers 0..N-1 through the optimizer policy; add `--freeze-embed` to
+turn the prefix from pass-through (wgrads skipped, dgrads still run)
+into truncated (no backwards below layer N at all); `--freeze-head`
+drops dW_head/O_head while CE still runs. The freeze shows up in the
+summary json (`freeze_layers`/`freeze_embed`/`freeze_head`) and in the
+log/summary filename tag (`-fz16e`).
+
+
 | flag | meaning |
 |---|---|
 | `--presets` | comma list of family presets (bench_train config prefixes), e.g. `dsv32-mini,glm52-mini` |
