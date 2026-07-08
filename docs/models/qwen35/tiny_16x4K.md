@@ -8,32 +8,32 @@ Layer kinds (4 layers): `lin lin lin full`
 
 ## Object summary
 
-At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token in parens. Details per kind below.
+At this run shape (65,536 tokens/round). Token-scaled objects show per-token size in parens. Details per kind below.
 
-| object | scope | bytes |
+| object | scope | size |
 |---|---|---|
-| `W_i (lin)` | layer | 1,056,512 |
-| `dW_i (lin)` | layer/step | 1,056,512 |
-| `O_i (lin)` | layer | 2,113,024 |
-| `A (lin)` | layer × round | 272,105,472 (4,152.0/token) |
-| `W_i (full)` | layer | 1,312,256 |
-| `dW_i (full)` | layer/step | 1,312,256 |
-| `O_i (full)` | layer | 2,624,512 |
-| `A (full)` | layer × round | 305,135,616 (4,656.0/token) |
-| `W_head` | run | 262,656 |
-| `W_embed` | run | 262,144 |
-| `O_embed` | run | 524,288 |
-| `O_head` | run | 525,312 |
-| `hidden state (y)` | boundary buffer | 33,554,432 (512.0/token) |
+| `W_i (lin)` | layer | 1.01 MiB |
+| `dW_i (lin)` | layer/step | 1.01 MiB |
+| `O_i (lin)` | layer | 2.02 MiB |
+| `A (lin)` | layer × round | 259.50 MiB (4.05 KiB/token) |
+| `W_i (full)` | layer | 1.25 MiB |
+| `dW_i (full)` | layer/step | 1.25 MiB |
+| `O_i (full)` | layer | 2.50 MiB |
+| `A (full)` | layer × round | 291.00 MiB (4.55 KiB/token) |
+| `W_head` | run | 256.50 KiB |
+| `W_embed` | run | 256.00 KiB |
+| `O_embed` | run | 512.00 KiB |
+| `O_head` | run | 513.00 KiB |
+| `hidden state (y)` | boundary buffer | 32.00 MiB (512.0 B/token) |
 
 ### Aggregate totals (all layers, this run shape)
 
-| type | objects | total bytes |
+| type | objects | total size |
 |---|---|---|
-| W (all weights, incl. embed/head) | 6 | 5,006,592 |
-| dW (all gradients, per step) | 6 | 5,006,592 |
-| O (all optimizer state) | 6 | 10,013,184 |
-| A (all saved activations, one round) | 4 | 1,121,452,032 (17,112.0/token) |
+| W (all weights, incl. embed/head) | 6 | 4.77 MiB |
+| dW (all gradients, per step) | 6 | 4.77 MiB |
+| O (all optimizer state) | 6 | 9.55 MiB |
+| A (all saved activations, one round) | 4 | 1.04 GiB (16.71 KiB/token) |
 
 ## Dims
 
@@ -64,89 +64,89 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
 
 ### kind `lin` (e.g. layer 0)
 
-**`W_0` weights** — 1,056,512 bytes
+**`W_0` weights** — 1.01 MiB
 
 | field | dtype | shape | bytes |
 |---|---|---|---|
-| `attn_norm_w` | bf16 | (256,) | 512 |
-| `w_qkvz` | bf16 | (256, 384) | 196,608 |
-| `w_ba` | bf16 | (256, 8) | 4,096 |
-| `w_conv` | bf16 | (256, 4) | 2,048 |
-| `A_log` | bf16 | (4,) | 8 |
-| `dt_bias` | bf16 | (4,) | 8 |
-| `lin_norm_w` | bf16 | (32,) | 64 |
-| `w_out` | bf16 | (128, 256) | 65,536 |
-| `ffn_norm_w` | bf16 | (256,) | 512 |
-| `w1` | bf16 | (256, 512) | 262,144 |
-| `w3` | bf16 | (256, 512) | 262,144 |
-| `w2` | bf16 | (512, 256) | 262,144 |
+| `attn_norm_w` | bf16 | (256,) | 512 B |
+| `w_qkvz` | bf16 | (256, 384) | 192.00 KiB |
+| `w_ba` | bf16 | (256, 8) | 4.00 KiB |
+| `w_conv` | bf16 | (256, 4) | 2.00 KiB |
+| `A_log` | bf16 | (4,) | 8 B |
+| `dt_bias` | bf16 | (4,) | 8 B |
+| `lin_norm_w` | bf16 | (32,) | 64 B |
+| `w_out` | bf16 | (128, 256) | 64.00 KiB |
+| `ffn_norm_w` | bf16 | (256,) | 512 B |
+| `w1` | bf16 | (256, 512) | 256.00 KiB |
+| `w3` | bf16 | (256, 512) | 256.00 KiB |
+| `w2` | bf16 | (512, 256) | 256.00 KiB |
 
-**`A_.._0` saved context** — 272,105,472 bytes = **4,152.0 bytes/token** (per (step, round))
+**`A_.._0` saved context** — 259.50 MiB = **4.05 KiB/token** (per (step, round))
 
 | field | dtype | shape | bytes |
 |---|---|---|---|
-| `rstd_attn` | fp32 | (65536,) | 262,144 |
-| `qkvz` | bf16 | (65536, 384) | 50,331,648 |
-| `ba` | bf16 | (65536, 8) | 1,048,576 |
-| `g_post` | fp32 | (65536, 4) | 1,048,576 |
-| `A_int` | bf16 | (65536, 4, 64) | 33,554,432 |
-| `core_out` | bf16 | (65536, 4, 32) | 16,777,216 |
-| `rstd_gate` | fp32 | (262144,) | 1,048,576 |
-| `xo` | bf16 | (65536, 256) | 33,554,432 |
-| `rstd_ffn` | fp32 | (65536,) | 262,144 |
-| `x1` | bf16 | (65536, 512) | 67,108,864 |
-| `x3` | bf16 | (65536, 512) | 67,108,864 |
+| `rstd_attn` | fp32 | (65536,) | 256.00 KiB |
+| `qkvz` | bf16 | (65536, 384) | 48.00 MiB |
+| `ba` | bf16 | (65536, 8) | 1.00 MiB |
+| `g_post` | fp32 | (65536, 4) | 1.00 MiB |
+| `A_int` | bf16 | (65536, 4, 64) | 32.00 MiB |
+| `core_out` | bf16 | (65536, 4, 32) | 16.00 MiB |
+| `rstd_gate` | fp32 | (262144,) | 1.00 MiB |
+| `xo` | bf16 | (65536, 256) | 32.00 MiB |
+| `rstd_ffn` | fp32 | (65536,) | 256.00 KiB |
+| `x1` | bf16 | (65536, 512) | 64.00 MiB |
+| `x3` | bf16 | (65536, 512) | 64.00 MiB |
 
 ### kind `full` (e.g. layer 3)
 
-**`W_3` weights** — 1,312,256 bytes
+**`W_3` weights** — 1.25 MiB
 
 | field | dtype | shape | bytes |
 |---|---|---|---|
-| `attn_norm_w` | bf16 | (256,) | 512 |
-| `wq` | bf16 | (256, 512) | 262,144 |
-| `wk` | bf16 | (256, 128) | 65,536 |
-| `wv` | bf16 | (256, 128) | 65,536 |
-| `q_norm_w` | bf16 | (64,) | 128 |
-| `k_norm_w` | bf16 | (64,) | 128 |
-| `wo` | bf16 | (256, 256) | 131,072 |
-| `ffn_norm_w` | bf16 | (256,) | 512 |
-| `w1` | bf16 | (256, 512) | 262,144 |
-| `w3` | bf16 | (256, 512) | 262,144 |
-| `w2` | bf16 | (512, 256) | 262,144 |
+| `attn_norm_w` | bf16 | (256,) | 512 B |
+| `wq` | bf16 | (256, 512) | 256.00 KiB |
+| `wk` | bf16 | (256, 128) | 64.00 KiB |
+| `wv` | bf16 | (256, 128) | 64.00 KiB |
+| `q_norm_w` | bf16 | (64,) | 128 B |
+| `k_norm_w` | bf16 | (64,) | 128 B |
+| `wo` | bf16 | (256, 256) | 128.00 KiB |
+| `ffn_norm_w` | bf16 | (256,) | 512 B |
+| `w1` | bf16 | (256, 512) | 256.00 KiB |
+| `w3` | bf16 | (256, 512) | 256.00 KiB |
+| `w2` | bf16 | (512, 256) | 256.00 KiB |
 
-**`A_.._3` saved context** — 305,135,616 bytes = **4,656.0 bytes/token** (per (step, round))
-
-| field | dtype | shape | bytes |
-|---|---|---|---|
-| `rstd_attn` | fp32 | (65536,) | 262,144 |
-| `qm` | bf16 | (65536, 256) | 33,554,432 |
-| `km` | bf16 | (65536, 128) | 16,777,216 |
-| `rstd_q` | fp32 | (262144,) | 1,048,576 |
-| `rstd_k` | fp32 | (131072,) | 524,288 |
-| `gate` | bf16 | (65536, 256) | 33,554,432 |
-| `v` | bf16 | (65536, 128) | 16,777,216 |
-| `lse` | fp32 | (64, 4096) | 1,048,576 |
-| `attn_out` | bf16 | (65536, 256) | 33,554,432 |
-| `xo` | bf16 | (65536, 256) | 33,554,432 |
-| `rstd_ffn` | fp32 | (65536,) | 262,144 |
-| `x1` | bf16 | (65536, 512) | 67,108,864 |
-| `x3` | bf16 | (65536, 512) | 67,108,864 |
-
-**`W_head`** — 262,656 bytes
+**`A_.._3` saved context** — 291.00 MiB = **4.55 KiB/token** (per (step, round))
 
 | field | dtype | shape | bytes |
 |---|---|---|---|
-| `w` | bf16 | (512, 256) | 262,144 |
-| `final_norm_w` | bf16 | (256,) | 512 |
+| `rstd_attn` | fp32 | (65536,) | 256.00 KiB |
+| `qm` | bf16 | (65536, 256) | 32.00 MiB |
+| `km` | bf16 | (65536, 128) | 16.00 MiB |
+| `rstd_q` | fp32 | (262144,) | 1.00 MiB |
+| `rstd_k` | fp32 | (131072,) | 512.00 KiB |
+| `gate` | bf16 | (65536, 256) | 32.00 MiB |
+| `v` | bf16 | (65536, 128) | 16.00 MiB |
+| `lse` | fp32 | (64, 4096) | 1.00 MiB |
+| `attn_out` | bf16 | (65536, 256) | 32.00 MiB |
+| `xo` | bf16 | (65536, 256) | 32.00 MiB |
+| `rstd_ffn` | fp32 | (65536,) | 256.00 KiB |
+| `x1` | bf16 | (65536, 512) | 64.00 MiB |
+| `x3` | bf16 | (65536, 512) | 64.00 MiB |
+
+**`W_head`** — 256.50 KiB
+
+| field | dtype | shape | bytes |
+|---|---|---|---|
+| `w` | bf16 | (512, 256) | 256.00 KiB |
+| `final_norm_w` | bf16 | (256,) | 512 B |
 
 ## Tasks
 
 ### `embed_fwd` — `EmbedFwd`
 
 - example task: `embed_fwd_0_0`
-- inputs: `tokens_0_0` (262,144B), `W_embed` (262,144B)
-- outputs: `y_embed_0_0` (33,554,432B)
+- inputs: `tokens_0_0` (256.00 KiB), `W_embed` (256.00 KiB)
+- outputs: `y_embed_0_0` (32.00 MiB)
 - mutates: —
 - kernel calls:
     0. `index_select`
@@ -154,8 +154,8 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
 ### `linattn_fwd` — `Qwen35LinBlockFwd`
 
 - example task: `block_fwd_0_0_0`
-- inputs: `y_embed_0_0` (33,554,432B), `W_0` (1,056,512B)
-- outputs: `y_0_0_0` (33,554,432B), `A_0_0_0` (272,105,472B)
+- inputs: `y_embed_0_0` (32.00 MiB), `W_0` (1.01 MiB)
+- outputs: `y_0_0_0` (32.00 MiB), `A_0_0_0` (259.50 MiB)
 - mutates: —
 - stages (name — emitted ctx fields):
     0. `attn_norm` — rstd_attn
@@ -194,8 +194,8 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
 ### `gattn_fwd` — `Qwen35AttnBlockFwd`
 
 - example task: `block_fwd_0_0_3`
-- inputs: `y_0_0_2` (33,554,432B), `W_3` (1,312,256B)
-- outputs: `y_0_0_3` (33,554,432B), `A_0_0_3` (305,135,616B)
+- inputs: `y_0_0_2` (32.00 MiB), `W_3` (1.25 MiB)
+- outputs: `y_0_0_3` (32.00 MiB), `A_0_0_3` (291.00 MiB)
 - mutates: —
 - stages (name — emitted ctx fields):
     0. `attn_norm` — rstd_attn
@@ -231,8 +231,8 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
 ### `head_loss` — `HeadLoss`
 
 - example task: `head_loss_0_0`
-- inputs: `y_0_0_3` (33,554,432B), `targets_0_0` (262,144B), `W_head` (262,656B)
-- outputs: `dy_0_0_3` (33,554,432B), `loss_0_0` (4B), `dW_head_0` (262,656B)
+- inputs: `y_0_0_3` (32.00 MiB), `targets_0_0` (256.00 KiB), `W_head` (256.50 KiB)
+- outputs: `dy_0_0_3` (32.00 MiB), `loss_0_0` (4 B), `dW_head_0` (256.50 KiB)
 - mutates: —
 - kernel calls:
     0. `rmsnorm_fwd`
@@ -244,7 +244,7 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
 ### `optimizer_head` — `AdamWStep`
 
 - example task: `optimizer_head_0`
-- inputs: `W_head` (262,656B), `dW_head_0` (262,656B), `O_head` (525,312B)
+- inputs: `W_head` (256.50 KiB), `dW_head_0` (256.50 KiB), `O_head` (513.00 KiB)
 - outputs: —
 - mutates: `W_head`, `O_head`
 - kernel calls:
@@ -253,8 +253,8 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
 ### `gattn_bwd` — `Qwen35AttnBlockBwd`
 
 - example task: `block_bwd_0_0_3`
-- inputs: `dy_0_0_3` (33,554,432B), `A_0_0_3` (305,135,616B), `y_0_0_2` (33,554,432B), `W_3` (1,312,256B)
-- outputs: `dy_0_0_2` (33,554,432B), `dW_0_3` (1,312,256B)
+- inputs: `dy_0_0_3` (32.00 MiB), `A_0_0_3` (291.00 MiB), `y_0_0_2` (32.00 MiB), `W_3` (1.25 MiB)
+- outputs: `dy_0_0_2` (32.00 MiB), `dW_0_3` (1.25 MiB)
 - mutates: —
 - kernel calls:
     0. `rmsnorm_apply`
@@ -276,7 +276,7 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
 ### `optimizer_block` — `AdamWStep`
 
 - example task: `optimizer_0_3`
-- inputs: `W_3` (1,312,256B), `dW_0_3` (1,312,256B), `O_3` (2,624,512B)
+- inputs: `W_3` (1.25 MiB), `dW_0_3` (1.25 MiB), `O_3` (2.50 MiB)
 - outputs: —
 - mutates: `W_3`, `O_3`
 - kernel calls:
@@ -285,8 +285,8 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
 ### `linattn_bwd` — `Qwen35LinBlockBwd`
 
 - example task: `block_bwd_0_0_2`
-- inputs: `dy_0_0_2` (33,554,432B), `A_0_0_2` (272,105,472B), `y_0_0_1` (33,554,432B), `W_2` (1,056,512B)
-- outputs: `dy_0_0_1` (33,554,432B), `dW_0_2` (1,056,512B)
+- inputs: `dy_0_0_2` (32.00 MiB), `A_0_0_2` (259.50 MiB), `y_0_0_1` (32.00 MiB), `W_2` (1.01 MiB)
+- outputs: `dy_0_0_1` (32.00 MiB), `dW_0_2` (1.01 MiB)
 - mutates: —
 - kernel calls:
     0. `rmsnorm_apply`
@@ -310,8 +310,8 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
 ### `embed_bwd` — `EmbedBwd`
 
 - example task: `embed_bwd_0_0`
-- inputs: `dy_embed_0_0` (33,554,432B), `tokens_0_0` (262,144B)
-- outputs: `dW_embed_0` (262,144B)
+- inputs: `dy_embed_0_0` (32.00 MiB), `tokens_0_0` (256.00 KiB)
+- outputs: `dW_embed_0` (256.00 KiB)
 - mutates: —
 - kernel calls:
     0. `embed_bwd_accum`
@@ -319,7 +319,7 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
 ### `optimizer_embed` — `AdamWStep`
 
 - example task: `optimizer_embed_0`
-- inputs: `W_embed` (262,144B), `dW_embed_0` (262,144B), `O_embed` (524,288B)
+- inputs: `W_embed` (256.00 KiB), `dW_embed_0` (256.00 KiB), `O_embed` (512.00 KiB)
 - outputs: —
 - mutates: `W_embed`, `O_embed`
 - kernel calls:

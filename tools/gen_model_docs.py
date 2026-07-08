@@ -42,6 +42,22 @@ DOC_SEQ_LEN = 4096
 DOC_BATCH = 16
 
 
+def fmt_bytes(n: int) -> str:
+    """Human units, binary: 5,646,057,472 -> '5.26 GiB'."""
+    for unit, div in (("GiB", 1 << 30), ("MiB", 1 << 20), ("KiB", 1 << 10)):
+        if n >= div:
+            return f"{n / div:,.2f} {unit}"
+    return f"{n} B"
+
+
+def fmt_per_token(b: float) -> str:
+    if b >= 1 << 20:
+        return f"{b / (1 << 20):,.2f} MiB/token"
+    if b >= 1 << 10:
+        return f"{b / (1 << 10):,.2f} KiB/token"
+    return f"{b:,.1f} B/token"
+
+
 def shape_tag(batch: int, seq_len: int) -> str:
     seq = f"{seq_len // 1024}K" if seq_len % 1024 == 0 else str(seq_len)
     return f"{batch}x{seq}"
@@ -79,14 +95,15 @@ def field_table(layout, title: str, note: str = "",
                 per_token: int | None = None) -> list[str]:
     if layout is None or not layout.fields:
         return []
-    head = f"**{title}** — {layout.total_bytes:,} bytes"
+    head = f"**{title}** — {fmt_bytes(layout.total_bytes)}"
     if per_token:
-        head += f" = **{layout.total_bytes / per_token:,.1f} bytes/token**"
+        head += f" = **{fmt_per_token(layout.total_bytes / per_token)}**"
     if note:
         head += f" ({note})"
     out = [head, "", "| field | dtype | shape | bytes |", "|---|---|---|---|"]
     for f in layout.fields:
-        out.append(f"| `{f.name}` | {f.dtype} | {tuple(f.shape)} | {f.nbytes:,} |")
+        out.append(f"| `{f.name}` | {f.dtype} | {tuple(f.shape)} | "
+                   f"{fmt_bytes(f.nbytes)} |")
     out.append("")
     return out
 
@@ -406,13 +423,13 @@ def gen_page(name: str, preset: str, record: bool,
 
     out += ["## Object summary", "",
             f"At this run shape ({dims.tokens:,} tokens/round). "
-            f"Token-scaled objects show bytes/token in parens. Details "
-            f"per kind below.", "",
-            "| object | scope | bytes |", "|---|---|---|"]
+            f"Token-scaled objects show per-token size in parens. "
+            f"Details per kind below.", "",
+            "| object | scope | size |", "|---|---|---|"]
     for label, per, b in summary:
-        cell = f"{b:,}"
+        cell = fmt_bytes(b)
         if "round" in per or "boundary" in per:
-            cell += f" ({b / dims.tokens:,.1f}/token)"
+            cell += f" ({fmt_per_token(b / dims.tokens)})"
         out.append(f"| `{label}` | {per} | {cell} |")
     out.append("")
 
@@ -435,7 +452,7 @@ def gen_page(name: str, preset: str, record: bool,
         elif oid.startswith("M_"):
             add("M", b)
     out += ["### Aggregate totals (all layers, this run shape)", "",
-            "| type | objects | total bytes |", "|---|---|---|"]
+            "| type | objects | total size |", "|---|---|---|"]
     label_of = {
         "W": "W (all weights, incl. embed/head)",
         "dW": "dW (all gradients, per step)",
@@ -447,9 +464,9 @@ def gen_page(name: str, preset: str, record: bool,
         if g not in agg:
             continue
         n, tot = agg[g]
-        cell = f"{tot:,}"
+        cell = fmt_bytes(tot)
         if g in ("A", "M"):
-            cell += f" ({tot / dims.tokens:,.1f}/token)"
+            cell += f" ({fmt_per_token(tot / dims.tokens)})"
         out.append(f"| {label_of[g]} | {n} | {cell} |")
     out.append("")
 
@@ -477,8 +494,10 @@ def gen_page(name: str, preset: str, record: bool,
         ex = resolver(t)
         out.append(f"### `{ck}` — `{type(ex).__name__}`")
         out.append("")
-        ins = ", ".join(f"`{i}` ({sizes.get(i, 0):,}B)" for i in t.inputs)
-        outs = ", ".join(f"`{o.id}` ({o.size_bytes:,}B)" for o in t.outputs)
+        ins = ", ".join(f"`{i}` ({fmt_bytes(sizes.get(i, 0))})"
+                        for i in t.inputs)
+        outs = ", ".join(f"`{o.id}` ({fmt_bytes(o.size_bytes)})"
+                         for o in t.outputs)
         muts = ", ".join(f"`{m}`" for m in t.mutates) or "—"
         out += [f"- example task: `{t.id}`",
                 f"- inputs: {ins or '—'}",
