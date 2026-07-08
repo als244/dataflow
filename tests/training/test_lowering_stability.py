@@ -40,6 +40,7 @@ EXPECTED = {
     "dsv32-tiny-dense": "7d6c6179f0c00e33",
     "glm52-tiny": "02de39829135fecd",
     "glm52-tiny-ga2": "97d566e41cfd5a02",
+    "glm52-tiny-warmup": "45d5d022358e5c74",
 }
 
 
@@ -89,6 +90,9 @@ def test_lowered_programs_bit_identical():
         "glm52-tiny": _hash(lower_glm52(ShapedGlm52Config.tiny())),
         "glm52-tiny-ga2": _hash(
             lower_glm52(replace(ShapedGlm52Config.tiny(), grad_accum_rounds=2))
+        ),
+        "glm52-tiny-warmup": _hash(
+            lower_glm52(replace(ShapedGlm52Config.tiny(), sparse_mode=False))
         ),
     }
     assert got == EXPECTED, {k: (got[k], EXPECTED[k]) for k in got if got[k] != EXPECTED[k]}

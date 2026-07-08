@@ -216,6 +216,8 @@ CONFIGS = {
     "glm52-mini-s4k-bs4ga4": ShapedGlm52Config.glm52_mini(
         seq_len=4096, batch=4, grad_accum_rounds=4,
     ),
+    "glm52-dense-warmup": ShapedGlm52Config.glm52_mini(
+        seq_len=4096, batch=4, grad_accum_rounds=4, sparse_mode=False),
     "kimi-k2": ShapedDsv3Config.kimi_k2(),
     "glm5": ShapedDsv32Config.glm5(),
     "glm5-dense-warmup": ShapedDsv32Config.glm5(sparse_mode=False),

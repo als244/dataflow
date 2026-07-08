@@ -54,6 +54,14 @@ from .dsv32_blocks import (
     Dsv32MoeBlockBwd,
     Dsv32MoeBlockFwd,
     Dsv32ProfileFill,
+    Dsv32WarmupDenseBlockBwd,
+    Dsv32WarmupDenseBlockFwd,
+    Dsv32WarmupDenseBlockRecompute,
+    Dsv32WarmupMoeBlockBwd,
+    Dsv32WarmupMoeBlockFwd,
+    Dsv32WarmupMoeBlockRecompute,
+    _IDX_FIELDS,
+    _causal_bits,
     _seq_bounds,
 )
 from .moe.stages import MOE_SHARED_NOGATE_STAGES, moe_bias_update, moe_mlp_tail_bwd
@@ -66,6 +74,12 @@ def _glm52_moe_context_layout(dims: Glm52Dims) -> PackedLayout:
     return PackedLayout.build(
         _dsv3_attn_ctx_specs(dims) + moe_context_specs(dims, dims.moe, meta=True)
     )
+
+
+def _dm_cols(d) -> int:
+    """dM row width: topk-gathered targets in sparse mode; FULL-PREFIX
+    rows (seq_len) in dense warm-up."""
+    return d.index_topk if getattr(d, "sparse_mode", True) else d.seq_len
 
 
 class Glm52MetaState:
@@ -90,16 +104,16 @@ class Glm52MetaState:
                     buf_of[int(oid.rsplit("_", 1)[1])] = self._in(ctx, j)
                 elif oid.startswith("dM_"):
                     st["_dm_view"] = torch_view(
-                        self._in(ctx, j), (d.tokens, d.index_topk), torch.float32)
+                        self._in(ctx, j), (d.tokens, _dm_cols(d)), torch.float32)
             for oid in ctx.task.mutates:
                 if oid.startswith("dM_"):
                     st["_dm_view"] = torch_view(
-                        ctx.mutates[oid], (d.tokens, d.index_topk), torch.float32)
+                        ctx.mutates[oid], (d.tokens, _dm_cols(d)), torch.float32)
             if key.endswith("_bwd"):
                 for j, o in enumerate(ctx.task.outputs):
                     if o.id.startswith("dM_"):
                         st["_dm_view"] = torch_view(
-                            self._out(ctx, j), (d.tokens, d.index_topk),
+                            self._out(ctx, j), (d.tokens, _dm_cols(d)),
                             torch.float32)
                         st["_dm_create"] = True
             if key.endswith("_recompute"):
@@ -114,7 +128,8 @@ class Glm52MetaState:
         if layout.fields and layer in buf_of:
             st["meta"] = layout.views(buf_of[layer])
         producer = d.leader_of(layer)
-        if producer != layer and producer in buf_of:
+        if (getattr(d, "sparse_mode", True)
+                and producer != layer and producer in buf_of):
             # the shared selection: dsa_idx is the FIRST field (offset 0)
             # in every producer layout — kind-agnostic by construction
             st["shared_idx"] = torch_view(
@@ -148,7 +163,7 @@ class Glm52ProfileFill(Dsv32ProfileFill):
         layout = self._meta_layout()
         for oid in ctx.task.inputs:
             if oid.startswith("dM_"):
-                torch_view(ctx.inputs[oid], (d.tokens, d.index_topk),
+                torch_view(ctx.inputs[oid], (d.tokens, _dm_cols(d)),
                            torch.float32).zero_()
                 continue
             if not oid.startswith("M_"):
@@ -156,6 +171,10 @@ class Glm52ProfileFill(Dsv32ProfileFill):
             own = int(oid.rsplit("_", 1)[1]) == layer
             if own and layout.fields:
                 m = layout.views(ctx.inputs[oid])
+            elif not getattr(d, "sparse_mode", True):
+                # warm-up: producer M is routing-only (no selection) and
+                # the follower never reads it — nothing to seed
+                continue
             else:
                 m = {"dsa_idx": torch_view(ctx.inputs[oid],
                                            (d.tokens, d.index_topk),
@@ -440,6 +459,184 @@ class Glm52MfBlockBwd(Glm52MetaState, Glm52ProfileFill, Dsv32MoeBlockBwd):
             del p
 
 
+# ---------------------------------------------------------------------------
+# Dense warm-up (sparse_mode=False): main model frozen and its wgrads/dgrads
+# SKIPPED (the _WarmupKLMixin _backward from dsv32); only the indexer trains,
+# against FULL-PREFIX targets. IndexShare twist: followers deposit their full
+# L1-normalized attention rows into the group dM (t, seq_len); the leader's
+# KL uses the group centroid (p_own + dM)/N.
+
+class _Glm52WarmupLeaderKL:
+    """Leader warm-up KL: dI = sigma_full - (p_own_full + dM_full)/N.
+    Standalone mixin (NOT _Glm52LeaderKL — its _backward would resurrect
+    the skipped main backward); borrows the weight-chain tail."""
+
+    _indexer_chains = _Glm52LeaderKL._indexer_chains
+
+    def _indexer_kl_bwd(self, kctx, d, a, x, w, acc, h1, q_lora_n,
+                        q_full, k_full, idx, lse, bounds, pos,
+                        bits_by_seq=None):
+        dm = a.get("_dm_view")
+        if dm is None:
+            # singleton leader: dsv32's per-layer full-prefix rule
+            return Dsv32DenseBlockBwd._indexer_kl_bwd(
+                self, kctx, d, a, x, w, acc, h1, q_lora_n, q_full,
+                k_full, idx, lse, bounds, pos, bits_by_seq=bits_by_seq)
+        from .dsv32_blocks import _indexer_inputs
+
+        K = self.kernels
+        n = float(a["_kl_n"])
+        q_idx, k_idx, wts = _indexer_inputs(kctx, K, d, h1, q_lora_n, w, pos)
+        dq_idx = torch.empty_like(q_idx)
+        dk_idx = torch.empty_like(k_idx)
+        dwts = torch.empty_like(wts)
+        hi_, di = d.index_n_heads, d.index_head_dim
+        h, qk = d.n_heads, d.qk_head_dim
+        for si, (lo, hi) in enumerate(bounds):
+            length = hi - lo
+            iscores = torch.empty(length, length, dtype=torch.float32,
+                                  device=x.device)
+            K.dsa_index_scores(
+                kctx, q_idx[lo:hi], k_idx[lo:hi], wts[lo:hi], iscores,
+                n_heads=hi_, head_dim=di, seq_bounds=((0, length),),
+            )
+            rows = torch.arange(length, device=x.device).unsqueeze(1)
+            cols = torch.arange(length, device=x.device).unsqueeze(0)
+            live = cols <= rows
+            p = torch.empty(length, length, device=x.device)
+            K.dsa_probs_sum(
+                kctx, q_full, k_full, None, lse, p,
+                n_heads=h, head_dim=qk, seq_bounds=((lo, hi),),
+                bits_by_seq=[_causal_bits(length, x.device)],
+            )
+            p = p / p.sum(-1, keepdim=True).clamp_min(1e-20)
+            # group centroid: own full rows + followers' deposited rows
+            total = (p + dm[lo:hi, :length]) / n
+            iscores.masked_fill_(~live, float("-inf"))
+            iscores.sub_(torch.logsumexp(iscores, -1, keepdim=True)).exp_()
+            d_scores = iscores.sub_(total).masked_fill_(~live, 0.0)
+            K.dsa_index_bwd(
+                kctx, d_scores, q_idx[lo:hi], k_idx[lo:hi], wts[lo:hi],
+                dq_idx[lo:hi], dk_idx[lo:hi], dwts[lo:hi],
+                n_heads=hi_, head_dim=di, seq_bounds=((0, length),),
+            )
+            del p, d_scores, total
+        self._indexer_chains(kctx, d, w, acc, h1, q_lora_n,
+                             dq_idx, dk_idx, dwts, pos, x)
+
+
+class _Glm52WarmupFollowerKL:
+    """Follower warm-up role: deposit the layer's FULL-PREFIX
+    L1-normalized attention rows into the group dM. No indexer weights,
+    no chains."""
+
+    def _indexer_kl_bwd(self, kctx, d, a, x, w, acc, h1, q_lora_n,
+                        q_full, k_full, idx, lse, bounds, pos,
+                        bits_by_seq=None):
+        K = self.kernels
+        h, qk = d.n_heads, d.qk_head_dim
+        dm = a["_dm_view"]
+        if a.get("_dm_create"):
+            dm.zero_()
+        for si, (lo, hi) in enumerate(bounds):
+            length = hi - lo
+            p = torch.empty(length, length, device=x.device)
+            K.dsa_probs_sum(
+                kctx, q_full, k_full, None, lse, p,
+                n_heads=h, head_dim=qk, seq_bounds=((lo, hi),),
+                bits_by_seq=[_causal_bits(length, x.device)],
+            )
+            p = p / p.sum(-1, keepdim=True).clamp_min(1e-20)
+            dm[lo:hi, :length] += p
+            del p
+
+
+@dataclass(frozen=True)
+class Glm52WarmupDlBlockFwd(Glm52MetaState, Dsv32WarmupDenseBlockFwd):
+    dims: Glm52Dims = None  # type: ignore[assignment]
+    META_KIND = "gdl"
+
+    @property
+    def cl(self) -> PackedLayout:
+        return dsv3_dense_context_layout(self.dims)
+
+
+@dataclass(frozen=True)
+class Glm52WarmupDlBlockRecompute(Glm52WarmupDlBlockFwd, BlockRecompute):
+    pass
+
+
+@dataclass(frozen=True)
+class Glm52WarmupDlBlockBwd(Glm52MetaState, _Glm52WarmupLeaderKL,
+                            Dsv32WarmupDenseBlockBwd):
+    dims: Glm52Dims = None  # type: ignore[assignment]
+    META_KIND = "gdl"
+
+    @property
+    def cl(self) -> PackedLayout:
+        return dsv3_dense_context_layout(self.dims)
+
+
+@dataclass(frozen=True)
+class Glm52WarmupMlBlockFwd(Glm52MetaState, Glm52ProfileFill,
+                            Dsv32WarmupMoeBlockFwd):
+    dims: Glm52Dims = None  # type: ignore[assignment]
+    META_KIND = "gml"
+
+    @property
+    def cl(self) -> PackedLayout:
+        return _glm52_moe_context_layout(self.dims)
+
+
+@dataclass(frozen=True)
+class Glm52WarmupMlBlockRecompute(Glm52WarmupMlBlockFwd, BlockRecompute):
+    pass
+
+
+@dataclass(frozen=True)
+class Glm52WarmupMlBlockBwd(Glm52MetaState, Glm52ProfileFill,
+                            _Glm52WarmupLeaderKL, Dsv32WarmupMoeBlockBwd):
+    dims: Glm52Dims = None  # type: ignore[assignment]
+    META_KIND = "gml"
+
+    @property
+    def cl(self) -> PackedLayout:
+        return _glm52_moe_context_layout(self.dims)
+
+
+@dataclass(frozen=True)
+class Glm52WarmupMfBlockFwd(Glm52MetaState, Glm52ProfileFill,
+                            Dsv32WarmupMoeBlockFwd):
+    dims: Glm52Dims = None  # type: ignore[assignment]
+    META_KIND = "gmf"
+
+    def _weight_layout(self, layer: int | None = None) -> PackedLayout:
+        return dsv3_moe_weight_layout(self.dims, layer=layer)
+
+    @property
+    def cl(self) -> PackedLayout:
+        return _glm52_moe_context_layout(self.dims)
+
+
+@dataclass(frozen=True)
+class Glm52WarmupMfBlockRecompute(Glm52WarmupMfBlockFwd, BlockRecompute):
+    pass
+
+
+@dataclass(frozen=True)
+class Glm52WarmupMfBlockBwd(Glm52MetaState, Glm52ProfileFill,
+                            _Glm52WarmupFollowerKL, Dsv32WarmupMoeBlockBwd):
+    dims: Glm52Dims = None  # type: ignore[assignment]
+    META_KIND = "gmf"
+
+    def _weight_layout(self, layer: int | None = None) -> PackedLayout:
+        return dsv3_moe_weight_layout(self.dims, layer=layer)
+
+    @property
+    def cl(self) -> PackedLayout:
+        return _glm52_moe_context_layout(self.dims)
+
+
 def build_glm52_resolver(
     dims: Glm52Dims,
     hyper: AdamWHyper = AdamWHyper(),
@@ -447,10 +644,27 @@ def build_glm52_resolver(
 ):
     kernels = kernels if kernels is not None else resolve_kernels()
 
+    if not dims.sparse_mode and not dims.train_indexer:
+        raise ValueError(
+            "dense warm-up trains ONLY the indexer; train_indexer=False "
+            "in dense mode would train nothing"
+        )
     bias_special = {
         "w_router_bias": partial(moe_bias_update,
                                  speed=dims.moe.bias_update_speed),
     }
+    if not dims.sparse_mode:
+        # warm-up freeze (paper): AdamW no-ops for EVERY non-indexer
+        # field — embed/head/router-bias included. The warm-up blocks
+        # never even compute those wgrads (dW arrives zeroed).
+        def _frozen_main(kctx, kernels_, w_view, g_view):
+            pass
+
+        names = set()
+        for wl_fn in (dsv32_dense_weight_layout, dsv32_moe_weight_layout,
+                      dsv3_moe_weight_layout):
+            names |= {f.name for f in wl_fn(dims).fields}
+        bias_special = {n: _frozen_main for n in names - set(_IDX_FIELDS)}
     if not dims.train_indexer:
         # frozen indexer: skip AdamW ENTIRELY for its fields (no decay);
         # follower packs lack the fields, so the special never fires there
@@ -471,25 +685,51 @@ def build_glm52_resolver(
         layer = AdamWStep.layer_of(task)
         return _WL[d.kind_of(layer)](d, layer=layer), None
 
+    if dims.sparse_mode:
+        blocks = {
+            "gdl_fwd": Glm52DlBlockFwd(dims, kernels),
+            "gdl_recompute": Glm52DlBlockRecompute(dims, kernels),
+            "gdl_bwd": Glm52DlBlockBwd(dims, kernels),
+            "gml_fwd": Glm52MlBlockFwd(dims, kernels),
+            "gml_recompute": Glm52MlBlockRecompute(dims, kernels),
+            "gml_bwd": Glm52MlBlockBwd(dims, kernels),
+            "gmf_fwd": Glm52MfBlockFwd(dims, kernels),
+            "gmf_recompute": Glm52MfBlockRecompute(dims, kernels),
+            "gmf_bwd": Glm52MfBlockBwd(dims, kernels),
+        }
+        opt_embed = AdamWStep(dims, kernels, hyper, kind="embed")
+        opt_head = AdamWStep(dims, kernels, hyper, kind="head")
+    else:
+        blocks = {
+            "gdl_fwd": Glm52WarmupDlBlockFwd(dims, kernels),
+            "gdl_recompute": Glm52WarmupDlBlockRecompute(dims, kernels),
+            "gdl_bwd": Glm52WarmupDlBlockBwd(dims, kernels),
+            "gml_fwd": Glm52WarmupMlBlockFwd(dims, kernels),
+            "gml_recompute": Glm52WarmupMlBlockRecompute(dims, kernels),
+            "gml_bwd": Glm52WarmupMlBlockBwd(dims, kernels),
+            "gmf_fwd": Glm52WarmupMfBlockFwd(dims, kernels),
+            "gmf_recompute": Glm52WarmupMfBlockRecompute(dims, kernels),
+            "gmf_bwd": Glm52WarmupMfBlockBwd(dims, kernels),
+        }
+
+        def _frozen_w(kctx, kernels_, w_view, g_view):
+            pass
+
+        opt_embed = AdamWStep(dims, kernels, hyper, kind="embed",
+                              update_specials={"w": _frozen_w})
+        opt_head = AdamWStep(dims, kernels, hyper, kind="head",
+                             update_specials={"w": _frozen_w})
     table = {
         "embed_fwd": EmbedFwd(dims, kernels),
-        "gdl_fwd": Glm52DlBlockFwd(dims, kernels),
-        "gdl_recompute": Glm52DlBlockRecompute(dims, kernels),
-        "gdl_bwd": Glm52DlBlockBwd(dims, kernels),
-        "gml_fwd": Glm52MlBlockFwd(dims, kernels),
-        "gml_recompute": Glm52MlBlockRecompute(dims, kernels),
-        "gml_bwd": Glm52MlBlockBwd(dims, kernels),
-        "gmf_fwd": Glm52MfBlockFwd(dims, kernels),
-        "gmf_recompute": Glm52MfBlockRecompute(dims, kernels),
-        "gmf_bwd": Glm52MfBlockBwd(dims, kernels),
+        **blocks,
         "head_loss": HeadLoss(dims, kernels),
         "embed_bwd": EmbedBwd(dims, kernels),
         "optimizer_block": AdamWStep(
             dims, kernels, hyper, layout_for=_opt_layout,
             update_specials=bias_special,
         ),
-        "optimizer_embed": AdamWStep(dims, kernels, hyper, kind="embed"),
-        "optimizer_head": AdamWStep(dims, kernels, hyper, kind="head"),
+        "optimizer_embed": opt_embed,
+        "optimizer_head": opt_head,
     }
 
     def resolver(task: TaskSpec):

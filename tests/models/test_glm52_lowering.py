@@ -68,11 +68,19 @@ def test_full_scale_presets_lower():
         assert n_fwd == layers
 
 
-def test_dense_warmup_rejected_frozen_indexer_supported():
+def test_dense_warmup_and_frozen_indexer_modes():
     from dataclasses import replace as rep
 
-    with pytest.raises(NotImplementedError):
-        lower_glm52(rep(ShapedGlm52Config.tiny(), sparse_mode=False))
+    # dense warm-up is SUPPORTED: no selection anywhere (no dsa_idx in
+    # any M — gdl's M drops entirely), dM chains carry FULL-PREFIX rows
+    prog = lower_glm52(rep(ShapedGlm52Config.tiny(), sparse_mode=False))
+    cfg = ShapedGlm52Config.tiny()
+    sizes = prog.object_sizes()
+    dms = {k: v for k, v in sizes.items() if k.startswith("dM_")}
+    assert dms and all(v == 4 * cfg.tokens * cfg.seq_len for v in dms.values())
+    assert not any(oid.startswith("M_") and oid.rsplit("_", 1)[1] == "0"
+                   for oid in sizes), \
+        "gdl (dense leader, layer 0) must have no M in warm-up"
     # frozen indexer is a SUPPORTED mode (RL post-training consumes
     # saved selections verbatim): lowers cleanly, emits no dM chain
     prog = lower_glm52(rep(ShapedGlm52Config.tiny(), train_indexer=False))

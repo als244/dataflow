@@ -556,22 +556,34 @@ class Dsv32MoeBlockBwd(Dsv32DenseBlockBwd):
 
 
 class _WarmupKLMixin:
-    """Dense warm-up backward: dsv3's flash backward runs UNCHANGED (main
-    gradients computed normally, then ignored by the frozen optimizer),
-    followed by the FULL-PREFIX indexer KL injection (report formula 3).
-    The MLA expansions are re-derived for the KL — a deliberate warm-up-
-    phase overhead that keeps the dsv3 backward untouched."""
+    """Dense warm-up backward: the paper trains ONLY the indexer (its
+    signal is L_I alone; CE is monitoring), so ALL main wgrads and the
+    dgrad chain are SKIPPED — dW views are zeroed on the create round
+    (the grammar is unchanged: dW/dy objects exist; the frozen optimizer
+    no-ops on them) and dy_prev is zeroed. Then the FULL-PREFIX indexer
+    KL injection runs (report formula 3), re-deriving the MLA expansions
+    it needs from the saved context."""
 
-    def _attn_bwd(self, kctx, dh_mid, a, x, w, acc, norm_bwd, dx_out) -> None:
-        super()._attn_bwd(kctx, dh_mid, a, x, w, acc, norm_bwd, dx_out)
+    def _backward(self, kctx, dy, a, x, w, dx_out, dw, accum, meta=None):
+        if meta:
+            a = {**a, **meta.get("meta", {})}
+            for k in ("_dm_view", "_dm_create", "_kl_n"):
+                if k in meta:
+                    a[k] = meta[k]
         d = self.dims
         K = self.kernels
+        if not accum:
+            for name, view in dw.items():
+                if name not in _IDX_FIELDS:
+                    view.zero_()
+        dx_out.zero_()
         if not d.train_indexer:
-            for name in ("w_idx_q", "w_idx_k", "idx_k_ln_w", "idx_k_ln_b",
-                         "w_idx_w"):
-                if name in w:  # glm52 followers carry no indexer fields
-                    acc(name, torch.zeros_like(w[name]))
+            if not accum:
+                for name in _IDX_FIELDS:
+                    if name in dw:
+                        dw[name].zero_()
             return
+        acc = self._acc_fn(dw, accum)
         t = d.tokens
         bounds = _seq_bounds(d)
         pos = ops.positions_for(d.seq_spec, t, x.device)
@@ -644,11 +656,6 @@ class Dsv32WarmupMoeBlockBwd(Dsv32MetaState, Dsv32ProfileFill, _WarmupKLMixin, D
     META_KIND = "moe"
     dims: Dsv32Dims = None  # type: ignore[assignment]
     _indexer_kl_bwd = Dsv32DenseBlockBwd._indexer_kl_bwd
-
-    def _backward(self, kctx, dy, a, x, w, dx_out, dw, accum, meta=None):
-        if meta:
-            a = {**a, **meta["meta"]}
-        super()._backward(kctx, dy, a, x, w, dx_out, dw, accum)
 
     def _weight_layout(self, layer: int | None = None) -> PackedLayout:
         return dsv32_moe_weight_layout(self.dims, layer=layer)

@@ -604,3 +604,88 @@ def test_glm52_frozen_indexer_ablation():
                 if str(oid).startswith("dM_")]
     check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
                      field_atol=_BIAS_ATOL).assert_ok()
+
+
+def test_glm52_dense_warmup_model_step():
+    """Dense warm-up gate (sparse_mode=False) — model-step matches golden.
+    IndexShare twist over dsv32's warm-up: followers deposit FULL-PREFIX
+    rows into the group dM and the leader trains on the group centroid
+    (p_own + dM)/N — the tiny config's N=3 group [1,2,3] and N=2 group
+    [4,5] pin the averaging. Main wgrads are SKIPPED in the engine (dW
+    zeroed); the frozen optimizer makes that invisible to param/state
+    comparisons, which is exactly the point."""
+    cfg = _tiny_cfg(sparse_mode=False)
+    check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
+                     field_atol=_BIAS_ATOL).assert_ok()
+
+
+def test_glm52_dense_warmup_freeze_and_movement():
+    """Across a REAL engine warm-up step: every non-indexer field —
+    embed/head/router-bias included, and EVERY follower field — is
+    BIT-FROZEN; leader indexer fields move (full-prefix group KL live)."""
+    import dataclasses
+
+    from dataflow.runtime import Engine
+    from dataflow.runtime.device.cuda import CudaBackend
+    from dataflow.runtime.device.fake import FakeBackend
+    from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME, torch_view
+    from dataflow.tasks.layouts import (
+        dsv3_moe_weight_layout,
+        dsv32_dense_weight_layout,
+        dsv32_moe_weight_layout,
+    )
+    from dataflow.training.families import resolve_family
+    from dataflow.training.planning import plan_program
+
+    cfg = _tiny_cfg(sparse_mode=False)
+    fam = resolve_family(cfg)
+    dims = fam.dims_of(cfg)
+    planned = plan_program(fam.lower(cfg), fast_memory_capacity=64 * 1024 * 1024)
+    backend = CudaBackend()
+    values = fam.initial_values(planned.program, cfg, backend, seed=13)
+    idx_fields = ("w_idx_q", "w_idx_k", "idx_k_ln_w", "idx_k_ln_b", "w_idx_w")
+    wl_of = {}
+    for i in range(cfg.n_layers):
+        kind = dims.kind_of(i)
+        wl_of[i] = {"gdl": dsv32_dense_weight_layout,
+                    "gml": dsv32_moe_weight_layout,
+                    "gmf": dsv3_moe_weight_layout}[kind](dims)
+    before = {}
+    for i in range(cfg.n_layers):
+        buf = values[f"W_{i}"]
+        before[i] = {
+            f.name: torch_view(buf, f.shape, TORCH_DTYPE_BY_NAME[f.dtype],
+                               offset_bytes=f.offset_bytes).clone()
+            for f in wl_of[i].fields
+        }
+    embed_before = torch_view(values["W_embed"],
+                              (values["W_embed"].size_bytes,), torch.uint8).clone()
+    head_before = torch_view(values["W_head"],
+                             (values["W_head"].size_bytes,), torch.uint8).clone()
+    dry = Engine(FakeBackend()).execute(planned.program, initial_buffers=values)
+    result = Engine(backend).execute(
+        planned.program, resolver=fam.build_resolver(dims),
+        initial_buffers=values, pool_prewarm=dry.pool_demand,
+    )
+    moved = 0
+    for i in range(cfg.n_layers):
+        rec = result.objects.get(f"W_{i}")
+        slot = rec.backing or rec.fast
+        for f in wl_of[i].fields:
+            after = torch_view(slot.buffer, f.shape, TORCH_DTYPE_BY_NAME[f.dtype],
+                               offset_bytes=f.offset_bytes)
+            if f.name in idx_fields:
+                moved += int(not torch.equal(after, before[i][f.name]))
+            else:
+                assert torch.equal(after, before[i][f.name]), \
+                    (i, f.name, "main field moved in warm-up")
+    assert moved > 0, "no leader indexer field moved — group KL not training"
+    for obj, ref in (("W_embed", embed_before), ("W_head", head_before)):
+        rec = result.objects.get(obj)
+        slot = rec.backing or rec.fast
+        got = torch_view(slot.buffer, (rec.size_bytes,), torch.uint8)
+        assert torch.equal(got, ref), f"{obj} moved in warm-up"
+    result.close()
+    dry.close()
+    for buf in values.values():
+        backend.free(buf)

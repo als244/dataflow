@@ -721,7 +721,7 @@ def glm52_meta_layout(dims: "Glm52Dims", kind: str) -> PackedLayout:
     from .moe.spec import moe_meta_specs
 
     specs: list[tuple[str, tuple[int, ...], str]] = []
-    if kind in ("gdl", "gml"):
+    if kind in ("gdl", "gml") and getattr(dims, "sparse_mode", True):
         specs.append(("dsa_idx", (dims.tokens, dims.index_topk), "int32"))
     if kind in ("gml", "gmf"):
         specs += moe_meta_specs(dims, dims.moe)

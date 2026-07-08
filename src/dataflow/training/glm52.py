@@ -206,6 +206,7 @@ class ShapedGlm52Config:
     @classmethod
     def glm52_mini(cls, *, seq_len: int = 4096, batch: int = 1,
                    grad_accum_rounds: int = 1, num_steps: int = 1,
+                   sparse_mode: bool = True,
                    ) -> "ShapedGlm52Config":
         return cls(
             n_layers=18, d_model=2048, n_heads=16, q_lora_rank=512,
@@ -217,7 +218,7 @@ class ShapedGlm52Config:
             indexer_types=_pattern(18, first_k_full=2),
             vocab_size=129_280, rope_base=10_000.0,
             seq_len=seq_len, batch=batch,
-            grad_accum_rounds=grad_accum_rounds, num_steps=num_steps,
+            grad_accum_rounds=grad_accum_rounds, num_steps=num_steps, sparse_mode=sparse_mode,
         )
 
     @classmethod
@@ -256,11 +257,6 @@ def dims_of_glm52(cfg: ShapedGlm52Config) -> Glm52Dims:
                 "dense-FFN shared layers are not supported (GLM-5.2's dense "
                 "layers are all full); needed only if a real config appears"
             )
-    if not cfg.sparse_mode:
-        raise NotImplementedError(
-            "glm52 dense warm-up (L^I_multi with full-prefix targets) is "
-            "the M-I2b deliverable — sparse correctness lands first"
-        )
     return Glm52Dims(
         opt_policy=cfg.opt_policy,
         d_model=cfg.d_model, n_heads=cfg.n_heads,
@@ -307,7 +303,7 @@ def _kind_specs(cfg: ShapedGlm52Config, hw: ShapedHardware) -> dict[str, LayerKi
     t, d, seq, h = cfg.tokens, cfg.d_model, cfg.seq_len, cfg.n_heads
     qk = cfg.qk_head_dim
     sbar = seq / 2.0
-    k_eff = min(cfg.index_topk, sbar)
+    k_eff = min(cfg.index_topk, sbar) if cfg.sparse_mode else sbar
     mla_active = (
         d * cfg.q_lora_rank + cfg.q_lora_rank * h * qk
         + d * (cfg.kv_lora_rank + cfg.qk_rope_dim)
@@ -320,7 +316,7 @@ def _kind_specs(cfg: ShapedGlm52Config, hw: ShapedHardware) -> dict[str, LayerKi
     )
     idx_flops = 2.0 * t * sbar * cfg.index_n_heads * cfg.index_head_dim
     core_flops = 2.0 * t * k_eff * h * qk * 2.0
-    s_bytes = 4.0 * t * cfg.index_topk
+    s_bytes = 4.0 * t * cfg.index_topk if cfg.sparse_mode else 0.0
 
     def spec(prefix, leader, wl, cl, ffn_active, extra_traffic,
              meta_bytes=0):
@@ -392,8 +388,10 @@ def build_shaped_glm52(
     shares = [
         MetaShare(producer=ld, consumers=dims.group_members(ld)[1:],
                   # frozen indexer => no KL anywhere => no dM chain
-                  grad_bytes=(4 * dims.tokens * dims.index_topk
-                              if dims.train_indexer else 0))
+                  grad_bytes=(0 if not dims.train_indexer
+                              else 4 * dims.tokens * (
+                                  dims.index_topk if dims.sparse_mode
+                                  else cfg.seq_len)))
         for ld in dims.leaders()
         if len(dims.group_members(ld)) > 1
     ]
@@ -440,11 +438,12 @@ def lower_glm52(
         fast_memory_capacity=fast_memory_capacity,
     )
     base_size = size_of_factory(dims, fl)
-    t_tokens, k_sel = dims.tokens, dims.index_topk
+    t_tokens = dims.tokens
+    dm_cols = dims.index_topk if dims.sparse_mode else cfg.seq_len
 
     def size_of(oid: str):
         if oid.startswith("dM_"):
-            return 4 * t_tokens * k_sel
+            return 4 * t_tokens * dm_cols
         return base_size(oid)
 
     return apply_exact_sizes(shaped, "glm52-exact", size_of=size_of)

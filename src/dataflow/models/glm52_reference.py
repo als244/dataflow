@@ -74,6 +74,40 @@ class GoldenGlm52(GoldenDsv3):
         self._group_mask = None
         return super().loss_terms(tokens, targets)
 
+    _IDX_FIELDS = ("w_idx_q", "w_idx_k", "idx_k_ln_w", "idx_k_ln_b",
+                   "w_idx_w")
+
+    def _adamw_obj(self, obj: str, leaves) -> None:
+        if not getattr(self.dims, "sparse_mode", True):
+            # dense warm-up: main model FROZEN — only indexer fields step
+            only = {k: v for k, v in leaves.items() if k in self._IDX_FIELDS}
+            if only:
+                super()._adamw_obj(obj, only)
+            return
+        if not getattr(self.dims, "train_indexer", True) and any(
+                n in leaves for n in self._IDX_FIELDS):
+            rest = {k: v for k, v in leaves.items()
+                    if k not in self._IDX_FIELDS}
+            super()._adamw_obj(obj, rest)
+            return
+        super()._adamw_obj(obj, leaves)
+
+    def train_step(self, tokens, targets) -> float:
+        if getattr(self.dims, "sparse_mode", True):
+            return super().train_step(tokens, targets)
+        # dense warm-up: CE reported but the ONLY moving weights are the
+        # leaders' indexers (grads solely from L^I_multi through the
+        # detachment seam); router-bias speed rule frozen too
+        self._pending_counts = []
+        for p_ in self.parameters():
+            p_.grad = None
+        ce, aux_total = self.loss_terms(tokens, targets)
+        (ce + aux_total).backward()
+        self.step_count += 1
+        for i, leaves in enumerate(self.w_blocks):
+            self._adamw_obj(f"block_{i}", leaves)
+        return float(ce.detach())
+
     def block_forward(
         self, x: torch.Tensor, w: dict[str, torch.Tensor],
         route_ids: torch.Tensor | None = None,
@@ -91,8 +125,15 @@ class GoldenGlm52(GoldenDsv3):
             scores = dsa_index_scores_reference(h1.detach(), q_lora.detach(), w, d)
             if not train_idx:
                 scores = scores.detach()
-            sel = dsa_topk_reference(scores.detach(), d.index_topk)
-            mask = dsa_mask_from_idx(sel, d, t)
+            if getattr(d, "sparse_mode", True):
+                sel = dsa_topk_reference(scores.detach(), d.index_topk)
+                mask = dsa_mask_from_idx(sel, d, t)
+            else:
+                # dense warm-up: attention AND the KL target over the
+                # full causal prefix (report formula 3)
+                from dataflow.tasks.dsa_reference import _causal_mask
+
+                mask = _causal_mask(d, t, x.device)
             self._group_scores, self._group_mask = scores, mask
         scores, mask = self._group_scores, self._group_mask
 
