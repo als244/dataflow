@@ -133,6 +133,29 @@ def prepare_placement(program, values):
     return placement, demand
 
 
+def check_pool_headroom(pool_demand: dict) -> None:
+    """A run's transient backing (session pool) is cudaHostAlloc'd
+    OUTSIDE the store slab in S1. Refuse (CAPACITY) instead of letting
+    the host OOM: projected pool bytes must fit in MemAvailable minus
+    the system reserve. Removed when pools draw from the slab."""
+    from .hostmem import GIB, PinnedSlab, meminfo_available_bytes
+    from .wire import ServiceError
+
+    projected = sum(int(size) * int(count)
+                    for (loc, size), count in (pool_demand or {}).items()
+                    if loc == "backing")
+    avail = meminfo_available_bytes()
+    reserve = int(PinnedSlab.SYSTEM_RESERVE_GIB * GIB)
+    if projected > max(0, avail - reserve):
+        raise ServiceError(
+            "CAPACITY",
+            f"run refused: session pool needs {projected / GIB:.1f} GiB "
+            f"pinned but only {avail / GIB:.1f} GiB available "
+            f"({reserve / GIB:.0f} GiB system reserve). Unregister idle "
+            f"programs or boot with a smaller slab.",
+            {"projected_pool_bytes": projected, "available": avail})
+
+
 def execute_run(program, resolver, values, *, prog_id, placement,
                 pool_demand, run_args, cancel_event):
     """One engine run over store-backed buffers. Returns (result,
@@ -140,6 +163,10 @@ def execute_run(program, resolver, values, *, prog_id, placement,
     from dataflow.runtime import Engine
     from dataflow.runtime.engine import CancelledRun, ExecutionError
 
+    # only the FIRST run of a program pays pool growth; adopted pools
+    # are already allocated — check before growing, not after
+    if prog_id not in _SESSIONS:
+        check_pool_headroom(pool_demand)
     try:
         result = Engine(get_backend(),
                         session=get_session(prog_id)).execute(

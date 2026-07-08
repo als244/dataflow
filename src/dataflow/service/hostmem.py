@@ -25,10 +25,26 @@ def _check(res):
 class PinnedSlab:
     """One cudaHostAlloc'd region; freed explicitly (daemon shutdown)."""
 
+    # pinned memory is UNRECLAIMABLE and UNSWAPPABLE: exhausting the
+    # host with it starves the page cache and the GPU driver long
+    # before the kernel OOM killer fires (observed: full desktop
+    # freeze + NVRM page-table failure + reboot). Never pin into the
+    # last SYSTEM_RESERVE_GIB of available memory.
+    SYSTEM_RESERVE_GIB = 24.0
+
     def __init__(self, capacity_bytes: int, *, device: int = 0):
         import threading
 
         from cuda.bindings import runtime as cudart
+
+        avail = meminfo_available_bytes()
+        limit = avail - int(self.SYSTEM_RESERVE_GIB * GIB)
+        if capacity_bytes > limit:
+            raise RuntimeError(
+                f"refusing to pin {capacity_bytes / GIB:.1f} GiB: only "
+                f"{avail / GIB:.1f} GiB available and "
+                f"{self.SYSTEM_RESERVE_GIB:.0f} GiB is reserved for the "
+                f"system (pinned memory cannot be reclaimed or swapped)")
 
         self._cudart = cudart
         self._free_lock = threading.Lock()
@@ -58,7 +74,13 @@ def meminfo_available_bytes() -> int:
     raise RuntimeError("MemAvailable not found")
 
 
-def auto_cap_bytes(reserve_gib: float = 10.0) -> int:
+def auto_cap_bytes(reserve_gib: float = 30.0) -> int:
+    """STORE-ONLY sizing: leaves reserve for the system but NOT for
+    session pools — daemons that execute programs must size the slab
+    explicitly until pools draw from the slab (design note Part V
+    addendum 2). Reserve default raised 10 -> 30 after the OOM
+    incident: pinned memory starves the desktop long before the
+    kernel killer acts."""
     return max(GIB, meminfo_available_bytes() - int(reserve_gib * GIB))
 
 
