@@ -53,6 +53,34 @@ class TrainReport:
         return sum(tail) / len(tail)
 
 
+def _make_default_stream_probe(*, vocab: int, tokens: int, seq_len: int,
+                               rounds: int, seed: int,
+                               decoupled: bool = False):
+    """Test seam: the bench default_stream's data contract, minus the
+    engine. Returns (stream, seq_len); see test_bench_default_stream_
+    semantics."""
+    import torch as _torch
+
+    gen = _torch.Generator().manual_seed(seed + 1)
+    fixed: dict[int, tuple] = {}
+
+    def stream(k: int):
+        r = k % max(1, rounds)
+        if r not in fixed:
+            toks = _torch.randint(0, vocab, (tokens,), generator=gen,
+                                  dtype=_torch.int32)
+            if decoupled:
+                tgts = _torch.randint(0, vocab, (tokens,), generator=gen,
+                                      dtype=_torch.int32)
+            else:
+                tgts = (toks.view(-1, seq_len).roll(-1, dims=1)
+                        .reshape(-1).contiguous())
+            fixed[r] = (toks, tgts)
+        return fixed[r]
+
+    return stream, seq_len
+
+
 def train(
     annotated: Program,
     cfg: ShapedLlamaConfig,
@@ -62,6 +90,7 @@ def train(
     seed: int = 0,
     hyper: AdamWHyper = AdamWHyper(),
     token_stream=None,
+    decoupled_targets: bool = False,
     values: dict | None = None,
     physical_limit_bytes: int = 27 * 1024**3,
     placement_mode: str = "static",
@@ -105,10 +134,33 @@ def train(
     session = Session(backend=backend)
     gen = torch.Generator().manual_seed(seed + 1)
 
-    def default_stream(_step: int):
-        tokens = torch.randint(0, dims.vocab_size, (dims.tokens,), generator=gen, dtype=torch.int32)
-        targets = torch.randint(0, dims.vocab_size, (dims.tokens,), generator=gen, dtype=torch.int32)
-        return tokens, targets
+    # Bench data semantics (Shein): random token sequences with SHIFTED
+    # targets (next-token, mimicking pretraining), unique across the
+    # batch and ga rounds WITHIN a step, and REPEATED across steps — so
+    # a healthy run shows a real learning signal: step-0 loss ~ ln(V)
+    # (+ init logit variance), then a slow decline as the model
+    # memorizes the fixed set. Targets shift within each sequence; the
+    # last position wraps to the sequence's first token.
+    _fixed_rounds: dict[int, tuple[torch.Tensor, torch.Tensor]] = {}
+
+    def default_stream(k: int):
+        rounds_ = max(1, cfg.grad_accum_rounds)
+        r = k % rounds_
+        if r not in _fixed_rounds:
+            tokens = torch.randint(0, dims.vocab_size, (dims.tokens,),
+                                   generator=gen, dtype=torch.int32)
+            if decoupled_targets:
+                # independently drawn targets (still fixed across steps):
+                # memorization signal with NO causal/sequence structure —
+                # copy-from-context shortcuts cannot help here
+                targets = torch.randint(0, dims.vocab_size, (dims.tokens,),
+                                        generator=gen, dtype=torch.int32)
+            else:
+                seq = dims.seq_len
+                targets = (tokens.view(-1, seq).roll(-1, dims=1)
+                           .reshape(-1).contiguous())
+            _fixed_rounds[r] = (tokens, targets)
+        return _fixed_rounds[r]
 
     token_stream = token_stream or default_stream
     annotator = getattr(backend, "annotator", None)

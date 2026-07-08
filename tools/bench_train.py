@@ -331,6 +331,12 @@ def main() -> None:
         help="freeze the embedding too (turns a frozen prefix from "
              "pass-through into truncated)")
     parser.add_argument(
+        "--decoupled-targets", action="store_true",
+        help="targets independently drawn (not shifted), still fixed "
+             "across steps: pure-memorization loss signal with no causal "
+             "structure — a diagnostic complement to the default "
+             "shifted-target stream")
+    parser.add_argument(
         "--freeze-head", action="store_true",
         help="freeze the LM head: head_loss still runs (CE needs the "
              "forward and its dy) but dW_head/O_head vanish and the "
@@ -376,7 +382,8 @@ def main() -> None:
         print(f"replaying saved plan {args.annotated.name}: "
               f"sim {sim_us / 1e3:.1f} ms/step ({sim_tok_s:.0f} tok/s)")
         backend = CudaBackend()
-        report = train(program, cfg, backend, steps=args.steps, seed=11)
+        report = train(program, cfg, backend, steps=args.steps, seed=11,
+                       decoupled_targets=args.decoupled_targets)
         real_tok_s = tokens_per_step / (report.steady_state_makespan_us / 1e6)
         wall_tail = report.step_wall_s[1:] or report.step_wall_s  # steps=1: no steady tail
         steady_wall = sum(wall_tail) / len(wall_tail)
@@ -446,6 +453,8 @@ def main() -> None:
                    + ("h" if args.freeze_head else "")
                    if (args.freeze_layers or args.freeze_embed
                        or args.freeze_head) else "")
+    if args.decoupled_targets:
+        _freeze_tag += "-dt"   # data-semantics tag: summaries must not collide
     _log_name = (f"{args.config}{_freeze_tag}"
                  f"-{args.device_gib.replace(',', '_')}dev"
                  f"-{args.placement}.log")
@@ -680,6 +689,7 @@ def main() -> None:
         try:
             report = train(
                 planned.program, cfg, backend, steps=args.steps, seed=11,
+                decoupled_targets=args.decoupled_targets,
                 placement_mode=args.placement, placement=placement,
                 values=shared_values,
             )
@@ -726,9 +736,11 @@ def main() -> None:
         # (scratch grows past step 1), so the loop closes HERE — if the
         # measured full-run peak busts the envelope, shrink the ledger by
         # the measured overage and re-run the row (once). No hand leeway.
+        headroom_reruns = 0
         for _retry in range(3):
             if env_gib is None or actual / GIB <= env_gib + 0.02 or _retry == 2:
                 break
+            headroom_reruns += 1
             over_gib = actual / GIB - env_gib
             # shrink by the overage PLUS a margin that beats run-to-run
             # torch-scratch variance (~±0.2 GiB measured) — a timid step
@@ -747,6 +759,7 @@ def main() -> None:
             torch.cuda.reset_peak_memory_stats()
             report = train(
                 planned.program, cfg, backend, steps=args.steps, seed=11,
+                decoupled_targets=args.decoupled_targets,
                 placement_mode=args.placement, placement=placement,
                 values=shared_values,
             )
@@ -790,6 +803,11 @@ def main() -> None:
             "wall_tokens_per_s": wall_tok_s,
             "real_vs_sim_pct": (real_tok_s / sim_tok_s - 1) * 100,
             "replay_fidelity_gap_pct": gap,
+            # >0: this row's train() ran again on ALREADY-TRAINED weights
+            # over the SAME fixed data (train() derives it from the seed),
+            # so its losses CONTINUE the memorization curve rather than
+            # starting at ~ln(V) — expected, not a bug (freeze-exp finding)
+            "headroom_reruns": headroom_reruns,
             "losses": report.losses,
             "peak_fast_gib": report.peak_fast_bytes / GIB,
             "peak_backing_gib": report.peak_backing_bytes / GIB,

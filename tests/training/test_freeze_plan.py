@@ -242,3 +242,34 @@ def test_model_step_frozen_head():
     assert "dW_head_0" not in sizes and "O_head" not in sizes
     assert not any(t_.startswith("optimizer_head") for t_ in ids)
     check_model_step(cfg, fast_memory_capacity=_CAP, tol=3e-2).assert_ok()
+
+
+def test_bench_default_stream_semantics():
+    """The bench data contract: shifted targets (next-token within each
+    sequence, last position wraps), rounds unique within a step, the
+    SAME data repeated across steps (memorization signal)."""
+    import torch
+
+    from dataflow.training.train_loop import _make_default_stream_probe
+
+    stream, seq = _make_default_stream_probe(vocab=97, tokens=32, seq_len=8,
+                                             rounds=2, seed=3)
+    t0_r0, y0_r0 = stream(0)
+    t0_r1, y0_r1 = stream(1)
+    t1_r0, y1_r0 = stream(2)   # next step, round 0
+    assert not torch.equal(t0_r0, t0_r1)          # unique within step
+    assert torch.equal(t0_r0, t1_r0)              # repeated across steps
+    assert torch.equal(y0_r0.view(-1, seq)[:, :-1],
+                       t0_r0.view(-1, seq)[:, 1:])   # shifted
+    assert torch.equal(y0_r0.view(-1, seq)[:, -1],
+                       t0_r0.view(-1, seq)[:, 0])    # wrap
+
+    # decoupled mode: targets independent of tokens, still fixed
+    # across steps, still unique per round
+    dstream, _ = _make_default_stream_probe(vocab=97, tokens=32, seq_len=8,
+                                            rounds=2, seed=3, decoupled=True)
+    dt0, dy0 = dstream(0)
+    dt1, dy1 = dstream(2)
+    assert torch.equal(dt0, dt1) and torch.equal(dy0, dy1)  # repeat
+    assert not torch.equal(dy0.view(-1, 8)[:, :-1],
+                           dt0.view(-1, 8)[:, 1:])          # NOT shifted
