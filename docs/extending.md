@@ -395,7 +395,19 @@ What adding a family (e.g. Qwen3) actually touches, in order:
    scale), a `mini` (single-GPU bench scale), and the real-scale preset
    with dims verified against the published HF config (param-count match
    is the acceptance test).
-7. Ladder 3 + gates (§5); sweep for quoted numbers.
+7. Ladder 3 + gates (§5); a frontier sweep for quoted numbers.
+8. Regenerate the GENERATED docs — the family appears in all of them
+   automatically (plugins included): `python tools/list_models.py >
+   docs/builtin_models.md`, `python tools/list_tasks.py >
+   docs/task_kinds.md`, `python tools/gen_model_docs.py --family
+   <name>` (and `tools/list_kernels.py` if you added registry ops).
+   Beyond the standard contract the generators need: no-arg preset
+   CLASSMETHODS (`tiny()` mandatory — it is also the kernel-TRACING
+   scale); an optional `DOC_PRESETS` entry in gen_model_docs (fallback
+   `{name}_mini` then `tiny`; pages standardize on seq 4096 ×
+   microbatch 16); a `_meta_layout` dispatch entry there if the family
+   has M objects; real DOCSTRINGS on new executables and ops (the
+   inventories print their first lines).
 
 Variants the qwen35 family (hybrid DeltaNet + gated attention, tied
 embeddings) added to the machinery — reuse, don't reinvent:

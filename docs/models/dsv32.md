@@ -32,25 +32,25 @@ Layer kinds (18 layers): `dense dense moe moe moe moe moe moe moe moe moe moe mo
 
 ## Object summary
 
-At the documentation run shape (65,536 tokens/round). Details per kind below.
+At the documentation run shape (65,536 tokens/round). Token-scaled objects show bytes/token in parens. Details per kind below.
 
-| object | scope | bytes | bytes/token |
-|---|---|---|---|
-| `W_i (dense)` | layer | 111,618,048 | — |
-| `dW_i (dense)` | layer/step | 111,618,048 | — |
-| `O_i (dense)` | layer | 223,236,096 | — |
-| `A (dense)` | layer × round | 2,660,237,312 | 40,592.0 |
-| `M (dense)` | layer × round | 268,435,456 | 4,096.0 |
-| `W_i (moe)` | layer | 1,634,675,200 | — |
-| `dW_i (moe)` | layer/step | 1,634,675,200 | — |
-| `O_i (moe)` | layer | 3,269,350,400 | — |
-| `A (moe)` | layer × round | 2,945,449,984 | 44,944.0 |
-| `M (moe)` | layer × round | 273,679,104 | 4,176.0 |
-| `W_head` | run | 529,534,976 | — |
-| `W_embed` | run | 529,530,880 | — |
-| `O_embed` | run | 1,059,061,760 | — |
-| `O_head` | run | 1,059,069,952 | — |
-| `hidden state (y)` | boundary buffer | 268,435,456 | 4,096.0 |
+| object | scope | bytes |
+|---|---|---|
+| `W_i (dense)` | layer | 111,618,048 |
+| `dW_i (dense)` | layer/step | 111,618,048 |
+| `O_i (dense)` | layer | 223,236,096 |
+| `A (dense)` | layer × round | 2,660,237,312 (40,592.0/token) |
+| `M (dense)` | layer × round | 268,435,456 (4,096.0/token) |
+| `W_i (moe)` | layer | 1,634,675,200 |
+| `dW_i (moe)` | layer/step | 1,634,675,200 |
+| `O_i (moe)` | layer | 3,269,350,400 |
+| `A (moe)` | layer × round | 2,945,449,984 (44,944.0/token) |
+| `M (moe)` | layer × round | 273,679,104 (4,176.0/token) |
+| `W_head` | run | 529,534,976 |
+| `W_embed` | run | 529,530,880 |
+| `O_embed` | run | 1,059,061,760 |
+| `O_head` | run | 1,059,069,952 |
+| `hidden state (y)` | boundary buffer | 268,435,456 (4,096.0/token) |
 
 ## Objects, per layer kind
 

@@ -57,6 +57,15 @@ CONFIGS = {
     # per-step optimizer/transfer overhead over more math
     "8b-bs4ga4": ShapedLlamaConfig.llama3_8b(batch=4, grad_accum_rounds=4),
     "8b-ga16": ShapedLlamaConfig.llama3_8b(batch=1, grad_accum_rounds=16),
+    # canonical dashed prefixes (= preset classmethods with dashes) at
+    # s4k, so bench_frontier --presets llama3-8b,qwen35-9b works with
+    # the oracle out of the box
+    "llama3-8b-s4k-bs4ga4": ShapedLlamaConfig.llama3_8b(batch=4, grad_accum_rounds=4),
+    "llama3-8b-s4k-bs8ga2": ShapedLlamaConfig.llama3_8b(batch=8, grad_accum_rounds=2),
+    "llama3-8b-s4k-bs16ga1": ShapedLlamaConfig.llama3_8b(batch=16, grad_accum_rounds=1),
+    "qwen35-9b-s4k-bs4ga4": ShapedQwen35Config.qwen35_9b(batch=4, grad_accum_rounds=4),
+    "qwen35-9b-s4k-bs8ga2": ShapedQwen35Config.qwen35_9b(batch=8, grad_accum_rounds=2),
+    "qwen35-9b-s4k-bs16ga1": ShapedQwen35Config.qwen35_9b(batch=16, grad_accum_rounds=1),
     # seq-1024 family: 64 sequences/step (65,536 tokens/step) chunked four ways
     # frontier edge probes (Shein): single-sequence rounds / single-round batch
     "8b-s1k-bs1ga64": ShapedLlamaConfig.llama3_8b(seq_len=1024, batch=1, grad_accum_rounds=64),

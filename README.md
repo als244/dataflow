@@ -28,9 +28,11 @@ batch/accumulation shape with a fresh profiling oracle, enforcing that
 every measured device peak stays under its budget, and rendering the
 results table with per-cell provenance:
 
+A full list of builtin model architecture families and preset configs can be found at [builtin_models](docs/builtin_models.md)
+
 ```bash
 python tools/bench_frontier.py \
-    --presets dsv32-mini,glm52-mini --seq-len 4096 --seqs-per-step 16 \
+    --presets llama3-8b,qwen35-9b,glm52-mini --seq-len 4096 --seqs-per-step 16 \
     --device-gib 12,16,20,24,28 --num-steps 3 --shapes oracle --run \
     --out-dir results/bench/quickstart
 ```
@@ -47,9 +49,9 @@ After the sweep, everything is inspectable in the
 [webapp simulator](https://dataflowsim.sunshein.net/). Upload a cell's
 `program.json` to see the SIMULATOR's expectations for that exact
 plan — the predicted task/transfer timeline and memory trace, priced
-from the measured task costs. (The cell's `measured.json` is the
-numeric summary row — real tok/s, peaks, fidelity — not an event
-log.) To inspect the TRUE timeline of a real run, generate the
+from the profiled/estimated task costs. (The cell's `measured.json` is the
+TRUE summary row from actual runtime — real tok/s, peaks, fidelity — not an event
+log.) To inspect the true timeline of a real run, generate the
 event-log bundle for the cell you care about:
 `tools/gap_analysis.py` re-runs its plan with tracing, and
 `tools/export_measured_run.py` packages the measured event log
@@ -58,7 +60,7 @@ webapp renders the real run in the same panels and diffs the two,
 which is exactly how the sim-vs-real fidelity gap is inspected
 (full guide: [docs/exporting_runs.md](docs/exporting_runs.md)).
 
-For benchmarking reference see: [docs/benchmarking.md](docs/benchmarking.md) (or `--help`).
+For other benchmarking reference see: [docs/benchmarking.md](docs/benchmarking.md) (or `--help`).
 
 ---
 
@@ -67,8 +69,7 @@ For benchmarking reference see: [docs/benchmarking.md](docs/benchmarking.md) (or
 ## Dataflow Engine
 
 At its core is a `Dataflow Engine`
-([API reference](docs/engine_api.md)) that accepts a `Dataflow
-Program` ([schema reference](docs/program_schema.md)): a linear chain
+([API reference](docs/engine_api.md)) that accepts a `Dataflow Program` ([schema reference](docs/program_schema.md)): a linear chain
 of tasks over named objects, where each task declares its input /
 mutated / output objects (with sizes) and a compute key that a
 resolver maps to an executable (`task -> executable.launch(ctx)`).

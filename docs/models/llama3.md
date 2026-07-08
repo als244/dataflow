@@ -22,19 +22,19 @@ Layer kinds (32 layers): `block block block block block block block block block 
 
 ## Object summary
 
-At the documentation run shape (65,536 tokens/round). Details per kind below.
+At the documentation run shape (65,536 tokens/round). Token-scaled objects show bytes/token in parens. Details per kind below.
 
-| object | scope | bytes | bytes/token |
-|---|---|---|---|
-| `W_i (block)` | layer | 436,224,000 | — |
-| `dW_i (block)` | layer/step | 436,224,000 | — |
-| `O_i (block)` | layer | 872,448,000 | — |
-| `A (block)` | layer × round | 5,646,057,472 | 86,152.0 |
-| `W_head` | run | 1,050,681,344 | — |
-| `W_embed` | run | 1,050,673,152 | — |
-| `O_embed` | run | 2,101,346,304 | — |
-| `O_head` | run | 2,101,362,688 | — |
-| `hidden state (y)` | boundary buffer | 536,870,912 | 8,192.0 |
+| object | scope | bytes |
+|---|---|---|
+| `W_i (block)` | layer | 436,224,000 |
+| `dW_i (block)` | layer/step | 436,224,000 |
+| `O_i (block)` | layer | 872,448,000 |
+| `A (block)` | layer × round | 5,646,057,472 (86,152.0/token) |
+| `W_head` | run | 1,050,681,344 |
+| `W_embed` | run | 1,050,673,152 |
+| `O_embed` | run | 2,101,346,304 |
+| `O_head` | run | 2,101,362,688 |
+| `hidden state (y)` | boundary buffer | 536,870,912 (8,192.0/token) |
 
 ## Objects, per layer kind
 

@@ -300,12 +300,14 @@ def gen_family(name: str, record: bool) -> str:
     out = out_main
     out += ["## Object summary", "",
             f"At the documentation run shape ({dims.tokens:,} "
-            f"tokens/round). Details per kind below.", "",
-            "| object | scope | bytes | bytes/token |", "|---|---|---|---|"]
+            f"tokens/round). Token-scaled objects show bytes/token in "
+            f"parens. Details per kind below.", "",
+            "| object | scope | bytes |", "|---|---|---|"]
     for label, per, b in summary:
-        pt = (f"{b / dims.tokens:,.1f}"
-              if ("round" in per or "boundary" in per) else "—")
-        out.append(f"| `{label}` | {per} | {b:,} | {pt} |")
+        cell = f"{b:,}"
+        if "round" in per or "boundary" in per:
+            cell += f" ({b / dims.tokens:,.1f}/token)"
+        out.append(f"| `{label}` | {per} | {cell} |")
     out.append("")
     out += detail
 

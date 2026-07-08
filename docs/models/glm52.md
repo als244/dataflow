@@ -32,30 +32,30 @@ Layer kinds (18 layers): `gdl gdl gml gmf gmf gmf gml gmf gmf gmf gml gmf gmf gm
 
 ## Object summary
 
-At the documentation run shape (65,536 tokens/round). Details per kind below.
+At the documentation run shape (65,536 tokens/round). Token-scaled objects show bytes/token in parens. Details per kind below.
 
-| object | scope | bytes | bytes/token |
-|---|---|---|---|
-| `W_i (gdl)` | layer | 111,618,048 | — |
-| `dW_i (gdl)` | layer/step | 111,618,048 | — |
-| `O_i (gdl)` | layer | 223,236,096 | — |
-| `A (gdl)` | layer × round | 2,660,237,312 | 40,592.0 |
-| `M (gdl)` | layer × round | 268,435,456 | 4,096.0 |
-| `W_i (gml)` | layer | 1,634,675,200 | — |
-| `dW_i (gml)` | layer/step | 1,634,675,200 | — |
-| `O_i (gml)` | layer | 3,269,350,400 | — |
-| `A (gml)` | layer × round | 2,945,449,984 | 44,944.0 |
-| `M (gml)` | layer × round | 273,679,104 | 4,176.0 |
-| `W_i (gmf)` | layer | 1,633,822,720 | — |
-| `dW_i (gmf)` | layer/step | 1,633,822,720 | — |
-| `O_i (gmf)` | layer | 3,267,645,440 | — |
-| `A (gmf)` | layer × round | 2,945,449,984 | 44,944.0 |
-| `M (gmf)` | layer × round | 5,243,648 | 80.0 |
-| `W_head` | run | 529,534,976 | — |
-| `W_embed` | run | 529,530,880 | — |
-| `O_embed` | run | 1,059,061,760 | — |
-| `O_head` | run | 1,059,069,952 | — |
-| `hidden state (y)` | boundary buffer | 268,435,456 | 4,096.0 |
+| object | scope | bytes |
+|---|---|---|
+| `W_i (gdl)` | layer | 111,618,048 |
+| `dW_i (gdl)` | layer/step | 111,618,048 |
+| `O_i (gdl)` | layer | 223,236,096 |
+| `A (gdl)` | layer × round | 2,660,237,312 (40,592.0/token) |
+| `M (gdl)` | layer × round | 268,435,456 (4,096.0/token) |
+| `W_i (gml)` | layer | 1,634,675,200 |
+| `dW_i (gml)` | layer/step | 1,634,675,200 |
+| `O_i (gml)` | layer | 3,269,350,400 |
+| `A (gml)` | layer × round | 2,945,449,984 (44,944.0/token) |
+| `M (gml)` | layer × round | 273,679,104 (4,176.0/token) |
+| `W_i (gmf)` | layer | 1,633,822,720 |
+| `dW_i (gmf)` | layer/step | 1,633,822,720 |
+| `O_i (gmf)` | layer | 3,267,645,440 |
+| `A (gmf)` | layer × round | 2,945,449,984 (44,944.0/token) |
+| `M (gmf)` | layer × round | 5,243,648 (80.0/token) |
+| `W_head` | run | 529,534,976 |
+| `W_embed` | run | 529,530,880 |
+| `O_embed` | run | 1,059,061,760 |
+| `O_head` | run | 1,059,069,952 |
+| `hidden state (y)` | boundary buffer | 268,435,456 (4,096.0/token) |
 
 ## Objects, per layer kind
 

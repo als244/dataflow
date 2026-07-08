@@ -31,23 +31,23 @@ Layer kinds (40 layers): `lin lin lin full lin lin lin full lin lin lin full lin
 
 ## Object summary
 
-At the documentation run shape (65,536 tokens/round). Details per kind below.
+At the documentation run shape (65,536 tokens/round). Token-scaled objects show bytes/token in parens. Details per kind below.
 
-| object | scope | bytes | bytes/token |
-|---|---|---|---|
-| `W_i (lin)` | layer | 1,685,402,368 | — |
-| `dW_i (lin)` | layer/step | 1,685,402,368 | — |
-| `O_i (lin)` | layer | 3,370,804,736 | — |
-| `A (lin)` | layer × round | 3,951,689,728 | 60,298.0 |
-| `W_i (full)` | layer | 1,672,492,032 | — |
-| `dW_i (full)` | layer/step | 1,672,492,032 | — |
-| `O_i (full)` | layer | 3,344,984,064 | — |
-| `A (full)` | layer × round | 3,264,348,160 | 49,810.0 |
-| `W_head` | run | 1,017,122,816 | — |
-| `W_embed` | run | 1,017,118,720 | — |
-| `O_embed` | run | 2,034,237,440 | — |
-| `O_head` | run | 2,034,245,632 | — |
-| `hidden state (y)` | boundary buffer | 268,435,456 | 4,096.0 |
+| object | scope | bytes |
+|---|---|---|
+| `W_i (lin)` | layer | 1,685,402,368 |
+| `dW_i (lin)` | layer/step | 1,685,402,368 |
+| `O_i (lin)` | layer | 3,370,804,736 |
+| `A (lin)` | layer × round | 3,951,689,728 (60,298.0/token) |
+| `W_i (full)` | layer | 1,672,492,032 |
+| `dW_i (full)` | layer/step | 1,672,492,032 |
+| `O_i (full)` | layer | 3,344,984,064 |
+| `A (full)` | layer × round | 3,264,348,160 (49,810.0/token) |
+| `W_head` | run | 1,017,122,816 |
+| `W_embed` | run | 1,017,118,720 |
+| `O_embed` | run | 2,034,237,440 |
+| `O_head` | run | 2,034,245,632 |
+| `hidden state (y)` | boundary buffer | 268,435,456 (4,096.0/token) |
 
 ## Objects, per layer kind
 
