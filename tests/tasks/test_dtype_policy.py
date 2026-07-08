@@ -1,7 +1,7 @@
 """DTypePolicy / ParamDTypes: matching semantics and validation (CPU).
 
 The policy layer only; lowering/exec/golden integration is tested in the
-per-family ladders once wired (the dtype-policy-design design note).
+per-family ladders once wired.
 """
 import pytest
 

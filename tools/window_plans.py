@@ -1,7 +1,7 @@
 """Multi-step planning-window analysis: what does a planner that can SEE
 across step boundaries do differently from our replayed 1-step plan?
 
-The 1-step replay is correct by the boundary invariant (the step-boundary design note
+The 1-step replay is correct by the step-boundary invariant
 .md); this tool measures what that invariant still COSTS by
 using jointly-planned k-step windows (k = 1..K) as an oracle, with every
 variable pinned except the window size:

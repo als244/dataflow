@@ -85,7 +85,7 @@ def rmsnorm_noweight_reference(x: torch.Tensor) -> torch.Tensor:
 # --- sequence structure -----------------------------------------------------
 #
 # ``seq`` arguments across the ops are polymorphic (varlen-first design,
-# the varlen-first-design design note): an int means uniform sequences of that
+# varlen-first convention): an int means uniform sequences of that
 # length (tokens // seq of them — the historical fast paths), a tuple is the
 # explicit per-sequence length list (ragged packing), None means one
 # sequence spanning all tokens.

@@ -10,7 +10,7 @@ Op signatures (t tokens, D = conv_dim, W = kernel width; all contiguous):
 
 Default wraps fla's fused Triton kernels (layout-native token-major).
 The Dao causal-conv1d package (channel-major) measured a bandwidth TIE in
-the standalone A/B (the qwen35-design design note §deps), so its registry
+the standalone A/B, so its registry
 entry is deferred until a profile pulls for it — its raw CUDA binding
 takes 12 undocumented positional args and earns nothing today. The eager
 fallback runs the sequence-aware reference (autograd for bwd).

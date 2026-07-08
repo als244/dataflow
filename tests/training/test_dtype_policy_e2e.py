@@ -1,6 +1,6 @@
 """Mixed dtype-policy E2E: real engine vs golden under non-default dtypes.
 
-The acceptance gates for the dtype-policy-design design note: a policy with
+The dtype-policy acceptance gates: a policy with
 fp32 norm weights (param+grad+opt), fp32 moments everywhere, and — for
 qwen3.5 — fp32 A_log/dt_bias, must train through the REAL engine and match
 the golden model exactly as the bf16 ladders do. Exercises: mixed-dtype

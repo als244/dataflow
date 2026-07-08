@@ -652,8 +652,7 @@ class _RunState:
                 # valve is a runtime-only recovery path the simulator
                 # never visits, so caller-priority here diverges from NO
                 # sim-modeled timeline; gated prefetches simply admit on
-                # the next token after the caller reserves. See the
-                # reserve-order-inversion design note.
+                # the next token after the caller reserves.
                 return
             raise DeadlockError(
                 f"deadlock: {waiting_reason}; no in-flight work can unblock it "

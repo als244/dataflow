@@ -164,7 +164,7 @@ def check_model_step(
     sign-lottery parameters only: a one-AdamW-step update of a field whose
     true gradient sits below the bf16 kernel noise floor is +-lr *
     sign(noise) on BOTH sides (qwen3.5's dt_bias — the bf16-ULP-vs-AdamW
-    caveat in the qwen35-design design note), so rel_l2 there measures a coin
+    caveat: zero-init params with sub-noise grads), so rel_l2 there measures a coin
     flip, not correctness; the envelope |a-b| <= atol (~2*lr) still catches
     garbage. Real-magnitude fields keep the strict relative gate."""
     from dataflow.runtime import Engine

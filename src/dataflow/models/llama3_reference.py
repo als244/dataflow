@@ -7,7 +7,7 @@ is composed from the ops' *reference* forms and autograd derives backward —
 catching errors in our hand-written backward compositions.
 
 Parameters are PER-FIELD leaves at each field's storage dtype (the dims'
-dtype policy — the dtype-policy-design design note); the AdamW update
+dtype policy); the AdamW update
 replicates ops.adamw_step exactly, including the storage-dtype round-trips
 of the moments (opt dtype) and the gradient (grad dtype), so post-step
 state is structurally comparable to the runtime's per-field optimizer.

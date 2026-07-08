@@ -13,7 +13,7 @@ measurement (profiling), and the correctness harness (gradcheck).
   `optimizer_placement="interleaved"` (default) emits each optimizer task
   at its gradient's final mutation inside the last backward round —
   `"tail"` restores the legacy end-of-chain order, which drains 1.5–2 s of
-  GPU-idle PCIe per step (the step-boundary design note).
+  GPU-idle PCIe per step.
 - `llama3_lowering.py` — execution-grade lowering: shaped structure with
   sizes rewritten to the tasks layer's packed layouts (`lower_llama3`), plus
   `initial_values()` filling pinned buffers with real weights/data.

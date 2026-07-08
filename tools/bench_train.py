@@ -257,7 +257,7 @@ def main() -> None:
         help="recompute planning (simulator-verified greedy selection over "
              "the rewrite table). ON by default — the qwen35 s1k "
              "sweeps ran without it and shipped a save-all plan that was "
-             "h2d-bound (the m52-perf-gap-findings design note); the planner "
+             "h2d-bound; the planner "
              "chooses 0 recompute when save-all genuinely wins, so leaving "
              "this on costs only the recompute-variant profiling pass. "
              "--no-recompute restores the bare save-all lowering.",

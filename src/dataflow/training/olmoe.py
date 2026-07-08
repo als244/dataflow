@@ -1,6 +1,6 @@
 """OLMoE family: config + declarations over the generic machinery.
 
-First MoE family on the pluggable module (the moe-design design note):
+First MoE family on the pluggable module (tasks/moe/):
 qwen3-shaped dense attention (full-row qk-norm, no GQA at 7B, rope 1e4)
 with a routed SwiGLU MoE FFN every layer — E=64, top-8, F=1024,
 softmax_then_topk (norm_topk_prob=false), gradient-injected load-balance

@@ -268,7 +268,8 @@ def test_qwen35moe_lowering_validates_and_plans():
 # --- ladder 3: full program through the real engine --------------------------------
 
 # dt_bias one-step updates from ZERO init are +-lr * sign(sub-noise grads)
-# on BOTH sides (the qwen35-design bf16-ULP-vs-AdamW caveat; ladder-2 pins
+# on BOTH sides (bf16-ULP-vs-AdamW: moment rounding flips update signs
+# on sub-ulp grads; ladder-2 pins
 # the REAL dt gradient at observability-scale init) — compare with the
 # sign-lottery envelope instead of rel_l2. 2.5e-4 = ~2.5x lr.
 _ATOL = {"dt_bias": 2.5e-4}

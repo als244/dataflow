@@ -6,7 +6,7 @@ ONE sigmoid-gated shared expert (F_s=512), topk_then_softmax
 (norm_topk_prob=true), aux alpha=0.001, vocab 248320, untied. ~34.7B
 params at the faithful 35B-A3B shape.
 
-HOST-RAM REALITY (the moe-design design note par 8): the full 35B needs
+HOST-RAM REALITY: the full 35B needs
 ~277 GB pinned W+dW+O — this box (188 GB) cannot run it; the config exists
 for lowering/planning validation + tiny-scale correctness. Perf rows use
 ``qwen35moe_20l`` (Shein-confirmed): 20 layers (15 lin + 5 full), E=256,

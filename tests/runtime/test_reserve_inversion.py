@@ -1,7 +1,7 @@
 """Reserve-order inversion: minimal deterministic reproduction.
 
-Pins the CURRENT engine behavior for the bs32-class deadlock (the
-reserve-order-inversion design note): a hand-authored, SIM-VALID
+Pins the engine behavior for the reserve-order-inversion deadlock
+class: a hand-authored, SIM-VALID
 training-shaped program whose realized transfer timing admits
 trigger-satisfied prefetches into the bytes the plan earmarked for a
 blocked task's output reservation. The eviction valve then feeds the
@@ -25,7 +25,7 @@ Z1+Z2 charge immediately (can_reserve admits to 10/10), Z3 parks at
 the head, and T1 cannot reserve Y. Each valve eviction pokes the head
 (Z3, then Q, then the evictees' own reloads) — never T1.
 
-FIXED (design note section 7): valve-freed bytes now go to the
+FIXED: valve-freed bytes now go to the
 stalled caller and the lane is pumped on input waits only — this file
 pins the fixed semantics (completes; bounded single-shot recoveries;
 caller-priority ordering).
@@ -42,7 +42,7 @@ from dataflow.core.validate import validate_program
 from dataflow.runtime.engine import DeadlockError, Engine
 
 MIB = 1 << 20
-U = MIB  # one "unit" from the design note's pen-and-paper example
+U = MIB  # one "unit" in the scenario table above
 
 
 def _program() -> Program:
@@ -140,7 +140,7 @@ def test_program_is_schema_valid():
 
 @pytest.mark.gpu
 def test_caller_priority_prevents_poke_starvation():
-    """With the poke-starvation fix (design note §7): valve-freed bytes
+    """With the poke-starvation fix: valve-freed bytes
     go to the STALLED CALLER (the blocked loop re-checks before any
     lane admission can run), and the from_slow lane is pumped on input
     waits but NOT on output-reserve waits (outputs never arrive by

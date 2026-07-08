@@ -13,7 +13,7 @@ Measures, on the actual device:
   6. interference: map/unmap churn on idle VA while a bandwidth-bound
      kernel runs — measures TLB/driver interference on compute.
 
-Design context: the vmm-slab-design-v1 design note.
+Benchmarks the VMM slab primitives (map/unmap/remap) in isolation.
 """
 from __future__ import annotations
 

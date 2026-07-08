@@ -60,7 +60,7 @@ def main() -> None:
              "measured bandwidth. bidi is the honest default: under memory pressure "
              "both directions run concurrently most of the time.",
     )
-    parser.add_argument("--out", type=Path, default=Path("artifacts/m2"))
+    parser.add_argument("--out", type=Path, default=Path("artifacts/engine-gate"))
     args = parser.parse_args()
 
     backend = CudaBackend(completion_mode=args.completion_mode)
