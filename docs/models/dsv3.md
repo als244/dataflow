@@ -46,6 +46,16 @@ At the documentation run shape (65,536 tokens/round). Token-scaled objects show 
 | `O_head` | run | 1,059,069,952 |
 | `hidden state (y)` | boundary buffer | 268,435,456 (4,096.0/token) |
 
+### Aggregate totals (all layers, this run shape)
+
+| type | objects | total bytes |
+|---|---|---|
+| W (all weights, incl. embed/head) | 20 | 27,421,760,512 |
+| dW (all gradients, per step) | 20 | 27,421,760,512 |
+| O (all optimizer state) | 20 | 54,843,521,024 |
+| A (all saved contexts, one round) | 18 | 52,447,674,368 (800,288.0/token) |
+| M (all metadata, one round) | 16 | 83,898,368 (1,280.2/token) |
+
 ## Objects, per layer kind
 
 `dW_i` mirrors `W_i`'s fields at the grad dtypes; `O_i` holds the optimizer policy's state slots per field (adamw default: `m_f`+`v_f` at the opt dtype; sgd fields contribute none — see extending.md §6). `A_i`/`M_i` exist per (step, round).

@@ -309,6 +309,36 @@ def gen_family(name: str, record: bool) -> str:
             cell += f" ({b / dims.tokens:,.1f}/token)"
         out.append(f"| `{label}` | {per} | {cell} |")
     out.append("")
+
+    # ---- aggregate totals by object TYPE, from the lowered program ----
+    groups = {"W": ("W_",), "dW": ("dW_",), "O": ("O_",),
+              "A": ("A_",), "M": ("M_",), "dM": ("dM_",)}
+    agg: dict[str, tuple[int, int]] = {}
+    for oid, b in sizes.items():
+        for gname, prefixes in groups.items():
+            if any(oid.startswith(pref) for pref in prefixes) and \
+                    not (gname == "W" and oid.startswith(("dW_",))) and \
+                    not (gname == "M" and oid.startswith(("dM_",))):
+                n, tot = agg.get(gname, (0, 0))
+                agg[gname] = (n + 1, tot + b)
+                break
+    out += ["### Aggregate totals (all layers, this run shape)", "",
+            "| type | objects | total bytes |", "|---|---|---|"]
+    label_of = {"W": "W (all weights, incl. embed/head)",
+                "dW": "dW (all gradients, per step)",
+                "O": "O (all optimizer state)",
+                "A": "A (all saved contexts, one round)",
+                "M": "M (all metadata, one round)",
+                "dM": "dM (metadata gradients)"}
+    for gname in ("W", "dW", "O", "A", "M", "dM"):
+        if gname not in agg:
+            continue
+        n, tot = agg[gname]
+        cell = f"{tot:,}"
+        if gname in ("A", "M"):
+            cell += f" ({tot / dims.tokens:,.1f}/token)"
+        out.append(f"| {label_of[gname]} | {n} | {cell} |")
+    out.append("")
     out += detail
 
     # ---- tasks ----
