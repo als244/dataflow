@@ -31,7 +31,7 @@ CUDA∩HIP common subset so an AMD backend is a mechanical addition.
 
 ## Implementations
 
-- `fake.py` — virtual clocks + a heap of pending completions. Drives the M1
+- `fake.py` — virtual clocks + a heap of pending completions. Drives the
   parity gates and all CI-without-GPU. Setup costs zero virtual time.
 - `cuda.py` — cuda-python (`cuda.bindings.runtime`). Nonblocking streams,
   timing events, `cudaMalloc`/`cudaHostAlloc`, `cudaMemcpyAsync`,

@@ -14,12 +14,12 @@ One control thread executes an annotated program over a DeviceBackend:
 - **Transfer engines** run fully asynchronously: a blocked transfer head
   never blocks the dispatcher.
 
-Strict pacing (M1): the dispatcher launches a task only after its inputs'
+Strict pacing: the dispatcher launches a task only after its inputs'
 ready events have *completed* (host-observed), so every ledger charge lands
 at the same virtual time the simulator charges it — parity by construction.
 The cost on real hardware is one host wake-up per task; an aggressive
 dispatch-ahead mode (stream-wait on input events + committed-ahead
-accounting) is an M2 experiment.
+accounting) is a deferred experiment.
 """
 from __future__ import annotations
 

@@ -5,10 +5,10 @@ buffers for declared inputs/outputs/mutates (+ optional workspace), the
 compute stream, and the backend. The executable must only enqueue
 device work on `ctx.stream` — no allocation, no synchronization, no globals.
 
-The tasks layer (M3) provides real implementations resolved by
+The tasks layer provides real implementations resolved by
 `(compute_block_key, block_params)`. `SyntheticExecutable` models a task of
 known duration and is the workhorse for parity gates (fake backend) and,
-later, calibrated spin kernels (cuda backend, M2).
+later, calibrated spin kernels (cuda backend).
 """
 from __future__ import annotations
 

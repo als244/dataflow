@@ -1,4 +1,4 @@
-"""M4 core semantics (GPU): multi-step training with state carryover through
+"""Core training semantics (GPU): multi-step training with state carryover through
 pinned buffers + session pool reuse, verified against the golden model
 step-for-step."""
 import pytest

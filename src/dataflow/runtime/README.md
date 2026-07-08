@@ -140,4 +140,4 @@ stable-pointer precondition.
 - `compare_to_sim_eventlog(trace, event_log) -> ParityDiff`
 - `device.base.DeviceBackend` — ~12-call vendor boundary (CUDA∩HIP);
   implementations: `device.fake.FakeBackend` (virtual clocks, CI-without-GPU),
-  `device/cuda.py` (M2).
+  `device/cuda.py` (the real-GPU backend).

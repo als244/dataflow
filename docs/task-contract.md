@@ -189,7 +189,7 @@ above condemn *hidden, tail-position, pageable* syncs — not this pattern.
 
 Why the contract still says no:
 1. **It freezes strict pacing into an ABI.** Dispatch-ahead (multi-
-   outstanding compute) is the engine's stated M2 evolution and the
+   outstanding compute) is the engine's stated evolution path and the
    obvious cure for the per-task boundary tax; under depth-2 dispatch an
    early sync in task N+1 drains all of task N — the aten pathology
    returns by design. Kernels that block are a veto on future pacing.

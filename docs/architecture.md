@@ -62,7 +62,8 @@ ShapedConfig (family + shapes)
 
 ## Simulator semantics the runtime reproduces
 
-From `dataflow_sim.engine.simulator` (the contract for M1/M2 parity gates):
+From `dataflow_sim.engine.simulator` (the contract the engine-vs-sim
+parity gates pin):
 
 - serial compute chain; a task starts when all inputs are live in fast memory
   AND fast capacity is reservable for its outputs;

@@ -1,4 +1,4 @@
-"""Calibrated spin-kernel executables for real-GPU synthetic runs (M2).
+"""Calibrated spin-kernel executables for real-GPU synthetic runs.
 
 A clock64 busy-loop kernel occupies the compute stream for a target duration,
 so an annotated program's *planned* runtimes become physically true on the

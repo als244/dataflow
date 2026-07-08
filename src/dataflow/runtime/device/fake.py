@@ -3,7 +3,7 @@
 Streams carry virtual clocks; enqueued work advances them; events capture
 stream time; completion tokens are delivered from a heap ordered by
 (time, priority, seq) — exactly the simulator's processing order. Drives the
-M1 parity gate and all CI-without-GPU testing.
+engine-vs-sim parity gate and all CI-without-GPU testing.
 """
 from __future__ import annotations
 
@@ -19,7 +19,8 @@ class FakeBackend:
     name: str = "fake"
     physical: bool = False
     # test-only timing distortion: (stream_kind, duration_us) -> duration_us.
-    # None (default) = exact declared durations — the M1/M2 parity contract.
+    # None (default) = exact declared durations — the engine-vs-sim
+    # parity contract.
     # A non-None scale deliberately reorders completion tokens the way real
     # hardware jitter does (e.g. transfers finishing early relative to
     # compute), for timing-robustness tests. Never set outside tests.

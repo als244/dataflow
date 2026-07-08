@@ -1,4 +1,4 @@
-"""M3 correctness ladder (GPU): ops (level 1), block (level 2), model (level 3),
+"""Correctness ladder (GPU): ops (level 1), block (level 2), model (level 3),
 plus plan-invariance — the flagship async/buffer-bug detector.
 """
 import pytest
