@@ -24,6 +24,26 @@ with a gradcheck gate at each level. Nothing reaches throughput work until
 its math is pinned to an autograd reference.
 
 ## Freezing parameters (FreezePlan)
+### The `acc` contract (frozen-safe weight gradients)
+
+Every block backward writes weight gradients through the `acc(name,
+value)` closure (`_Base._acc_fn`), and this is a FREEZE contract, not
+just a convenience:
+
+- `acc` SKIPS the write for any field absent from the (policy-filtered)
+  dW layout, and is a no-op when the layer has no dW at all — frozen
+  fields can never crash a backward or corrupt storage.
+- wgrads with their OWN standalone cost (the `X.T @ dY` GEMMs) must be
+  guarded at the call site: `if acc.wanted("wq"): acc("wq", h1.T @ dq)`
+  — frozen fields then skip the COMPUTATION, not just the write.
+- BYPRODUCT gradients (norm weights, biases, fla-kernel side outputs)
+  call `acc` bare: they fall out of fused dgrad kernels at negligible
+  cost, so there is nothing to skip — the write-skip is the whole
+  story.
+
+New block code MUST follow this split; the freeze gates
+(`tests/training/test_freeze_plan.py`) exercise both paths.
+
 
 Freezing is part of the OPTIMIZER POLICY — the `freeze()` composer in
 `tasks/optim.py` is the front door:

@@ -527,7 +527,6 @@ class Dsv32DenseBlockBwd(Dsv32MetaState, Dsv32ProfileFill, Dsv3DenseBlockBwd):
         acc("q_a_norm_w", d_q_norm)
 
         if acc.wanted("w_q_a"):
-
             acc("w_q_a", h1.T @ dq_lora)
         if acc.wanted("w_kv_a"):
             acc("w_kv_a", h1.T @ d_kv_a)
