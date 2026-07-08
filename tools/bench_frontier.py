@@ -127,7 +127,12 @@ def shapes_oracle(presets, devs, seq_tag, seqs_per_step, out_dir=None,
     seq_len = seq_len or int(seq_tag[1:-1]) * 1024
     out: dict[tuple[str, int], str] = {}
     for preset in presets:
+        # llama's bench-config prefix is bare ("8b-s1k-*"), unlike the
+        # other families ("dsv3-mini", "glm52-mini") — alias to the
+        # registered family name for the oracle/registry lookups
+        _FAMILY_ALIAS = {"8b": "llama3"}
         family = preset.split("-", 1)[0]
+        family = _FAMILY_ALIAS.get(family, family)
         oracle_name = preset.replace("-", "_")
         jdir = Path(out_dir) if out_dir else REPO / "artifacts/bench"
         jdir.mkdir(parents=True, exist_ok=True)
