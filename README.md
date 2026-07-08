@@ -30,18 +30,18 @@ results table with per-cell provenance:
 
 ```bash
 python tools/bench_frontier.py \
-    --presets dsv32-mini,glm52-mini --seq-tag s4k --seqs-per-step 16 \
-    --device-gib 12,16,20,24,28 \
-    --shapes oracle --run --no-legacy \
+    --presets dsv32-mini,glm52-mini --seq-len 4096 --seqs-per-step 16 \
+    --device-gib 12,16,20,24,28 --shapes oracle --run \
     --out-dir results/bench/quickstart
 ```
 
-Swap in any builtin presets (`olmoe-7b --seq-tag s1k --seqs-per-step 64`
-reproduces the OLMoE column). Output: `TABLES.md` (throughput / sim
+Swap in any builtin presets (`olmoe-7b --seq-len 1024 --seqs-per-step
+64` reproduces the OLMoE column). Output: `TABLES.md` (throughput / sim
 prediction / measured peak / chosen shape / recompute fraction per
 cell) plus, per cell, the exact dataflow program, its annotated plan,
 and the measured row. Full protocol — legality contract, placement
-modes, tool matrix: [docs/benchmarking.md](docs/benchmarking.md).
+modes, tool matrix, complete flag reference:
+[docs/benchmarking.md](docs/benchmarking.md) (or `--help`).
 
 ---
 
@@ -113,7 +113,7 @@ task kinds per distinct layer type):
   - mutates: `dW_head` on later rounds (accumulation)
 - **Recompute** (per layer; only where the plan dropped `A_i`)
   - inputs: `x_i` and `W_i` (+ optionally `M_i`)
-  - outputs:`A_i`, repopulated with same activations as seen during forwards
+  - outputs: `A_i`, repopulated with same activations as seen during forwards
 - **Backward** (per layer)
   - inputs: upstream gradient `dy_{i+1}`, `A_i` (+ optionally `M_i`), `W_i`, `x_i`
   - outputs: downstream gradient `dy_i`; `dW_i` on round 0
@@ -152,7 +152,7 @@ sizes/lifetimes, and per-task costs — no model knowledge — so it
 applies unchanged to hand-built programs
 ([docs/extending_programs.md](docs/extending_programs.md)).
 
-Task costs come from a either a roofline estimate or a profiling pass (each unique task signature is
+Task costs come from either a roofline estimate or a profiling pass (each unique task signature is
 measured once and cached), and the simulator's makespan prediction for
 the chosen plan is reported next to every real measurement — the
 sim-vs-real gap is tracked as a first-class fidelity metric.

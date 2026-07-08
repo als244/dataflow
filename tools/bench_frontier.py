@@ -315,6 +315,17 @@ def main() -> None:
     cells = load_cells(presets, args.allow_illegal)
     if args.shapes == "cached":
         shapes = shapes_cached(cells, presets, devs)
+    elif args.shapes == "oracle" and args.dry_run:
+        # dry-run must be DRY: print the would-be oracle invocations,
+        # then plan the run phase from cached shapes (cells lacking a
+        # cached shape are reported as skipped)
+        for preset in presets:
+            print(f"[dry] would run oracle: best_config --family "
+                  f"{preset.split('-', 1)[0]} --preset "
+                  f"{preset.replace('-', '_')} --seq-len {args.seq_len} "
+                  f"--seqs-per-step {args.seqs_per_step} --device-gib "
+                  f"{args.device_gib}", file=sys.stderr)
+        shapes = shapes_cached(cells, presets, devs)
     elif args.shapes == "oracle":
         shapes = shapes_oracle(presets, devs, seq_tag,
                                args.seqs_per_step, out_dir=args.out_dir,
