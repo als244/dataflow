@@ -85,6 +85,46 @@ raw/                           # every bench_train output: summaries,
                                # plans, webapp programs, logs/<invocation>.log
 ```
 
+## bench_train.py — one (config, budget) run in depth
+
+The single-cell engine under the frontier: profile (cached) → recompute
+planning on measured costs → PressureFit → execute N steps on the real
+GPU → measured summary row + replayable exports. Invoke directly when
+iterating on one cell; the frontier composes these invocations.
+
+```bash
+python tools/bench_train.py --config glm52-mini-s4k-bs8ga2 \
+    --device-gib 16,20 --steps 4 --out artifacts/bench
+```
+
+| flag | meaning |
+|---|---|
+| `--config` | a CONFIGS name (`{preset}-s{seq}k-bs{B}ga{G}`; full list: `--help` or [builtin_models.md](builtin_models.md)) |
+| `--device-gib` | HARD device envelope(s), comma list: placed extent + measured op scratch + CUDA context must all fit; the ledger is derived per envelope and the run is post-hoc verified (busting rows are flagged) |
+| `--steps` | training steps (default 4; step 1 is warm-up, steady-state averages the rest) |
+| `--recompute` / `--no-recompute` | sim-verified greedy recompute planning before PressureFit (default on) |
+| `--force-recompute all` | skip the planner: every rewrite at level 1 (ablation tool) |
+| `--placement` | `static` (packed at planning time) / `vmm` (chunk-backed) / `dynamic` |
+| `--optimizer` | `interleaved` (optimizer tasks inside the chain, default) / `tail` |
+| `--preplace` | initial fast placement: `task0` (default — pre-place only task 0's needs, rest travel as planned prefetches) / `greedy` (legacy) |
+| `--backing-gib` | explicit pinned-host cap. UNSET (default): a PLAN-cap is derived from host MemAvailable − `--backing-leeway-gib`, planning is bounded by it, and the executed program is stripped back to capacity None so the runtime pins by plan demand (a set capacity makes the engine pin the full amount as one slab) |
+| `--backing-leeway-gib` | leeway for the auto cap (default 10) |
+| `--probe-max` | probe the largest feasible ledger instead of running |
+| `--extent-budget` | budget the placed extent rather than the device envelope |
+| `--baseline` | also time the plain-torch golden model (reference ceiling) |
+| `--annotated` | REPLAY a saved plan (`*.annotated.json` / a cell's `plan.json`) instead of planning fresh |
+| `--refresh-profiles` | ignore the profile cache and re-measure |
+| `--out` | output dir (default `artifacts/bench`): summary JSON + per-run exports + `logs/` |
+| `--plugin` | external family plugin module(s) |
+
+Outputs per (config, budget): a row in
+`{config}-{devs}dev-{placement}.summary.json` (throughput, peaks,
+fidelity, recompute chosen, `envelope_ok`), plus `{stem}.annotated.json`
+(the executed plan — replayable via `--annotated`, capacities stamped in
+`Program.metadata`) and `{stem}.webapp.json` (upload at the
+[webapp](https://dataflowsim.sunshein.net/) for the simulator's expected
+timeline), and the full console log under `logs/`.
+
 ## What a row means (the legality contract)
 
 Every quoted number is ENVELOPE-LEGAL: the measured device peak
