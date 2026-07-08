@@ -131,15 +131,30 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
     7. `moe_experts13` — h13  ← derived recompute boundary
     8. `moe_experts2_combine` — —
 - kernel calls, by stage:
-    - `attn_norm`: `rmsnorm_fwd`
-    - `qkv_qknorm`: `mm ×3`, `rmsnorm_fwd ×2`
-    - `rope`: `rope_fwd ×2`
-    - `attn`: `_scaled_dot_product_flash_attention`
-    - `resid1_norm2`: `addmm`, `rmsnorm_fwd`
-    - `moe_route`: `mm`, `moe_topk_softmax`
-    - `moe_dispatch`: `moe_sort`, `moe_dispatch_fwd`
-    - `moe_experts13`: `moe_grouped_mm_fwd`
-    - `moe_experts2_combine`: `swiglu_packed_fwd`, `moe_grouped_mm_fwd`, `moe_combine_fwd`
+    - `attn_norm`:
+        0. `rmsnorm_fwd`
+    - `qkv_qknorm`:
+        1. `mm ×3`
+        2. `rmsnorm_fwd ×2`
+    - `rope`:
+        3. `rope_fwd ×2`
+    - `attn`:
+        4. `_scaled_dot_product_flash_attention`
+    - `resid1_norm2`:
+        5. `addmm`
+        6. `rmsnorm_fwd`
+    - `moe_route`:
+        7. `mm`
+        8. `moe_topk_softmax`
+    - `moe_dispatch`:
+        9. `moe_sort`
+        10. `moe_dispatch_fwd`
+    - `moe_experts13`:
+        11. `moe_grouped_mm_fwd`
+    - `moe_experts2_combine`:
+        12. `swiglu_packed_fwd`
+        13. `moe_grouped_mm_fwd`
+        14. `moe_combine_fwd`
 
 ### `head_loss` — `HeadLoss`
 

@@ -499,13 +499,15 @@ def gen_page(name: str, preset: str, record: bool,
             groups = kern_seqs[ck]
             if any(stage for stage, _ in groups):
                 out.append("- kernel calls, by stage:")
+                ki = 0
                 for stage, ops in groups:
                     label = f"`{stage}`" if stage else "(pre-stage)"
-                    if ops:
-                        out.append(f"    - {label}: "
-                                   + ", ".join(f"`{o}`" for o in ops))
-                    else:
-                        out.append(f"    - {label}: —")
+                    out.append(f"    - {label}:")
+                    if not ops:
+                        out.append("        - —")
+                    for op in ops:
+                        out.append(f"        {ki}. `{op}`")
+                        ki += 1
             else:
                 out.append("- kernel calls:")
                 ki = 0

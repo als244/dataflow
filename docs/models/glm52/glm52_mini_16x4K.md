@@ -254,15 +254,37 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
     7. `swiglu` — —
     8. `down_resid` — —
 - kernel calls, by stage:
-    - `attn_norm`: `rmsnorm_fwd`
-    - `mla_q`: `mm`, `rmsnorm_fwd`, `mm`, `rope_fwd`, `rmsnorm_apply`
-    - `mla_kv`: `mm`, `rope_fwd`, `mm`, `rope_fwd`, `mm ×2`, `rmsnorm_fwd`, `rope_fwd`, `mm`
-    - `dsa_select`: `dsa_index_scores`, `dsa_topk`
-    - `dsa_attn`: `dsa_sparse_attn_fwd`
-    - `resid1_norm2`: `addmm`, `rmsnorm_fwd`
-    - `up_proj`: `mm ×2`
-    - `swiglu`: `swiglu_fwd_out`
-    - `down_resid`: `addmm`
+    - `attn_norm`:
+        0. `rmsnorm_fwd`
+    - `mla_q`:
+        1. `mm`
+        2. `rmsnorm_fwd`
+        3. `mm`
+        4. `rope_fwd`
+        5. `rmsnorm_apply`
+    - `mla_kv`:
+        6. `mm`
+        7. `rope_fwd`
+        8. `mm`
+        9. `rope_fwd`
+        10. `mm ×2`
+        11. `rmsnorm_fwd`
+        12. `rope_fwd`
+        13. `mm`
+    - `dsa_select`:
+        14. `dsa_index_scores`
+        15. `dsa_topk`
+    - `dsa_attn`:
+        16. `dsa_sparse_attn_fwd`
+    - `resid1_norm2`:
+        17. `addmm`
+        18. `rmsnorm_fwd`
+    - `up_proj`:
+        19. `mm ×2`
+    - `swiglu`:
+        20. `swiglu_fwd_out`
+    - `down_resid`:
+        21. `addmm`
 
 ### `gml_fwd` — `Glm52MlBlockFwd`
 
@@ -283,17 +305,47 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
     9. `moe_shared` — s13  ← derived recompute boundary
     10. `moe_experts2_combine` — —
 - kernel calls, by stage:
-    - `attn_norm`: `rmsnorm_fwd`
-    - `mla_q`: `mm`, `rmsnorm_fwd`, `mm`, `rope_fwd`, `rmsnorm_apply`
-    - `mla_kv`: `mm`, `rope_fwd`, `mm`, `rope_fwd`, `mm ×2`, `rmsnorm_fwd`, `rope_fwd`, `mm`
-    - `dsa_select`: `dsa_index_scores`, `dsa_topk`
-    - `dsa_attn`: `dsa_sparse_attn_fwd`
-    - `resid1_norm2`: `addmm`, `rmsnorm_fwd`
-    - `moe_route`: `mm`, `moe_topk_sigmoid_noaux`
-    - `moe_dispatch`: `moe_sort`, `moe_dispatch_fwd`
-    - `moe_experts13`: `moe_grouped_mm_fwd`
-    - `moe_shared`: `mm`
-    - `moe_experts2_combine`: `swiglu_packed_fwd`, `moe_grouped_mm_fwd`, `swiglu_packed_fwd`, `mm`, `moe_combine_fwd`
+    - `attn_norm`:
+        0. `rmsnorm_fwd`
+    - `mla_q`:
+        1. `mm`
+        2. `rmsnorm_fwd`
+        3. `mm`
+        4. `rope_fwd`
+        5. `rmsnorm_apply`
+    - `mla_kv`:
+        6. `mm`
+        7. `rope_fwd`
+        8. `mm`
+        9. `rope_fwd`
+        10. `mm ×2`
+        11. `rmsnorm_fwd`
+        12. `rope_fwd`
+        13. `mm`
+    - `dsa_select`:
+        14. `dsa_index_scores`
+        15. `dsa_topk`
+    - `dsa_attn`:
+        16. `dsa_sparse_attn_fwd`
+    - `resid1_norm2`:
+        17. `addmm`
+        18. `rmsnorm_fwd`
+    - `moe_route`:
+        19. `mm`
+        20. `moe_topk_sigmoid_noaux`
+    - `moe_dispatch`:
+        21. `moe_sort`
+        22. `moe_dispatch_fwd`
+    - `moe_experts13`:
+        23. `moe_grouped_mm_fwd`
+    - `moe_shared`:
+        24. `mm`
+    - `moe_experts2_combine`:
+        25. `swiglu_packed_fwd`
+        26. `moe_grouped_mm_fwd`
+        27. `swiglu_packed_fwd`
+        28. `mm`
+        29. `moe_combine_fwd`
 
 ### `gmf_fwd` — `Glm52MfBlockFwd`
 
@@ -313,16 +365,39 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
     8. `moe_shared` — s13  ← derived recompute boundary
     9. `moe_experts2_combine` — —
 - kernel calls, by stage:
-    - `attn_norm`: `rmsnorm_fwd`
-    - `mla_q`: `mm`, `rmsnorm_fwd`, `mm`, `rope_fwd`
-    - `mla_kv`: `mm`, `rmsnorm_fwd`, `rope_fwd`, `mm`
-    - `dsa_attn`: `dsa_sparse_attn_fwd`
-    - `resid1_norm2`: `addmm`, `rmsnorm_fwd`
-    - `moe_route`: `mm`, `moe_topk_sigmoid_noaux`
-    - `moe_dispatch`: `moe_sort`, `moe_dispatch_fwd`
-    - `moe_experts13`: `moe_grouped_mm_fwd`
-    - `moe_shared`: `mm`
-    - `moe_experts2_combine`: `swiglu_packed_fwd`, `moe_grouped_mm_fwd`, `swiglu_packed_fwd`, `mm`, `moe_combine_fwd`
+    - `attn_norm`:
+        0. `rmsnorm_fwd`
+    - `mla_q`:
+        1. `mm`
+        2. `rmsnorm_fwd`
+        3. `mm`
+        4. `rope_fwd`
+    - `mla_kv`:
+        5. `mm`
+        6. `rmsnorm_fwd`
+        7. `rope_fwd`
+        8. `mm`
+    - `dsa_attn`:
+        9. `dsa_sparse_attn_fwd`
+    - `resid1_norm2`:
+        10. `addmm`
+        11. `rmsnorm_fwd`
+    - `moe_route`:
+        12. `mm`
+        13. `moe_topk_sigmoid_noaux`
+    - `moe_dispatch`:
+        14. `moe_sort`
+        15. `moe_dispatch_fwd`
+    - `moe_experts13`:
+        16. `moe_grouped_mm_fwd`
+    - `moe_shared`:
+        17. `mm`
+    - `moe_experts2_combine`:
+        18. `swiglu_packed_fwd`
+        19. `moe_grouped_mm_fwd`
+        20. `swiglu_packed_fwd`
+        21. `mm`
+        22. `moe_combine_fwd`
 
 ### `head_loss` — `HeadLoss`
 
