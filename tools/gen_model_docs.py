@@ -205,15 +205,15 @@ def _patch_direct_calls(proxy):
     return cm()
 
 
-def compress(seq: list[str]) -> str:
+def compress_list(seq: list[str]) -> list[str]:
     out, i = [], 0
     while i < len(seq):
         j = i
         while j < len(seq) and seq[j] == seq[i]:
             j += 1
-        out.append(seq[i] if j - i == 1 else f"{seq[i]}×{j - i}")
+        out.append(seq[i] if j - i == 1 else f"{seq[i]} ×{j - i}")
         i = j
-    return " → ".join(out)
+    return out
 
 
 def record_kernel_seqs(fam, cfg, dims, prog) -> dict[str, str]:
@@ -252,7 +252,7 @@ def record_kernel_seqs(fam, cfg, dims, prog) -> dict[str, str]:
     with _patch_direct_calls(proxy):
         profile_program(prog, resolver, CudaBackend(),
                         warmup=0, repeats=1, soak_seconds=0)
-    return {k: compress(v) for k, v in proxy.log.items()}
+    return {k: compress_list(v) for k, v in proxy.log.items()}
 
 
 # ---------------------------------------------------------------- page
@@ -405,9 +405,9 @@ def gen_page(name: str, preset: str, record: bool,
             "| type | objects | total bytes |", "|---|---|---|"]
     label_of = {
         "W": "W (all weights, incl. embed/head)",
-        "dW": "dW (all gradients, incl. metadata grads, per step)",
+        "dW": "dW (all gradients, per step)",
         "O": "O (all optimizer state)",
-        "A": "A (all saved contexts, one round)",
+        "A": "A (all saved activations, one round)",
         "M": "M (all metadata, one round)",
     }
     for g in ("W", "dW", "O", "A", "M"):
@@ -463,9 +463,9 @@ def gen_page(name: str, preset: str, record: bool,
                     marker = "  ← derived recompute boundary"
                 out.append(f"    {si}. `{st[0]}` — {emits}{meta}{marker}")
         if ck in kern_seqs:
-            out.append(f"- kernel calls (traced once at tiny dims; "
-                       f"per-sequence op counts scale with microbatch): "
-                       f"{kern_seqs[ck]}")
+            out.append("- kernel calls:")
+            for ki, op in enumerate(kern_seqs[ck]):
+                out.append(f"    {ki}. `{op}`")
         out.append("")
 
     if rec_note:

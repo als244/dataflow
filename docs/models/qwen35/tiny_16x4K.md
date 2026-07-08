@@ -31,9 +31,9 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
 | type | objects | total bytes |
 |---|---|---|
 | W (all weights, incl. embed/head) | 6 | 5,006,592 |
-| dW (all gradients, incl. metadata grads, per step) | 6 | 5,006,592 |
+| dW (all gradients, per step) | 6 | 5,006,592 |
 | O (all optimizer state) | 6 | 10,013,184 |
-| A (all saved contexts, one round) | 4 | 1,121,452,032 (17,112.0/token) |
+| A (all saved activations, one round) | 4 | 1,121,452,032 (17,112.0/token) |
 
 ## Dims
 
@@ -148,7 +148,8 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
 - inputs: `tokens_0_0` (262,144B), `W_embed` (262,144B)
 - outputs: `y_embed_0_0` (33,554,432B)
 - mutates: —
-- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): index_select
+- kernel calls:
+    0. `index_select`
 
 ### `linattn_fwd` — `Qwen35LinBlockFwd`
 
@@ -167,7 +168,18 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
     7. `up_proj` — x1, x3  ← derived recompute boundary
     8. `swiglu` — —
     9. `down_resid` — —
-- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_fwd → mm×2 → causal_conv1d_silu_fwd → fla::l2norm_fwd×2 → fla::chunk_gated_delta_rule_fwd → gated_rmsnorm_fwd → addmm → rmsnorm_fwd → mm×2 → swiglu_fwd_out → addmm
+- kernel calls:
+    0. `rmsnorm_fwd`
+    1. `mm ×2`
+    2. `causal_conv1d_silu_fwd`
+    3. `fla::l2norm_fwd ×2`
+    4. `fla::chunk_gated_delta_rule_fwd`
+    5. `gated_rmsnorm_fwd`
+    6. `addmm`
+    7. `rmsnorm_fwd`
+    8. `mm ×2`
+    9. `swiglu_fwd_out`
+    10. `addmm`
 
 ### `gattn_fwd` — `Qwen35AttnBlockFwd`
 
@@ -185,7 +197,17 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
     6. `up_proj` — x1, x3  ← derived recompute boundary
     7. `swiglu` — —
     8. `down_resid` — —
-- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_fwd → mm×3 → rmsnorm_fwd×2 → rope_fwd×2 → _scaled_dot_product_flash_attention → addmm → rmsnorm_fwd → mm×2 → swiglu_fwd_out → addmm
+- kernel calls:
+    0. `rmsnorm_fwd`
+    1. `mm ×3`
+    2. `rmsnorm_fwd ×2`
+    3. `rope_fwd ×2`
+    4. `_scaled_dot_product_flash_attention`
+    5. `addmm`
+    6. `rmsnorm_fwd`
+    7. `mm ×2`
+    8. `swiglu_fwd_out`
+    9. `addmm`
 
 ### `head_loss` — `HeadLoss`
 
@@ -193,7 +215,12 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
 - inputs: `y_0_0_3` (33,554,432B), `targets_0_0` (262,144B), `W_head` (262,656B)
 - outputs: `dy_0_0_3` (33,554,432B), `loss_0_0` (4B), `dW_head_0` (262,656B)
 - mutates: —
-- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_fwd → mm → ce_loss_fwd_bwd → mm×2 → rmsnorm_bwd
+- kernel calls:
+    0. `rmsnorm_fwd`
+    1. `mm`
+    2. `ce_loss_fwd_bwd`
+    3. `mm ×2`
+    4. `rmsnorm_bwd`
 
 ### `optimizer_head` — `AdamWStep`
 
@@ -201,7 +228,8 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
 - inputs: `W_head` (262,656B), `dW_head_0` (262,656B), `O_head` (525,312B)
 - outputs: —
 - mutates: `W_head`, `O_head`
-- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): adamw_step×2
+- kernel calls:
+    0. `adamw_step ×2`
 
 ### `gattn_bwd` — `Qwen35AttnBlockBwd`
 
@@ -209,7 +237,22 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
 - inputs: `dy_0_0_3` (33,554,432B), `A_0_0_3` (305,135,616B), `y_0_0_2` (33,554,432B), `W_3` (1,312,256B)
 - outputs: `dy_0_0_2` (33,554,432B), `dW_0_3` (1,312,256B)
 - mutates: —
-- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_apply → swiglu_fwd_out → mm×2 → swiglu_bwd → mm×3 → rmsnorm_bwd → mm×2 → rmsnorm_apply×2 → rope_fwd×2 → _scaled_dot_product_flash_attention_backward → rope_bwd×2 → rmsnorm_bwd×2 → rmsnorm_apply → mm×4 → rmsnorm_bwd
+- kernel calls:
+    0. `rmsnorm_apply`
+    1. `swiglu_fwd_out`
+    2. `mm ×2`
+    3. `swiglu_bwd`
+    4. `mm ×3`
+    5. `rmsnorm_bwd`
+    6. `mm ×2`
+    7. `rmsnorm_apply ×2`
+    8. `rope_fwd ×2`
+    9. `_scaled_dot_product_flash_attention_backward`
+    10. `rope_bwd ×2`
+    11. `rmsnorm_bwd ×2`
+    12. `rmsnorm_apply`
+    13. `mm ×4`
+    14. `rmsnorm_bwd`
 
 ### `optimizer_block` — `AdamWStep`
 
@@ -217,7 +260,8 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
 - inputs: `W_3` (1,312,256B), `dW_0_3` (1,312,256B), `O_3` (2,624,512B)
 - outputs: —
 - mutates: `W_3`, `O_3`
-- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): adamw_step×11
+- kernel calls:
+    0. `adamw_step ×11`
 
 ### `linattn_bwd` — `Qwen35LinBlockBwd`
 
@@ -225,7 +269,24 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
 - inputs: `dy_0_0_2` (33,554,432B), `A_0_0_2` (272,105,472B), `y_0_0_1` (33,554,432B), `W_2` (1,056,512B)
 - outputs: `dy_0_0_1` (33,554,432B), `dW_0_2` (1,056,512B)
 - mutates: —
-- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): rmsnorm_apply → swiglu_fwd_out → mm×2 → swiglu_bwd → mm×3 → rmsnorm_bwd → mm → gated_rmsnorm_bwd → mm → causal_conv1d_silu_fwd → fla::l2norm_fwd×2 → fla::chunk_gated_delta_rule_bwd → fla::l2norm_bwd×2 → causal_conv1d_silu_bwd → rmsnorm_apply → mm×3 → rmsnorm_bwd
+- kernel calls:
+    0. `rmsnorm_apply`
+    1. `swiglu_fwd_out`
+    2. `mm ×2`
+    3. `swiglu_bwd`
+    4. `mm ×3`
+    5. `rmsnorm_bwd`
+    6. `mm`
+    7. `gated_rmsnorm_bwd`
+    8. `mm`
+    9. `causal_conv1d_silu_fwd`
+    10. `fla::l2norm_fwd ×2`
+    11. `fla::chunk_gated_delta_rule_bwd`
+    12. `fla::l2norm_bwd ×2`
+    13. `causal_conv1d_silu_bwd`
+    14. `rmsnorm_apply`
+    15. `mm ×3`
+    16. `rmsnorm_bwd`
 
 ### `embed_bwd` — `EmbedBwd`
 
@@ -233,7 +294,8 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
 - inputs: `dy_embed_0_0` (33,554,432B), `tokens_0_0` (262,144B)
 - outputs: `dW_embed_0` (262,144B)
 - mutates: —
-- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): embed_bwd_accum
+- kernel calls:
+    0. `embed_bwd_accum`
 
 ### `optimizer_embed` — `AdamWStep`
 
@@ -241,5 +303,6 @@ At this run shape (65,536 tokens/round). Token-scaled objects show bytes/token i
 - inputs: `W_embed` (262,144B), `dW_embed_0` (262,144B), `O_embed` (524,288B)
 - outputs: —
 - mutates: `W_embed`, `O_embed`
-- kernel calls (traced once at tiny dims; per-sequence op counts scale with microbatch): adamw_step
+- kernel calls:
+    0. `adamw_step`
 
