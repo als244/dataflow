@@ -368,6 +368,7 @@ class Engine:
             # 2. fast capacity for outputs (the simulator's task stall) —
             # assigned mode adds per-offset availability to the same condition
             escaped_outputs: set[str] = set()
+            was_reserve_blocked = False
             _t = _time.perf_counter() if stats is not None else 0.0
             while True:
                 can_res = ledger.can_reserve("fast", fast_out)
@@ -401,8 +402,9 @@ class Engine:
                 state.step(
                     f"task {task.id!r} waiting to reserve {fast_out} fast bytes "
                     f"(used={ledger.used['fast']}, cap={ledger.fast_capacity})",
-                    exclude=protected,
+                    exclude=protected, pump_h2d=False,
                 )
+                was_reserve_blocked = True
 
             # 3. backing outputs never stall (mirror sim: immediate error)
             if not ledger.can_reserve("backing", backing_out):
@@ -436,6 +438,12 @@ class Engine:
 
             if stats is not None:
                 stats["reserve_bookkeeping"] += _time.perf_counter() - _t
+            if was_reserve_blocked:
+                # the lane was suppressed while this reserve accumulated
+                # its bytes — restart the parked head now that outputs are
+                # charged
+                state.h2d.try_start()
+
             # 5. launch (start/done timestamps come from the events themselves,
             # resolved in the token handler — identical mechanism on fake and
             # real backends)
@@ -601,9 +609,20 @@ class _RunState:
     pressure_evictions: int = 0
     prefetch_override: dict[str, float | None] = None  # type: ignore[assignment]
 
-    def step(self, waiting_reason: str, *, exclude: frozenset = frozenset()) -> None:
+    def step(self, waiting_reason: str, *, exclude: frozenset = frozenset(),
+             pump_h2d: bool = True) -> None:
         token = self.engine.backend.next_completion()
         if token is None:
+            # a parked from_slow head may be admissible again (frees since
+            # it parked). Input waits MUST pump — the awaited object
+            # arrives via this lane. Output-reserve waits pass
+            # pump_h2d=False: outputs never arrive by lane, and admitting
+            # a head there hands the blocked task's bytes to a later
+            # consumer (the poke-starvation spiral).
+            if pump_h2d and self.h2d.inflight is None and self.h2d.queue:
+                self.h2d.try_start()
+                if self.h2d.inflight is not None:
+                    return
             # quiescent: a prefetch head blocked only by a placed-offset
             # conflict is the same lifetime inversion — escape it and retry
             if self.h2d.escape_blocked_head():
@@ -621,14 +640,20 @@ class _RunState:
             # "deferred prefetch", decided late. Budget cap is never exceeded
             # (eviction only frees); genuine capacity deadlocks still raise.
             evicted = self._evict_for_pressure(exclude)
-            if evicted == "evicted-poke":
-                # a plan transfer was already waiting at the h2d head: freed
-                # bytes go to it first (the simulator's own tie priority)
-                self.h2d.try_start()
-                return
-            if evicted == "evicted":
-                # queue held only our reload: the stalled caller re-checks and
-                # takes the bytes; the reload admits on a later token
+            if evicted in ("evicted", "evicted-poke"):
+                # freed bytes go to the STALLED CALLER, never the transfer
+                # head: control returns to the blocked loop, which re-checks
+                # before any lane admission can run (single dispatcher).
+                # Poking the head here — the sim's transfer-first tie —
+                # was the poke-starvation feedback: each eviction's bytes
+                # fed the next trigger-satisfied prefetch (or the prior
+                # evictee's own reload) while the blocked task starved to
+                # the thrash guard (observed 1080 = 10 x 108 tasks). The
+                # valve is a runtime-only recovery path the simulator
+                # never visits, so caller-priority here diverges from NO
+                # sim-modeled timeline; gated prefetches simply admit on
+                # the next token after the caller reserves. See the
+                # reserve-order-inversion design note.
                 return
             raise DeadlockError(
                 f"deadlock: {waiting_reason}; no in-flight work can unblock it "

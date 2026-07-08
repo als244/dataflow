@@ -25,10 +25,10 @@ Z1+Z2 charge immediately (can_reserve admits to 10/10), Z3 parks at
 the head, and T1 cannot reserve Y. Each valve eviction pokes the head
 (Z3, then Q, then the evictees' own reloads) — never T1.
 
-WHEN THE PLAN-ORDER ADMISSION FIX LANDS (design note section 4a),
-flip this test: the run must COMPLETE with zero pressure evictions,
-because Z3/Q/reloads may not be admitted while T1's earlier-positioned
-reservation is pending.
+FIXED (design note section 7): valve-freed bytes now go to the
+stalled caller and the lane is pumped on input waits only — this file
+pins the fixed semantics (completes; bounded single-shot recoveries;
+caller-priority ordering).
 """
 from __future__ import annotations
 
@@ -139,19 +139,32 @@ def test_program_is_schema_valid():
 
 
 @pytest.mark.gpu
-def test_current_engine_deadlocks_by_poke_starvation():
-    """CURRENT behavior pin: realized (fast) transfers admit Z1+Z2 into
-    T1's planned bytes; the valve's freed bytes are poked to the
-    transfer head (Z3, Q, then reloads), never to the blocked task;
-    the thrash guard trips and DeadlockError names the blocked
-    reservation. Flip to a completes-clean assertion when plan-order
-    admission lands."""
+def test_caller_priority_prevents_poke_starvation():
+    """With the poke-starvation fix (design note §7): valve-freed bytes
+    go to the STALLED CALLER (the blocked loop re-checks before any
+    lane admission can run), and the from_slow lane is pumped on input
+    waits but NOT on output-reserve waits (outputs never arrive by
+    lane; pumping there hands the blocked task's bytes to a later
+    consumer). The same program that deterministically DeadlockError'd
+    at the thrash guard (50 = 10 x 5 tasks) now COMPLETES with a few
+    single-shot Belady recoveries and zero spiral.
+
+    Ordering pin (caller priority): between the first pressure_evict
+    and y_0's reserve there is NO transfer_reserve — every evicted
+    byte reached the blocked reservation, not the transfer head."""
     from dataflow.runtime.device.cuda import CudaBackend
 
     engine = Engine(CudaBackend())
-    with pytest.raises(DeadlockError) as ei:
-        result = engine.execute(_program(), resolver=_resolver)
+    result = engine.execute(_program(), resolver=_resolver)
+    try:
+        assert result.pressure_evictions <= 4, result.pressure_evictions
+        kinds = [(e.kind, e.object_id) for e in result.trace.events
+                 if e.kind in ("reserve", "transfer_reserve", "pressure_evict")]
+        first_evict = next(i for i, (k, _) in enumerate(kinds)
+                           if k == "pressure_evict")
+        y_pos = kinds.index(("reserve", "y_0"))
+        assert first_evict < y_pos
+        between = [k for k, _ in kinds[first_evict:y_pos]]
+        assert "transfer_reserve" not in between, kinds[first_evict:y_pos]
+    finally:
         result.close()
-    msg = str(ei.value)
-    assert "block_fwd_0_0_1" in msg or "waiting to reserve" in msg
-    assert "pressure_evictions=" in msg
