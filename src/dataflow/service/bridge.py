@@ -47,6 +47,15 @@ def fill_family_objects(store, fill: dict, *, writer: str) -> dict:
 # imports the wider package; nothing outside bridge.py does.
 
 _BACKEND = None
+_STREAMS = None               # ONE stream trio shared by all execution
+                              # contexts: torch's caching allocator is
+                              # STREAM-AWARE — per-program streams made
+                              # each program's cached scratch dead to the
+                              # next (+4-7 GiB reserved PER PROGRAM,
+                              # Shein's 29-GiB dev-20 observation).
+                              # Streams are program-agnostic (one run at
+                              # a time); sharing makes the cache fully
+                              # reusable at zero recurring cost.
 _SESSIONS: dict = {}          # prog_id -> Session (adoption is
                               # program-scoped: the engine's placement
                               # adoption records assume ONE shape-stable
@@ -77,6 +86,12 @@ def get_session(prog_id: str, store=None):
         from dataflow.runtime.device.cuda import Buffer
         from dataflow.runtime.engine import Session
 
+        global _STREAMS
+        if _STREAMS is None:
+            b = get_backend()
+            _STREAMS = (b.create_stream("compute"),
+                        b.create_stream("h2d"),
+                        b.create_stream("d2h"))
         ext_pair = None
         if store is not None and store.slab is not None:
             def _alloc(size, _store=store, _owner=prog_id):
@@ -90,6 +105,7 @@ def get_session(prog_id: str, store=None):
 
             ext_pair = (_alloc, _free)
         _SESSIONS[prog_id] = Session(backend=get_backend(),
+                                     streams=_STREAMS,
                                      external_backing=ext_pair)
     return _SESSIONS[prog_id]
 
