@@ -85,6 +85,7 @@ class BlockFwd(_Base):
             if seq is not d.seq_spec:      # packed-args mode only
                 extras["pos"] = self._positions_dev(ctx, seq, x.device)
                 extras["cu"] = self._cu_for(ctx)
+                extras["max_q"] = self._max_seqlen_for(ctx)
             self._forward(kctx, x, w, y, a, extras=extras)
 
     # --- staged forward -------------------------------------------------------
@@ -140,7 +141,8 @@ class BlockFwd(_Base):
             # packed mode: ONE varlen launch for all segments
             attn_out, lse = ops.flash_fwd(
                 st["q"], st["k"], st["v"], d.n_heads, d.n_kv_heads,
-                d.head_dim, cu_seqlens=cu, max_seqlen=d.tokens)
+                d.head_dim, cu_seqlens=cu,
+                max_seqlen=st.get("max_q") or d.tokens)
         else:
             attn_out, lse = ops.flash_fwd(
                 st["q"], st["k"], st["v"], d.n_heads, d.n_kv_heads,
@@ -266,6 +268,7 @@ class BlockRecompute(BlockFwd):
             if seq is not d.seq_spec:
                 extras["pos"] = self._positions_dev(ctx, seq, x.device)
                 extras["cu"] = self._cu_for(ctx)
+                extras["max_q"] = self._max_seqlen_for(ctx)
             self._forward_context(kctx, x, w, a, extras=extras)
 
     def _forward_context(self, kctx, x, w, a, extras=None) -> None:
@@ -357,6 +360,9 @@ class BlockBwd(_Base):
                 if packed else None)
             object.__setattr__(
                 self, "_cu_run", self._cu_for(ctx) if packed else None)
+            object.__setattr__(
+                self, "_mx_run",
+                self._max_seqlen_for(ctx) if packed else None)
             meta = self._meta_state(ctx)
             if meta is None:
                 self._backward(kctx, dy, a, x, w, dx, dw, accum)
@@ -391,8 +397,8 @@ class BlockBwd(_Base):
         if cu is not None:
             dq, dk, dv = ops.flash_bwd(
                 d_attn, a["q"], a["k"], a["v"], a["attn_out"], a["lse"],
-                d.n_heads, d.n_kv_heads, d.head_dim,
-                cu_seqlens=cu, max_seqlen=d.tokens)
+                d.n_heads, d.n_kv_heads, d.head_dim, cu_seqlens=cu,
+                max_seqlen=getattr(self, "_mx_run", None) or d.tokens)
         else:
             dq, dk, dv = ops.flash_bwd(
                 d_attn, a["q"], a["k"], a["v"], a["attn_out"], a["lse"],

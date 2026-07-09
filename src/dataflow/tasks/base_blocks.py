@@ -147,6 +147,14 @@ class _Base:
             return self.dims.seq_spec
         return tuple(b[i + 1] - b[i] for i in range(len(b) - 1))
 
+    def _max_seqlen_for(self, ctx):
+        """Tight per-round max segment length (host int, derived by
+        the engine prologue). None in static mode."""
+        mx = (ctx.run_args or {}).get("max_seqlen")
+        if not mx:
+            return None
+        return mx.get(self._round_of(ctx))
+
     def _cu_for(self, ctx):
         """Device int32 boundary tensor for this round (mirrored once
         at run start by the engine prologue) — feeds the SINGLE-LAUNCH

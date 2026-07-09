@@ -38,6 +38,35 @@ from .trace import Interval, RunTrace, TraceEvent
 from .transfers import TransferDone, TransferEngine, TransferJob
 
 
+def packed_run_args(run_args: dict, backend) -> dict:
+    """Packed-mode RUN-START prologue (documented convention,
+    family-agnostic): run_args["seq_lens"] = {round: [0, b1, ..., t]}
+    CUMULATIVE BOUNDARIES (host ints). Derives, once, before task 0:
+    - "seq_lens_cuda": device int32 mirror per round (pinned staging
+      + non_blocking copy — never a pageable H2D mid-round);
+    - "max_seqlen": {round: max segment length} host ints (tight
+      flash grid sizing instead of the conservative full-grid value).
+    Returns an augmented COPY; the caller's dict is untouched."""
+    mx = {}
+    for r, b in run_args["seq_lens"].items():
+        b = list(b)
+        if len(b) < 2 or b[0] != 0 or any(
+                b[i + 1] < b[i] for i in range(len(b) - 1)):
+            raise ValueError(f"seq_lens[{r}] must be cumulative "
+                             f"boundaries starting at 0, got {b}")
+        mx[r] = max(b[i + 1] - b[i] for i in range(len(b) - 1))
+    out = {**run_args, "max_seqlen": mx}
+    if getattr(backend, "physical", False):
+        import torch as _torch
+
+        dev = {}
+        for r, b in run_args["seq_lens"].items():
+            host = _torch.tensor(list(b), dtype=_torch.int32).pin_memory()
+            dev[r] = host.to(f"cuda:{backend.device}", non_blocking=True)
+        out["seq_lens_cuda"] = dev
+    return out
+
+
 class CancelledRun(RuntimeError):
     """Boundary-cancel (engine service): raised between task
     dispatches when the caller's cancel_event is set; unwinds through
@@ -344,23 +373,8 @@ class Engine:
             stats["token_detect_n"] = 0
             state.stats = stats
         run_cache: dict = {}   # per-run derived-metadata memo
-        # packed-mode prologue (documented convention, family-agnostic):
-        # run_args["seq_lens"] = {round: [0, b1, ..., t]} CUMULATIVE
-        # BOUNDARIES (host ints). Mirror each list to a device int32
-        # tensor ONCE, up front, via pinned staging + non_blocking
-        # copy — never a pageable H2D mid-round (implicit-sync class)
-        # — and expose them to every task as run_args["seq_lens_cuda"].
-        if run_args and run_args.get("seq_lens") and getattr(
-                self.backend, "physical", False):
-            import torch as _torch
-
-            _dev = {}
-            for _r, _b in run_args["seq_lens"].items():
-                _host = _torch.tensor(list(_b),
-                                      dtype=_torch.int32).pin_memory()
-                _dev[_r] = _host.to(f"cuda:{self.backend.device}",
-                                    non_blocking=True)
-            run_args = {**run_args, "seq_lens_cuda": _dev}
+        if run_args and run_args.get("seq_lens"):
+            run_args = packed_run_args(run_args, self.backend)
         for task_pos, task in enumerate(program.tasks):
             # service boundary-cancel: observed ONLY here, between task
             # dispatches — in-flight work drains normally, the ledger

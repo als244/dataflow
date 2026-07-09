@@ -117,3 +117,26 @@ def test_run_cache_memoizes_positions():
     assert a.cpu().tolist() == [0, 1, 2, 3, 4, 0, 1, 2]
     c = _Probe._positions_dev(probe, _Ctx, (4, 4), "cuda")
     assert c is not a and len(_Ctx.run_cache) == 2
+
+
+def test_prologue_derives_max_seqlen_and_mirrors():
+    """packed_run_args: boundary validation, tight per-round max,
+    device mirrors; caller's dict untouched."""
+    import torch as _t
+
+    from dataflow.runtime.engine import packed_run_args
+    from dataflow.runtime.device.cuda import CudaBackend
+
+    ra = {"step": 3,
+          "seq_lens": {"0": [0, 73, 111, 128], "1": [0, 50, 128]}}
+    out = packed_run_args(ra, CudaBackend())
+    assert out["max_seqlen"] == {"0": 73, "1": 78}
+    assert "max_seqlen" not in ra and "seq_lens_cuda" not in ra
+    cu0 = out["seq_lens_cuda"]["0"]
+    assert cu0.device.type == "cuda" and cu0.dtype == _t.int32
+    assert cu0.cpu().tolist() == [0, 73, 111, 128]
+
+    with pytest.raises(ValueError):
+        packed_run_args({"seq_lens": {"0": [5, 3]}}, CudaBackend())
+    with pytest.raises(ValueError):
+        packed_run_args({"seq_lens": {"0": [0, 10, 7]}}, CudaBackend())
