@@ -99,24 +99,16 @@ def test_packed_mode_never_touches_pageable_lru(monkeypatch):
         backend.free(buf)
 
 
-def test_run_cache_memoizes_positions():
-    from dataflow.tasks.base_blocks import _Base
+def test_prologue_positions():
     import torch as _t
 
-    class _Ctx:
-        run_cache = {}
+    from dataflow.runtime.device.cuda import CudaBackend
+    from dataflow.runtime.engine import packed_run_args
 
-    class _Probe(_Base):
-        pass
-
-    probe = object.__new__(_Probe)
-    a = _Probe._positions_dev(probe, _Ctx, (5, 3), "cuda")
-    b = _Probe._positions_dev(probe, _Ctx, (5, 3), "cuda")
-    assert a is b, "second task must reuse the run-cached tensor"
-    assert a.device.type == "cuda" and a.dtype == _t.int32
-    assert a.cpu().tolist() == [0, 1, 2, 3, 4, 0, 1, 2]
-    c = _Probe._positions_dev(probe, _Ctx, (4, 4), "cuda")
-    assert c is not a and len(_Ctx.run_cache) == 2
+    out = packed_run_args({"seq_lens": {"0": [0, 5, 8]}}, CudaBackend())
+    pos = out["positions_cuda"]["0"]
+    assert pos.device.type == "cuda" and pos.dtype == _t.int32
+    assert pos.cpu().tolist() == [0, 1, 2, 3, 4, 0, 1, 2]
 
 
 def test_prologue_derives_max_seqlen_and_mirrors():

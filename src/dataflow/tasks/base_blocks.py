@@ -165,22 +165,14 @@ class _Base:
             return None
         return dev.get(self._round_of(ctx))
 
-    def _positions_dev(self, ctx, lens, device):
-        """Per-run memoized device positions for packed-args lens:
-        built ONCE per (run, lens) via PINNED staging + non_blocking
-        copy (a pageable .to() here would implicit-sync the dispatcher
-        mid-round; the ops-level lru cache would thrash on fresh lens
-        every step). All tasks of the run share the tensor."""
-        cache = ctx.run_cache
-        key = ("pos", tuple(lens), str(device))
-        if cache is not None and key in cache:
-            return cache[key]
-        host = torch.cat([torch.arange(n, dtype=torch.int32)
-                          for n in lens]).pin_memory()
-        dev = host.to(device, non_blocking=True)
-        if cache is not None:
-            cache[key] = dev
-        return dev
+    def _pos_cuda_for(self, ctx):
+        """Device positions for this round, derived ONCE by the engine
+        prologue (concatenated [0, len_i) ranges). None in static
+        mode — no host derivation or per-task build anywhere."""
+        pc = (ctx.run_args or {}).get("positions_cuda")
+        if not pc:
+            return None
+        return pc.get(self._round_of(ctx))
 
     def _meta_state(self, ctx) -> dict | None:
         """Family hook: st entries for METADATA objects (M_{s}_{r}_{i} —

@@ -83,7 +83,7 @@ class BlockFwd(_Base):
             seq = self._seq_for(ctx)
             extras["seq"] = seq
             if seq is not d.seq_spec:      # packed-args mode only
-                extras["pos"] = self._positions_dev(ctx, seq, x.device)
+                extras["pos"] = self._pos_cuda_for(ctx)
                 extras["cu"] = self._cu_for(ctx)
                 extras["max_q"] = self._max_seqlen_for(ctx)
             self._forward(kctx, x, w, y, a, extras=extras)
@@ -266,7 +266,7 @@ class BlockRecompute(BlockFwd):
             seq = self._seq_for(ctx)
             extras["seq"] = seq
             if seq is not d.seq_spec:
-                extras["pos"] = self._positions_dev(ctx, seq, x.device)
+                extras["pos"] = self._pos_cuda_for(ctx)
                 extras["cu"] = self._cu_for(ctx)
                 extras["max_q"] = self._max_seqlen_for(ctx)
             self._forward_context(kctx, x, w, a, extras=extras)
@@ -356,8 +356,7 @@ class BlockBwd(_Base):
             packed = seq_run is not d.seq_spec
             object.__setattr__(
                 self, "_pos_run",
-                self._positions_dev(ctx, seq_run, dy.device)
-                if packed else None)
+                self._pos_cuda_for(ctx) if packed else None)
             object.__setattr__(
                 self, "_cu_run", self._cu_for(ctx) if packed else None)
             object.__setattr__(

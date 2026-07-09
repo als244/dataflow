@@ -45,7 +45,10 @@ def packed_run_args(run_args: dict, backend) -> dict:
     - "seq_lens_cuda": device int32 mirror per round (pinned staging
       + non_blocking copy — never a pageable H2D mid-round);
     - "max_seqlen": {round: max segment length} host ints (tight
-      flash grid sizing instead of the conservative full-grid value).
+      flash grid sizing instead of the conservative full-grid value);
+    - "positions_cuda": device int32 per round — concatenated ranges
+      [0, len_i) per segment (rope positions; no host derivation or
+      per-task build anywhere downstream).
     Returns an augmented COPY; the caller's dict is untouched."""
     mx = {}
     for r, b in run_args["seq_lens"].items():
@@ -59,11 +62,18 @@ def packed_run_args(run_args: dict, backend) -> dict:
     if getattr(backend, "physical", False):
         import torch as _torch
 
-        dev = {}
+        dev, pos = {}, {}
+        tgt = f"cuda:{backend.device}"
         for r, b in run_args["seq_lens"].items():
-            host = _torch.tensor(list(b), dtype=_torch.int32).pin_memory()
-            dev[r] = host.to(f"cuda:{backend.device}", non_blocking=True)
+            b = list(b)
+            host = _torch.tensor(b, dtype=_torch.int32).pin_memory()
+            dev[r] = host.to(tgt, non_blocking=True)
+            phost = _torch.cat([
+                _torch.arange(b[i + 1] - b[i], dtype=_torch.int32)
+                for i in range(len(b) - 1)]).pin_memory()
+            pos[r] = phost.to(tgt, non_blocking=True)
         out["seq_lens_cuda"] = dev
+        out["positions_cuda"] = pos
     return out
 
 
@@ -372,7 +382,6 @@ class Engine:
             stats["token_detect_lat"] = 0.0
             stats["token_detect_n"] = 0
             state.stats = stats
-        run_cache: dict = {}   # per-run derived-metadata memo
         if run_args and run_args.get("seq_lens"):
             run_args = packed_run_args(run_args, self.backend)
         for task_pos, task in enumerate(program.tasks):
@@ -511,7 +520,6 @@ class Engine:
                     task=task, stream=compute, inputs=in_buffers, outputs=out_buffers,
                     mutates=mut_buffers, backend=self.backend,
                     run_args=run_args,
-                    run_cache=run_cache,
                 ))
             finally:
                 annotator.range_pop()

@@ -32,12 +32,6 @@ class TaskContext:
     # engine never interprets them — executables read what they need
     # (e.g. the optimizer's global step for bias correction)
     run_args: Mapping[str, object] | None = None
-    # per-RUN scratch created by the engine (one dict per execute()):
-    # tasks memoize derived device metadata here (e.g. positions/cu
-    # built ONCE per (run, lens) via pinned staging instead of a
-    # pageable H2D per task — Shein's implicit-sync concern). The
-    # engine never interprets it.
-    run_cache: dict | None = None
 
 
 class Executable(Protocol):
