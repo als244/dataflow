@@ -87,7 +87,7 @@ def block(golden, i, x):
     dref, _ = _refs()
     saved_sel = golden._saved["sel"][i].cuda()
 
-    def pinned_topk(scores, topk):
+    def pinned_topk(scores, topk, *_a):  # *_a absorbs the segments arg
         return saved_sel
 
     ids = golden._saved["route_ids"].get(i)
