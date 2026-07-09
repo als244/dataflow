@@ -67,9 +67,14 @@ applying the LBL once per step is a planned refinement (engine + driver).
 Projections are `nn.Linear` with weight `(out, in)`; the engine stores packed
 `(in, out)` matrices, so a bridge loads `linear.weight = packed.T`. Embedding
 and LM-head tables are `(vocab, d)` and load directly; 1-D norm gains directly;
-a depthwise conv is `(D, W) -> (D, 1, W)`. (`dataflow.pretrain.bridge` has the
-llama3 + qwen3.5 bridges; the others are TODO, needed for the GPU golden
-cross-checks.)
+a depthwise conv is `(D, W) -> (D, 1, W)`. Raw-parameter tensors (expert
+stacks everywhere; per-file choices like qwen3moe's router or dsv32's shared
+expert) are already in the engine orientation and load directly.
+`dataflow.pretrain.bridges` has one bridge module per family (all nine); every
+family is gate-checked against its golden from a byte-identical init
+(state_dict byte-identity + forward + training-curve agreement,
+`tests/pretrain/test_reference_*.py`) and against the ENGINE SERVICE over a
+few steps (`tests/pretrain/test_engine_parity_families.py`).
 
 ## Import
 
