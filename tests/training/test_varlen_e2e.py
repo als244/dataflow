@@ -107,23 +107,29 @@ def _ragged_for(cfg):
     return (a, b, t - a - b)
 
 
+# Sub-noise bias fields (zero-init, ~1e-6 KL/router grads): a one-AdamW-step
+# update is +-lr*sign(noise) on BOTH engine and golden, so rel_l2 there is a
+# coin flip — the |a-b|<=atol envelope catches real garbage. Same class the
+# per-family dsv32/glm52 tests envelope with _BIAS_ATOL.
+_DSA_BIAS_ATOL = {"w_router_bias": 2.5e-3, "idx_k_ln_b": 2.5e-4}
+
+
 @pytest.mark.parametrize("family", [
-    "qwen3", "olmoe", "dsv3",
-    pytest.param("dsv32", marks=pytest.mark.xfail(
-        reason="DSA ragged gradcheck divergence — data-dependent "
-               "(suspect: top-k cut-boundary tie-break engine vs "
-               "golden); ledger Part V addendum 6; task open",
-        strict=False)),
-    pytest.param("glm52", marks=pytest.mark.xfail(
-        reason="same DSA divergence class as dsv32", strict=False)),
-    "qwen3moe", "qwen35moe",
+    "qwen3", "olmoe", "dsv3", "dsv32", "glm52", "qwen3moe", "qwen35moe",
 ])
 def test_model_step_ragged_all_families(family):
     """Ragged model step vs golden (naive autograd reference) for the
     seven families not covered by the two original ragged gates —
     with llama3 + qwen35 above, all NINE families gate the
     sequence-dependent semantics (positions reset, block-diagonal
-    attention / state resets, per-field grads) under packing."""
+    attention / state resets, per-field grads) under packing.
+
+    dsv32/glm52 (DSA) were xfail here under a mislabeled "top-k tie-break"
+    reason; the real cause was the index-scores triton store dropping its
+    column mask (out-of-bounds cols spilled via the row stride, corrupting
+    causal cells for any L%64!=0 — every ragged length). With that fixed the
+    selection matches the golden exactly; the only residual is the sub-noise
+    bias sign-lottery, enveloped below exactly as the per-family gates do."""
     from dataclasses import replace
     import importlib
 
@@ -132,5 +138,6 @@ def test_model_step_ragged_all_families(family):
                    if k.startswith("Shaped") and k.endswith("Config"))
     cfg = cfg_cls.tiny()
     cfg = replace(cfg, seq_lens=_ragged_for(cfg))
+    atol = _DSA_BIAS_ATOL if family in ("dsv32", "glm52") else None
     check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024,
-                     tol=3e-2).assert_ok()
+                     tol=3e-2, field_atol=atol).assert_ok()

@@ -556,8 +556,12 @@ if triton is not None:
             acc += w[:, None] * r
         causal = rn[None, :] <= rm[:, None]
         acc = tl.where(causal & nmask[None, :], acc, float("-inf"))
+        # nmask is LOAD-BEARING on the store, not just the compute: without it
+        # the last column-tile writes out-of-bounds cols (rn >= L) that spill
+        # via s_stride into the next rows, clobbering valid causal cells with
+        # -inf. Only bites when L % BN != 0 — i.e. every ragged/varlen length.
         tl.store(s_ptr + rm[:, None] * s_stride + rn[None, :], acc,
-                 mask=mmask[:, None])
+                 mask=mmask[:, None] & nmask[None, :])
 
     @register("dsa_index_scores", "triton", deterministic=True,
               workspace=internal(_score_hint),
