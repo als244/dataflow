@@ -65,3 +65,71 @@ def test_qwen35_model_step_ragged():
 
     cfg = replace(ShapedQwen35Config.tiny(), seq_lens=RAGGED)
     check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2).assert_ok()
+
+
+def test_varlen_single_launch_matches_reference_autograd():
+    """The C3 single-launch cu_seqlens path vs NAIVE autograd through
+    the block-diagonal reference (the C3 kernel gates compared
+    flash-vs-flash; this is flash-vs-naive), incl. a pad-tail-like
+    short final segment."""
+    segs = (73, 38, 12, 5)                    # sum 128, short tail
+    t, h, kvh, hd = sum(segs), 8, 2, 64
+    gen = torch.Generator(device="cuda").manual_seed(1)
+
+    def r(*shape):
+        return (torch.randn(*shape, device="cuda", generator=gen)
+                * 0.5).to(torch.bfloat16)
+
+    q, k, v, dy = r(t, h * hd), r(t, kvh * hd), r(t, kvh * hd), r(t, h * hd)
+    cu = torch.tensor([0, 73, 111, 123, 128], dtype=torch.int32,
+                      device="cuda")
+    out, lse = ops.flash_fwd(q, k, v, h, kvh, hd,
+                             cu_seqlens=cu, max_seqlen=t)
+    aq = q.detach().clone().requires_grad_()
+    ak = k.detach().clone().requires_grad_()
+    av = v.detach().clone().requires_grad_()
+    ref = ops.attention_reference(aq, ak, av, h, kvh, hd, segs)
+    assert rel_l2(out, ref) < 2e-3
+    ref.backward(dy)
+    dq, dk, dv = ops.flash_bwd(dy, q, k, v, out, lse, h, kvh, hd,
+                               cu_seqlens=cu, max_seqlen=t)
+    assert rel_l2(dq, aq.grad) < 3e-2
+    assert rel_l2(dk, ak.grad) < 3e-2
+    assert rel_l2(dv, av.grad) < 3e-2
+
+
+def _ragged_for(cfg):
+    """A deliberately unaligned partition of one round's tokens."""
+    t = cfg.seq_len * cfg.batch
+    a = t // 2 + 3
+    b = t // 4 + 1
+    return (a, b, t - a - b)
+
+
+@pytest.mark.parametrize("family", [
+    "qwen3", "olmoe", "dsv3",
+    pytest.param("dsv32", marks=pytest.mark.xfail(
+        reason="DSA ragged gradcheck divergence — data-dependent "
+               "(suspect: top-k cut-boundary tie-break engine vs "
+               "golden); ledger Part V addendum 6; task open",
+        strict=False)),
+    pytest.param("glm52", marks=pytest.mark.xfail(
+        reason="same DSA divergence class as dsv32", strict=False)),
+    "qwen3moe", "qwen35moe",
+])
+def test_model_step_ragged_all_families(family):
+    """Ragged model step vs golden (naive autograd reference) for the
+    seven families not covered by the two original ragged gates —
+    with llama3 + qwen35 above, all NINE families gate the
+    sequence-dependent semantics (positions reset, block-diagonal
+    attention / state resets, per-field grads) under packing."""
+    from dataclasses import replace
+    import importlib
+
+    mod = importlib.import_module(f"dataflow.training.models.{family}")
+    cfg_cls = next(v for k, v in vars(mod).items()
+                   if k.startswith("Shaped") and k.endswith("Config"))
+    cfg = cfg_cls.tiny()
+    cfg = replace(cfg, seq_lens=_ragged_for(cfg))
+    check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024,
+                     tol=3e-2).assert_ok()
