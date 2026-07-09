@@ -155,7 +155,6 @@ def check_model_step(
     seed: int = 0,
     tol: float = 3e-2,
     field_atol: dict[str, float] | None = None,
-    pk_lens: tuple[int, ...] | None = None,
 ) -> CheckReport:
     """Ladder level 3: full annotated program through the REAL engine vs the
     golden model — loss, final params, optimizer state.
@@ -175,14 +174,6 @@ def check_model_step(
     from dataflow.training.families import resolve_family
     from dataflow.training.planning import plan_program
 
-    # dynamic packed mode (C4): the ENGINE runs the dynamic program
-    # (bounds/positions as data); the GOLDEN runs static semantics
-    # with the same lens — the equality-with-golden gate for the
-    # data-driven path. pk_lens required iff cfg.s_max is set.
-    dyn = getattr(cfg, "s_max", None)
-    if (dyn is None) != (pk_lens is None):
-        raise ValueError("pk_lens must be given exactly when cfg.s_max is set")
-
     fam = resolve_family(cfg)
     dims = fam.dims_of(cfg)
     program = fam.lower(cfg, recompute_levels=recompute_levels)
@@ -190,23 +181,6 @@ def check_model_step(
 
     backend = CudaBackend()
     values = fam.initial_values(planned.program, cfg, backend, seed=seed)
-    if pk_lens is not None:
-        import numpy as _np
-
-        t_tok = dims.tokens
-        assert sum(pk_lens) == t_tok, (pk_lens, t_tok)
-        _cu = _np.full(dyn + 1, t_tok, dtype=_np.int32)
-        _cu[0] = 0
-        _acc = 0
-        for _j, _L in enumerate(pk_lens):
-            _acc += _L
-            _cu[_j + 1] = _acc
-        _pos = _np.concatenate(
-            [_np.arange(_L, dtype=_np.int32) for _L in pk_lens])
-        torch_view(values["bounds_0_0"], (dyn + 1,), torch.int32).copy_(
-            torch.from_numpy(_cu))
-        torch_view(values["positions_0_0"], (t_tok,), torch.int32).copy_(
-            torch.from_numpy(_pos))
 
     # golden model + inputs from the same bytes
     def pinned(name: str) -> torch.Tensor:
@@ -219,14 +193,7 @@ def check_model_step(
     leaves = [pinned("W_embed"), [pinned(f"W_{i}") for i in range(cfg.n_layers)]]
     if not tied:
         leaves.append(pinned("W_head"))
-    if pk_lens is not None:
-        import dataclasses as _dc
-
-        _gcfg = _dc.replace(cfg, s_max=None, seq_lens=tuple(pk_lens))
-        _gdims = fam.dims_of(_gcfg)
-    else:
-        _gdims = dims
-    golden = fam.golden().from_packed_bytes(_gdims, cfg.n_layers, *leaves)
+    golden = fam.golden().from_packed_bytes(dims, cfg.n_layers, *leaves)
     tokens = torch_view(values["tokens_0_0"], (dims.tokens,), torch.int32).long().cuda()
     targets = (torch_view(values["targets_0_0"], (dims.tokens,), torch.int32).long().cuda()
                if "targets_0_0" in values else tokens.clone())  # warm-up: no CE, unused

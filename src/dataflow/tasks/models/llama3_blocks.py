@@ -79,9 +79,7 @@ class BlockFwd(_Base):
                     if o.id.startswith("A_"):
                         a = self.cl.views(self._out(ctx, j))
                         break
-            self._forward(kctx, x, w, y, a,
-                          extras=self._extras_with_pk(
-                              ctx, self._meta_state(ctx)))
+            self._forward(kctx, x, w, y, a, extras=self._meta_state(ctx))
 
     # --- staged forward -------------------------------------------------------
     #
@@ -114,10 +112,7 @@ class BlockFwd(_Base):
         h1, w, a = st["h1"], st["w"], st["a"]
         qm = h1 @ w["wq"]
         q = a["q"] if a is not None else torch.empty_like(qm)
-        # dynamic packed mode: driver-supplied positions object
-        pos = st.get("pk_pos")
-        if pos is None:
-            pos = ops.positions_for(d.seq_spec, qm.shape[0], qm.device)
+        pos = ops.positions_for(d.seq_spec, qm.shape[0], qm.device)
         K.rope_fwd(kctx, qm, q, pos, d.n_heads, d.head_dim, d.rope_base)
         km = h1 @ w["wk"]
         k = a["k"] if a is not None else torch.empty_like(km)
@@ -132,17 +127,9 @@ class BlockFwd(_Base):
 
     @staticmethod
     def _stage_attn(kctx, K, d, st):
-        cu = st.get("pk_cu")
-        if cu is not None:
-            # single-launch varlen: sentinel-padded cu is kernel-legal
-            # (probed); max_seqlen STATIC = the grid (hidden-sync rule)
-            attn_out, lse = ops.flash_fwd(
-                st["q"], st["k"], st["v"], d.n_heads, d.n_kv_heads,
-                d.head_dim, cu_seqlens=cu, max_seqlen=d.tokens)
-        else:
-            attn_out, lse = ops.flash_fwd(
-                st["q"], st["k"], st["v"], d.n_heads, d.n_kv_heads, d.head_dim, d.seq_spec
-            )
+        attn_out, lse = ops.flash_fwd(
+            st["q"], st["k"], st["v"], d.n_heads, d.n_kv_heads, d.head_dim, d.seq_spec
+        )
         st.pop("q"), st.pop("k"), st.pop("v")
         st["attn_out"] = attn_out
         if st["a"] is not None:
@@ -257,9 +244,7 @@ class BlockRecompute(BlockFwd):
             x = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
             w = self.wl_for(ctx.task).views(self._in(ctx, 1))
             a = self.cl.views(self._out(ctx, 0))
-            self._forward_context(kctx, x, w, a,
-                                  extras=self._extras_with_pk(
-                                      ctx, self._meta_state(ctx)))
+            self._forward_context(kctx, x, w, a, extras=self._meta_state(ctx))
 
     def _forward_context(self, kctx, x, w, a, extras=None) -> None:
         """DERIVED from the stage list: run through the last context-emitting
@@ -341,10 +326,6 @@ class BlockBwd(_Base):
                         dw = self.gl_for(ctx.task).views(self._out(ctx, j))
                         break
                 dx = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
-            # per-launch pk stash (single dispatcher thread; frozen
-            # dataclass => object.__setattr__; families without C4
-            # threading never see pk inputs and read (None, None))
-            object.__setattr__(self, "_pk", self._pk_views(ctx))
             meta = self._meta_state(ctx)
             if meta is None:
                 self._backward(kctx, dy, a, x, w, dx, dw, accum)
@@ -374,21 +355,13 @@ class BlockBwd(_Base):
         d_attn = dh_mid @ w["wo"].T
         if acc.wanted("wo"):
             acc("wo", a["attn_out"].T @ dh_mid)
-        pk_cu, pk_pos = getattr(self, "_pk", (None, None))
-        if pk_cu is not None:
-            dq, dk, dv = ops.flash_bwd(
-                d_attn, a["q"], a["k"], a["v"], a["attn_out"], a["lse"],
-                d.n_heads, d.n_kv_heads, d.head_dim,
-                cu_seqlens=pk_cu, max_seqlen=d.tokens)
-        else:
-            dq, dk, dv = ops.flash_bwd(
-                d_attn, a["q"], a["k"], a["v"], a["attn_out"], a["lse"],
-                d.n_heads, d.n_kv_heads, d.head_dim, d.seq_spec,
-            )
+        dq, dk, dv = ops.flash_bwd(
+            d_attn, a["q"], a["k"], a["v"], a["attn_out"], a["lse"],
+            d.n_heads, d.n_kv_heads, d.head_dim, d.seq_spec,
+        )
         del d_attn
         dq_r = torch.empty_like(dq)
-        pos = pk_pos if pk_pos is not None else \
-            ops.positions_for(d.seq_spec, dq.shape[0], dq.device)
+        pos = ops.positions_for(d.seq_spec, dq.shape[0], dq.device)
         K.rope_bwd(kctx, dq, dq_r, pos, d.n_heads, d.head_dim, d.rope_base)
         del dq
         dk_r = torch.empty_like(dk)
