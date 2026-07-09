@@ -1,5 +1,5 @@
 """Repo-root conftest: put the repo root on ``sys.path`` so the top-level
-``references/`` package (isolated ground-truth models, deliberately outside
+``reference_models/`` package (isolated ground-truth models, deliberately outside
 the installed ``src/`` tree) is importable in tests without a pip reinstall.
 """
 import sys

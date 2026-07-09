@@ -3,7 +3,7 @@ SERVICE (dataflowd). Both consume the same recipe, the same deterministic
 token stream, and the same seeded init (the reference bridges the engine's
 packed init bytes), so the only variable is the execution engine.
 
-The reference is a plain pytorch loop over ``references.Llama3`` with an
+The reference is a plain pytorch loop over ``reference_models.Llama3`` with an
 AdamW that mirrors the engine's ``ops.adamw_step`` (bf16 states, fp32 math,
 weight decay on every field, cosine LR). The engine backend drives the
 daemon: plan at a device budget → register (with the recipe hyper on the
@@ -112,7 +112,7 @@ class ReferenceAdamW:
 def run_reference(cfg, recipe: Recipe, stream, steps: int, *, seed: int = 11,
                   device: str = "cuda", grad_checkpoint: bool = False,
                   log=print, log_every: int = 10) -> RunResult:
-    """Train ``references.Llama3`` from the engine's seeded init on ``stream``."""
+    """Train ``reference_models.Llama3`` from the engine's seeded init on ``stream``."""
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.training.families import resolve_family
 

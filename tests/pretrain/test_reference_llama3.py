@@ -4,7 +4,7 @@ llama3 from a byte-identical init (validates the model + the weight bridge)."""
 import pytest
 import torch
 
-from references import Llama3, Llama3Config
+from reference_models import Llama3, Llama3Config
 
 
 def test_forward_shapes_and_init_loss():

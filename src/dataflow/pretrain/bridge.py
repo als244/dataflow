@@ -3,7 +3,7 @@
 
 Parity invariant #2: the initialization is seeded ONCE by the engine
 (``initial_values`` / the daemon's ``family_init_all``); this bridge loads
-those exact bytes into the isolated ``references.Llama3`` so the ONLY
+those exact bytes into the isolated ``reference_models.Llama3`` so the ONLY
 variable between the two training runs is the execution engine.
 
 The engine stores each block's parameters packed ``(in, out)``; the reference
@@ -24,13 +24,13 @@ from pathlib import Path
 
 import torch
 
-# Make the top-level references/ package importable when run as a script
+# Make the top-level reference_models/ package importable when run as a script
 # (tests get this from the root conftest; scripts compute it from here).
 _ROOT = str(Path(__file__).resolve().parents[3])
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from references.llama3 import Llama3, Llama3Config  # noqa: E402
+from reference_models.llama3 import Llama3, Llama3Config  # noqa: E402
 
 
 def reference_config(cfg) -> Llama3Config:
@@ -129,7 +129,7 @@ def assert_byte_identical(model: Llama3, dims, n_layers: int, get_bytes) -> None
 
 def reference_qwen35_config(cfg):
     """Build the isolated qwen3.5 reference config from a ShapedQwen35Config."""
-    from references.qwen35 import Qwen35Config
+    from reference_models.qwen35 import Qwen35Config
 
     return Qwen35Config(
         n_layers=cfg.n_layers, d_model=cfg.d_model,
@@ -145,7 +145,7 @@ def reference_qwen35_config(cfg):
 
 
 def build_qwen35_reference(cfg, *, device="cuda", dtype=torch.bfloat16):
-    from references.qwen35 import Qwen35
+    from reference_models.qwen35 import Qwen35
 
     return Qwen35(reference_qwen35_config(cfg)).to(device=device, dtype=dtype)
 

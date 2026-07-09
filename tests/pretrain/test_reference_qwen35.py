@@ -9,7 +9,7 @@ from dataclasses import replace
 import pytest
 import torch
 
-from references.qwen35 import Qwen35, Qwen35Config
+from reference_models.qwen35 import Qwen35, Qwen35Config
 
 _TINY = dict(
     n_layers=4, d_model=256, full_attention_interval=4, n_heads=4,
