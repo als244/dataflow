@@ -132,19 +132,46 @@ def parse_program(program_dict: dict):
     return program_from_dict(program_dict)
 
 
+def _hyper_from_spec(h: dict | None):
+    """Rebuild an ``AdamWHyper`` (+ optional ``LRSchedule``) from the wire
+    ``hyper`` dict. Lets a client set LR / weight decay / a cosine schedule
+    via ``register_program(resolver={..., 'hyper': {...}})``; without it the
+    service is stuck at the built-in default (lr=1e-4, no schedule). ``None``
+    -> the family default (unchanged historical behavior)."""
+    from dataflow.tasks.base_blocks import AdamWHyper
+
+    h = dict(h or {})
+    sched = h.pop("schedule", None)
+    if sched is not None:
+        from dataflow.tasks.optim import LRSchedule
+
+        h["schedule"] = LRSchedule(**sched)
+    return AdamWHyper(**h)
+
+
 def resolver_for(spec: dict):
-    """(family, cfg) -> cached (fam, cfg_obj, dims, resolver)."""
+    """(family, cfg[, hyper]) -> cached (fam, cfg_obj, dims, resolver).
+
+    The optional ``hyper`` (lr/betas/eps/weight_decay/schedule) overrides the
+    family default so LR schedules ride the resolver channel; it joins the
+    cache key so different hypers don't collide. When absent, the resolver is
+    built exactly as before (byte-identical to plain ``build_resolver(dims)``
+    — the losses-bit-equal path is untouched)."""
     import json
 
     from dataflow.training.families import family as _family
 
-    key = (spec["family"], json.dumps(spec["cfg"], sort_keys=True))
+    key = (spec["family"], json.dumps(spec["cfg"], sort_keys=True),
+           json.dumps(spec.get("hyper"), sort_keys=True))
     hit = _RESOLVERS.get(key)
     if hit is None:
         fam = _family(spec["family"])
         cfg_obj = fam.config_type(**spec["cfg"])
         dims = fam.dims_of(cfg_obj)
-        hit = (fam, cfg_obj, dims, fam.build_resolver(dims))
+        hyper = spec.get("hyper")
+        resolver = (fam.build_resolver(dims, _hyper_from_spec(hyper))
+                    if hyper else fam.build_resolver(dims))
+        hit = (fam, cfg_obj, dims, resolver)
         _RESOLVERS[key] = hit
     return hit
 
