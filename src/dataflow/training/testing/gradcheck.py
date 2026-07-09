@@ -155,6 +155,8 @@ def check_model_step(
     seed: int = 0,
     tol: float = 3e-2,
     field_atol: dict[str, float] | None = None,
+    run_args: dict | None = None,
+    golden_seq_lens: tuple[int, ...] | None = None,
 ) -> CheckReport:
     """Ladder level 3: full annotated program through the REAL engine vs the
     golden model — loss, final params, optimizer state.
@@ -174,6 +176,10 @@ def check_model_step(
     from dataflow.training.families import resolve_family
     from dataflow.training.planning import plan_program
 
+    # packed mode: engine takes per-round lens via run_args
+    # ("seq_lens"); the GOLDEN runs static semantics with
+    # golden_seq_lens (same lens, cfg-level) — same bytes, the
+    # equality-with-golden gate for the args-driven path
     fam = resolve_family(cfg)
     dims = fam.dims_of(cfg)
     program = fam.lower(cfg, recompute_levels=recompute_levels)
@@ -193,7 +199,13 @@ def check_model_step(
     leaves = [pinned("W_embed"), [pinned(f"W_{i}") for i in range(cfg.n_layers)]]
     if not tied:
         leaves.append(pinned("W_head"))
-    golden = fam.golden().from_packed_bytes(dims, cfg.n_layers, *leaves)
+    if golden_seq_lens is not None:
+        import dataclasses as _dc
+
+        _gdims = fam.dims_of(_dc.replace(cfg, seq_lens=tuple(golden_seq_lens)))
+    else:
+        _gdims = dims
+    golden = fam.golden().from_packed_bytes(_gdims, cfg.n_layers, *leaves)
     tokens = torch_view(values["tokens_0_0"], (dims.tokens,), torch.int32).long().cuda()
     targets = (torch_view(values["targets_0_0"], (dims.tokens,), torch.int32).long().cuda()
                if "targets_0_0" in values else tokens.clone())  # warm-up: no CE, unused
@@ -205,6 +217,7 @@ def check_model_step(
         resolver=fam.build_resolver(dims),
         initial_buffers=values,
         pool_prewarm=dry.pool_demand,
+        run_args=run_args,
     )
 
     errors: dict[str, float] = {}

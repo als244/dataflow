@@ -128,6 +128,21 @@ class _Base:
         acc.wanted = lambda name: name in dw
         return acc
 
+    def _seq_for(self, ctx):
+        """Sequence lens for THIS task's round: run_args["seq_lens"]
+        (packed mode — per-round lists keyed by round index as a
+        string; task ids carry {s}_{r} by the documented lowering
+        convention) else the static dims.seq_spec. Objects carry
+        bytes; args carry step metadata."""
+        ra = ctx.run_args or {}
+        sl = ra.get("seq_lens")
+        if not sl:
+            return self.dims.seq_spec
+        parts = ctx.task.id.rsplit("_", 3)
+        r = parts[2] if len(parts) >= 3 else "0"
+        lens = sl.get(r) if isinstance(sl, dict) else None
+        return tuple(lens) if lens else self.dims.seq_spec
+
     def _meta_state(self, ctx) -> dict | None:
         """Family hook: st entries for METADATA objects (M_{s}_{r}_{i} —
         never-recompute forward artifacts: routing packs, selections).
