@@ -169,6 +169,19 @@ def profile_program(
     contender = _PcieContender(backend) if contend_pcie else None
     profiles: dict[tuple, TaskProfile] = {}
 
+    # attention blocks read the round's Segments from run_args; the profiler
+    # bypasses the engine prologue, so build + materialize a uniform descriptor
+    # once here (from any block executable's dims — all tasks share dims)
+    _run_args = None
+    for _t in program.tasks:
+        _d = getattr(resolver(_t), "dims", None)
+        if _d is not None:
+            from dataflow.runtime.engine import prologue_run_args, uniform_segments
+
+            _run_args = prologue_run_args(
+                {"segments": uniform_segments(_d, program)}, backend)
+            break
+
     for task in program.tasks:
         sig = _signature(task, sizes, resolver)
         if sig in profiles:
@@ -193,11 +206,11 @@ def profile_program(
                 in_buffers[obj] = b
             out_buffers = {o.id: buf(o.size_bytes) for o in task.outputs}
             mut_buffers = {m: in_buffers[m] for m in task.mutates}
+            executable = resolver(task)
             ctx = TaskContext(
                 task=task, stream=stream, inputs=in_buffers, outputs=out_buffers,
-                mutates=mut_buffers, backend=backend,
+                mutates=mut_buffers, backend=backend, run_args=_run_args,
             )
-            executable = resolver(task)
 
             # Executables may declare a deterministic buffer-seeding hook
             # (MoE blocks do): valid routing indices in packed contexts —

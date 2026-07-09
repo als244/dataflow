@@ -48,8 +48,10 @@ class GoldenQwen35Moe(GoldenQwen35):
 
     def lin_block_forward(
         self, x: torch.Tensor, w: Leaves, route_ids: torch.Tensor | None = None,
+        segments=None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         d = self.dims
+        seg = self._segments(segments, x.device)
         t = x.shape[0]
         h1 = ops.rmsnorm_reference(x, w["attn_norm_w"])
         qkvz = h1 @ w["w_qkvz"]
@@ -58,7 +60,7 @@ class GoldenQwen35Moe(GoldenQwen35):
         z = qkvz[:, d.conv_dim :].view(t, d.lin_v_heads, d.lin_v_head_dim)
         b = ba[:, : d.lin_v_heads]
         a = ba[:, d.lin_v_heads :]
-        post = ops.causal_conv1d_silu_reference(conv_in, w["w_conv"], seq_len=d.seq_spec)
+        post = ops.causal_conv1d_silu_reference(conv_in, w["w_conv"], segments=seg)
         q = ops.l2norm_reference(post[:, : d.key_dim].reshape(t, d.lin_k_heads, d.lin_k_head_dim))
         k = ops.l2norm_reference(
             post[:, d.key_dim : 2 * d.key_dim].reshape(t, d.lin_k_heads, d.lin_k_head_dim)
@@ -66,15 +68,17 @@ class GoldenQwen35Moe(GoldenQwen35):
         v = post[:, 2 * d.key_dim :].reshape(t, d.lin_v_heads, d.lin_v_head_dim)
         beta = torch.sigmoid(b.float()).to(x.dtype)
         g = ops.gated_delta_gate_reference(a, w["A_log"], w["dt_bias"])
-        core = ops.gated_delta_rule_reference(q, k, v, beta, g, seq_len=d.seq_spec)
+        core = ops.gated_delta_rule_reference(q, k, v, beta, g, segments=seg)
         o_normed = ops.gated_rmsnorm_reference(core, z, w["lin_norm_w"])
         xo = x + o_normed.reshape(t, d.value_dim) @ w["w_out"]
         return self._moe_tail(xo, w, route_ids)
 
     def full_block_forward(
         self, x: torch.Tensor, w: Leaves, route_ids: torch.Tensor | None = None,
+        segments=None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         d = self.dims
+        seg = self._segments(segments, x.device)
         t = x.shape[0]
         h1 = ops.rmsnorm_reference(x, w["attn_norm_w"])
         qg = h1 @ w["wq"]                       # (t, 2*attn_dim): [Q_all | gate_all]
@@ -87,9 +91,9 @@ class GoldenQwen35Moe(GoldenQwen35):
         kn = ops.rmsnorm_reference(
             km.view(t, d.n_kv_heads, d.head_dim), w["k_norm_w"]
         ).view(t, d.kv_dim)
-        q = ops.partial_rope_reference(qn, d.seq_spec, d.n_heads, d.head_dim, d.rot_dim, d.rope_base)
-        k = ops.partial_rope_reference(kn, d.seq_spec, d.n_kv_heads, d.head_dim, d.rot_dim, d.rope_base)
-        attn = ops.attention_reference(q, k, v, d.n_heads, d.n_kv_heads, d.head_dim, d.seq_spec)
+        q = ops.partial_rope_reference(qn, seg, d.n_heads, d.head_dim, d.rot_dim, d.rope_base)
+        k = ops.partial_rope_reference(kn, seg, d.n_kv_heads, d.head_dim, d.rot_dim, d.rope_base)
+        attn = ops.attention_reference(q, k, v, d.n_heads, d.n_kv_heads, d.head_dim, seg)
         gated = attn * torch.sigmoid(gate.float()).to(attn.dtype)
         xo = x + gated @ w["wo"]
         return self._moe_tail(xo, w, route_ids)
@@ -97,30 +101,31 @@ class GoldenQwen35Moe(GoldenQwen35):
     # --- loss / training (CE reported; CE + aux differentiated) ----------------
 
     def loss_terms(
-        self, tokens: torch.Tensor, targets: torch.Tensor
+        self, tokens: torch.Tensor, targets: torch.Tensor, segments=None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         d = self.dims
         assert not self.tied, "qwen35moe is untied (the 35B config)"
         x = self.w_embed["w"][tokens.long()]
+        seg = self._segments(segments, x.device)
         aux_total = torch.zeros((), dtype=torch.float32, device=x.device)
         for i in range(d.n_layers):
             w = self.w_blocks[i]
             x, aux = (
-                self.full_block_forward(x, w) if d.kind_of(i) == "full"
-                else self.lin_block_forward(x, w)
+                self.full_block_forward(x, w, segments=seg) if d.kind_of(i) == "full"
+                else self.lin_block_forward(x, w, segments=seg)
             )
             aux_total = aux_total + aux
         hv = self.w_head
         logits = ops.rmsnorm_reference(x, hv["final_norm_w"]) @ hv["w"].T
         return ops.ce_loss_reference(logits, targets), aux_total
 
-    def loss(self, tokens: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-        return self.loss_terms(tokens, targets)[0]
+    def loss(self, tokens: torch.Tensor, targets: torch.Tensor, segments=None) -> torch.Tensor:
+        return self.loss_terms(tokens, targets, segments)[0]
 
-    def train_step(self, tokens: torch.Tensor, targets: torch.Tensor) -> float:
+    def train_step(self, tokens: torch.Tensor, targets: torch.Tensor, segments=None) -> float:
         for p in self.parameters():
             p.grad = None
-        ce, aux_total = self.loss_terms(tokens, targets)
+        ce, aux_total = self.loss_terms(tokens, targets, segments)
         (ce + aux_total).backward()
         self.step_count += 1
         self._opt_obj("embed", "embed", self.w_embed)

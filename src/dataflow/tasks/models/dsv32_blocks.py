@@ -58,9 +58,10 @@ from ..modules.moe.stages import MOE_SHARED_NOGATE_STAGES, MoEProfileFill, moe_b
 _LN_EPS = 1e-5
 
 
-def _seq_bounds(d):
-    lens = ops.seq_lens_of(d.seq_spec, d.tokens)
-    return tuple(ops.seq_bounds_of(lens, d.tokens))
+def _seq_bounds(seg):
+    """Per-sequence (lo, hi) bounds for the round — from the round's Segments
+    (DSA index scores / topk / sparse attention run per sequence)."""
+    return tuple(seg.bounds)
 
 
 def _causal_bits(length, device):
@@ -183,7 +184,8 @@ class Dsv32ProfileFill(MoEProfileFill):
                 offs = torch.arange(d.index_topk, device="cuda").unsqueeze(0)
                 lo_of = torch.empty(d.tokens, dtype=torch.long, device="cuda")
                 lo = 0
-                for L in ops.seq_lens_of(d.seq_spec, d.tokens):
+                # profiler seed data: dims-derived (uniform) per-seq lengths
+                for L in ops.Segments.of_dims(d).lengths:
                     lo_of[lo:lo + L] = lo
                     lo += L
                 idx.copy_(torch.maximum(rows - offs,
@@ -252,7 +254,7 @@ class Dsv32DenseBlockFwd(Dsv32MetaState, Dsv32ProfileFill, Dsv3DenseBlockFwd):
         # indexer inputs need h1 — compute BEFORE the base stage pops it
         h1, w = st["h1"], st["w"]
         q_idx, k_idx, wts = _indexer_inputs(
-            kctx, K, d, h1, st.pop("q_lora_n_idx"), w, st["pos"],
+            kctx, K, d, h1, st.pop("q_lora_n_idx"), w, st["seg"].positions,
         )
         st.update(q_idx=q_idx, k_idx=k_idx, idx_wts=wts)
         Dsv3DenseBlockFwd._stage_mla_kv(kctx, K, d, st)
@@ -264,7 +266,7 @@ class Dsv32DenseBlockFwd(Dsv32MetaState, Dsv32ProfileFill, Dsv3DenseBlockFwd):
         # (recompute) — metadata is never recomputed
         idx = st["meta"]["dsa_idx"]
         q_idx, k_idx, wts = st.pop("q_idx"), st.pop("k_idx"), st.pop("idx_wts")
-        for lo, hi in _seq_bounds(d):
+        for lo, hi in _seq_bounds(st["seg"]):
             length = hi - lo
             scores = torch.empty(length, length, dtype=torch.float32,
                                  device=q_idx.device)
@@ -292,7 +294,7 @@ class Dsv32DenseBlockFwd(Dsv32MetaState, Dsv32ProfileFill, Dsv3DenseBlockFwd):
             kctx, st.pop("q_full"), st.pop("k_full"), vals,
             st.get("shared_idx", None) if "shared_idx" in st
             else st["meta"]["dsa_idx"], attn_out, lse,
-            n_heads=h, head_dim=qk, seq_bounds=_seq_bounds(d), v_head_dim=v,
+            n_heads=h, head_dim=qk, seq_bounds=_seq_bounds(st["seg"]), v_head_dim=v,
         )
         del vals
         if a is not None:
@@ -447,13 +449,14 @@ class Dsv32DenseBlockBwd(Dsv32MetaState, Dsv32ProfileFill, Dsv3DenseBlockBwd):
         t = d.tokens
         h, nope, rope, v = d.n_heads, d.qk_nope_dim, d.qk_rope_dim, d.v_head_dim
         qk, kvl = d.qk_head_dim, d.kv_lora_rank
-        bounds = _seq_bounds(d)
+        seg = a["_seg"]
+        bounds = _seq_bounds(seg)
 
         d_attn_v = (dh_mid @ w["wo"].T).contiguous()
         if acc.wanted("wo"):
             acc("wo", a["attn_out"].T @ dh_mid)
 
-        pos = ops.positions_for(d.seq_spec, t, x.device)
+        pos = seg.positions          # always varlen; run_args prologue
         q_lora_n, q_full = _mla_expand_q(kctx, K, d, a["q_a"], a["rstd_qa"], w, pos)
         latent_n, k_full, vals = _mla_expand_kv(
             kctx, K, d, a["kv_a"], a["rstd_kva"], w, pos,
@@ -612,6 +615,7 @@ class _WarmupKLMixin:
                     lv = torch_view(ctx.mutates[m], (1,), torch.float32)
             meta["_loss_view"] = lv
             meta["_loss_create"] = lcreate
+            a = {**a, "_seg": self._attn_meta(ctx)}
             self._backward(kctx, None, a, x, w, None, dw, accum, meta=meta)
 
     def _backward(self, kctx, dy, a, x, w, dx_out, dw, accum, meta=None):
@@ -629,8 +633,9 @@ class _WarmupKLMixin:
         acc = (self._acc_fn(dw, accum) if dw
                else (lambda name, value: None))
         t = d.tokens
-        bounds = _seq_bounds(d)
-        pos = ops.positions_for(d.seq_spec, t, x.device)
+        seg = a["_seg"]
+        bounds = _seq_bounds(seg)
+        pos = seg.positions          # always varlen; run_args prologue
         h1 = torch.empty_like(x)
         K.rmsnorm_apply(kctx, x, a["rstd_attn"], w["attn_norm_w"], h1)
         q_lora_n, q_full = _mla_expand_q(kctx, K, d, a["q_a"], a["rstd_qa"],

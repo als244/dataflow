@@ -5,7 +5,7 @@ Op signatures:
              *, row_stride=None, head_stride=None, col_base=0)``
 - ``rope_bwd(...)`` — same, sin sign flipped (rotation transpose).
   (``positions``: (tokens,) int32 per-sequence indices — sequence structure
-  is explicit; build with ``ops.positions_for``)
+  is explicit; the round's ``Segments.positions`` device field)
 
 Default (strides omitted): x/out (tokens, n_heads*head_dim) contiguous.
 STRIDED/IN-PLACE mode (the torch.cat killer): pass the FULL assembled

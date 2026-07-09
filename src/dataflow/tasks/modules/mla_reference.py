@@ -41,16 +41,19 @@ def mla_head_dims(dims) -> tuple[int, int]:
 
 
 def mla_qkv_reference(
-    h1: torch.Tensor, w: dict[str, torch.Tensor], dims,
+    h1: torch.Tensor, w: dict[str, torch.Tensor], dims, segments=None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """The MLA expansion shared by dense (dsv3) and DSA (dsv32) forms:
     returns (q_lora_n (t, q_lora), q_full (t,h,qk), k_full (t,h,qk),
-    v_pad (t,h,qk)) — padded-v convention."""
+    v_pad (t,h,qk)) — padded-v convention. ``segments`` supplies the
+    per-sequence rope positions (``segments.positions``); None derives the
+    round segmentation from ``dims``."""
     d = dims
     t = h1.shape[0]
     h, nope, rope, v = d.n_heads, d.qk_nope_dim, d.qk_rope_dim, d.v_head_dim
     qk = nope + rope
-    pos = ops.positions_for(d.seq_spec, t, h1.device)
+    seg = segments if segments is not None else ops.Segments.of_dims(dims).on(h1.device)
+    pos = seg.positions
 
     # q stack
     q_lora = ops.rmsnorm_reference(h1 @ w["w_q_a"], w["q_a_norm_w"])
@@ -78,27 +81,30 @@ def mla_qkv_reference(
 
 
 def mla_attention_reference(
-    h1: torch.Tensor, w: dict[str, torch.Tensor], dims,
+    h1: torch.Tensor, w: dict[str, torch.Tensor], dims, segments=None,
 ) -> torch.Tensor:
     """Post-attn-norm input h1 (t, d) -> attention output (t, n_heads*v)
     (caller applies wo + residual). Pure autograd; mirrors the runtime
-    stage decomposition 1:1 so ladders compare piecewise."""
+    stage decomposition 1:1 so ladders compare piecewise. ``segments`` (the
+    round's ``Segments``; None derives it from ``dims``) supplies both the
+    rope positions and the block-diagonal attention structure."""
     d = dims
     t = h1.shape[0]
     h, v = d.n_heads, d.v_head_dim
     qk = d.qk_nope_dim + d.qk_rope_dim
-    _, q_full, k_full, v_pad = mla_qkv_reference(h1, w, dims)
+    seg = segments if segments is not None else ops.Segments.of_dims(dims).on(h1.device)
+    _, q_full, k_full, v_pad = mla_qkv_reference(h1, w, dims, seg)
     attn = ops.attention_reference(
         q_full.reshape(t, h * qk), k_full.reshape(t, h * qk),
-        v_pad.reshape(t, h * qk), h, h, qk, d.seq_spec,
+        v_pad.reshape(t, h * qk), h, h, qk, seg,
     )
     return attn.view(t, h, qk)[..., :v].reshape(t, h * v)
 
 
 def mla_block_reference(
-    x: torch.Tensor, w: dict[str, torch.Tensor], dims,
+    x: torch.Tensor, w: dict[str, torch.Tensor], dims, segments=None,
 ) -> torch.Tensor:
     """Full attention half of a DSv3 block: norm -> MLA -> wo -> residual."""
     h1 = ops.rmsnorm_reference(x, w["attn_norm_w"])
-    attn = mla_attention_reference(h1, w, dims)
+    attn = mla_attention_reference(h1, w, dims, segments)
     return x + attn @ w["wo"]

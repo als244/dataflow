@@ -49,7 +49,7 @@ def test_rope_backward_is_transpose():
     """<rope(x), y> == <x, rope_bwd(y)> (rotation orthogonality)."""
     x = torch.randn(128, 256, device="cuda", dtype=torch.bfloat16)
     y = torch.randn(128, 256, device="cuda", dtype=torch.bfloat16)
-    pos = ops.positions_for(128, 128, x.device)
+    pos = ops.Segments.uniform(128, 1).on(x.device).positions
     rx = ops.rope_fwd(x, pos, 8, 32, 500_000.0)
     ry = ops.rope_bwd(y, pos, 8, 32, 500_000.0)
     lhs = (rx.float() * y.float()).sum()
@@ -64,11 +64,13 @@ def test_flash_wrapper_matches_autograd():
     k = torch.randn(128, 64, device="cuda", dtype=torch.bfloat16)
     v = torch.randn(128, 64, device="cuda", dtype=torch.bfloat16)
     d_attn = torch.randn(128, 256, device="cuda", dtype=torch.bfloat16)
-    out, lse = ops.flash_fwd(q, k, v, 8, 2, 32)
-    dq, dk, dv = ops.flash_bwd(d_attn, q, k, v, out, lse, 8, 2, 32)
+    seg = ops.Segments.uniform(128, 1).on(q.device)
+    out, lse = ops.flash_fwd(q, k, v, 8, 2, 32, cu_seqlens=seg.cu, max_seqlen=seg.max_len)
+    dq, dk, dv = ops.flash_bwd(d_attn, q, k, v, out, lse, 8, 2, 32,
+                               cu_seqlens=seg.cu, max_seqlen=seg.max_len)
 
     qr, kr, vr = (t.clone().requires_grad_() for t in (q, k, v))
-    outr = ops.attention_reference(qr, kr, vr, 8, 2, 32)
+    outr = ops.attention_reference(qr, kr, vr, 8, 2, 32)  # segments=None: one sequence
     assert rel_l2(out, outr) < 2e-2
     outr.backward(d_attn)
     assert rel_l2(dq, qr.grad) < 3e-2

@@ -40,8 +40,10 @@ def _run(engine_kwargs=None, resolver_wrapper=None, program_transform=None, seed
     resolver = build_resolver(dims)
     if resolver_wrapper is not None:
         resolver = resolver_wrapper(resolver, backend)
+    from dataflow.runtime.engine import uniform_segments
     result = Engine(backend, **(engine_kwargs or {})).execute(
         prog, resolver=resolver, initial_buffers=values, pool_prewarm=dry.pool_demand,
+        run_args={"segments": uniform_segments(dims, prog)},
     )
     # readback: final weights + loss
     out = {}
@@ -120,9 +122,11 @@ def test_measured_costs_replan_still_golden():
     planned = plan_program(measured, fast_memory_capacity=CAP)
     values = initial_values(planned.program, CFG, backend, seed=7)
     dry = Engine(FakeBackend()).execute(planned.program, initial_buffers=values)
+    from dataflow.runtime.engine import uniform_segments
     result = Engine(backend).execute(
         planned.program, resolver=build_resolver(dims),
         initial_buffers=values, pool_prewarm=dry.pool_demand,
+        run_args={"segments": uniform_segments(dims, planned.program)},
     )
     rec = result.objects.get("loss_0_0")
     loss = float(torch_view((rec.backing or rec.fast).buffer, (1,), torch.float32)[0])

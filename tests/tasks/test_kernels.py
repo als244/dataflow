@@ -121,7 +121,9 @@ def test_rope_fused(seq, heads, hd):
     x = _rand(t, heads * hd, seed=4)
     dy = _rand(t, heads * hd, seed=5)
     base = 500000.0
-    pos = ops.positions_for(seq, t, x.device)
+    seg = (ops.Segments.uniform(seq, t // seq) if isinstance(seq, int)
+           else ops.Segments(tuple(seq)))
+    pos = seg.on(x.device).positions
 
     e_fwd = ops.rope_fwd(x, pos, heads, hd, base)
     f_fwd = torch.empty_like(x)
@@ -251,10 +253,13 @@ def test_fused_steady_state_no_torch_allocation():
     m, v = _rand(512, 1024, seed=22) * 0.01, _rand(512, 1024, seed=23).abs() * 0.01
     out = torch.empty_like(x1)
     rstd = torch.empty(512, device="cuda", dtype=torch.float32)
+    # positions materialized ONCE (the Segments discipline) — read as a field
+    # in the steady-state loop, so no per-launch device allocation
+    pos = ops.Segments.uniform(128, x1.shape[0] // 128).on(x1.device).positions
 
     def run():
         FUSED.swiglu_fwd_out(KCTX, x1, x3, out)
-        FUSED.rope_fwd(KCTX, x1, out, ops.positions_for(128, x1.shape[0], x1.device), 8, 128, 500000.0)
+        FUSED.rope_fwd(KCTX, x1, out, pos, 8, 128, 500000.0)
         FUSED.rmsnorm_fwd(KCTX, x1, x3[0], out, rstd)
         FUSED.adamw_step(KCTX, x1, x3, m, v,
                          lr=1e-4, beta1=0.9, beta2=0.95, eps=1e-8,

@@ -65,15 +65,15 @@ class GoldenGlm52(GoldenDsv3):
             return dsv32_moe_weight_layout(self.dims, layer=layer)
         return dsv3_moe_weight_layout(self.dims, layer=layer)
 
-    def loss_terms(self, tokens, targets):
+    def loss_terms(self, tokens, targets, segments=None):
         self._layer_ptr = 0
         self._group_scores = None   # leader's live scores (autograd node)
         self._group_mask = None
-        return super().loss_terms(tokens, targets)
+        return super().loss_terms(tokens, targets, segments)
 
-    def train_step(self, tokens, targets) -> float:
+    def train_step(self, tokens, targets, segments=None) -> float:
         if getattr(self.dims, "sparse_mode", True):
-            return super().train_step(tokens, targets)
+            return super().train_step(tokens, targets, segments)
         # dense warm-up: the OBJECTIVE is L^I_multi alone — no head, no
         # CE, no dy chain (matching the specialized program). Trained
         # and reported as the per-group CENTROID KL: its sigma-gradient
@@ -82,21 +82,22 @@ class GoldenGlm52(GoldenDsv3):
         self._pending_counts = []
         for p_ in self.parameters():
             p_.grad = None
-        kl_total = self.warmup_kl(tokens)
+        kl_total = self.warmup_kl(tokens, segments)
         kl_total.backward()
         self.step_count += 1
         for i, leaves in enumerate(self.w_blocks):
             self._opt_obj(f"block_{i}", leaves)
         return float(kl_total.detach())
 
-    def warmup_kl(self, tokens) -> "torch.Tensor":
+    def warmup_kl(self, tokens, segments=None) -> "torch.Tensor":
         """Forward through the blocks (no head), then one KL per GROUP
         against the member-averaged full-prefix target."""
         self._wu_groups = []
         self._layer_ptr = 0
         x = self.w_embed["w"][tokens.long()]
+        seg = self._segments(segments, x.device)
         for w in self.w_blocks:
-            x, _ = self.block_forward(x, w)
+            x, _ = self.block_forward(x, w, segments=seg)
         total = None
         for g in self._wu_groups:
             centroid = g["psum"] / g["n"]
@@ -104,19 +105,19 @@ class GoldenGlm52(GoldenDsv3):
             total = kl if total is None else total + kl
         return total
 
-    def _leader_selection(self, h1, q_lora, w, t: int, device):
+    def _leader_selection(self, h1, q_lora, w, t: int, device, segments=None):
         """Group leader's shared pair (scores, mask). Indexer inputs are
         DETACHED (the paper's seam: CE never reaches the indexer); a
         frozen indexer detaches the scores themselves. The mask states
         the TWO TRAINING MODES in one place: sparse top-k live set vs
         dense warm-up causal (dsa_selection_mask_reference)."""
         d = self.dims
-        scores = dsa_index_scores_reference(h1.detach(), q_lora.detach(), w, d)
+        scores = dsa_index_scores_reference(h1.detach(), q_lora.detach(), w, d, segments)
         if not getattr(d, "train_indexer", True):
             scores = scores.detach()
-        return scores, dsa_selection_mask_reference(scores, d, t, device)
+        return scores, dsa_selection_mask_reference(scores, d, t, device, segments)
 
-    def _member_kl(self, i: int, scores, mask, q_full, k_full, t: int):
+    def _member_kl(self, i: int, scores, mask, q_full, k_full, t: int, segments=None):
         """SPARSE mode: this member's contribution to the group
         objective — its own attention rows on the shared live set,
         weighted 1/N; summed over members this IS L^I_multi.
@@ -128,7 +129,7 @@ class GoldenGlm52(GoldenDsv3):
         d = self.dims
         if not getattr(d, "train_indexer", True):
             return torch.zeros((), device=q_full.device)
-        p = dsa_attention_rows_reference(q_full, k_full, mask, d, t)
+        p = dsa_attention_rows_reference(q_full, k_full, mask, d, t, segments)
         if not getattr(d, "sparse_mode", True):
             g = self._wu_groups[-1]
             g["psum"] = p if g["psum"] is None else g["psum"] + p
@@ -139,22 +140,23 @@ class GoldenGlm52(GoldenDsv3):
 
     def block_forward(
         self, x: torch.Tensor, w: dict[str, torch.Tensor],
-        route_ids: torch.Tensor | None = None,
+        route_ids: torch.Tensor | None = None, segments=None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         d = self.dims
+        seg = self._segments(segments, x.device)
         i = self._layer_ptr
         self._layer_ptr += 1
         t = x.shape[0]
         h, qk, v = d.n_heads, d.qk_head_dim, d.v_head_dim
         h1 = ops.rmsnorm_reference(x, w["attn_norm_w"])
-        q_lora, q_full, k_full, v_pad = mla_qkv_reference(h1, w, d)
+        q_lora, q_full, k_full, v_pad = mla_qkv_reference(h1, w, d, seg)
 
         # IndexShare: the group LEADER computes scores + the mode's mask
         # once and caches them; every member (leader included) reads the
         # shared pair below
         if d.role_of(i) == "full":
             self._group_scores, self._group_mask = \
-                self._leader_selection(h1, q_lora, w, t, x.device)
+                self._leader_selection(h1, q_lora, w, t, x.device, seg)
             if not getattr(d, "sparse_mode", True):
                 if not hasattr(self, "_wu_groups"):
                     self._wu_groups = []
@@ -166,11 +168,11 @@ class GoldenGlm52(GoldenDsv3):
         qf = q_full.reshape(t, h * qk)
         kf = k_full.reshape(t, h * qk)
         vp = v_pad.reshape(t, h * qk)
-        attn = dsa_sparse_attention_reference(qf, kf, vp, mask, d)
+        attn = dsa_sparse_attention_reference(qf, kf, vp, mask, d, seg)
         attn = attn.view(t, h, qk)[..., :v].reshape(t, h * v)
         h_mid = x + attn @ w["wo"]
 
-        kl = self._member_kl(i, scores, mask, q_full, k_full, t)
+        kl = self._member_kl(i, scores, mask, q_full, k_full, t, seg)
 
         h2 = ops.rmsnorm_reference(h_mid, w["ffn_norm_w"])
         if "w13_experts" not in w:

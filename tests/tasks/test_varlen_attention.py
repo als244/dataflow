@@ -38,14 +38,42 @@ def _varlen(q, k, v, cu):
                          cu_seqlens=cu, max_seqlen=T)
 
 
-def _ragged(q, k, v):
-    return ops.flash_fwd(q, k, v, H, HKV, D, seq_len=SEGS)
+def _per_segment(q, k, v):
+    """The block-diagonal reference: each segment through its OWN single-
+    launch varlen call, concatenated. Always-varlen has ONE flash path, so
+    the ragged comparison is that same path run per segment — the isolation
+    contract (one launch over all segments must equal per-segment launches)."""
+    outs, lses, lo = [], [], 0
+    for s in SEGS:
+        cu_i = torch.tensor([0, s], dtype=torch.int32, device="cuda")
+        o, l = ops.flash_fwd(q[lo:lo + s], k[lo:lo + s], v[lo:lo + s],
+                             H, HKV, D, cu_seqlens=cu_i, max_seqlen=s)
+        outs.append(o)
+        lses.append(l.view(H, s))
+        lo += s
+    return torch.cat(outs), torch.cat(lses, dim=1)
+
+
+def _per_segment_bwd(g, q, k, v):
+    dqs, dks, dvs, lo = [], [], [], 0
+    for s in SEGS:
+        cu_i = torch.tensor([0, s], dtype=torch.int32, device="cuda")
+        o, l = ops.flash_fwd(q[lo:lo + s], k[lo:lo + s], v[lo:lo + s],
+                             H, HKV, D, cu_seqlens=cu_i, max_seqlen=s)
+        dq, dk, dv = ops.flash_bwd(g[lo:lo + s], q[lo:lo + s], k[lo:lo + s],
+                                   v[lo:lo + s], o, l, H, HKV, D,
+                                   cu_seqlens=cu_i, max_seqlen=s)
+        dqs.append(dq)
+        dks.append(dk)
+        dvs.append(dv)
+        lo += s
+    return torch.cat(dqs), torch.cat(dks), torch.cat(dvs)
 
 
 def test_fwd_matches_ragged_fallback():
     q, k, v, cu = _case(0)
     out_v, lse_v = _varlen(q, k, v, cu)
-    out_r, lse_r = _ragged(q, k, v)
+    out_r, lse_r = _per_segment(q, k, v)
     torch.cuda.synchronize()
     assert out_v.shape == out_r.shape == (T, H * D)
     assert (out_v - out_r).abs().max().item() <= 8e-3   # bf16 ULP class
@@ -60,9 +88,7 @@ def test_bwd_matches_ragged_fallback():
     dq_v, dk_v, dv_v = ops.flash_bwd(g, q, k, v, out_v, lse_v,
                                      H, HKV, D, cu_seqlens=cu,
                                      max_seqlen=T)
-    out_r, lse_r = _ragged(q, k, v)
-    dq_r, dk_r, dv_r = ops.flash_bwd(g, q, k, v, out_r, lse_r,
-                                     H, HKV, D, seq_len=SEGS)
+    dq_r, dk_r, dv_r = _per_segment_bwd(g, q, k, v)
     torch.cuda.synchronize()
     for a, b, tol in ((dq_v, dq_r, 2e-2), (dk_v, dk_r, 2e-2),
                       (dv_v, dv_r, 2e-2)):

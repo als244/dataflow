@@ -96,21 +96,27 @@ def check_block_backward(dims, *, family=None, seed: int = 0, tol: float = 3e-2)
             "bundle); its per-kind block ladders live in its own test module"
         )
 
+    from dataflow.tasks.ops import Segments
+
     w, x, dy = _random_block_state(dims, family.weight_layout(dims), seed)
     kernels = resolve_kernels()
     kctx = KernelCtx()
     fwd = family.block_fwd(dims, kernels)
     bwd = family.block_bwd(dims, kernels)
 
+    # ONE materialized Segments handed to BOTH sides (bypassing launch, this
+    # gate supplies the varlen metadata the engine prologue normally would)
+    seg = Segments.of_dims(dims).on("cuda")
+
     # our forward with saved context
     a = _ctx_tensors(family.context_layout(dims))
     y = torch.empty_like(x)
-    fwd._forward(kctx, x, w, y, a)
+    fwd._forward(kctx, x, w, y, a, extras={"seg": seg})
 
     # recompute-path equivalence: the RECOMPUTE executable's truncated
     # forward must rebuild an identical context from the same x
     a2 = _ctx_tensors(family.context_layout(dims))
-    family.block_recompute(dims, kernels)._forward_context(kctx, x, w, a2)
+    family.block_recompute(dims, kernels)._forward_context(kctx, x, w, a2, extras={"seg": seg})
     # the truncated recompute intentionally does NOT produce y (the block
     # output is never a backward dependency) — context equality is the claim
     errors = {f"recompute:{k}": rel_l2(a2[k], a[k]) for k in a}
@@ -125,13 +131,14 @@ def check_block_backward(dims, *, family=None, seed: int = 0, tol: float = 3e-2)
         for f in gl.fields
     }
     dx = torch.empty_like(x)
+    a["_seg"] = seg  # the launch merges this into `a`; here we do it directly
     bwd._backward(kctx, dy, a, x, w, dx, dw, accum=False)
 
     # golden: autograd through the reference block forward (per-field leaves)
     golden = family.golden()(dims=dims, n_layers=1)
     leaves = {n: t.detach().clone().requires_grad_() for n, t in w.items()}
     x_ref = x.clone().requires_grad_()
-    y_ref = golden.block_forward(x_ref, leaves)
+    y_ref = golden.block_forward(x_ref, leaves, seg)
     y_ref.backward(dy)
 
     errors["fwd:y"] = rel_l2(y, y_ref)
@@ -210,6 +217,14 @@ def check_model_step(
     targets = (torch_view(values["targets_0_0"], (dims.tokens,), torch.int32).long().cuda()
                if "targets_0_0" in values else tokens.clone())  # warm-up: no CE, unused
     golden_loss = golden.train_step(tokens.cuda(), targets.cuda())
+
+    # every run provides segments: the standard path builds the uniform
+    # per-round descriptor straight from dims (the golden derives the SAME
+    # segmentation via Segments.of_dims); packed gates pass their own run_args
+    if run_args is None:
+        from dataflow.runtime.engine import uniform_segments
+
+        run_args = {"segments": uniform_segments(dims, planned.program)}
 
     dry = Engine(FakeBackend()).execute(planned.program, initial_buffers=values)
     result = Engine(backend).execute(

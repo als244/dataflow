@@ -33,10 +33,6 @@ class _Dims:
     seq_len: int = 64
     seq_lens: tuple = None
 
-    @property
-    def seq_spec(self):
-        return self.seq_lens if self.seq_lens is not None else self.seq_len
-
 
 def _weights(d: _Dims, seed=0, dtype=torch.float32):
     g = torch.Generator(device="cuda").manual_seed(seed)
@@ -79,7 +75,8 @@ def test_padded_v_attention_is_exact():
     v_pad = torch.cat(
         [val, torch.zeros(t, h, qk - v, device="cuda")], dim=-1,
     ).reshape(t, h * qk)
-    out = ops.attention_reference(q, k, v_pad, h, h, qk, s)
+    out = ops.attention_reference(q, k, v_pad, h, h, qk,
+                                  ops.Segments.uniform(s, q.shape[0] // s))
     out3 = out.view(t, h, qk)
     assert torch.equal(out3[..., v:], torch.zeros_like(out3[..., v:]))
     got = out3[..., :v].reshape(t, h * v)
@@ -199,14 +196,14 @@ def _block_state(dims, wl, seed):
     return views, x, dy
 
 
-def _golden_block(x_ref, leaves, dims, kind, route_ids=None):
+def _golden_block(x_ref, leaves, dims, kind, route_ids=None, segments=None):
     """Autograd block: MLA attention (reference) + dense-or-moe tail."""
     from dataflow.tasks import ops
     from dataflow.tasks.modules.mla_reference import mla_attention_reference
     from dataflow.tasks.modules.moe.reference import moe_mlp_reference
 
     h1 = ops.rmsnorm_reference(x_ref, leaves["attn_norm_w"])
-    attn = mla_attention_reference(h1, leaves, dims)
+    attn = mla_attention_reference(h1, leaves, dims, segments)
     h_mid = x_ref + attn @ leaves["wo"]
     h2 = ops.rmsnorm_reference(h_mid, leaves["ffn_norm_w"])
     if kind == "dense":
@@ -255,14 +252,19 @@ def test_dsv3_block_ladder2(kind):
     }
     y = torch.empty_like(x)
     from dataflow.tasks.modules.moe.spec import moe_meta_layout
+    from dataflow.tasks.ops import Segments
 
+    # ONE materialized Segments handed to fwd/recompute (extras) and bwd
+    # (a["_seg"]) — standing in for the engine's run-prologue that normally
+    # sets it (always-varlen attention needs cu/positions/max_len)
+    seg = Segments.of_dims(dims).on("cuda")
     meta_views = None
-    extras = None
+    extras = {"seg": seg}
     if kind == "moe":
         m_l = moe_meta_layout(dims, dims.moe)
         meta_views = {f.name: torch.empty(f.shape, dtype=TORCH_DTYPE_BY_NAME[f.dtype],
                                           device="cuda") for f in m_l.fields}
-        extras = {"meta": dict(meta_views)}
+        extras = {"meta": dict(meta_views), "seg": seg}
     fwd._forward(kctx, x, w, y, a, extras=extras)
 
     a2 = {
@@ -270,8 +272,7 @@ def test_dsv3_block_ladder2(kind):
         for f in cl.fields
     }
     rc._run_stages(kctx, x, w, a2, count=rc.recompute_stage_count(),
-                   extras=None if extras is None
-                   else {**extras, "meta_ready": True})
+                   extras={**extras, "meta_ready": True})
     torch.cuda.synchronize()
     errors = {}
     for name in a:
@@ -286,6 +287,7 @@ def test_dsv3_block_ladder2(kind):
         for f in gl.fields
     }
     dx = torch.empty_like(x)
+    a["_seg"] = seg
     bwd_meta = None if meta_views is None else {"meta": meta_views}
     if bwd_meta is None:
         bwd._backward(kctx, dy, a, x, w, dx, dwv, accum=False)
@@ -298,7 +300,8 @@ def test_dsv3_block_ladder2(kind):
         leaves["w_router_bias"] = w["w_router_bias"]  # non-gradient
     x_ref = x.clone().requires_grad_()
     route_ids = None if meta_views is None else meta_views["route_ids"]
-    y_ref, aux_ref = _golden_block(x_ref, leaves, dims, kind, route_ids=route_ids)
+    y_ref, aux_ref = _golden_block(x_ref, leaves, dims, kind, route_ids=route_ids,
+                                   segments=seg)
     y_ref.backward(dy, retain_graph=True)
     if kind == "moe":
         aux_ref.backward()

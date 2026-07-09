@@ -300,13 +300,12 @@ def moe_mlp_tail_bwd(kctx, K, d, dy, a, w, dw, accum, acc, norm_bwd, *, resid_fi
             else:
                 dw["w_router_bias"].copy_(cnt)
         if moe.aux_coef > 0:
-            from ... import ops as _ops
-
-            lens = _ops.seq_lens_of(d.seq_spec, t)
+            # per-round aux load-balance needs per-sequence bounds: the round's
+            # Segments (merged into `a` by the bwd launch), never d.seq_spec
             K.moe_seq_aux_grad(
                 kctx, a["router_logits"], a["route_ids"], dlogits,
                 alpha=moe.aux_coef, top_k=topk,
-                seq_bounds=tuple(_ops.seq_bounds_of(lens, t)),
+                seq_bounds=tuple(a["_seg"].bounds),
             )
         del cnt
     else:

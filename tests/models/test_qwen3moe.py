@@ -128,7 +128,11 @@ def test_qwen3moe_block_ladder2():
     m_l = moe_meta_layout(dims, dims.moe)
     meta_views = {f.name: torch.empty(f.shape, dtype=TORCH_DTYPE_BY_NAME[f.dtype],
                                       device="cuda") for f in m_l.fields}
-    fwd._forward(kctx, x, w, y, a, extras={"meta": dict(meta_views)})
+    # ONE materialized Segments handed to BOTH sides (bypassing launch)
+    from dataflow.tasks.ops import Segments
+
+    seg = Segments.of_dims(dims).on("cuda")
+    fwd._forward(kctx, x, w, y, a, extras={"meta": dict(meta_views), "seg": seg})
 
     # recompute equivalence: the ROUTING DECISION must reproduce bit-exactly
     a2 = {
@@ -137,7 +141,7 @@ def test_qwen3moe_block_ladder2():
     }
     Qwen3MoeBlockRecompute(dims, kernels)._run_stages(
         kctx, x, w, a2, count=Qwen3MoeBlockRecompute.recompute_stage_count(),
-        extras={"meta": dict(meta_views), "meta_ready": True},
+        extras={"meta": dict(meta_views), "meta_ready": True, "seg": seg},
     )
     torch.cuda.synchronize()
     errors = {}
@@ -153,13 +157,14 @@ def test_qwen3moe_block_ladder2():
         for f in gl.fields
     }
     dx = torch.empty_like(x)
+    a["_seg"] = seg
     bwd._backward(kctx, dy, a, x, w, dx, dwv, accum=False,
                   meta={"meta": meta_views})
 
     golden = GoldenQwen3Moe(dims=dims, n_layers=cfg.n_layers)
     leaves = {n: t.detach().clone().requires_grad_() for n, t in w.items()}
     x_ref = x.clone().requires_grad_()
-    y_ref, aux_ref = golden.block_forward(x_ref, leaves, route_ids=meta_views["route_ids"])
+    y_ref, aux_ref = golden.block_forward(x_ref, leaves, route_ids=meta_views["route_ids"], segments=seg)
     y_ref.backward(dy, retain_graph=True)
     aux_ref.backward()
 
@@ -309,10 +314,13 @@ def test_qwen3moe_ga2_matches_golden():
         golden._opt_obj(f"block_{i}", leaves)
     golden._opt_obj("head", golden.w_head)
 
+    from dataflow.runtime.engine import uniform_segments
+
     dry = Engine(FakeBackend()).execute(planned.program, initial_buffers=values)
     result = Engine(backend).execute(
         planned.program, resolver=fam.build_resolver(dims),
         initial_buffers=values, pool_prewarm=dry.pool_demand,
+        run_args={"segments": uniform_segments(dims, planned.program)},
     )
 
     def worst_field_err(object_id):
@@ -361,9 +369,11 @@ def _run(engine_kwargs=None, program=None, seed=7, resolver_wrapper=None):
     resolver = fam.build_resolver(fam.dims_of(cfg))
     if resolver_wrapper is not None:
         resolver = resolver_wrapper(resolver, backend)
+    from dataflow.runtime.engine import uniform_segments
     result = Engine(backend, **(engine_kwargs or {})).execute(
         prog, resolver=resolver,
         initial_buffers=values, pool_prewarm=dry.pool_demand,
+        run_args={"segments": uniform_segments(fam.dims_of(cfg), prog)},
     )
     out = {}
     for obj_id in ["W_embed", "W_head"] + [f"W_{i}" for i in range(cfg.n_layers)]:

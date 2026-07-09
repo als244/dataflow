@@ -244,10 +244,13 @@ def test_glm52_ga2_matches_golden():
             moe_i += 1
     golden._opt_obj("head", golden.w_head)
 
+    from dataflow.runtime.engine import uniform_segments
+
     dry = Engine(FakeBackend()).execute(planned.program, initial_buffers=values)
     result = Engine(backend).execute(
         planned.program, resolver=fam.build_resolver(dims),
         initial_buffers=values, pool_prewarm=dry.pool_demand,
+        run_args={"segments": uniform_segments(dims, planned.program)},
     )
 
     def worst_field_err(object_id):
@@ -294,6 +297,8 @@ def _run(engine_kwargs=None, program=None, seed=7, resolver_wrapper=None):
 
     backend = CudaBackend()
     values = fam.initial_values(prog, cfg, backend, seed=seed)
+    from dataflow.runtime.engine import uniform_segments
+
     dry = Engine(FakeBackend()).execute(prog, initial_buffers=values)
     resolver = fam.build_resolver(fam.dims_of(cfg))
     if resolver_wrapper is not None:
@@ -301,6 +306,7 @@ def _run(engine_kwargs=None, program=None, seed=7, resolver_wrapper=None):
     result = Engine(backend, **(engine_kwargs or {})).execute(
         prog, resolver=resolver,
         initial_buffers=values, pool_prewarm=dry.pool_demand,
+        run_args={"segments": uniform_segments(fam.dims_of(cfg), prog)},
     )
     out = {}
     for obj_id in ["W_embed", "W_head"] + [f"W_{i}" for i in range(cfg.n_layers)]:
@@ -431,6 +437,11 @@ def test_glm52_leader_follower_pair_ladder():
     # follower (group {1, 2}, N=2) — the chain below is the whole group
     cfg = _tiny_cfg(indexer_types=("full", "full", "shared", "full", "full", "shared"))
     dims = _tiny_dims(cfg)
+    from dataflow.tasks.ops import Segments
+
+    # ONE materialized Segments handed to fwd (extras) and bwd (a["_seg"]) —
+    # the engine run-prologue that normally sets the varlen metadata
+    seg = Segments.of_dims(dims).on("cuda")
     kernels = resolve_kernels()
     kctx = KernelCtx()
     ld_fwd, ld_bwd = Glm52MlBlockFwd(dims, kernels), Glm52MlBlockBwd(dims, kernels)
@@ -473,9 +484,9 @@ def test_glm52_leader_follower_pair_ladder():
     a1, a2 = mk_ctx(ld_fwd.cl), mk_ctx(f_fwd.cl)
     y1 = torch.empty_like(x)
     y2 = torch.empty_like(x)
-    ld_fwd._forward(kctx, x, w_ld, y1, a1, extras={"meta": dict(meta_ld)})
+    ld_fwd._forward(kctx, x, w_ld, y1, a1, extras={"meta": dict(meta_ld), "seg": seg})
     f_fwd._forward(kctx, y1, w_f, y2, a2,
-                   extras={"meta": dict(meta_f),
+                   extras={"meta": dict(meta_f), "seg": seg,
                            "shared_idx": meta_ld["dsa_idx"]})
 
     gl_ld = grad_layout(ld_fwd.wl, dims.dtypes)
@@ -487,6 +498,8 @@ def test_glm52_leader_follower_pair_ladder():
     dm = torch.empty(dims.tokens, dims.index_topk, dtype=torch.float32, device="cuda")
     dx1 = torch.empty_like(x)   # grad into y1 from the follower
     dx0 = torch.empty_like(x)
+    a1["_seg"] = seg
+    a2["_seg"] = seg
     # reverse order: follower bwd creates dM, leader bwd consumes it
     f_bwd._backward(kctx, dy2, a2, y1, w_f, dx1, dw_f, accum=False,
                     meta={"meta": meta_f, "shared_idx": meta_ld["dsa_idx"],
@@ -510,10 +523,10 @@ def test_glm52_leader_follower_pair_ladder():
     from dataflow.tasks import ops as _ops
 
     h1_ref = _ops.rmsnorm_reference(x_ref, leaves_ld["attn_norm_w"])
-    q_lora_ref, *_ = mla_qkv_reference(h1_ref, leaves_ld, dims)
+    q_lora_ref, *_ = mla_qkv_reference(h1_ref, leaves_ld, dims, seg)
     scores = dsa_index_scores_reference(h1_ref.detach(), q_lora_ref.detach(),
-                                        leaves_ld, dims)
-    mask = dsa_mask_from_idx(meta_ld["dsa_idx"].long(), dims, dims.tokens)
+                                        leaves_ld, dims, seg)
+    mask = dsa_mask_from_idx(meta_ld["dsa_idx"].long(), dims, dims.tokens, seg)
     golden._group_scores, golden._group_mask = scores, mask
     golden._pin_mask = True
 
@@ -539,9 +552,9 @@ def test_glm52_leader_follower_pair_ladder():
         GR.dsa_topk_reference = lambda s, k: meta_ld["dsa_idx"].long()
         golden._layer_ptr = 1
         y1_ref, aux1 = golden.block_forward(
-            x_ref, leaves_ld, route_ids=meta_ld["route_ids"])
+            x_ref, leaves_ld, route_ids=meta_ld["route_ids"], segments=seg)
         y2_ref, aux2 = golden.block_forward(
-            y1_ref, leaves_f, route_ids=meta_f["route_ids"])
+            y1_ref, leaves_f, route_ids=meta_f["route_ids"], segments=seg)
     finally:
         GR.dsa_topk_reference = orig_topk
     (aux1 + aux2).backward(retain_graph=True)
@@ -662,10 +675,13 @@ def test_glm52_dense_warmup_freeze_and_movement():
                               (values["W_embed"].size_bytes,), torch.uint8).clone()
     head_before = torch_view(values["W_head"],
                              (values["W_head"].size_bytes,), torch.uint8).clone()
+    from dataflow.runtime.engine import uniform_segments
+
     dry = Engine(FakeBackend()).execute(planned.program, initial_buffers=values)
     result = Engine(backend).execute(
         planned.program, resolver=fam.build_resolver(dims),
         initial_buffers=values, pool_prewarm=dry.pool_demand,
+        run_args={"segments": uniform_segments(dims, planned.program)},
     )
     moved = 0
     for i in range(cfg.n_layers):

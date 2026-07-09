@@ -32,45 +32,47 @@ class GoldenOlmoe(GoldenLlama3):
 
     def block_forward(
         self, x: torch.Tensor, w: dict[str, torch.Tensor],
-        route_ids: torch.Tensor | None = None,
+        route_ids: torch.Tensor | None = None, segments=None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         # route_ids pins the discrete selection (block-ladder use only;
         # see moe_mlp_reference — E2E paths leave it None)
         d = self.dims
+        seg = self._segments(segments, x.device)
         h1 = ops.rmsnorm_reference(x, w["attn_norm_w"])
         qn = ops.rmsnorm_reference(h1 @ w["wq"], w["q_norm_w"])   # full-row
         kn = ops.rmsnorm_reference(h1 @ w["wk"], w["k_norm_w"])   # full-row
-        pos = ops.positions_for(d.seq_spec, x.shape[0], x.device)
+        pos = seg.positions
         q = ops.rope_fwd(qn, pos, d.n_heads, d.head_dim, d.rope_base)
         k = ops.rope_fwd(kn, pos, d.n_kv_heads, d.head_dim, d.rope_base)
         v = h1 @ w["wv"]
         attn = ops.attention_reference(
-            q, k, v, d.n_heads, d.n_kv_heads, d.head_dim, d.seq_spec
+            q, k, v, d.n_heads, d.n_kv_heads, d.head_dim, seg
         )
         h_mid = x + attn @ w["wo"]
         h2 = ops.rmsnorm_reference(h_mid, w["ffn_norm_w"])
         return moe_mlp_reference(h2, w, d.moe, h_mid, route_ids=route_ids)
 
     def loss_terms(
-        self, tokens: torch.Tensor, targets: torch.Tensor
+        self, tokens: torch.Tensor, targets: torch.Tensor, segments=None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """(CE, total aux) — CE is the reported loss; CE + aux is the
         autograd objective."""
+        seg = self._segments(segments, self.w_embed["w"].device)
         x = self.w_embed["w"][tokens.long()]
         aux_total = torch.zeros((), dtype=torch.float32, device=x.device)
         for w in self.w_blocks:
-            x, aux = self.block_forward(x, w)
+            x, aux = self.block_forward(x, w, segments=seg)
             aux_total = aux_total + aux
         logits = ops.rmsnorm_reference(x, self.w_head["final_norm_w"]) @ self.w_head["w"].T
         return ops.ce_loss_reference(logits, targets), aux_total
 
-    def loss(self, tokens: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-        return self.loss_terms(tokens, targets)[0]
+    def loss(self, tokens: torch.Tensor, targets: torch.Tensor, segments=None) -> torch.Tensor:
+        return self.loss_terms(tokens, targets, segments)[0]
 
-    def train_step(self, tokens: torch.Tensor, targets: torch.Tensor) -> float:
+    def train_step(self, tokens: torch.Tensor, targets: torch.Tensor, segments=None) -> float:
         for p in self.parameters():
             p.grad = None
-        ce, aux_total = self.loss_terms(tokens, targets)
+        ce, aux_total = self.loss_terms(tokens, targets, segments)
         (ce + aux_total).backward()
         self.step_count += 1
         self._opt_obj("embed", self.w_embed)

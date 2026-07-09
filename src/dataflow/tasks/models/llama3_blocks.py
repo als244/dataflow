@@ -80,12 +80,7 @@ class BlockFwd(_Base):
                         a = self.cl.views(self._out(ctx, j))
                         break
             extras = self._meta_state(ctx) or {}
-            seq = self._seq_for(ctx)
-            extras["seq"] = seq
-            if seq is not d.seq_spec:      # packed-args mode only
-                extras["pos"] = self._pos_cuda_for(ctx)
-                extras["cu"] = self._cu_for(ctx)
-                extras["max_q"] = self._max_seqlen_for(ctx)
+            extras["seg"] = self._attn_meta(ctx)
             self._forward(kctx, x, w, y, a, extras=extras)
 
     # --- staged forward -------------------------------------------------------
@@ -119,9 +114,7 @@ class BlockFwd(_Base):
         h1, w, a = st["h1"], st["w"], st["a"]
         qm = h1 @ w["wq"]
         q = a["q"] if a is not None else torch.empty_like(qm)
-        pos = st.get("pos")
-        if pos is None:
-            pos = ops.positions_for(st.get("seq", d.seq_spec), qm.shape[0], qm.device)
+        pos = st["seg"].positions   # always varlen; run_args prologue
         K.rope_fwd(kctx, qm, q, pos, d.n_heads, d.head_dim, d.rope_base)
         km = h1 @ w["wk"]
         k = a["k"] if a is not None else torch.empty_like(km)
@@ -136,18 +129,12 @@ class BlockFwd(_Base):
 
     @staticmethod
     def _stage_attn(kctx, K, d, st):
-        cu = st.get("cu")
-        if cu is not None:
-            # packed mode: ONE varlen launch for all segments
-            attn_out, lse = ops.flash_fwd(
-                st["q"], st["k"], st["v"], d.n_heads, d.n_kv_heads,
-                d.head_dim, cu_seqlens=cu,
-                max_seqlen=st.get("max_q") or d.tokens)
-        else:
-            attn_out, lse = ops.flash_fwd(
-                st["q"], st["k"], st["v"], d.n_heads, d.n_kv_heads,
-                d.head_dim, st.get("seq", d.seq_spec)
-            )
+        # ALWAYS varlen: ONE launch for all segments (uniform batch is
+        # equal-length segments); cu/max from the run_args prologue Segments
+        seg = st["seg"]
+        attn_out, lse = ops.flash_fwd(
+            st["q"], st["k"], st["v"], d.n_heads, d.n_kv_heads,
+            d.head_dim, cu_seqlens=seg.cu, max_seqlen=seg.max_len)
         st.pop("q"), st.pop("k"), st.pop("v")
         st["attn_out"] = attn_out
         if st["a"] is not None:
@@ -263,12 +250,7 @@ class BlockRecompute(BlockFwd):
             w = self.wl_for(ctx.task).views(self._in(ctx, 1))
             a = self.cl.views(self._out(ctx, 0))
             extras = self._meta_state(ctx) or {}
-            seq = self._seq_for(ctx)
-            extras["seq"] = seq
-            if seq is not d.seq_spec:
-                extras["pos"] = self._pos_cuda_for(ctx)
-                extras["cu"] = self._cu_for(ctx)
-                extras["max_q"] = self._max_seqlen_for(ctx)
+            extras["seg"] = self._attn_meta(ctx)
             self._forward_context(kctx, x, w, a, extras=extras)
 
     def _forward_context(self, kctx, x, w, a, extras=None) -> None:
@@ -351,23 +333,20 @@ class BlockBwd(_Base):
                         dw = self.gl_for(ctx.task).views(self._out(ctx, j))
                         break
                 dx = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
-            seq_run = self._seq_for(ctx)
-            if seq_run is not d.seq_spec:
-                kctx.pk = (seq_run, self._cu_for(ctx),
-                           self._max_seqlen_for(ctx),
-                           self._pos_cuda_for(ctx))
+            a = {**a, "_seg": self._attn_meta(ctx)}
             meta = self._meta_state(ctx)
             if meta is None:
                 self._backward(kctx, dy, a, x, w, dx, dw, accum)
             else:
                 self._backward(kctx, dy, a, x, w, dx, dw, accum, meta=meta)
 
-    def _backward(self, kctx, dy, a, x, w, dx_out, dw, accum: bool) -> None:
-        """Template: MLP tail (shared helper, swappable per family) then the
-        family's attention part. Kernel-call order unchanged from the
-        pre-split monolith. ``dw``/``accum`` reach ``_mlp_bwd`` beyond the
-        ``acc`` closure because MoE tails hand their stacked expert fields
-        to grouped wgrads directly (create-vs-accumulate inside the op)."""
+    def _backward(self, kctx, dy, a, x, w, dx_out, dw, accum,
+                  meta=None) -> None:
+        """Template: MLP tail then the family's attention part. Attention
+        reads the run_args prologue metadata (cu/pos/max) that the LAUNCH
+        merged into ``a`` under _pk_* keys (symmetric with the forward's
+        ``st``). Direct-invocation callers (unit tests bypassing launch)
+        get the uniform default here."""
         acc = self._acc_fn(dw, accum)
         norm_bwd = self._norm_bwd_fn(kctx)
         dh_mid = self._mlp_bwd(kctx, dy, a, w, dw, accum, acc, norm_bwd)
@@ -382,24 +361,17 @@ class BlockBwd(_Base):
     def _attn_bwd(self, kctx, dh_mid, a, x, w, acc, norm_bwd, dx_out) -> None:
         d = self.dims
         K = self.kernels
+        seg = a["_seg"]
         d_attn = dh_mid @ w["wo"].T
         if acc.wanted("wo"):
             acc("wo", a["attn_out"].T @ dh_mid)
-        seq, cu, mx, pos = kctx.pk or (d.seq_spec, None, None, None)
-        if cu is not None:
-            dq, dk, dv = ops.flash_bwd(
-                d_attn, a["q"], a["k"], a["v"], a["attn_out"], a["lse"],
-                d.n_heads, d.n_kv_heads, d.head_dim, cu_seqlens=cu,
-                max_seqlen=mx or d.tokens)
-        else:
-            dq, dk, dv = ops.flash_bwd(
-                d_attn, a["q"], a["k"], a["v"], a["attn_out"], a["lse"],
-                d.n_heads, d.n_kv_heads, d.head_dim, seq,
-            )
+        dq, dk, dv = ops.flash_bwd(
+            d_attn, a["q"], a["k"], a["v"], a["attn_out"], a["lse"],
+            d.n_heads, d.n_kv_heads, d.head_dim,
+            cu_seqlens=seg.cu, max_seqlen=seg.max_len)
         del d_attn
         dq_r = torch.empty_like(dq)
-        if pos is None:
-            pos = ops.positions_for(seq, dq.shape[0], dq.device)
+        pos = seg.positions          # always varlen; run_args prologue
         K.rope_bwd(kctx, dq, dq_r, pos, d.n_heads, d.head_dim, d.rope_base)
         del dq
         dk_r = torch.empty_like(dk)

@@ -1,8 +1,8 @@
 """Ragged-packing (varlen-first) gates: real engine vs golden with a
 genuinely non-uniform per-round sequence pattern.
 
-Varlen-first: seq_spec carries ragged bounds end to end. Activations
-were already
+Varlen-first: the round's Segments carries ragged bounds end to end.
+Activations were already
 [total_tokens, d]; these tests pin the SEQUENCE-DEPENDENT semantics under
 ragged packing — rope positions resetting per sequence, block-diagonal
 causal attention (per-seq flash calls + the (heads, tokens) lse layout),
@@ -34,15 +34,16 @@ def test_flash_ragged_matches_reference_autograd():
         return (torch.randn(*shape, device="cuda", generator=gen) * 0.5).to(torch.bfloat16)
 
     q, k, v, dy = r(t, h * hd), r(t, kvh * hd), r(t, kvh * hd), r(t, h * hd)
-    out, lse = ops.flash_fwd(q, k, v, h, kvh, hd, RAGGED)
+    sr = ops.Segments(tuple(RAGGED)).on("cuda")
+    out, lse = ops.flash_fwd(q, k, v, h, kvh, hd, cu_seqlens=sr.cu, max_seqlen=sr.max_len)
     assert lse.shape == (h, t)
     aq = q.detach().clone().requires_grad_()
     ak = k.detach().clone().requires_grad_()
     av = v.detach().clone().requires_grad_()
-    ref = ops.attention_reference(aq, ak, av, h, kvh, hd, RAGGED)
+    ref = ops.attention_reference(aq, ak, av, h, kvh, hd, sr)
     assert rel_l2(out, ref) < 2e-3
     ref.backward(dy)
-    dq, dk, dv = ops.flash_bwd(dy, q, k, v, out, lse, h, kvh, hd, RAGGED)
+    dq, dk, dv = ops.flash_bwd(dy, q, k, v, out, lse, h, kvh, hd, cu_seqlens=sr.cu, max_seqlen=sr.max_len)
     assert rel_l2(dq, aq.grad) < 3e-2
     assert rel_l2(dk, ak.grad) < 3e-2
     assert rel_l2(dv, av.grad) < 3e-2
@@ -88,7 +89,7 @@ def test_varlen_single_launch_matches_reference_autograd():
     aq = q.detach().clone().requires_grad_()
     ak = k.detach().clone().requires_grad_()
     av = v.detach().clone().requires_grad_()
-    ref = ops.attention_reference(aq, ak, av, h, kvh, hd, segs)
+    ref = ops.attention_reference(aq, ak, av, h, kvh, hd, ops.Segments(tuple(segs)))
     assert rel_l2(out, ref) < 2e-3
     ref.backward(dy)
     dq, dk, dv = ops.flash_bwd(dy, q, k, v, out, lse, h, kvh, hd,

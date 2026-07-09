@@ -76,21 +76,24 @@ register(
 )
 
 
-def _seq_len(x: torch.Tensor, cu_seqlens) -> int | None:
+def _segments_of(cu_seqlens):
+    """Rebuild the round's Segments from the conv kernel's cu_seqlens (device
+    int tensor); None = one sequence. Eager fallback only (tiny-scale
+    correctness path), so the device->host read is acceptable."""
     if cu_seqlens is None:
         return None
-    return int(cu_seqlens[1])
+    return ops.Segments.from_boundaries([int(v) for v in cu_seqlens.tolist()])
 
 
 def _eager_fwd(kctx, x, w, out, cu_seqlens):
-    out.copy_(ops.causal_conv1d_silu_reference(x, w, seq_len=_seq_len(x, cu_seqlens)))
+    out.copy_(ops.causal_conv1d_silu_reference(x, w, segments=_segments_of(cu_seqlens)))
 
 
 def _eager_bwd(kctx, x, dy, w, dx_out, dw_out, cu_seqlens):
     with torch.enable_grad():
         x_l = x.detach().requires_grad_()
         w_l = w.detach().requires_grad_()
-        y = ops.causal_conv1d_silu_reference(x_l, w_l, seq_len=_seq_len(x, cu_seqlens))
+        y = ops.causal_conv1d_silu_reference(x_l, w_l, segments=_segments_of(cu_seqlens))
     dx, dw = torch.autograd.grad(y, (x_l, w_l), grad_outputs=dy)
     dx_out.copy_(dx)
     dw_out.copy_(dw.to(dw_out.dtype))

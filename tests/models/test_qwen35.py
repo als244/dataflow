@@ -279,14 +279,18 @@ def _ladder2(kind: str, tol: float = 4e-2):
         for f in cl.fields
     }
     y = torch.empty_like(x)
-    fwd._forward(kctx, x, w, y, a)
+    from dataflow.tasks.ops import Segments
+
+    seg = Segments.of_dims(dims).on("cuda")
+    fwd._forward(kctx, x, w, y, a, extras={"seg": seg})
 
     # recompute-path equivalence (derived boundary)
     a2 = {
         f.name: torch.empty(f.shape, dtype=TORCH_DTYPE_BY_NAME[f.dtype], device="cuda")
         for f in cl.fields
     }
-    rc_cls(dims, kernels)._run_stages(kctx, x, w, a2, count=rc_cls.recompute_stage_count())
+    rc_cls(dims, kernels)._run_stages(kctx, x, w, a2, count=rc_cls.recompute_stage_count(),
+                                      extras={"seg": seg})
     errors = {f"recompute:{k}": rel_l2(a2[k], a[k]) for k in a}
 
     # backward vs autograd through the golden block: per-field dW at the
@@ -299,14 +303,15 @@ def _ladder2(kind: str, tol: float = 4e-2):
         for f in gl.fields
     }
     dx = torch.empty_like(x)
+    a["_seg"] = seg
     bwd._backward(kctx, dy, a, x, w, dx, dwv, accum=False)
 
     golden = GoldenQwen35(dims=dims)
     leaves = {n: t.detach().clone().requires_grad_() for n, t in w.items()}
     x_ref = x.clone().requires_grad_()
     y_ref = (
-        golden.lin_block_forward(x_ref, leaves) if kind == "lin"
-        else golden.full_block_forward(x_ref, leaves)
+        golden.lin_block_forward(x_ref, leaves, seg) if kind == "lin"
+        else golden.full_block_forward(x_ref, leaves, seg)
     )
     y_ref.backward(dy)
 
@@ -458,8 +463,10 @@ def _run35(engine_kwargs=None, resolver_wrapper=None, program=None, seed=7):
     resolver = fam.build_resolver(fam.dims_of(cfg))
     if resolver_wrapper is not None:
         resolver = resolver_wrapper(resolver, backend)
+    from dataflow.runtime.engine import uniform_segments
     result = Engine(backend, **(engine_kwargs or {})).execute(
         prog, resolver=resolver, initial_buffers=values, pool_prewarm=dry.pool_demand,
+        run_args={"segments": uniform_segments(fam.dims_of(cfg), prog)},
     )
     # readback masks the layouts' alignment-padding gaps: the bwd tasks write
     # FIELDS, adamw updates the whole flat buffer (padding included, from

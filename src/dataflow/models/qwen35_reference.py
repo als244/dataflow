@@ -85,8 +85,17 @@ class GoldenQwen35:
 
     # --- per-kind block forwards (pinned reference ops only) -------------------
 
-    def lin_block_forward(self, x: torch.Tensor, w: Leaves) -> torch.Tensor:
+    def _segments(self, segments, device) -> "ops.Segments":
+        """This model's round segmentation (materialized on ``device``);
+        explicit ``segments`` win (the direct gates share the engine's), else
+        derive from dims — one materialization per forward, read as fields."""
+        if segments is not None:
+            return segments
+        return ops.Segments.of_dims(self.dims).on(device)
+
+    def lin_block_forward(self, x: torch.Tensor, w: Leaves, segments=None) -> torch.Tensor:
         d = self.dims
+        seg = self._segments(segments, x.device)
         t = x.shape[0]
         h1 = ops.rmsnorm_reference(x, w["attn_norm_w"])
         qkvz = h1 @ w["w_qkvz"]
@@ -95,7 +104,7 @@ class GoldenQwen35:
         z = qkvz[:, d.conv_dim :].view(t, d.lin_v_heads, d.lin_v_head_dim)
         b = ba[:, : d.lin_v_heads]
         a = ba[:, d.lin_v_heads :]
-        post = ops.causal_conv1d_silu_reference(conv_in, w["w_conv"], seq_len=d.seq_spec)
+        post = ops.causal_conv1d_silu_reference(conv_in, w["w_conv"], segments=seg)
         q = ops.l2norm_reference(post[:, : d.key_dim].reshape(t, d.lin_k_heads, d.lin_k_head_dim))
         k = ops.l2norm_reference(
             post[:, d.key_dim : 2 * d.key_dim].reshape(t, d.lin_k_heads, d.lin_k_head_dim)
@@ -103,14 +112,15 @@ class GoldenQwen35:
         v = post[:, 2 * d.key_dim :].reshape(t, d.lin_v_heads, d.lin_v_head_dim)
         beta = torch.sigmoid(b.float()).to(x.dtype)
         g = ops.gated_delta_gate_reference(a, w["A_log"], w["dt_bias"])
-        core = ops.gated_delta_rule_reference(q, k, v, beta, g, seq_len=d.seq_spec)
+        core = ops.gated_delta_rule_reference(q, k, v, beta, g, segments=seg)
         o_normed = ops.gated_rmsnorm_reference(core, z, w["lin_norm_w"])
         xo = x + o_normed.reshape(t, d.value_dim) @ w["w_out"]
         h2 = ops.rmsnorm_reference(xo, w["ffn_norm_w"])
         return xo + ops.swiglu_fwd(h2 @ w["w1"], h2 @ w["w3"]) @ w["w2"]
 
-    def full_block_forward(self, x: torch.Tensor, w: Leaves) -> torch.Tensor:
+    def full_block_forward(self, x: torch.Tensor, w: Leaves, segments=None) -> torch.Tensor:
         d = self.dims
+        seg = self._segments(segments, x.device)
         t = x.shape[0]
         h1 = ops.rmsnorm_reference(x, w["attn_norm_w"])
         qg = h1 @ w["wq"]                       # (t, 2*attn_dim): [Q_all | gate_all]
@@ -123,9 +133,9 @@ class GoldenQwen35:
         kn = ops.rmsnorm_reference(
             km.view(t, d.n_kv_heads, d.head_dim), w["k_norm_w"]
         ).view(t, d.kv_dim)
-        q = ops.partial_rope_reference(qn, d.seq_spec, d.n_heads, d.head_dim, d.rot_dim, d.rope_base)
-        k = ops.partial_rope_reference(kn, d.seq_spec, d.n_kv_heads, d.head_dim, d.rot_dim, d.rope_base)
-        attn = ops.attention_reference(q, k, v, d.n_heads, d.n_kv_heads, d.head_dim, d.seq_spec)
+        q = ops.partial_rope_reference(qn, seg, d.n_heads, d.head_dim, d.rot_dim, d.rope_base)
+        k = ops.partial_rope_reference(kn, seg, d.n_kv_heads, d.head_dim, d.rot_dim, d.rope_base)
+        attn = ops.attention_reference(q, k, v, d.n_heads, d.n_kv_heads, d.head_dim, seg)
         gated = attn * torch.sigmoid(gate.float()).to(attn.dtype)
         xo = x + gated @ w["wo"]
         h2 = ops.rmsnorm_reference(xo, w["ffn_norm_w"])
@@ -133,16 +143,17 @@ class GoldenQwen35:
 
     # --- loss / training --------------------------------------------------------
 
-    def loss(self, tokens: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    def loss(self, tokens: torch.Tensor, targets: torch.Tensor, segments=None) -> torch.Tensor:
         d = self.dims
         hv = self.w_embed if self.tied else self.w_head
         table = hv["w"] if self.tied else self.w_embed["w"]
         x = table[tokens.long()]
+        seg = self._segments(segments, x.device)
         for i in range(d.n_layers):
             w = self.w_blocks[i]
             x = (
-                self.full_block_forward(x, w) if d.kind_of(i) == "full"
-                else self.lin_block_forward(x, w)
+                self.full_block_forward(x, w, seg) if d.kind_of(i) == "full"
+                else self.lin_block_forward(x, w, seg)
             )
         logits = ops.rmsnorm_reference(x, hv["final_norm_w"]) @ hv["w"].T
         return ops.ce_loss_reference(logits, targets)
@@ -164,10 +175,10 @@ class GoldenQwen35:
                 grad_dtype=TORCH_DTYPE_BY_NAME[dts.grad],
                 opt_dtype=TORCH_DTYPE_BY_NAME[dts.opt],
             )
-    def train_step(self, tokens: torch.Tensor, targets: torch.Tensor) -> float:
+    def train_step(self, tokens: torch.Tensor, targets: torch.Tensor, segments=None) -> float:
         for p in self.parameters():
             p.grad = None
-        loss = self.loss(tokens, targets)
+        loss = self.loss(tokens, targets, segments)
         loss.backward()
         self.step_count += 1
         # tied W_embed IS the head layout — policy-addressed as head.*

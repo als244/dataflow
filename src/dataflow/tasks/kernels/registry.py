@@ -63,13 +63,6 @@ class KernelCtx:
     stream_handle: int = 0          # raw vendor stream (foreign toolchains)
     torch_stream: object = None     # torch.cuda.Stream/ExternalStream or None
     workspace: object = None        # torch uint8 view when style == "arena"
-    # packed-mode metadata for THIS launch: (seq_lens, cu_dev,
-    # max_seqlen, positions_dev) — set by block launches from the
-    # run_args prologue; None in static mode. Lives here because
-    # KernelCtx is constructed fresh per launch (race-free by
-    # construction) and already flows through every stage/backward
-    # signature.
-    pk: tuple | None = None
 
 
 # --- registry ------------------------------------------------------------------

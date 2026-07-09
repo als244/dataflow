@@ -55,11 +55,12 @@ class GoldenDsv3(GoldenOlmoe):
 
     def block_forward(
         self, x: torch.Tensor, w: dict[str, torch.Tensor],
-        route_ids: torch.Tensor | None = None,
+        route_ids: torch.Tensor | None = None, segments=None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         d = self.dims
+        seg = self._segments(segments, x.device)
         h1 = ops.rmsnorm_reference(x, w["attn_norm_w"])
-        attn = mla_attention_reference(h1, w, d)
+        attn = mla_attention_reference(h1, w, d, seg)
         h_mid = x + attn @ w["wo"]
         h2 = ops.rmsnorm_reference(h_mid, w["ffn_norm_w"])
         if "w13_experts" not in w:                      # dense kind
@@ -82,11 +83,11 @@ class GoldenDsv3(GoldenOlmoe):
         else:
             super()._opt_obj(obj, leaves)
 
-    def train_step(self, tokens: torch.Tensor, targets: torch.Tensor) -> float:
+    def train_step(self, tokens: torch.Tensor, targets: torch.Tensor, segments=None) -> float:
         self._pending_counts = []
         for p in self.parameters():
             p.grad = None
-        ce, aux_total = self.loss_terms(tokens, targets)
+        ce, aux_total = self.loss_terms(tokens, targets, segments)
         (ce + aux_total).backward()
         self.step_count += 1
         self._opt_obj("embed", self.w_embed)

@@ -91,37 +91,108 @@ def rmsnorm_noweight_reference(x: torch.Tensor) -> torch.Tensor:
 # sequence spanning all tokens.
 
 
-def seq_lens_of(seq, tokens: int) -> tuple[int, ...]:
-    """Normalize a seq spec to the explicit per-sequence length tuple."""
-    if seq is None:
-        return (tokens,)
-    if isinstance(seq, int):
-        return (seq,) * (tokens // seq)
-    lens = tuple(int(n) for n in seq)
-    assert sum(lens) == tokens, (lens, tokens)
-    return lens
+from dataclasses import dataclass, field, replace
 
 
-def seq_bounds_of(seq, tokens: int) -> list[tuple[int, int]]:
-    out, lo = [], 0
-    for n in seq_lens_of(seq, tokens):
-        out.append((lo, lo + n))
-        lo += n
-    return out
+@dataclass(frozen=True)
+class Segments:
+    """How one round's tokens split into sequences — the SINGLE varlen
+    descriptor shared by packing, engine blocks, and reference models.
 
+    ``lengths`` (host) are the per-sequence token counts (sum == tokens)
+    and fully define the geometry. The device tensors the varlen flash
+    kernels and rope need are carried as FIELDS, materialized ONCE by
+    ``.on(device)``:
+      - ``cu``        (n_seq + 1,) int32 cumulative segment boundaries
+      - ``positions`` (tokens,)    int32 per-sequence rope indices
+    ``.on`` is called exactly once per round in the engine's run prologue
+    (and once per golden forward); every stage/op downstream then reads
+    ``seg.cu`` / ``seg.positions`` as plain attributes. Nothing rebuilds a
+    device tensor from host data mid-round — that would be a hidden
+    host->device sync (the aten-hidden-syncs discipline). ``cu`` /
+    ``positions`` are excluded from equality/hash (identity is ``lengths``).
 
-import functools as _functools
+    Replaces the old seq_spec (int | tuple) + the seq_lens_of /
+    seq_bounds_of / positions_for / attn_meta free-function family.
+    """
+    lengths: tuple[int, ...]
+    cu: torch.Tensor | None = field(default=None, compare=False)
+    positions: torch.Tensor | None = field(default=None, compare=False)
 
+    @classmethod
+    def uniform(cls, seq_len: int, batch: int) -> "Segments":
+        return cls((int(seq_len),) * int(batch))
 
-@_functools.lru_cache(maxsize=128)
-def _positions_cached(seq_lens: tuple, device_str: str) -> torch.Tensor:
-    pos = torch.cat([torch.arange(n, dtype=torch.int32) for n in seq_lens])
-    return pos.to(device_str)
+    @classmethod
+    def from_boundaries(cls, cu) -> "Segments":
+        """[0, b1, ..., tokens] cumulative boundaries -> Segments (host)."""
+        cu = [int(x) for x in cu]
+        if len(cu) < 2 or cu[0] != 0 or any(b < a for a, b in zip(cu, cu[1:])):
+            raise ValueError(f"cumulative boundaries from 0 required, got {cu}")
+        return cls(tuple(b - a for a, b in zip(cu, cu[1:])))
 
+    @classmethod
+    def of_dims(cls, d) -> "Segments":
+        """The round's segmentation implied by a dims config (host):
+        explicit ``seq_lens`` when ragged, else ``batch`` uniform
+        ``seq_len`` sequences. Materialize with ``.on(device)``."""
+        sl = getattr(d, "seq_lens", None)
+        if sl is not None:
+            return cls(tuple(int(n) for n in sl))
+        return cls.uniform(d.seq_len, d.tokens // d.seq_len)
 
-def positions_for(seq, tokens: int, device) -> torch.Tensor:
-    """(tokens,) int32 per-sequence position indices for a seq spec."""
-    return _positions_cached(seq_lens_of(seq, tokens), str(device))
+    @property
+    def tokens(self) -> int:
+        return sum(self.lengths)
+
+    @property
+    def max_len(self) -> int:
+        return max(self.lengths)
+
+    @property
+    def bounds(self) -> list[tuple[int, int]]:
+        out, lo = [], 0
+        for n in self.lengths:
+            out.append((lo, lo + n))
+            lo += n
+        return out
+
+    @property
+    def boundaries(self) -> list[int]:
+        """[0, b1, ..., tokens] cumulative host boundaries — the inverse of
+        ``from_boundaries`` and the form run_args['seq_lens'] carries."""
+        out, acc = [0], 0
+        for n in self.lengths:
+            acc += n
+            out.append(acc)
+        return out
+
+    @property
+    def materialized(self) -> bool:
+        return self.cu is not None
+
+    def on(self, device) -> "Segments":
+        """Materialize ``cu`` / ``positions`` on ``device`` ONCE and return a
+        Segments carrying them as fields. Pinned staging + non_blocking copy
+        — never a pageable H2D (the hidden-sync rule). Idempotent when the
+        tensors already live on ``device``."""
+        if self.cu is not None and self.cu.device == torch.device(device):
+            return self
+        b = [0]
+        for n in self.lengths:
+            b.append(b[-1] + n)
+        cu_host = torch.tensor(b, dtype=torch.int32).pin_memory()
+        if self.lengths:
+            pos_host = torch.cat(
+                [torch.arange(n, dtype=torch.int32) for n in self.lengths]
+            ).pin_memory()
+        else:
+            pos_host = torch.empty(0, dtype=torch.int32).pin_memory()
+        return replace(
+            self,
+            cu=cu_host.to(device, non_blocking=True),
+            positions=pos_host.to(device, non_blocking=True),
+        )
 
 
 def _rope_cos_sin(seq_len: int, head_dim: int, base: float, device, dtype=torch.float32):
@@ -146,7 +217,7 @@ def _rotate_half(x: torch.Tensor) -> torch.Tensor:
 
 def rope_fwd(x: torch.Tensor, positions: torch.Tensor, n_heads: int, head_dim: int, base: float) -> torch.Tensor:
     """x: (tokens, n_heads*head_dim); positions: (tokens,) int PER-SEQUENCE
-    indices (``positions_for``) — sequence structure is fully explicit."""
+    indices (``Segments.positions``) — sequence structure is fully explicit."""
     t = x.shape[0]
     cos, sin = _rope_cos_sin_pos(positions, head_dim, base)
     xh = x.view(t, n_heads, head_dim).float()
@@ -167,135 +238,82 @@ def rope_bwd(dx: torch.Tensor, positions: torch.Tensor, n_heads: int, head_dim: 
 
 def flash_fwd(
     q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,
-    n_heads: int, n_kv_heads: int, head_dim: int, seq_len: int | None = None,
-    cu_seqlens: torch.Tensor | None = None, max_seqlen: int | None = None,
+    n_heads: int, n_kv_heads: int, head_dim: int,
+    cu_seqlens: torch.Tensor, max_seqlen: int,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """q: (t, d); k, v: (t, kv); t = batch x seq_len (causal PER SEQUENCE).
-    Returns (attn_out (t, d), lse (batch*n_heads, seq_len)).
-
-    VARLEN (packed) path: cu_seqlens (device int32 cumulative
-    boundaries incl. the pad-tail segment) + max_seqlen (STATIC host
-    int — pass t_round; NEVER derived from device data, hidden-sync
-    rule) => ONE aten varlen launch for all segments, GQA native (no
-    kv head expansion). lse returns (n_heads, t) — the ragged-path
-    layout. Probed on this box: bit-clean segment isolation,
-    deterministic-twice, sync-audit clean."""
+    """Single-launch VARLEN flash-attention forward — the ONLY path (a
+    uniform batch is just equal-length segments). q: (t, d); k, v: (t, kv);
+    causal PER SEGMENT. ``cu_seqlens`` is the device int32 cumulative
+    boundary vector (``Segments.cu``, incl. the final total); ``max_seqlen``
+    is the STATIC host int flash grid (``Segments.max_len`` — NEVER derived
+    from device data, the hidden-sync rule). GQA native (no kv-head
+    expansion). Returns (attn_out (t, d), lse (n_heads, t) ragged layout).
+    Probed on this box: bit-clean segment isolation, deterministic-twice,
+    sync-audit clean."""
     t = q.shape[0]
-    if cu_seqlens is not None:
-        mq = int(max_seqlen if max_seqlen is not None else t)
-        out, lse, _rng, _unused, _ = torch.ops.aten._flash_attention_forward(
-            q.view(t, n_heads, head_dim),
-            k.view(t, n_kv_heads, head_dim),
-            v.view(t, n_kv_heads, head_dim),
-            cu_seqlens, cu_seqlens, mq, mq, 0.0, True, False)
-        return out.reshape(t, n_heads * head_dim), lse
-    lens = seq_lens_of(seq_len, t)
-    if len(set(lens)) > 1:
-        # ragged packing: one dense call per sequence; lse layout (h, t)
-        outs, lses = [], []
-        for lo, hi in seq_bounds_of(lens, t):
-            o, l = flash_fwd(q[lo:hi], k[lo:hi], v[lo:hi],
-                             n_heads, n_kv_heads, head_dim, hi - lo)
-            outs.append(o)
-            lses.append(l.view(n_heads, hi - lo))
-        return torch.cat(outs), torch.cat(lses, dim=1)
-    s = lens[0]
-    b = t // s
-    rep = n_heads // n_kv_heads
-    q4 = q.view(b, s, n_heads, head_dim).transpose(1, 2)
-    k4 = k.view(b, s, n_kv_heads, head_dim).repeat_interleave(rep, dim=2).transpose(1, 2)
-    v4 = v.view(b, s, n_kv_heads, head_dim).repeat_interleave(rep, dim=2).transpose(1, 2)
-    out, lse, *_rest = torch.ops.aten._scaled_dot_product_flash_attention(
-        q4, k4, v4, 0.0, True, return_debug_mask=False
-    )
-    return (
-        out.transpose(1, 2).reshape(t, n_heads * head_dim),
-        lse.reshape(b * n_heads, s),
-    )
+    mq = int(max_seqlen)
+    out, lse, _rng, _unused, _ = torch.ops.aten._flash_attention_forward(
+        q.view(t, n_heads, head_dim),
+        k.view(t, n_kv_heads, head_dim),
+        v.view(t, n_kv_heads, head_dim),
+        cu_seqlens, cu_seqlens, mq, mq, 0.0, True, False)
+    return out.reshape(t, n_heads * head_dim), lse
 
 
 def flash_bwd(
     d_attn: torch.Tensor, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,
     attn_out: torch.Tensor, lse: torch.Tensor,
-    n_heads: int, n_kv_heads: int, head_dim: int, seq_len: int | None = None,
-    cu_seqlens: torch.Tensor | None = None, max_seqlen: int | None = None,
+    n_heads: int, n_kv_heads: int, head_dim: int,
+    cu_seqlens: torch.Tensor, max_seqlen: int,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Returns (dq (t,d), dk (t,kv), dv (t,kv)); GQA head grads reduced.
-
-    VARLEN path mirrors flash_fwd: lse is (n_heads, t); dk/dv come
-    back GQA-reduced natively. philox zeros are valid (dropout 0 —
-    same convention as the dense path; gate-verified equal to
-    round-tripped rng_state)."""
+    """Single-launch VARLEN flash-attention backward — the ONLY path,
+    mirroring flash_fwd. Returns (dq (t,d), dk (t,kv), dv (t,kv)); GQA head
+    grads come back reduced natively. ``cu_seqlens`` = ``Segments.cu``,
+    ``max_seqlen`` = ``Segments.max_len`` (static host int). lse is
+    (n_heads, t). philox zeros are valid (dropout 0 — gate-verified equal to
+    round-tripped rng_state). ``.contiguous()`` on lse is LOAD-BEARING: the
+    aten flash-bwd kernel reads it assuming contiguous rows (the fla
+    contiguity lesson, aten edition — silent garbage grads otherwise)."""
     t = q.shape[0]
-    if cu_seqlens is not None:
-        mq = int(max_seqlen if max_seqlen is not None else t)
-        philox = torch.zeros(2, dtype=torch.uint64, device=q.device)
-        dq3, dk3, dv3 = torch.ops.aten._flash_attention_backward(
-            d_attn.view(t, n_heads, head_dim),
-            q.view(t, n_heads, head_dim),
-            k.view(t, n_kv_heads, head_dim),
-            v.view(t, n_kv_heads, head_dim),
-            attn_out.view(t, n_heads, head_dim),
-            lse.contiguous(), cu_seqlens, cu_seqlens, mq, mq,
-            0.0, True, philox, philox)
-        return (dq3.reshape(t, n_heads * head_dim),
-                dk3.reshape(t, n_kv_heads * head_dim),
-                dv3.reshape(t, n_kv_heads * head_dim))
-    lens = seq_lens_of(seq_len, t)
-    if len(set(lens)) > 1:
-        # ragged: lse arrives (n_heads, t); slice everything per sequence.
-        # .contiguous() on the lse column slice is LOAD-BEARING: reshape of
-        # a same-shaped strided view is a no-op, and the aten flash-bwd
-        # kernel reads lse assuming contiguous rows (the fla contiguity
-        # lesson, aten edition — silent garbage grads otherwise).
-        lse2 = lse.view(n_heads, t)
-        dqs, dks, dvs = [], [], []
-        for lo, hi in seq_bounds_of(lens, t):
-            dq_i, dk_i, dv_i = flash_bwd(
-                d_attn[lo:hi], q[lo:hi], k[lo:hi], v[lo:hi], attn_out[lo:hi],
-                lse2[:, lo:hi].contiguous(),
-                n_heads, n_kv_heads, head_dim, hi - lo,
-            )
-            dqs.append(dq_i)
-            dks.append(dk_i)
-            dvs.append(dv_i)
-        return torch.cat(dqs), torch.cat(dks), torch.cat(dvs)
-    s = lens[0]
-    b = t // s
-    rep = n_heads // n_kv_heads
-    q4 = q.view(b, s, n_heads, head_dim).transpose(1, 2)
-    k4 = k.view(b, s, n_kv_heads, head_dim).repeat_interleave(rep, dim=2).transpose(1, 2)
-    v4 = v.view(b, s, n_kv_heads, head_dim).repeat_interleave(rep, dim=2).transpose(1, 2)
-    out4 = attn_out.view(b, s, n_heads, head_dim).transpose(1, 2)
-    d4 = d_attn.view(b, s, n_heads, head_dim).transpose(1, 2)
-    lse4 = lse.view(b, n_heads, s)
-    # dense (non-varlen) path: cum_seqs are undefined; philox is unused with
-    # dropout 0 but must be a uint64 pair tensor
+    mq = int(max_seqlen)
     philox = torch.zeros(2, dtype=torch.uint64, device=q.device)
-    dq4, dk4, dv4 = torch.ops.aten._scaled_dot_product_flash_attention_backward(
-        d4, q4, k4, v4, out4, lse4, None, None, s, s, 0.0, True, philox, philox,
-    )
-    dq = dq4.transpose(1, 2).reshape(t, n_heads * head_dim)
-    dk = dk4.transpose(1, 2).reshape(t, n_heads, head_dim).view(t, n_kv_heads, rep, head_dim).sum(2)
-    dv = dv4.transpose(1, 2).reshape(t, n_heads, head_dim).view(t, n_kv_heads, rep, head_dim).sum(2)
-    return dq, dk.reshape(t, -1), dv.reshape(t, -1)
+    dq3, dk3, dv3 = torch.ops.aten._flash_attention_backward(
+        d_attn.view(t, n_heads, head_dim),
+        q.view(t, n_heads, head_dim),
+        k.view(t, n_kv_heads, head_dim),
+        v.view(t, n_kv_heads, head_dim),
+        attn_out.view(t, n_heads, head_dim),
+        lse.contiguous(), cu_seqlens, cu_seqlens, mq, mq,
+        0.0, True, philox, philox)
+    return (dq3.reshape(t, n_heads * head_dim),
+            dk3.reshape(t, n_kv_heads * head_dim),
+            dv3.reshape(t, n_kv_heads * head_dim))
 
 
 def attention_reference(
     q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,
-    n_heads: int, n_kv_heads: int, head_dim: int, seq_len: int | None = None,
+    n_heads: int, n_kv_heads: int, head_dim: int,
+    segments: "Segments | None" = None,
 ) -> torch.Tensor:
+    """Golden causal attention over ``segments`` (block-diagonal — each
+    segment is an independent causal sequence). Uniform batches take the
+    batched-SDPA fast path; ragged packs recurse per segment. ``segments``
+    uses only host structure (lengths/bounds), so an unmaterialized Segments
+    is fine; None = one sequence spanning all tokens."""
     t = q.shape[0]
-    lens = seq_lens_of(seq_len, t)
+    if segments is None:
+        segments = Segments.uniform(t, 1)
+    lens = segments.lengths
+    rep = n_heads // n_kv_heads
     if len(set(lens)) > 1:
         return torch.cat([
             attention_reference(q[lo:hi], k[lo:hi], v[lo:hi],
-                                n_heads, n_kv_heads, head_dim, hi - lo)
-            for lo, hi in seq_bounds_of(lens, t)
+                                n_heads, n_kv_heads, head_dim,
+                                Segments.uniform(hi - lo, 1))
+            for lo, hi in segments.bounds
         ])
     s = lens[0]
     b = t // s
-    rep = n_heads // n_kv_heads
     q4 = q.view(b, s, n_heads, head_dim).transpose(1, 2)
     k4 = k.view(b, s, n_kv_heads, head_dim).repeat_interleave(rep, dim=2).transpose(1, 2)
     v4 = v.view(b, s, n_kv_heads, head_dim).repeat_interleave(rep, dim=2).transpose(1, 2)
@@ -494,19 +512,23 @@ def gated_rmsnorm_reference(o: torch.Tensor, z: torch.Tensor, w: torch.Tensor) -
 
 
 def causal_conv1d_silu_reference(
-    x: torch.Tensor, w: torch.Tensor, *, seq_len: int | None = None,
+    x: torch.Tensor, w: torch.Tensor, *, segments: "Segments | None" = None,
 ) -> torch.Tensor:
     """Depthwise causal conv1d + silu. x: (T, D) token-major; w: (D, W).
-    ``seq_len`` resets the causal window at packed-sequence boundaries
+    ``segments`` resets the causal window at packed-sequence boundaries
     (positions 0..W-2 of every sequence see zero padding, never the previous
-    sequence's tail)."""
+    sequence's tail); host structure only. None = one sequence over all
+    tokens."""
     T, D = x.shape
     W = w.shape[-1]
-    lens = seq_lens_of(seq_len, T)
+    if segments is None:
+        segments = Segments.uniform(T, 1)
+    lens = segments.lengths
     if len(set(lens)) > 1:
         return torch.cat([
-            causal_conv1d_silu_reference(x[lo:hi], w, seq_len=hi - lo)
-            for lo, hi in seq_bounds_of(lens, T)
+            causal_conv1d_silu_reference(
+                x[lo:hi], w, segments=Segments.uniform(hi - lo, 1))
+            for lo, hi in segments.bounds
         ])
     B = T // lens[0]
     xf = x.float().T.reshape(D, B, -1).transpose(0, 1)  # (B, D, seq)
@@ -531,7 +553,7 @@ def gated_delta_rule_reference(
     g: torch.Tensor,      # (T, HV) decay log, fp32
     *,
     scale: float | None = None,
-    seq_len: int | None = None,
+    segments: "Segments | None" = None,
 ) -> torch.Tensor:
     """Sequential gated delta rule (the recurrence itself; fp32 state):
 
@@ -542,7 +564,8 @@ def gated_delta_rule_reference(
 
     GVA: q/k arrive with HK heads and are expanded so v-head i reads
     k-head i // (HV // HK) — same mapping fla's kernels apply internally.
-    ``seq_len`` resets the recurrent state at packed-sequence boundaries.
+    ``segments`` resets the recurrent state at packed-sequence boundaries
+    (host structure only). None = one sequence over all tokens.
     """
     T, HK, K = q.shape
     HV, V = v.shape[1], v.shape[2]
@@ -554,7 +577,7 @@ def gated_delta_rule_reference(
     gf = g.float()
     if scale is None:
         scale = K ** -0.5
-    starts = {lo for lo, _hi in seq_bounds_of(seq_len, T)}
+    starts = {0} if segments is None else {lo for lo, _hi in segments.bounds}
     state = torch.zeros(HV, K, V, dtype=torch.float32, device=q.device)
     outs = []
     for t in range(T):
@@ -569,14 +592,18 @@ def gated_delta_rule_reference(
 
 
 def partial_rope_reference(
-    x: torch.Tensor, seq, n_heads: int, head_dim: int, rot_dim: int, base: float,
+    x: torch.Tensor, segments: "Segments | None", n_heads: int, head_dim: int,
+    rot_dim: int, base: float,
 ) -> torch.Tensor:
     """Partial RoPE: rotate only the first rot_dim channels of each head
     (pair-interleaved, via the family rope reference); the rest pass through.
-    ``seq`` is a seq spec (int uniform / tuple ragged)."""
+    ``segments`` supplies the per-sequence rope positions (the materialized
+    ``segments.positions`` device field); None = one sequence over all
+    tokens."""
     t = x.shape[0]
     xh = x.view(t, n_heads, head_dim)
-    pos = positions_for(seq, t, x.device)
+    pos = (Segments.uniform(t, 1).on(x.device).positions
+           if segments is None else segments.positions)
     rot = rope_fwd(xh[:, :, :rot_dim].reshape(t, n_heads * rot_dim), pos, n_heads, rot_dim, base)
     return torch.cat([rot.view(t, n_heads, rot_dim), xh[:, :, rot_dim:]], dim=-1).view(t, n_heads * head_dim)
 

@@ -180,6 +180,12 @@ def train(
         )
         for r in range(rounds)
     ]
+    # every run provides segments: the fixed-shape training path builds the
+    # uniform per-round descriptor from dims (round keys are stable across
+    # steps, so one run_args serves every step; the prologue materializes it)
+    from dataflow.runtime.engine import uniform_segments
+
+    run_args = {"segments": uniform_segments(dims, annotated)}
 
     try:
         for step in range(steps):
@@ -199,6 +205,7 @@ def train(
                     stepped, resolver=resolver, initial_buffers=values,
                     pool_prewarm=dry.pool_demand, placement=placement,
                     vmm=use_vmm, annotate_rename=_annotate_step(step),
+                    run_args=run_args,
                 )
             finally:
                 if annotator is not None and annotator.enabled:

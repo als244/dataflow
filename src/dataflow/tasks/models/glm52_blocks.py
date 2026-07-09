@@ -185,7 +185,8 @@ class Glm52ProfileFill(Dsv32ProfileFill):
                 offs = torch.arange(d.index_topk, device="cuda").unsqueeze(0)
                 lo_of = torch.empty(d.tokens, dtype=torch.long, device="cuda")
                 lo = 0
-                for L in ops.seq_lens_of(d.seq_spec, d.tokens):
+                # profiler seed data: dims-derived (uniform) per-seq lengths
+                for L in ops.Segments.of_dims(d).lengths:
                     lo_of[lo:lo + L] = lo
                     lo += L
                 idx.copy_(torch.maximum(rows - offs,

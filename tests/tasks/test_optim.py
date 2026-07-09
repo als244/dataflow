@@ -212,11 +212,14 @@ def test_mixed_policy_model_step_vs_hand_replica():
                 out = out - hp.lr * eff
         return out.to(w.dtype)
 
+    from dataflow.runtime.engine import uniform_segments
+
     dry = Engine(FakeBackend()).execute(planned.program,
                                         initial_buffers=values)
     result = Engine(backend).execute(
         planned.program, resolver=fam.build_resolver(dims),
-        initial_buffers=values, pool_prewarm=dry.pool_demand)
+        initial_buffers=values, pool_prewarm=dry.pool_demand,
+        run_args={"segments": uniform_segments(dims, planned.program)})
 
     worst = (0.0, "")
     for i in range(cfg.n_layers):
@@ -304,11 +307,14 @@ def test_muon_recipe_string_model_step_vs_hand_replica():
             out = out - hp.lr * scale * _ns_orthogonalize(eff).float()
         return out.to(w.dtype)
 
+    from dataflow.runtime.engine import uniform_segments
+
     dry = Engine(FakeBackend()).execute(planned.program,
                                         initial_buffers=values)
     result = Engine(backend).execute(
         planned.program, resolver=fam.build_resolver(dims),
-        initial_buffers=values, pool_prewarm=dry.pool_demand)
+        initial_buffers=values, pool_prewarm=dry.pool_demand,
+        run_args={"segments": uniform_segments(dims, planned.program)})
 
     worst = (0.0, "")
     for i in range(cfg.n_layers):
@@ -391,11 +397,14 @@ def test_layer_indexed_policy_sizes_and_model_step():
                    / ((v / (1 - hp.beta2)).sqrt() + hp.eps))
         return out.to(w.dtype)
 
+    from dataflow.runtime.engine import uniform_segments
+
     dry = Engine(FakeBackend()).execute(planned.program,
                                         initial_buffers=values)
     result = Engine(backend).execute(
         planned.program, resolver=fam.build_resolver(dims),
-        initial_buffers=values, pool_prewarm=dry.pool_demand)
+        initial_buffers=values, pool_prewarm=dry.pool_demand,
+        run_args={"segments": uniform_segments(dims, planned.program)})
 
     worst = (0.0, "")
     for i in range(cfg.n_layers):
@@ -496,12 +505,15 @@ def test_hyper_overrides_and_schedule_model_step():
                 - lr * (m / (1 - 0.9))
                 / ((v / (1 - 0.95)).sqrt() + 1e-8)).to(w.dtype)
 
+    from dataflow.runtime.engine import uniform_segments
+
     dry = Engine(FakeBackend()).execute(planned.program,
                                         initial_buffers=values)
     result = Engine(backend).execute(
         planned.program,
         resolver=build_resolver(dims, hyper=hyper),
-        initial_buffers=values, pool_prewarm=dry.pool_demand)
+        initial_buffers=values, pool_prewarm=dry.pool_demand,
+        run_args={"segments": uniform_segments(dims, planned.program)})
 
     worst = (0.0, "")
     checks = [("W_embed", "embed", golden.w_embed, leaves[0])] + [

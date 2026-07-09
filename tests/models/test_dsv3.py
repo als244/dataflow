@@ -237,10 +237,13 @@ def test_dsv3_ga2_matches_golden():
             moe_i += 1
     golden._opt_obj("head", golden.w_head)
 
+    from dataflow.runtime.engine import uniform_segments
+
     dry = Engine(FakeBackend()).execute(planned.program, initial_buffers=values)
     result = Engine(backend).execute(
         planned.program, resolver=fam.build_resolver(dims),
         initial_buffers=values, pool_prewarm=dry.pool_demand,
+        run_args={"segments": uniform_segments(dims, planned.program)},
     )
 
     def worst_field_err(object_id):
@@ -285,6 +288,8 @@ def _run(engine_kwargs=None, program=None, seed=7, resolver_wrapper=None):
 
     backend = CudaBackend()
     values = fam.initial_values(prog, cfg, backend, seed=seed)
+    from dataflow.runtime.engine import uniform_segments
+
     dry = Engine(FakeBackend()).execute(prog, initial_buffers=values)
     resolver = fam.build_resolver(fam.dims_of(cfg))
     if resolver_wrapper is not None:
@@ -292,6 +297,7 @@ def _run(engine_kwargs=None, program=None, seed=7, resolver_wrapper=None):
     result = Engine(backend, **(engine_kwargs or {})).execute(
         prog, resolver=resolver,
         initial_buffers=values, pool_prewarm=dry.pool_demand,
+        run_args={"segments": uniform_segments(fam.dims_of(cfg), prog)},
     )
     out = {}
     for obj_id in ["W_embed", "W_head"] + [f"W_{i}" for i in range(cfg.n_layers)]:

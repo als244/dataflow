@@ -74,7 +74,7 @@ class Qwen3BlockFwd(BlockFwd):
     @staticmethod
     def _stage_rope(kctx, K, d, st):
         q = torch.empty_like(st["qn"])
-        pos = ops.positions_for(d.seq_spec, q.shape[0], q.device)
+        pos = st["seg"].positions   # always varlen; run_args prologue
         K.rope_fwd(kctx, st["qn"], q, pos, d.n_heads, d.head_dim, d.rope_base)
         k = torch.empty_like(st["kn"])
         K.rope_fwd(kctx, st["kn"], k, pos, d.n_kv_heads, d.head_dim, d.rope_base)
@@ -147,7 +147,8 @@ class Qwen3BlockBwd(BlockBwd):
         kn = torch.empty_like(a["km"])
         K.rmsnorm_apply(kctx, km2, a["rstd_k"], w["k_norm_w"], kn.view(t * kvh, hd))
         q = torch.empty_like(qn)
-        pos = ops.positions_for(d.seq_spec, qn.shape[0], qn.device)
+        seg = a["_seg"]
+        pos = seg.positions          # always varlen; run_args prologue
         K.rope_fwd(kctx, qn, q, pos, h, hd, d.rope_base)
         del qn
         k = torch.empty_like(kn)
@@ -155,7 +156,8 @@ class Qwen3BlockBwd(BlockBwd):
         del kn
 
         dq, dk, dv = ops.flash_bwd(
-            d_attn, q, k, a["v"], a["attn_out"], a["lse"], h, kvh, hd, d.seq_spec,
+            d_attn, q, k, a["v"], a["attn_out"], a["lse"], h, kvh, hd,
+            cu_seqlens=seg.cu, max_seqlen=seg.max_len,
         )
         del d_attn, q, k
         dqn = torch.empty_like(dq)

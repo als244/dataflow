@@ -235,11 +235,22 @@ def install(server) -> None:
         st.emit("run_started", run_id=run_id, prog_id=entry.prog_id,
                 args=args)
 
+        # every run provides segments: the wire carries per-round `seq_lens`
+        # (cumulative boundaries) for packed runs, converted by the engine
+        # prologue; a uniform run sends neither, so synthesize the descriptor
+        # from the program's dims here (Segments objects stay in-process — the
+        # wire form is boundaries only)
+        rf = bridge.resolver_for(entry.resolver_spec)
+        run_args = args
+        if not args.get("segments") and not args.get("seq_lens"):
+            from dataflow.runtime.engine import uniform_segments
+
+            run_args = {**args, "segments": uniform_segments(rf[2], program)}
         result, err_kind, err_msg = bridge.execute_run(
-            program, bridge.resolver_for(entry.resolver_spec)[3], values,
+            program, rf[3], values,
             prog_id=entry.prog_id, store=store,
             placement=entry.placement, pool_demand=entry.pool_demand,
-            run_args=args, cancel_event=active_cancel)
+            run_args=run_args, cancel_event=active_cancel)
 
         rec.finished = time.time()
         entry.runs += 1

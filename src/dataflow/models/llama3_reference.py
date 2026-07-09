@@ -92,24 +92,35 @@ class GoldenLlama3:
 
     # --- forward --------------------------------------------------------------
 
-    def block_forward(self, x: torch.Tensor, w: Leaves) -> torch.Tensor:
+    def _segments(self, segments, device) -> "ops.Segments":
+        """This model's round segmentation (materialized on ``device``).
+        Explicit ``segments`` (direct-invocation gates that hand the SAME
+        Segments to the engine) win; otherwise derive from dims — one
+        materialization per forward, read as fields thereafter."""
+        if segments is not None:
+            return segments
+        return ops.Segments.of_dims(self.dims).on(device)
+
+    def block_forward(self, x: torch.Tensor, w: Leaves, segments=None) -> torch.Tensor:
         d = self.dims
+        seg = self._segments(segments, x.device)
         h1 = ops.rmsnorm_reference(x, w["attn_norm_w"])
-        pos = ops.positions_for(d.seq_spec, x.shape[0], x.device)
+        pos = seg.positions
         q = ops.rope_fwd(h1 @ w["wq"], pos, d.n_heads, d.head_dim, d.rope_base)
         k = ops.rope_fwd(h1 @ w["wk"], pos, d.n_kv_heads, d.head_dim, d.rope_base)
         v = h1 @ w["wv"]
-        attn = ops.attention_reference(q, k, v, d.n_heads, d.n_kv_heads, d.head_dim, d.seq_spec)
+        attn = ops.attention_reference(q, k, v, d.n_heads, d.n_kv_heads, d.head_dim, seg)
         h_mid = x + attn @ w["wo"]
         h2 = ops.rmsnorm_reference(h_mid, w["ffn_norm_w"])
         x1 = h2 @ w["w1"]
         x3 = h2 @ w["w3"]
         return h_mid + ops.swiglu_fwd(x1, x3) @ w["w2"]
 
-    def loss(self, tokens: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    def loss(self, tokens: torch.Tensor, targets: torch.Tensor, segments=None) -> torch.Tensor:
+        seg = self._segments(segments, self.w_embed["w"].device)
         x = self.w_embed["w"][tokens.long()]
         for w in self.w_blocks:
-            x = self.block_forward(x, w)
+            x = self.block_forward(x, w, seg)
         logits = ops.rmsnorm_reference(x, self.w_head["final_norm_w"]) @ self.w_head["w"].T
         return ops.ce_loss_reference(logits, targets)
 
@@ -143,10 +154,10 @@ class GoldenLlama3:
                 opt_dtype=TORCH_DTYPE_BY_NAME[dts.opt],
             )
 
-    def train_step(self, tokens: torch.Tensor, targets: torch.Tensor) -> float:
+    def train_step(self, tokens: torch.Tensor, targets: torch.Tensor, segments=None) -> float:
         for p in self.parameters():
             p.grad = None
-        loss = self.loss(tokens, targets)
+        loss = self.loss(tokens, targets, segments)
         loss.backward()
         self.step_count += 1
         self._opt_obj("embed", self.w_embed)

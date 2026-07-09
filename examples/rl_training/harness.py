@@ -258,11 +258,14 @@ def run(adapter, *, loss="ppo", steps=3, device_gib=2.0, out_dir=None):
             return rl_head
         return base_resolver(task)
 
+    from dataflow.runtime.engine import uniform_segments
+
     dry = Engine(FakeBackend()).execute(planned.program,
                                         initial_buffers=values)
     result = Engine(backend).execute(
         planned.program, resolver=resolver, initial_buffers=values,
-        pool_prewarm=dry.pool_demand)
+        pool_prewarm=dry.pool_demand,
+        run_args={"segments": uniform_segments(dims, planned.program)})
     engine_losses = [
         float(torch_view(result.objects.get(f"loss_{s}_0").backing.buffer,
                          (1,), torch.float32)[0])

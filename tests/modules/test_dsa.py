@@ -42,10 +42,6 @@ class _Dims:
     seq_lens: tuple = None
 
     @property
-    def seq_spec(self):
-        return self.seq_lens if self.seq_lens is not None else self.seq_len
-
-    @property
     def qk_head_dim(self) -> int:
         return self.qk_nope_dim + self.qk_rope_dim
 
@@ -81,7 +77,7 @@ def test_index_scores_vs_hand_loop():
 
     # hand loop
     t, hi, di, rope = d.tokens, d.index_n_heads, d.index_head_dim, d.qk_rope_dim
-    pos = ops.positions_for(d.seq_spec, t, h1.device)
+    pos = ops.Segments.of_dims(d).on(h1.device).positions
     q = (q_lora_n @ w["w_idx_q"]).view(t, hi, di)
     q_pe = ops.rope_fwd(q[..., :rope].reshape(t, hi * rope).contiguous(),
                         pos, hi, rope, d.rope_base).view(t, hi, rope)
@@ -287,7 +283,7 @@ def test_dsa_kernels_vs_references_and_autograd():
     assert torch.equal(idx.long(), ref_idx)
 
     mask = dsa_mask_from_idx(ref_idx, d, t)
-    bounds = tuple(ops.seq_bounds_of(ops.seq_lens_of(d.seq_spec, t), t))
+    bounds = tuple(ops.Segments.of_dims(d).bounds)
     qf, kf, vp = _mla_pad_tensors(d, seed=12)
 
     ref_out = dsa_sparse_attention_reference(qf, kf, vp, mask, d)
@@ -344,7 +340,7 @@ def test_dsa_index_bwd_vs_autograd():
              ).to(torch.bfloat16).requires_grad_()
     wts = (torch.randn(t, hi, generator=g, device="cuda") * 0.2
            ).float().requires_grad_()
-    bounds = tuple(ops.seq_bounds_of(ops.seq_lens_of(d.seq_spec, t), t))
+    bounds = tuple(ops.Segments.of_dims(d).bounds)
 
     # autograd of the score formula with an injected upstream d_scores
     q3 = q_idx.view(t, hi, di).float()
@@ -401,7 +397,8 @@ def _dsv32_dims(**over):
     return Dsv32Dims(**kw)
 
 
-def _golden_dsv32_block(x_ref, leaves, dims, kind, sel_idx=None, route_ids=None):
+def _golden_dsv32_block(x_ref, leaves, dims, kind, sel_idx=None, route_ids=None,
+                        segments=None):
     from dataflow.tasks import ops
     from dataflow.tasks.modules.dsa_reference import (
         dsa_index_scores_reference,
@@ -417,17 +414,17 @@ def _golden_dsv32_block(x_ref, leaves, dims, kind, sel_idx=None, route_ids=None)
     t = x_ref.shape[0]
     h, qk, v = d.n_heads, d.qk_head_dim, d.v_head_dim
     h1 = ops.rmsnorm_reference(x_ref, leaves["attn_norm_w"])
-    q_lora, q_full, k_full, v_pad = mla_qkv_reference(h1, leaves, d)
+    q_lora, q_full, k_full, v_pad = mla_qkv_reference(h1, leaves, d, segments)
 
-    scores = dsa_index_scores_reference(h1.detach(), q_lora.detach(), leaves, d)
+    scores = dsa_index_scores_reference(h1.detach(), q_lora.detach(), leaves, d, segments)
     if sel_idx is None:
         sel_idx = dsa_topk_reference(scores.detach(), d.index_topk)
-    mask = dsa_mask_from_idx(sel_idx.long(), d, t)
+    mask = dsa_mask_from_idx(sel_idx.long(), d, t, segments)
 
     qf = q_full.reshape(t, h * qk)
     kf = k_full.reshape(t, h * qk)
     vp = v_pad.reshape(t, h * qk)
-    attn_pad = dsa_sparse_attention_reference(qf, kf, vp, mask, d)
+    attn_pad = dsa_sparse_attention_reference(qf, kf, vp, mask, d, segments)
     attn = attn_pad.view(t, h, qk)[..., :v].reshape(t, h * v)
     h_mid = x_ref + attn @ leaves["wo"]
 
@@ -437,7 +434,7 @@ def _golden_dsv32_block(x_ref, leaves, dims, kind, sel_idx=None, route_ids=None)
         scale = qk ** -0.5
         q3 = q_full.detach().float()
         k3 = k_full.detach().float()
-        lens = ops.seq_lens_of(d.seq_spec, t)
+        lens = (segments if segments is not None else ops.Segments.of_dims(d)).lengths
         lo = 0
         for L in lens:
             hi = lo + L
@@ -502,16 +499,20 @@ def test_dsv32_block_ladder2(kind):
     dy = (torch.randn(dims.tokens, dims.d_model, generator=gen, device="cuda") * 0.5).to(torch.bfloat16)
 
     from dataflow.tasks.layouts import dsv32_meta_layout
+    from dataflow.tasks.ops import Segments
 
     a = {f.name: torch.empty(f.shape, dtype=TORCH_DTYPE_BY_NAME[f.dtype], device="cuda")
          for f in cl.fields}
     y = torch.empty_like(x)
+    # ONE materialized Segments handed to fwd/recompute (extras) and bwd
+    # (a["_seg"]) — the engine run-prologue that normally sets it
+    seg = Segments.of_dims(dims).on("cuda")
     # the layer's M object: ALL never-recompute metadata in one layout
     m_l = dsv32_meta_layout(dims, kind)
     meta_views = {f.name: torch.empty(f.shape, dtype=TORCH_DTYPE_BY_NAME[f.dtype],
                                       device="cuda") for f in m_l.fields}
     s_buf = meta_views["dsa_idx"]
-    extras = {"meta": meta_views}
+    extras = {"meta": meta_views, "seg": seg}
     fwd._forward(kctx, x, w, y, a, extras=dict(extras))
 
     a2 = {f.name: torch.empty(f.shape, dtype=TORCH_DTYPE_BY_NAME[f.dtype], device="cuda")
@@ -529,6 +530,7 @@ def test_dsv32_block_ladder2(kind):
     dwv = {f.name: torch.zeros(f.shape, device="cuda", dtype=TORCH_DTYPE_BY_NAME[f.dtype])
            for f in gl.fields}
     dx = torch.empty_like(x)
+    a["_seg"] = seg
     bwd._backward(kctx, dy, a, x, w, dx, dwv, accum=False,
                   meta={"meta": meta_views})
 
@@ -540,6 +542,7 @@ def test_dsv32_block_ladder2(kind):
         x_ref, leaves, dims, kind,
         sel_idx=s_buf,
         route_ids=meta_views.get("route_ids"),
+        segments=seg,
     )
     y_ref.backward(dy, retain_graph=True)
     aux_ref.backward()
@@ -590,10 +593,6 @@ def test_absorbed_op_matches_expanded_reference():
         n_heads, qk_head_dim, v_head_dim = h, d_qk, d_v
         tokens, seq_len, seq_lens = t, t, None
         index_topk = k_sel
-
-        @property
-        def seq_spec(self):
-            return t
 
     kf = kv.unsqueeze(1).expand(t, h, d_qk).reshape(t, h * d_qk).contiguous()
     vp = kv[:, :d_v].unsqueeze(1).expand(t, h, d_v).reshape(t, h * d_v).contiguous()

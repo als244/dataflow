@@ -122,13 +122,13 @@ class Dsv3DenseBlockFwd(BlockFwd):
         # ctx (bwd re-applies) and the normalized value locally
         q_lora_n = torch.empty_like(q_a)
         K.rmsnorm_fwd(kctx, q_a, w["q_a_norm_w"], q_lora_n, rstd_qa)
-        pos = ops.positions_for(d.seq_spec, t, h1.device)
+        pos = st["seg"].positions   # always varlen; run_args prologue
         h, nope, rope = d.n_heads, d.qk_nope_dim, d.qk_rope_dim
         q_full = q_lora_n @ w["w_q_b"]
         K.rope_fwd(kctx, q_full, q_full, pos, h, rope, d.rope_base,
                    row_stride=h * d.qk_head_dim, head_stride=d.qk_head_dim,
                    col_base=nope)
-        st.update(q_full=q_full, pos=pos)
+        st.update(q_full=q_full)
         if a is not None and "rstd_qa" in a:
             a["rstd_qa"].copy_(rstd_qa)
         else:
@@ -150,8 +150,8 @@ class Dsv3DenseBlockFwd(BlockFwd):
         K.rmsnorm_fwd(kctx, latent_pre, w["kv_a_norm_w"], latent_n, rstd_kva)
         h, nope, rope, v = d.n_heads, d.qk_nope_dim, d.qk_rope_dim, d.v_head_dim
         k_rope = torch.empty(t, rope, dtype=kv_a.dtype, device=kv_a.device)
-        K.rope_fwd(kctx, kv_a[:, kvl:].contiguous(), k_rope, st["pos"], 1, rope,
-                   d.rope_base)
+        K.rope_fwd(kctx, kv_a[:, kvl:].contiguous(), k_rope, st["seg"].positions,
+                   1, rope, d.rope_base)
         kvb = (latent_n @ w["w_kv_b"]).view(t, h, nope + v)
         k_full = torch.cat(
             [kvb[..., :nope], k_rope.view(t, 1, rope).expand(t, h, rope)], dim=-1,
@@ -168,7 +168,7 @@ class Dsv3DenseBlockFwd(BlockFwd):
         t, h, qk, v = d.tokens, d.n_heads, d.qk_head_dim, d.v_head_dim
         out_pad, lse = ops.flash_fwd(
             st.pop("q_full"), st.pop("k_full"), st.pop("v_pad"),
-            h, h, qk, d.seq_spec,
+            h, h, qk, cu_seqlens=st["seg"].cu, max_seqlen=st["seg"].max_len,
         )
         attn_out = out_pad.view(t, h, qk)[..., :v].reshape(t, h * v).contiguous()
         del out_pad
@@ -255,7 +255,8 @@ class Dsv3DenseBlockBwd(BlockBwd):
         if acc.wanted("wo"):
             acc("wo", a["attn_out"].T @ dh_mid)
 
-        pos = ops.positions_for(d.seq_spec, t, x.device)
+        seg = a["_seg"]
+        pos = seg.positions          # always varlen; run_args prologue
         q_lora_n, q_full = _mla_expand_q(kctx, K, d, a["q_a"], a["rstd_qa"], w, pos)
         latent_n, k_full, vals = _mla_expand_kv(
             kctx, K, d, a["kv_a"], a["rstd_kva"], w, pos,
@@ -269,7 +270,7 @@ class Dsv3DenseBlockBwd(BlockBwd):
         del d_attn_v
         dq, dk, dv_pad = ops.flash_bwd(
             d_attn_pad, q_full, k_full, v_pad, attn_out_pad, a["lse"],
-            h, h, qk, d.seq_spec,
+            h, h, qk, cu_seqlens=seg.cu, max_seqlen=seg.max_len,
         )
         del d_attn_pad, q_full, k_full, v_pad, attn_out_pad
 

@@ -58,17 +58,18 @@ def test_no_args_is_legacy():
                      tol=3e-2).assert_ok()
 
 
-def test_packed_mode_never_touches_pageable_lru(monkeypatch):
-    """THE implicit-sync gate (Shein): the ENGINE side of a packed
-    run must never reach the ops-level lru positions builder (CPU
-    cat + pageable .to() per fresh lens — cache thrash + mid-round
-    implicit sync). Positions come from the per-run pinned-staged
-    run_cache. (The golden reference legitimately uses the lru path
-    on the harness side, so this gate drives the engine alone.)"""
+def test_packed_mode_materializes_positions_once(monkeypatch):
+    """THE implicit-sync gate (Shein): a packed run materializes the round's
+    Segments (cu/positions device tensors) EXACTLY ONCE — the prologue's
+    pinned + non_blocking copy, before task 0 — never per-block or per-round.
+    Blocks read seg.positions/seg.cu as fields; a regression that rebuilt a
+    device tensor mid-round (a pageable H2D / hidden sync) would bump the
+    call count. (The golden reference legitimately materializes on the
+    harness side; this gate drives the ENGINE alone.)"""
     from dataflow.runtime import Engine
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.runtime.device.fake import FakeBackend
-    from dataflow.tasks import ops
+    from dataflow.tasks.ops import Segments
     from dataflow.training.families import resolve_family
     from dataflow.training.planning import plan_program
 
@@ -81,15 +82,20 @@ def test_packed_mode_never_touches_pageable_lru(monkeypatch):
     dry = Engine(FakeBackend()).execute(planned.program,
                                         initial_buffers=values)
 
-    def _boom(*a, **k):
-        raise AssertionError(
-            "pageable _positions_cached reached from packed-args mode")
+    real_on = Segments.on
+    calls = {"n": 0}
 
-    monkeypatch.setattr(ops, "_positions_cached", _boom)
+    def counting_on(self, device):
+        calls["n"] += 1
+        return real_on(self, device)
+
+    monkeypatch.setattr(Segments, "on", counting_on)
     result = Engine(backend).execute(
         planned.program, resolver=fam.build_resolver(fam.dims_of(cfg)),
         initial_buffers=values, pool_prewarm=dry.pool_demand,
         run_args=RA)
+    # one round -> one distinct segmentation -> a single materialization
+    assert calls["n"] == 1
     result.close()
     dry.close()
     from dataflow.tasks.interop import clear_view_cache
@@ -103,32 +109,32 @@ def test_prologue_positions():
     import torch as _t
 
     from dataflow.runtime.device.cuda import CudaBackend
-    from dataflow.runtime.engine import packed_run_args
+    from dataflow.runtime.engine import prologue_run_args
 
-    out = packed_run_args({"seq_lens": {"0": [0, 5, 8]}}, CudaBackend())
-    pos = out["positions_cuda"]["0"]
-    assert pos.device.type == "cuda" and pos.dtype == _t.int32
-    assert pos.cpu().tolist() == [0, 1, 2, 3, 4, 0, 1, 2]
+    out = prologue_run_args({"seq_lens": {"0": [0, 5, 8]}}, CudaBackend())
+    seg = out["segments"]["0"]
+    assert seg.positions.device.type == "cuda" and seg.positions.dtype == _t.int32
+    assert seg.positions.cpu().tolist() == [0, 1, 2, 3, 4, 0, 1, 2]
 
 
 def test_prologue_derives_max_seqlen_and_mirrors():
-    """packed_run_args: boundary validation, tight per-round max,
-    device mirrors; caller's dict untouched."""
+    """prologue_run_args: wire boundaries -> materialized Segments; tight
+    per-round max_len, device cu mirror; caller's dict untouched."""
     import torch as _t
 
-    from dataflow.runtime.engine import packed_run_args
+    from dataflow.runtime.engine import prologue_run_args
     from dataflow.runtime.device.cuda import CudaBackend
 
     ra = {"step": 3,
           "seq_lens": {"0": [0, 73, 111, 128], "1": [0, 50, 128]}}
-    out = packed_run_args(ra, CudaBackend())
-    assert out["max_seqlen"] == {"0": 73, "1": 78}
-    assert "max_seqlen" not in ra and "seq_lens_cuda" not in ra
-    cu0 = out["seq_lens_cuda"]["0"]
+    out = prologue_run_args(ra, CudaBackend())
+    assert out["segments"]["0"].max_len == 73 and out["segments"]["1"].max_len == 78
+    assert "segments" not in ra  # caller's dict untouched
+    cu0 = out["segments"]["0"].cu
     assert cu0.device.type == "cuda" and cu0.dtype == _t.int32
     assert cu0.cpu().tolist() == [0, 73, 111, 128]
 
     with pytest.raises(ValueError):
-        packed_run_args({"seq_lens": {"0": [5, 3]}}, CudaBackend())
+        prologue_run_args({"seq_lens": {"0": [5, 3]}}, CudaBackend())
     with pytest.raises(ValueError):
-        packed_run_args({"seq_lens": {"0": [0, 10, 7]}}, CudaBackend())
+        prologue_run_args({"seq_lens": {"0": [0, 10, 7]}}, CudaBackend())

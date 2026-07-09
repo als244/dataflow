@@ -34,9 +34,11 @@ def test_causal_mask_does_not_leak_across_batch():
     q = torch.randn(2 * s, d, device="cuda", dtype=torch.bfloat16)
     k = torch.randn(2 * s, 64, device="cuda", dtype=torch.bfloat16)
     v = torch.randn(2 * s, 64, device="cuda", dtype=torch.bfloat16)
-    batched, _ = ops.flash_fwd(q, k, v, 8, 2, 32, seq_len=s)
-    per0, _ = ops.flash_fwd(q[:s], k[:s], v[:s], 8, 2, 32, seq_len=s)
-    per1, _ = ops.flash_fwd(q[s:], k[s:], v[s:], 8, 2, 32, seq_len=s)
+    seg2 = ops.Segments.uniform(s, 2).on(q.device)
+    seg1 = ops.Segments.uniform(s, 1).on(q.device)
+    batched, _ = ops.flash_fwd(q, k, v, 8, 2, 32, cu_seqlens=seg2.cu, max_seqlen=seg2.max_len)
+    per0, _ = ops.flash_fwd(q[:s], k[:s], v[:s], 8, 2, 32, cu_seqlens=seg1.cu, max_seqlen=seg1.max_len)
+    per1, _ = ops.flash_fwd(q[s:], k[s:], v[s:], 8, 2, 32, cu_seqlens=seg1.cu, max_seqlen=seg1.max_len)
     assert torch.equal(batched[:s], per0)
     assert torch.equal(batched[s:], per1)
 
@@ -73,10 +75,13 @@ def test_batch_ga_model_step_matches_golden():
         golden._opt_obj(f"block_{i}", leaves)
     golden._opt_obj("head", golden.w_head)
 
+    from dataflow.runtime.engine import uniform_segments
+
     dry = Engine(FakeBackend()).execute(planned.program, initial_buffers=values)
     result = Engine(backend).execute(
         planned.program, resolver=build_resolver(dims),
         initial_buffers=values, pool_prewarm=dry.pool_demand,
+        run_args={"segments": uniform_segments(dims, planned.program)},
     )
 
     def worst_field_err(object_id: str) -> float:

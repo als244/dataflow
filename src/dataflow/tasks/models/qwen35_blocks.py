@@ -53,16 +53,16 @@ from ..base_blocks import AdamWHyper, AdamWStep, EmbedBwd, EmbedFwd, HeadLoss
 from .llama3_blocks import BlockBwd, BlockFwd, BlockRecompute
 
 
-def _cu_seqlens(dims: Qwen35Dims, device) -> tuple:
-    """(cu_seqlens, chunk_indices) for packed rounds — ragged-aware via the
-    dims' seq spec; (None, None) when the round is a single sequence."""
-    lens = ops.seq_lens_of(dims.seq_spec, dims.tokens)
-    if len(lens) == 1:
+def _cu_seqlens(seg) -> tuple:
+    """(cu_seqlens int64, chunk_indices) for packed rounds — from the round's
+    Segments; (None, None) for a single sequence (fla's non-varlen path). cu
+    is a device->device cast of the already-materialized ``seg.cu`` (int32) —
+    no host->device build / hidden sync."""
+    if len(seg.lengths) == 1:
         return None, None
     from fla.modules.conv.triton.ops import prepare_chunk_indices
 
-    cu = torch.zeros(len(lens) + 1, device=device, dtype=torch.int64)
-    torch.cumsum(torch.tensor(lens, device=device, dtype=torch.int64), 0, out=cu[1:])
+    cu = seg.cu.to(torch.int64)
     return cu, prepare_chunk_indices(cu, 64)
 
 
@@ -104,7 +104,7 @@ class Qwen35LinBlockFwd(BlockFwd):
     @staticmethod
     def _stage_conv(kctx, K, d, st):
         conv_in = st["qkvz"][:, : d.conv_dim].contiguous()
-        cu, _ci = _cu_seqlens(d, conv_in.device)
+        cu, _ci = _cu_seqlens(st["seg"])
         post = torch.empty_like(conv_in)
         K.causal_conv1d_silu_fwd(kctx, conv_in, st["w"]["w_conv"], post, cu)
         st["post_conv"] = post
@@ -131,7 +131,7 @@ class Qwen35LinBlockFwd(BlockFwd):
         b = st["ba"][:, : d.lin_v_heads]
         a_raw = st["ba"][:, d.lin_v_heads :].contiguous()
         beta = torch.sigmoid(b.float()).to(b.dtype)
-        cu, ci = _cu_seqlens(d, b.device)
+        cu, ci = _cu_seqlens(st["seg"])
         g_post, o, A_int, _fs, _is, _gi = chunk_gated_delta_rule_fwd(
             st["qn"].unsqueeze(0), st["kn"].unsqueeze(0),
             st["v_h"].unsqueeze(0).contiguous(),
@@ -263,7 +263,7 @@ class Qwen35LinBlockBwd(BlockBwd):
 
         # --- recompute conv/l2norm inputs from saved qkvz ---
         conv_in = a["qkvz"][:, : d.conv_dim].contiguous()
-        cu, ci = _cu_seqlens(d, dxo.device)
+        cu, ci = _cu_seqlens(a["_seg"])
         post = torch.empty_like(conv_in)
         K.causal_conv1d_silu_fwd(kctx, conv_in, w["w_conv"], post, cu)
         q2 = post[:, : d.key_dim].reshape(t * d.lin_k_heads, d.lin_k_head_dim).contiguous()
@@ -355,15 +355,15 @@ class Qwen35AttnBlockFwd(BlockFwd):
         return qwen35_attn_context_layout(self.dims)
 
     @staticmethod
-    def _partial_rope(kctx, K, d, x, heads, *, bwd: bool = False):
-        """Rotate only the first rot_dim channels per head; pass the rest."""
+    def _partial_rope(kctx, K, d, x, heads, pos, *, bwd: bool = False):
+        """Rotate only the first rot_dim channels per head; pass the rest.
+        ``pos`` = the run_args prologue positions (always varlen)."""
         t = x.shape[0]
         rot = d.rot_dim
         xh = x.view(t, heads, d.head_dim)
         rs = xh[:, :, :rot].contiguous().view(t, heads * rot)
         out = torch.empty_like(rs)
         fn = K.rope_bwd if bwd else K.rope_fwd
-        pos = ops.positions_for(d.seq_spec, t, rs.device)
         fn(kctx, rs, out, pos, heads, rot, d.rope_base)
         y = torch.empty_like(xh)
         y[:, :, :rot] = out.view(t, heads, rot)
@@ -404,8 +404,8 @@ class Qwen35AttnBlockFwd(BlockFwd):
         kn = torch.empty_like(st["km"])
         rstd_k = torch.empty(t * kvh, dtype=torch.float32, device=kn.device)
         K.rmsnorm_fwd(kctx, st["km"].view(t * kvh, hd), st["w"]["k_norm_w"], kn.view(t * kvh, hd), rstd_k)
-        st["q"] = Qwen35AttnBlockFwd._partial_rope(kctx, K, d, qn, h)
-        st["k"] = Qwen35AttnBlockFwd._partial_rope(kctx, K, d, kn, kvh)
+        st["q"] = Qwen35AttnBlockFwd._partial_rope(kctx, K, d, qn, h, st["seg"].positions)
+        st["k"] = Qwen35AttnBlockFwd._partial_rope(kctx, K, d, kn, kvh, st["seg"].positions)
         st.pop("qm"), st.pop("km")
         if st["a"] is not None:
             st["a"]["rstd_q"].copy_(rstd_q)
@@ -414,7 +414,8 @@ class Qwen35AttnBlockFwd(BlockFwd):
     @staticmethod
     def _stage_attn(kctx, K, d, st):
         attn_out, lse = ops.flash_fwd(
-            st["q"], st["k"], st["v"], d.n_heads, d.n_kv_heads, d.head_dim, d.seq_spec,
+            st["q"], st["k"], st["v"], d.n_heads, d.n_kv_heads, d.head_dim,
+            cu_seqlens=st["seg"].cu, max_seqlen=st["seg"].max_len,
         )
         st.pop("q"), st.pop("k"), st.pop("v")
         st["attn_out"] = attn_out
@@ -505,17 +506,20 @@ class Qwen35AttnBlockBwd(BlockBwd):
         K.rmsnorm_apply(kctx, a["qm"].view(t * h, hd), a["rstd_q"], w["q_norm_w"], qn.view(t * h, hd))
         kn = torch.empty_like(a["km"])
         K.rmsnorm_apply(kctx, a["km"].view(t * kvh, hd), a["rstd_k"], w["k_norm_w"], kn.view(t * kvh, hd))
-        q = Qwen35AttnBlockFwd._partial_rope(kctx, K, d, qn, h)
+        seg = a["_seg"]
+        pos = seg.positions          # always varlen; run_args prologue
+        q = Qwen35AttnBlockFwd._partial_rope(kctx, K, d, qn, h, pos)
         del qn
-        k = Qwen35AttnBlockFwd._partial_rope(kctx, K, d, kn, kvh)
+        k = Qwen35AttnBlockFwd._partial_rope(kctx, K, d, kn, kvh, pos)
         del kn
         dq, dk, dv = ops.flash_bwd(
-            d_attn, q, k, a["v"], a["attn_out"], a["lse"], h, kvh, hd, d.seq_spec,
+            d_attn, q, k, a["v"], a["attn_out"], a["lse"], h, kvh, hd,
+            cu_seqlens=seg.cu, max_seqlen=seg.max_len,
         )
         del d_attn, q, k
-        dqn = Qwen35AttnBlockFwd._partial_rope(kctx, K, d, dq, h, bwd=True)
+        dqn = Qwen35AttnBlockFwd._partial_rope(kctx, K, d, dq, h, pos, bwd=True)
         del dq
-        dkn = Qwen35AttnBlockFwd._partial_rope(kctx, K, d, dk, kvh, bwd=True)
+        dkn = Qwen35AttnBlockFwd._partial_rope(kctx, K, d, dk, kvh, pos, bwd=True)
         del dk
 
         dqm, dqnorm = norm_bwd(dqn.view(t * h, hd), a["qm"].view(t * h, hd), a["rstd_q"], w["q_norm_w"])

@@ -24,19 +24,20 @@ class GoldenQwen3(GoldenLlama3):
     def block_layout(self, layer: int | None = None) -> PackedLayout:
         return qwen3_weight_layout(self.dims, layer=layer)
 
-    def block_forward(self, x: torch.Tensor, w: dict[str, torch.Tensor]) -> torch.Tensor:
+    def block_forward(self, x: torch.Tensor, w: dict[str, torch.Tensor], segments=None) -> torch.Tensor:
         d = self.dims
+        seg = self._segments(segments, x.device)
         t, h, kvh, hd = d.tokens, d.n_heads, d.n_kv_heads, d.head_dim
         h1 = ops.rmsnorm_reference(x, w["attn_norm_w"])
         qm = (h1 @ w["wq"]).view(t, h, hd)
         km = (h1 @ w["wk"]).view(t, kvh, hd)
         qn = ops.rmsnorm_reference(qm, w["q_norm_w"]).view(t, d.q_dim)
         kn = ops.rmsnorm_reference(km, w["k_norm_w"]).view(t, d.kv_dim)
-        pos = ops.positions_for(d.seq_spec, x.shape[0], x.device)
+        pos = seg.positions
         q = ops.rope_fwd(qn, pos, h, hd, d.rope_base)
         k = ops.rope_fwd(kn, pos, kvh, hd, d.rope_base)
         v = h1 @ w["wv"]
-        attn = ops.attention_reference(q, k, v, h, kvh, hd, d.seq_spec)
+        attn = ops.attention_reference(q, k, v, h, kvh, hd, seg)
         h_mid = x + attn @ w["wo"]
         h2 = ops.rmsnorm_reference(h_mid, w["ffn_norm_w"])
         x1 = h2 @ w["w1"]

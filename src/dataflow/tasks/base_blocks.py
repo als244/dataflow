@@ -132,47 +132,22 @@ class _Base:
         parts = ctx.task.id.rsplit("_", 3)
         return parts[2] if len(parts) >= 3 else "0"
 
-    def _seq_for(self, ctx):
-        """Per-round sequence LENS for this task. Packed mode:
-        run_args["seq_lens"] carries CUMULATIVE BOUNDARIES
-        [0, b1, ..., t] per round (Shein's notation); lens are the
-        diffs. Else the static dims.seq_spec. Objects carry bytes;
-        args carry step metadata."""
+    def _attn_meta(self, ctx):
+        """The round's ``Segments`` — the SINGLE varlen descriptor every
+        family's fwd/bwd attention + rope reads (models ALWAYS run varlen).
+        Already materialized (``seg.cu`` / ``seg.positions`` device fields,
+        ``seg.max_len`` host int) by the engine's run prologue; stages read
+        them as attributes, never rebuilding a device tensor mid-round.
+        Round parsed from the task id ({s}_{r})."""
         ra = ctx.run_args or {}
-        sl = ra.get("seq_lens")
-        if not sl:
-            return self.dims.seq_spec
-        b = sl.get(self._round_of(ctx)) if isinstance(sl, dict) else None
-        if not b:
-            return self.dims.seq_spec
-        return tuple(b[i + 1] - b[i] for i in range(len(b) - 1))
-
-    def _max_seqlen_for(self, ctx):
-        """Tight per-round max segment length (host int, derived by
-        the engine prologue). None in static mode."""
-        mx = (ctx.run_args or {}).get("max_seqlen")
-        if not mx:
-            return None
-        return mx.get(self._round_of(ctx))
-
-    def _cu_for(self, ctx):
-        """Device int32 boundary tensor for this round (mirrored once
-        at run start by the engine prologue) — feeds the SINGLE-LAUNCH
-        varlen attention path. None in static mode."""
-        ra = ctx.run_args or {}
-        dev = ra.get("seq_lens_cuda")
-        if not dev:
-            return None
-        return dev.get(self._round_of(ctx))
-
-    def _pos_cuda_for(self, ctx):
-        """Device positions for this round, derived ONCE by the engine
-        prologue (concatenated [0, len_i) ranges). None in static
-        mode — no host derivation or per-task build anywhere."""
-        pc = (ctx.run_args or {}).get("positions_cuda")
-        if not pc:
-            return None
-        return pc.get(self._round_of(ctx))
+        r = self._round_of(ctx)
+        segs = ra.get("segments")
+        if not segs or r not in segs:
+            raise RuntimeError(
+                f"packed metadata missing for round {r!r}: every run must "
+                f"provide run_args['seq_lens'] (the engine prologue then "
+                f"derives run_args['segments'] = {{round: Segments}})")
+        return segs[r]
 
     def _meta_state(self, ctx) -> dict | None:
         """Family hook: st entries for METADATA objects (M_{s}_{r}_{i} —

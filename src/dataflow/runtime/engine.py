@@ -38,43 +38,62 @@ from .trace import Interval, RunTrace, TraceEvent
 from .transfers import TransferDone, TransferEngine, TransferJob
 
 
-def packed_run_args(run_args: dict, backend) -> dict:
-    """Packed-mode RUN-START prologue (documented convention,
-    family-agnostic): run_args["seq_lens"] = {round: [0, b1, ..., t]}
-    CUMULATIVE BOUNDARIES (host ints). Derives, once, before task 0:
-    - "seq_lens_cuda": device int32 mirror per round (pinned staging
-      + non_blocking copy — never a pageable H2D mid-round);
-    - "max_seqlen": {round: max segment length} host ints (tight
-      flash grid sizing instead of the conservative full-grid value);
-    - "positions_cuda": device int32 per round — concatenated ranges
-      [0, len_i) per segment (rope positions; no host derivation or
-      per-task build anywhere downstream).
-    Returns an augmented COPY; the caller's dict is untouched."""
-    mx = {}
-    for r, b in run_args["seq_lens"].items():
-        b = list(b)
-        if len(b) < 2 or b[0] != 0 or any(
-                b[i + 1] < b[i] for i in range(len(b) - 1)):
-            raise ValueError(f"seq_lens[{r}] must be cumulative "
-                             f"boundaries starting at 0, got {b}")
-        mx[r] = max(b[i + 1] - b[i] for i in range(len(b) - 1))
-    out = {**run_args, "max_seqlen": mx}
-    if getattr(backend, "physical", False):
-        import torch as _torch
+def prologue_run_args(run_args: dict, backend) -> dict:
+    """Run-START prologue (family-agnostic): normalize run_args to per-round
+    MATERIALIZED Segments — run_args["segments"] = {round: Segments} with the
+    ``cu`` / ``positions`` device fields built ONCE, before task 0, via a
+    pinned + non_blocking copy (never a pageable H2D mid-round; the
+    hidden-sync rule). Every block/stage downstream reads ``seg.cu`` /
+    ``seg.positions`` / ``seg.max_len`` as fields — no host derivation or
+    per-task device build anywhere.
 
-        dev, pos = {}, {}
+    Input is EITHER the clean internal form run_args["segments"] = {round:
+    Segments} (host; direct callers build these straight from dims) OR the
+    wire-serializable run_args["seq_lens"] = {round: [0, b1, ..., t]}
+    cumulative boundaries (the daemon/client protocol), converted here.
+    Distinct host Segments materialize once (identity-deduped, so the uniform
+    case — one Segments shared across rounds — makes a single device copy).
+    Host Segments pass through unmaterialized on non-physical backends
+    (planning/sim). Returns an augmented COPY; the caller's dict is
+    untouched."""
+    from dataflow.tasks.ops import Segments
+
+    segs = run_args.get("segments")
+    if segs is None:
+        # wire form: cumulative boundaries -> Segments (validates from-0)
+        segs = {r: Segments.from_boundaries(b)
+                for r, b in run_args["seq_lens"].items()}
+    if getattr(backend, "physical", False):
         tgt = f"cuda:{backend.device}"
-        for r, b in run_args["seq_lens"].items():
-            b = list(b)
-            host = _torch.tensor(b, dtype=_torch.int32).pin_memory()
-            dev[r] = host.to(tgt, non_blocking=True)
-            phost = _torch.cat([
-                _torch.arange(b[i + 1] - b[i], dtype=_torch.int32)
-                for i in range(len(b) - 1)]).pin_memory()
-            pos[r] = phost.to(tgt, non_blocking=True)
-        out["seq_lens_cuda"] = dev
-        out["positions_cuda"] = pos
-    return out
+        done: dict[int, object] = {}
+
+        def _mat(s):
+            if id(s) not in done:
+                done[id(s)] = s.on(tgt)
+            return done[id(s)]
+
+        segs = {r: _mat(s) for r, s in segs.items()}
+    return {**run_args, "segments": segs}
+
+
+def uniform_segments(dims, program) -> dict:
+    """The standard (unpacked / fixed-shape) path's run_args["segments"]:
+    every round appearing in ``program`` maps to the SAME host ``Segments``
+    implied by ``dims`` (``batch`` uniform ``seq_len`` sequences, or the
+    config's fixed ``seq_lens``) — one shared object, materialized once by the
+    prologue. This is where the non-packed caller (train loop, gradcheck)
+    commits to "every run provides segments". Round key is the task id's
+    ``{s}_{r}_{i}`` middle field (matches _Base._round_of), a superset of
+    block rounds; extra keys are harmless."""
+    from dataflow.tasks.ops import Segments
+
+    seg = Segments.of_dims(dims)
+    rounds = set()
+    for t in program.tasks:
+        parts = t.id.rsplit("_", 3)
+        if len(parts) >= 3:
+            rounds.add(parts[2])
+    return {r: seg for r in (rounds or {"0"})}
 
 
 class CancelledRun(RuntimeError):
@@ -382,8 +401,8 @@ class Engine:
             stats["token_detect_lat"] = 0.0
             stats["token_detect_n"] = 0
             state.stats = stats
-        if run_args and run_args.get("seq_lens"):
-            run_args = packed_run_args(run_args, self.backend)
+        if run_args and (run_args.get("segments") or run_args.get("seq_lens")):
+            run_args = prologue_run_args(run_args, self.backend)
         for task_pos, task in enumerate(program.tasks):
             # service boundary-cancel: observed ONLY here, between task
             # dispatches — in-flight work drains normally, the ledger

@@ -164,11 +164,6 @@ class LlamaDims:
     seq_lens: tuple[int, ...] | None = None
 
     @property
-    def seq_spec(self):
-        """int (uniform) or tuple (ragged) — the ops-layer seq argument."""
-        return self.seq_lens if self.seq_lens is not None else self.seq_len
-
-    @property
     def head_dim(self) -> int:
         return self.d_model // self.n_heads
 
@@ -205,11 +200,6 @@ class Qwen3Dims:
     seq_lens: tuple[int, ...] | None = None
 
     @property
-    def seq_spec(self):
-        """int (uniform) or tuple (ragged) — the ops-layer seq argument."""
-        return self.seq_lens if self.seq_lens is not None else self.seq_len
-
-    @property
     def q_dim(self) -> int:
         return self.n_heads * self.head_dim
 
@@ -243,13 +233,13 @@ def _policy_of(dims) -> DTypePolicy:
 
 
 def _lse_spec(dims, n_heads: int) -> tuple[str, tuple[int, ...], str]:
-    """Flash lse context field. Uniform batches keep the historical
-    (batch*heads, seq_len) shape; ragged packing stores (heads, tokens)
-    (same element count — ops.flash_fwd emits the matching layout)."""
-    t = dims.tokens
-    if getattr(dims, "seq_lens", None) is not None and len(set(dims.seq_lens)) > 1:
-        return ("lse", (n_heads, t), "fp32")
-    return ("lse", ((t // dims.seq_len) * n_heads, dims.seq_len), "fp32")
+    """Flash lse context field: always the varlen ``(heads, tokens)`` layout.
+    Models ALWAYS run varlen (a uniform batch is equal-length segments), so
+    ops.flash_fwd emits this shape for every case — never the historical
+    batched ``(batch*heads, seq_len)`` (identical element count, but the
+    per-batch split reappears only for batch>1 and would mismatch the
+    single-launch lse)."""
+    return ("lse", (n_heads, dims.tokens), "fp32")
 
 
 def grad_layout(weight: PackedLayout, policy: DTypePolicy,
@@ -504,10 +494,6 @@ class Dsv3Dims:
     dtypes: DTypePolicy = DTypePolicy()
     seq_lens: tuple[int, ...] | None = None
     moe: MoESpec | None = None
-
-    @property
-    def seq_spec(self):
-        return self.seq_lens if self.seq_lens is not None else self.seq_len
 
     @property
     def qk_head_dim(self) -> int:
@@ -813,11 +799,6 @@ class Qwen35Dims:
     # explicit per-sequence lengths for ragged packing (sum == tokens);
     # None = uniform sequences of seq_len
     seq_lens: tuple[int, ...] | None = None
-
-    @property
-    def seq_spec(self):
-        """int (uniform) or tuple (ragged) — the ops-layer seq argument."""
-        return self.seq_lens if self.seq_lens is not None else self.seq_len
 
     @property
     def attn_dim(self) -> int:

@@ -53,9 +53,9 @@ _IDX_FIELDS = ("w_idx_q", "w_idx_k", "idx_k_ln_w", "idx_k_ln_b", "w_idx_w")
 class GoldenDsv32(GoldenDsv3):
     dims: Dsv32Dims  # re-typed
 
-    def train_step(self, tokens, targets) -> float:
+    def train_step(self, tokens, targets, segments=None) -> float:
         if getattr(self.dims, "sparse_mode", True):
-            return super().train_step(tokens, targets)
+            return super().train_step(tokens, targets, segments)
         # dense warm-up: the OBJECTIVE is the indexer KL alone — the
         # specialized program has no head, no CE, no dy chain. The
         # reported loss is the summed per-layer KL(p || sigma), exactly
@@ -63,21 +63,22 @@ class GoldenDsv32(GoldenDsv3):
         self._pending_counts = []
         for p_ in self.parameters():
             p_.grad = None
-        kl_total = self.warmup_kl(tokens)
+        kl_total = self.warmup_kl(tokens, segments)
         kl_total.backward()
         self.step_count += 1
         for i, leaves in enumerate(self.w_blocks):
             self._opt_obj(f"block_{i}", leaves)
         return float(kl_total.detach())
 
-    def warmup_kl(self, tokens) -> "torch.Tensor":
+    def warmup_kl(self, tokens, segments=None) -> "torch.Tensor":
         """Forward through the blocks (no head) summing each layer's
         KL — for dsv32 the training objective and the reported value
         coincide (every layer is its own group)."""
         x = self.w_embed["w"][tokens.long()]
+        seg = self._segments(segments, x.device)
         total = None
         for w in self.w_blocks:
-            x, kl = self.block_forward(x, w)
+            x, kl = self.block_forward(x, w, segments=seg)
             total = kl if total is None else total + kl
         return total
 
@@ -88,32 +89,33 @@ class GoldenDsv32(GoldenDsv3):
 
     def block_forward(
         self, x: torch.Tensor, w: dict[str, torch.Tensor],
-        route_ids: torch.Tensor | None = None,
+        route_ids: torch.Tensor | None = None, segments=None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         d = self.dims
+        seg = self._segments(segments, x.device)
         t = x.shape[0]
         h, qk, v = d.n_heads, d.qk_head_dim, d.v_head_dim
         h1 = ops.rmsnorm_reference(x, w["attn_norm_w"])
-        q_lora, q_full, k_full, v_pad = mla_qkv_reference(h1, w, d)
+        q_lora, q_full, k_full, v_pad = mla_qkv_reference(h1, w, d, seg)
 
         # indexer scores (input DETACHED — the paper's seam: CE never
         # reaches the indexer) + the mode's mask (sparse top-k live set
         # vs dense warm-up causal — dsa_selection_mask_reference)
-        scores = dsa_index_scores_reference(h1.detach(), q_lora.detach(), w, d)
-        mask = dsa_selection_mask_reference(scores, d, t, x.device)
+        scores = dsa_index_scores_reference(h1.detach(), q_lora.detach(), w, d, seg)
+        mask = dsa_selection_mask_reference(scores, d, t, x.device, seg)
         train_idx = getattr(d, "train_indexer", True)
 
         qf = q_full.reshape(t, h * qk)
         kf = k_full.reshape(t, h * qk)
         vp = v_pad.reshape(t, h * qk)
-        attn = dsa_sparse_attention_reference(qf, kf, vp, mask, d)
+        attn = dsa_sparse_attention_reference(qf, kf, vp, mask, d, seg)
         attn = attn.view(t, h, qk)[..., :v].reshape(t, h * v)
         h_mid = x + attn @ w["wo"]
 
         # per-layer indexer objective: KL(p || sigma) with p = this
         # layer's own attention rows on the mask's live set
         if train_idx:
-            p = dsa_attention_rows_reference(q_full, k_full, mask, d, t)
+            p = dsa_attention_rows_reference(q_full, k_full, mask, d, t, seg)
             kl = dsa_indexer_kl_reference(scores, mask, p)
         else:
             kl = torch.zeros((), dtype=torch.float32, device=x.device)

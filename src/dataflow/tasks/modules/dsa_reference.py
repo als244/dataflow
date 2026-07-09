@@ -45,15 +45,18 @@ _LN_EPS = 1e-5  # repo-global norm eps (their 1e-6; standing delta note)
 
 
 def dsa_index_scores_reference(
-    h1: torch.Tensor, q_lora_n: torch.Tensor, w: dict, dims,
+    h1: torch.Tensor, q_lora_n: torch.Tensor, w: dict, dims, segments=None,
 ) -> torch.Tensor:
     """(t, t) fp32 index scores, -inf strictly above the causal diagonal.
     Autograd flows to the four indexer weights (and h1/q_lora_n — the
-    caller detaches those for training parity)."""
+    caller detaches those for training parity). ``segments`` (the round's
+    ``Segments``; None derives it from ``dims``) supplies the per-sequence
+    rope positions and the block-diagonal causal structure."""
     d = dims
     t = h1.shape[0]
     hi, di, rope = d.index_n_heads, d.index_head_dim, d.qk_rope_dim
-    pos = ops.positions_for(d.seq_spec, t, h1.device)
+    seg = segments if segments is not None else ops.Segments.of_dims(d).on(h1.device)
+    pos = seg.positions
 
     q = (q_lora_n @ w["w_idx_q"]).view(t, hi, di)
     q_pe = ops.rope_fwd(
@@ -75,14 +78,16 @@ def dsa_index_scores_reference(
     scores = (wts.unsqueeze(-1) * r.clamp_min(0.0)).sum(1)           # (t, t)
 
     # causal (per sequence): s <= t within each sequence
-    mask = _causal_mask(d, t, h1.device)
+    mask = _causal_mask(d, t, h1.device, seg)
     return scores + mask
 
 
-def _causal_mask(dims, t: int, device) -> torch.Tensor:
+def _causal_mask(dims, t: int, device, segments=None) -> torch.Tensor:
     """(t, t) additive mask: 0 on/below the per-sequence causal diagonal,
-    -inf above it AND across sequence boundaries."""
-    lens = ops.seq_lens_of(dims.seq_spec, t)
+    -inf above it AND across sequence boundaries. ``segments`` (None derives
+    from ``dims``) supplies the per-sequence token counts."""
+    seg = segments if segments is not None else ops.Segments.of_dims(dims)
+    lens = seg.lengths
     m = torch.full((t, t), float("-inf"), device=device)
     lo = 0
     for L in lens:
@@ -104,25 +109,27 @@ def dsa_topk_reference(scores: torch.Tensor, k: int) -> torch.Tensor:
     return order.to(torch.int64)
 
 
-def dsa_mask_from_idx(idx: torch.Tensor, dims, t: int) -> torch.Tensor:
+def dsa_mask_from_idx(idx: torch.Tensor, dims, t: int, segments=None) -> torch.Tensor:
     """Their construction: scatter 0 at selected, then ADD causal —
     pad slots (future indices) are re-suppressed."""
     m = torch.full((t, t), float("-inf"), device=idx.device)
     m.scatter_(-1, idx, 0.0)
-    return m + _causal_mask(dims, t, idx.device)
+    return m + _causal_mask(dims, t, idx.device, segments)
 
 
 def dsa_sparse_attention_reference(
     q_full: torch.Tensor, k_full: torch.Tensor, v_pad: torch.Tensor,
-    add_mask: torch.Tensor, dims,
+    add_mask: torch.Tensor, dims, segments=None,
 ) -> torch.Tensor:
     """Masked-SDPA sparse core over the padded-v MLA tensors (t, h*qk):
     per-sequence SDPA with the additive {0,-inf} mask (causality lives
-    in the mask). Output (t, h*qk); caller slices [:v]."""
+    in the mask). Output (t, h*qk); caller slices [:v]. ``segments`` (None
+    derives from ``dims``) supplies the per-sequence token counts."""
     d = dims
     t = q_full.shape[0]
     h, qk = d.n_heads, d.qk_head_dim
-    lens = ops.seq_lens_of(d.seq_spec, t)
+    seg = segments if segments is not None else ops.Segments.of_dims(d)
+    lens = seg.lengths
     outs = []
     lo = 0
     for L in lens:
@@ -157,7 +164,7 @@ def dsa_indexer_kl_reference(
 
 
 def dsa_selection_mask_reference(scores: torch.Tensor, d, t: int,
-                                 device) -> torch.Tensor:
+                                 device, segments=None) -> torch.Tensor:
     """Additive attention mask for the current TRAINING MODE — the two
     paths, stated once:
 
@@ -167,23 +174,27 @@ def dsa_selection_mask_reference(scores: torch.Tensor, d, t: int,
     selection exists anywhere in the program."""
     if getattr(d, "sparse_mode", True):
         sel = dsa_topk_reference(scores.detach(), d.index_topk)
-        return dsa_mask_from_idx(sel, d, t)
-    return _causal_mask(d, t, device)
+        return dsa_mask_from_idx(sel, d, t, segments)
+    return _causal_mask(d, t, device, segments)
 
 
 def dsa_attention_rows_reference(q_full: torch.Tensor, k_full: torch.Tensor,
-                                 mask: torch.Tensor, d, t: int) -> torch.Tensor:
+                                 mask: torch.Tensor, d, t: int,
+                                 segments=None) -> torch.Tensor:
     """This member's attention distributions on the mask's live set,
     head-summed in detached fp32 — the KL TARGET (the p in
-    KL(p || sigma)). Ragged-aware; O(h * L^2) reference loop by design."""
+    KL(p || sigma)). Ragged-aware; O(h * L^2) reference loop by design.
+    ``segments`` (None derives from ``dims``) supplies the per-sequence
+    token counts."""
     h, qk = d.n_heads, d.qk_head_dim
+    seg = segments if segments is not None else ops.Segments.of_dims(d)
     with torch.no_grad():
         p = torch.zeros(t, t, device=q_full.device)
         scale = qk ** -0.5
         q3 = q_full.detach().float()
         k3 = k_full.detach().float()
         lo = 0
-        for L in ops.seq_lens_of(d.seq_spec, t):
+        for L in seg.lengths:
             hi = lo + L
             for hh in range(h):
                 lg = (q3[lo:hi, hh] @ k3[lo:hi, hh].T) * scale

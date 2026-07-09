@@ -163,7 +163,10 @@ def _ladder2(kind: str, tol: float = 4e-2):
     m_l = moe_meta_layout(dims, dims.moe)
     meta_views = {f.name: torch.empty(f.shape, dtype=TORCH_DTYPE_BY_NAME[f.dtype],
                                       device="cuda") for f in m_l.fields}
-    fwd._forward(kctx, x, w, y, a, extras={"meta": dict(meta_views)})
+    from dataflow.tasks.ops import Segments
+
+    seg = Segments.of_dims(dims).on("cuda")
+    fwd._forward(kctx, x, w, y, a, extras={"meta": dict(meta_views), "seg": seg})
 
     a2 = {
         f.name: torch.empty(f.shape, dtype=TORCH_DTYPE_BY_NAME[f.dtype], device="cuda")
@@ -171,7 +174,7 @@ def _ladder2(kind: str, tol: float = 4e-2):
     }
     rc_cls(dims, kernels)._run_stages(
         kctx, x, w, a2, count=rc_cls.recompute_stage_count(),
-        extras={"meta": dict(meta_views), "meta_ready": True},
+        extras={"meta": dict(meta_views), "meta_ready": True, "seg": seg},
     )
     torch.cuda.synchronize()
     errors = {}
@@ -187,6 +190,7 @@ def _ladder2(kind: str, tol: float = 4e-2):
         for f in gl.fields
     }
     dx = torch.empty_like(x)
+    a["_seg"] = seg
     bwd._backward(kctx, dy, a, x, w, dx, dwv, accum=False,
                   meta={"meta": meta_views})
 
@@ -196,7 +200,7 @@ def _ladder2(kind: str, tol: float = 4e-2):
     fwd_ref = golden.lin_block_forward if kind == "lin" else golden.full_block_forward
     # selection pinned to the runtime's (see moe-design.md: comparison
     # methodology — flips are model sensitivity, not gradient error)
-    y_ref, aux_ref = fwd_ref(x_ref, leaves, route_ids=meta_views["route_ids"])
+    y_ref, aux_ref = fwd_ref(x_ref, leaves, route_ids=meta_views["route_ids"], segments=seg)
     y_ref.backward(dy, retain_graph=True)
     aux_ref.backward()
 
@@ -326,8 +330,10 @@ def _run(engine_kwargs=None, resolver_wrapper=None, program=None, seed=7):
     resolver = fam.build_resolver(fam.dims_of(cfg))
     if resolver_wrapper is not None:
         resolver = resolver_wrapper(resolver, backend)
+    from dataflow.runtime.engine import uniform_segments
     result = Engine(backend, **(engine_kwargs or {})).execute(
         prog, resolver=resolver, initial_buffers=values, pool_prewarm=dry.pool_demand,
+        run_args={"segments": uniform_segments(fam.dims_of(cfg), prog)},
     )
     # mask alignment-padding gaps (8-byte A_log/dt_bias fields at tiny
     # scale — the qwen35 padding artifact; see test_qwen35_math._run35)
