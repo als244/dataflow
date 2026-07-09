@@ -87,6 +87,48 @@ def reference_curve_moe(model, data, batch: int, seq_len: int, *,
     return ces, lbls
 
 
+def noaux_bias_step(model, speed: float) -> None:
+    """Apply the DeepSeek aux-free balance rule on every MoE layer of a noaux
+    reference (each such module exposes ``apply_bias_update`` over the counts
+    its forward stashed). Called once per step AFTER the optimizer step —
+    exactly where the golden/engine apply it."""
+    for module in model.modules():
+        if hasattr(module, "apply_bias_update"):
+            module.apply_bias_update(speed)
+
+
+def reference_bias_tensors(model) -> list[torch.Tensor]:
+    """The noaux balance-bias buffers of a reference model, in layer order.
+    Buffer names differ per (deliberately independent) reference file:
+    dsv3 uses ``router_bias``, dsv32/glm52 use ``w_router_bias``."""
+    out = []
+    for module in model.modules():
+        if hasattr(module, "apply_bias_update"):
+            if hasattr(module, "router_bias"):
+                out.append(module.router_bias)
+            else:
+                out.append(module.w_router_bias)
+    return out
+
+
+def reference_curve_noaux_bias(model, data, batch: int, seq_len: int, *,
+                               lr: float, weight_decay: float,
+                               speed: float) -> list[float]:
+    """CE curve for a noaux reference training pure CE (no aux loss) while
+    applying the sign-rule bias update after each optimizer step — the
+    harness-owned mechanism mirroring the golden/engine convention."""
+    opt = ReferenceAdamW(model.parameters(), flat_recipe(lr, weight_decay, len(data)))
+    losses = []
+    for k, (tok, tgt) in enumerate(data):
+        opt.zero_grad()
+        loss = model.loss(tok.view(batch, seq_len), tgt.view(batch, seq_len))
+        loss.backward()
+        losses.append(float(loss.detach()))
+        opt.step(k)
+        noaux_bias_step(model, speed)
+    return losses
+
+
 def assert_curves_close(golden_losses, reference_losses, atol: float) -> None:
     deltas = [abs(a - b) for a, b in zip(golden_losses, reference_losses)]
     assert max(deltas) < atol, (
@@ -96,19 +138,24 @@ def assert_curves_close(golden_losses, reference_losses, atol: float) -> None:
 
 
 def moe_golden_gate(cfg_off, golden_cls, bridge_mod, *, alpha: float,
+                    bias_speed: float | None = None,
                     lr: float = 1e-2, weight_decay: float = 0.1,
                     steps: int = 5, seed: int = 3, fwd_atol: float = 0.03,
                     curve_atol: float = 0.05, aux_atol: float = 0.005) -> None:
     """The full MoE reference-vs-golden gate, shared by the MoE family tests.
 
-    LBL-OFF leg (``cfg_off`` must carry ``aux_coef=0`` — no load-balance
-    functions on either side): state_dict byte-identity, forward CE
-    agreement, multi-step curve agreement. LBL-ON leg (fresh witnesses from
-    the SAME packed bytes, ``aux_coef=alpha``): the scalar-loss convention is
-    pinned — the REPORTED scalar is pure CE on both sides (golden train_step
-    returns CE while differentiating CE+aux; the reference logs
-    composite − alpha·LBL) — the alpha-scaled LBL terms agree, and the
-    CE-channel training curves agree.
+    LBL-OFF leg (``cfg_off`` must carry ``aux_coef=0`` and, for noaux
+    families, ``bias_update_speed=0`` — NO load-balance functions on either
+    side): state_dict byte-identity, forward CE agreement, multi-step curve
+    agreement. LBL-ON leg (fresh witnesses from the SAME packed bytes,
+    ``aux_coef=alpha``): the scalar-loss convention is pinned — the REPORTED
+    scalar is pure CE on both sides (golden train_step returns CE while
+    differentiating CE+aux; the reference logs composite − alpha·LBL) — the
+    alpha-scaled LBL terms agree, and the CE-channel training curves agree.
+    BIAS-ON leg (noaux families, when ``bias_speed`` is given): fresh
+    witnesses train pure CE while BOTH sides apply the per-step sign-rule
+    bias update (golden inside train_step; reference via the harness's
+    ``noaux_bias_step``) — CE curves agree and the final bias buffers match.
     """
     from dataclasses import replace
 
@@ -119,6 +166,8 @@ def moe_golden_gate(cfg_off, golden_cls, bridge_mod, *, alpha: float,
     from .bridges import assert_state_dict_byte_identical, get_bytes_from_values
 
     assert cfg_off.aux_coef == 0.0, "cfg_off is the LBL-OFF leg"
+    assert getattr(cfg_off, "bias_update_speed", 0.0) == 0.0, (
+        "cfg_off is the LBL-OFF leg (bias rule off too)")
     fam = resolve_family(cfg_off)
     dims = fam.dims_of(cfg_off)
     backend = CudaBackend()
@@ -171,6 +220,34 @@ def moe_golden_gate(cfg_off, golden_cls, bridge_mod, *, alpha: float,
             model_on, data, B, T, lr=lr, weight_decay=weight_decay, aux_coef=alpha)
         assert_curves_close(golden_curve(golden_on, data), ces_r, atol=curve_atol)
         assert all(x > 0.0 for x in lbls_r)
+
+        # -- BIAS-ON leg (noaux families: the sign-rule update, both sides) ----
+        if bias_speed is not None:
+            cfg_b = replace(cfg_off, bias_update_speed=bias_speed)
+            dims_b = resolve_family(cfg_b).dims_of(cfg_b)
+            golden_b = golden_cls.from_packed_bytes(
+                dims_b, cfg_b.n_layers, gb("W_embed"),
+                [gb(f"W_{i}") for i in range(cfg_b.n_layers)], gb("W_head"),
+                hyper=hyper)
+            model_b = bridge_mod.build_reference_model(cfg_b, device="cuda")
+            bridge_mod.load_reference_init(model_b, cfg_b, dims_b, gb)
+            gc_b = golden_curve(golden_b, data)
+            rc_b = reference_curve_noaux_bias(
+                model_b, data, B, T, lr=lr, weight_decay=weight_decay,
+                speed=bias_speed)
+            assert_curves_close(gc_b, rc_b, atol=curve_atol)
+            # identical counts each step => bit-equal biases; allow at most
+            # one flipped sign-step per expert if a near-tie count diverged
+            ref_biases = reference_bias_tensors(model_b)
+            golden_biases = [leaves["w_router_bias"] for leaves in golden_b.w_blocks
+                             if "w_router_bias" in leaves]
+            assert len(ref_biases) == len(golden_biases)
+            for rb, gbias in zip(ref_biases, golden_biases):
+                worst = float((rb.detach().cpu().float()
+                               - gbias.detach().cpu().float()).abs().max())
+                assert worst <= 2 * bias_speed + 1e-9, (
+                    f"bias trajectories diverged: worst |d|={worst} "
+                    f"(speed {bias_speed})")
     finally:
         for buf in values.values():
             backend.free(buf)

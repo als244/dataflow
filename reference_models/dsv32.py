@@ -42,15 +42,18 @@ layer's attention:
     additive shared expert (DeepSeek-V3 style).
 
 SCOPE — this reference implements the SPARSE path ONLY. ``loss()`` returns
-mean CE; pass ``aux_coef>0`` to add the routed-expert load-balancing auxiliary
-loss α·E·Σ_e f_e·p̄_e (α=aux_coef, p̄ = mean normalized-sigmoid router prob),
-summed over MoE layers — matches the engine's balance loss; the shared expert
-is excluded. (The DSA indexer-KL objective remains omitted.) Still deliberately
-OMITTED: the dense-warm-up mode; the indexer's KL training objective (so the
-indexer weights receive no gradient here and stay at their init — they still
-drive selection in the forward); and the noaux balance-bias step rule
-(``w_router_bias`` is a fixed zero buffer, so selection is by raw sigmoid
-score).
+mean CE; pass ``aux_coef>0`` to add DeepSeek-V3's complementary SEQUENCE-WISE
+balance loss (per ``(B, T)`` row: ``α·Σ_e f_e^s·P_e^s`` with
+``f_e^s = count_e^s·E/(K·T)`` from the row's discrete top-K ids and ``P_e^s``
+the row-mean normalized-sigmoid router prob; summed over rows and MoE layers)
+— matches the engine's ``moe_seq_aux_loss_reference``; the shared expert is
+excluded. Still deliberately OMITTED: the dense-warm-up mode and the indexer's
+KL training objective (so the indexer weights receive no gradient here and
+stay at their init — they still drive selection in the forward). The noaux
+balance-bias sign rule is an OPTIMIZER-TIME mechanism exposed as
+``MoE.apply_bias_update(speed)`` over the forward's stashed counts — the
+training harness calls it once per step (the buffer stays zero if never
+called).
 
 Numeric conventions MATCH the engine (so curves track to within bf16
 kernel-order noise, not a divergent fp32 model): weights/activations bf16;
@@ -315,10 +318,14 @@ class MoE(nn.Module):
         d, E, f = cfg.d_model, cfg.n_experts, cfg.d_ff_expert
         # engine orientation: out = x @ w; experts packed [gate | up] over 2F.
         self.w_router = nn.Parameter(torch.empty(d, E))
-        # noaux balance bias: fp32, selection-only, NON-gradient. The per-step
-        # sign-update rule is omitted, so it stays zero (the optional LBL adds
-        # gradient to the router weights, not to this selection bias).
+        # noaux balance bias: fp32, selection-only, NON-gradient. Its per-step
+        # sign-rule update is an OPTIMIZER-TIME mechanism exposed as
+        # apply_bias_update(speed), called by the training harness on the
+        # forward's stashed counts (the optional LBL adds gradient to the
+        # router weights, never to this selection bias).
         self.register_buffer("w_router_bias", torch.zeros(E, dtype=torch.float32))
+        # most recent forward's aggregate assignment counts (E,) int64
+        self.last_counts: torch.Tensor | None = None
         self.w13_experts = nn.Parameter(torch.empty(E, d, 2 * f))
         self.w2_experts = nn.Parameter(torch.empty(E, f, d))
         nn.init.normal_(self.w_router, std=d ** -0.5)
@@ -355,21 +362,38 @@ class MoE(nn.Module):
         w = picked / picked.sum(-1, keepdim=True) * c.routed_scaling
         return w, ids
 
-    def _load_balance_loss(self, logits: torch.Tensor,
-                           ids: torch.Tensor) -> torch.Tensor:
-        """Routed-expert load-balancing aux (DeepSeek sigmoid_noaux_tc), no α:
-        ``E · Σ_e f_e·p̄_e`` (fp32 scalar). ``f_e = count_e/(T·K)`` from the
-        DISCRETE top-K routed ids (bincount over the flattened batch; detached);
-        ``p̄_e`` = mean over tokens of the FULL-E normalized-sigmoid router prob
-        ``p = s / s.sum(-1)`` — gradient flows through ``p̄``. Shared expert
-        EXCLUDED; ``Σ_e f_e = Σ_e p̄_e = 1`` so uniform routing ⇒ L = 1."""
+    def apply_bias_update(self, speed: float) -> None:
+        """DeepSeek's aux-free balance rule on the most recent forward's
+        assignment counts: ``b += speed * sign(mean(c) - c)``. An
+        OPTIMIZER-TIME mechanism — the training harness calls this once per
+        step after the weight update; the bias never sees autograd (it enters
+        selection only)."""
+        c = self.last_counts.float()
+        self.w_router_bias.add_(
+            torch.sign(c.mean() - c).to(self.w_router_bias.dtype), alpha=speed)
+
+    def _load_balance_loss(self, logits: torch.Tensor, ids: torch.Tensor,
+                           B: int, T: int) -> torch.Tensor:
+        """DeepSeek-V3's complementary SEQUENCE-WISE balance loss, no α
+        (fp32 scalar). Per sequence s (each of the B length-T rows):
+        ``L_s = Σ_e f_e^s·P_e^s`` with ``f_e^s = count_e^s·E/(K·T)`` from the
+        row's DISCRETE top-K ids (bincount; detached) and ``P_e^s`` = mean
+        over the row's tokens of the FULL-E normalized-sigmoid router prob
+        ``p = s / s.sum(-1)`` — gradient flows through ``P``. Summed over
+        rows; at B=1 this equals the global ``E·Σ_e f_e·p̄_e``. Shared expert
+        EXCLUDED. Matches the engine's ``moe_seq_aux_loss_reference``."""
         E, K = self.cfg.n_experts, self.cfg.top_k
         s = torch.sigmoid(logits.float())                     # (N, E)
-        pbar = (s / s.sum(-1, keepdim=True)).mean(0)          # (E,) grad via p̄
-        with torch.no_grad():                                 # f from discrete ids
-            counts = torch.bincount(ids.reshape(-1), minlength=E).to(pbar.dtype)
-            f = counts / (ids.shape[0] * K)                   # (E,) detached, Σf=1
-        return E * (f * pbar).sum()
+        sn = (s / s.sum(-1, keepdim=True)).view(B, T, E)      # grad via P
+        row_ids = ids.view(B, T, K)
+        total = torch.zeros((), dtype=torch.float32, device=logits.device)
+        for row in range(B):
+            with torch.no_grad():                             # f from discrete ids
+                counts = torch.bincount(row_ids[row].reshape(-1),
+                                        minlength=E).float()
+                f = counts * E / (K * T)
+            total = total + (f * sn[row].mean(0)).sum()
+        return total
 
     def forward(self, h2: torch.Tensor, resid: torch.Tensor) -> torch.Tensor:
         c = self.cfg
@@ -378,7 +402,9 @@ class MoE(nn.Module):
         x = h2.reshape(B * T, d)
         logits = x @ self.w_router                            # (N, E) storage-dtype
         w, ids = self._route(logits)
-        self.aux_lbl = self._load_balance_loss(logits, ids)   # fp32 scalar, no α
+        self.aux_lbl = self._load_balance_loss(logits, ids, B, T)  # fp32, no α
+        # step-aggregate counts (detached ints) for apply_bias_update
+        self.last_counts = torch.bincount(ids.reshape(-1), minlength=c.n_experts)
         routed = torch.zeros(B * T, d, dtype=torch.float32, device=h2.device)
         for e in range(c.n_experts):                          # dropless masked E-loop
             coef = (w * (ids == e)).sum(-1)                   # (N,) fp32; <=1 hit/token
@@ -456,16 +482,12 @@ class Dsv32(nn.Module):
 
     def loss(self, tokens: torch.Tensor, targets: torch.Tensor, *,
              aux_coef: float = 0.0) -> torch.Tensor:
-        """``loss()`` returns mean CE; pass ``aux_coef>0`` to add the routed-
-        expert load-balancing auxiliary loss α·E·Σ_e f_e·p̄_e (α=aux_coef,
-        p̄ = mean normalized-sigmoid router prob), summed over MoE layers —
-        matches the engine's balance loss; the shared expert is excluded. (The
-        DSA indexer-KL objective remains omitted.)
-
-        Mean cross-entropy over all tokens (fp32) — matches the engine's
-        per-round HeadLoss normalization. ``tokens``/``targets`` are ``(B, T)``
-        int; targets are the next-token ids. With the default ``aux_coef=0`` the
-        returned value (and its autograd graph) is exactly the pure-CE result."""
+        """``loss()`` returns mean CE; pass ``aux_coef>0`` to add DeepSeek-V3's
+        SEQUENCE-WISE balance loss (see the module docstring), summed over
+        rows and MoE layers — matches the engine's
+        ``moe_seq_aux_loss_reference``; the shared expert is excluded. With
+        the default ``aux_coef=0`` the returned value is the pure-CE loss.
+        ``tokens``/``targets`` are ``(B, T)`` int next-token ids."""
         logits = self.forward(tokens)
         ce = F.cross_entropy(
             logits.float().reshape(-1, logits.shape[-1]),

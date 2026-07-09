@@ -79,3 +79,33 @@ def test_qwen35moe_engine_vs_reference():
     from dataflow.pretrain.presets import qwen35moe_smoke_preset
 
     run_family_parity(qwen35moe_smoke_preset())
+
+
+@pytest.mark.gpu
+def test_dsv3_engine_vs_reference():
+    """LBL-OFF (aux 0, bias speed 0): pure CE + AdamW on both sides."""
+    if not torch.cuda.is_available():
+        pytest.skip("no CUDA")
+    from dataflow.pretrain.presets import dsv3_smoke_preset
+
+    run_family_parity(dsv3_smoke_preset())
+
+
+@pytest.mark.gpu
+def test_dsv32_engine_vs_reference():
+    """LBL-OFF + train_indexer=False: the indexer stays at init on both
+    sides while its selection drives the sparse attention."""
+    if not torch.cuda.is_available():
+        pytest.skip("no CUDA")
+    from dataflow.pretrain.presets import dsv32_smoke_preset
+
+    run_family_parity(dsv32_smoke_preset())
+
+
+@pytest.mark.gpu
+def test_glm52_engine_vs_reference():
+    if not torch.cuda.is_available():
+        pytest.skip("no CUDA")
+    from dataflow.pretrain.presets import glm52_smoke_preset
+
+    run_family_parity(glm52_smoke_preset())

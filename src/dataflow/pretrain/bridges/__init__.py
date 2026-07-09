@@ -34,7 +34,17 @@ ROOT = str(Path(__file__).resolve().parents[4])
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from . import llama3, olmoe, qwen3, qwen35, qwen35moe, qwen3moe  # noqa: E402
+from . import (  # noqa: E402
+    dsv3,
+    dsv32,
+    glm52,
+    llama3,
+    olmoe,
+    qwen3,
+    qwen35,
+    qwen35moe,
+    qwen3moe,
+)
 from .common import (  # noqa: E402,F401
     assert_state_dict_byte_identical,
     bytes_from_buffer,
@@ -46,6 +56,9 @@ from .common import (  # noqa: E402,F401
 
 # Shaped config type name -> the family's bridge module.
 FAMILY_BRIDGES = {
+    "ShapedDsv3Config": dsv3,
+    "ShapedDsv32Config": dsv32,
+    "ShapedGlm52Config": glm52,
     "ShapedLlamaConfig": llama3,
     "ShapedOlmoeConfig": olmoe,
     "ShapedQwen3Config": qwen3,

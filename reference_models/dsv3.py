@@ -41,18 +41,22 @@ dense-SwiGLU layers, then MoE layers):
     (residual + shared), rounded once.
 
 LOAD-BALANCE AUX (optional) — ``loss()`` returns mean CE; pass ``aux_coef>0``
-to add the routed-expert load-balancing auxiliary loss ``α·E·Σ_e f_e·p̄_e``
-(``α = aux_coef``; ``f_e`` = fraction of the discrete top-K assignments landing
-on expert ``e``, from the selected ids; ``p̄`` = mean normalized-sigmoid router
-prob over the batch's tokens, with the gradient flowing through ``p̄``), summed
-over the MoE layers — this matches the engine's balance loss. The SHARED expert
-is excluded (it has no router). Default ``aux_coef=0`` → pure CE.
+to add DeepSeek-V3's complementary SEQUENCE-WISE balance loss: per sequence
+``s`` (each ``(B, T)`` row), ``L_s = α·Σ_e f_e^s·P_e^s`` with
+``f_e^s = count_e^s·E/(K·T_s)`` from the row's discrete top-K assignments and
+``P_e^s`` the mean normalized-sigmoid router prob over the row's tokens
+(gradient flows through ``P``), summed over rows and MoE layers — this matches
+the engine's ``moe_seq_aux_loss_reference``. At one sequence it reduces to the
+global ``E·Σ_e f_e·p̄_e``. The SHARED expert is excluded (it has no router).
+Default ``aux_coef=0`` → pure CE.
 
-SEPARATE mechanism, left out (a training-dynamics concern, NOT the aux above and
-not modeled by this pure forward): the DeepSeek aux-free bias-update rule — the
+SEPARATE mechanism (a training-dynamics concern, NOT the aux above and not part
+of this pure forward): the DeepSeek aux-free bias-update rule — the
 NON-GRADIENT balance bias is a zero-initialized buffer read by selection ONLY;
 its per-step sign-rule update (``b += speed*sign(mean - count)`` on the step's
-expert counts) is an optimizer-time concern owned by the training harness.
+expert counts) is an optimizer-time concern owned by the training harness,
+exposed here as ``MoEMLP.apply_bias_update(speed)`` over the counts stashed by
+the most recent forward.
 
 Numeric conventions MATCH the engine (curves track within bf16 kernel-order
 noise, not a divergent fp32 model): weights/activations bf16; RMSNorm, RoPE,
@@ -270,9 +274,12 @@ class MoEMLP(nn.Module):
         # NON-GRADIENT balance bias: zero-initialized, read by selection only;
         # the per-step sign-rule update is an optimizer-time concern (see docstring).
         self.register_buffer("router_bias", torch.zeros(E))
-        # per-layer routed-expert load-balance aux term (E·Σ_e f_e·p̄_e),
+        # per-layer routed-expert SEQUENCE-WISE balance term (no α),
         # (re)computed and stashed by every forward; 0 until the first forward.
         self.aux_lbl = torch.zeros(())
+        # the most recent forward's aggregate assignment counts (E,) int64 —
+        # consumed by apply_bias_update (the optimizer-time sign rule)
+        self.last_counts: torch.Tensor | None = None
         self.w13 = nn.Parameter(torch.empty(E, d, 2 * F_))
         self.w2 = nn.Parameter(torch.empty(E, F_, d))
         # fan-in init so a from-scratch (non-bridged) model is well-conditioned;
@@ -283,6 +290,16 @@ class MoEMLP(nn.Module):
             fs = cfg.d_ff_shared
             self.w_s13 = nn.Linear(d, 2 * fs, bias=False)
             self.w_s2 = nn.Linear(fs, d, bias=False)
+
+    def apply_bias_update(self, speed: float) -> None:
+        """DeepSeek's aux-free balance rule on the most recent forward's
+        assignment counts: ``b += speed * sign(mean(c) - c)``. An
+        OPTIMIZER-TIME mechanism — the training harness calls this once per
+        step after the weight update; the bias never sees autograd (it enters
+        selection only)."""
+        c = self.last_counts.float()
+        self.router_bias.add_(
+            torch.sign(c.mean() - c).to(self.router_bias.dtype), alpha=speed)
 
     def _route(self, logits: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """sigmoid_noaux_tc: group-limited biased selection, raw-sigmoid
@@ -321,18 +338,29 @@ class MoEMLP(nn.Module):
         logits = self.router(hf)                               # bf16 GEMM (N, E)
         weights, ids = self._route(logits)                     # (N, K) fp32 / int
 
-        # routed-expert load-balance aux term  L = E·Σ_e f_e·p̄_e  (fp32, no α;
-        # load_balance_loss() sums it, loss() adds α· it only when aux_coef>0).
-        #   f_e : fraction of the n_tok·K discrete top-K assignments on expert e,
-        #         from the selected ids (bincount, non-differentiable);
-        #   p̄_e : mean over tokens of the FULL-E normalized-sigmoid router prob
-        #         (bias-free logits; gradient flows through p̄).
-        n_tok, K = hf.shape[0], ids.shape[1]
-        counts = torch.bincount(ids.reshape(-1), minlength=c.n_experts).float()
-        f = counts / (n_tok * K)                               # (E,) sums to 1
+        # routed-expert SEQUENCE-WISE balance term (DeepSeek-V3's complementary
+        # loss), fp32, no α (load_balance_loss() sums layers; loss() scales by
+        # aux_coef). Per sequence s — each (B, T) row is one sequence:
+        #   L_s = Σ_e f_e^s · P_e^s
+        #   f_e^s : count_e^s · E/(K·T) from the row's discrete top-K ids
+        #           (bincount, non-differentiable);
+        #   P_e^s : mean over the row's tokens of the FULL-E normalized-sigmoid
+        #           router prob (bias-free logits; gradient flows through P).
+        # Summed over the B rows; at B=1 this equals the global E·Σ_e f_e·p̄_e.
+        K = ids.shape[1]
         s = torch.sigmoid(logits.float())
-        p_bar = (s / s.sum(-1, keepdim=True)).mean(0)          # (E,) grad flows
-        self.aux_lbl = c.n_experts * (f * p_bar).sum()         # fp32 scalar
+        sn = (s / s.sum(-1, keepdim=True)).view(B, T, c.n_experts)
+        row_ids = ids.view(B, T, K)
+        aux = torch.zeros((), dtype=torch.float32, device=hf.device)
+        for row in range(B):
+            counts = torch.bincount(row_ids[row].reshape(-1),
+                                    minlength=c.n_experts).float()
+            f = counts * c.n_experts / (K * T)
+            aux = aux + (f * sn[row].mean(0)).sum()
+        self.aux_lbl = aux
+        # step-aggregate discrete assignment counts (detached ints) for the
+        # optimizer-time aux-free bias rule (apply_bias_update)
+        self.last_counts = torch.bincount(ids.reshape(-1), minlength=c.n_experts)
 
         # dropless masked E-loop: at most one top-K slot hits each expert per row
         routed = torch.zeros(B * T, d, dtype=torch.float32, device=hf.device)
@@ -399,8 +427,8 @@ class Dsv3(nn.Module):
         return self.lm_head(self.final_norm(x))
 
     def load_balance_loss(self) -> torch.Tensor:
-        """Sum over the MoE layers of the per-layer routed-expert load-balance
-        aux term ``E·Σ_e f_e·p̄_e`` (no α) stashed on each ``MoEMLP`` by its most
+        """Sum over the MoE layers of the per-layer SEQUENCE-WISE balance term
+        (no α; see the module docstring) stashed on each ``MoEMLP`` by its most
         recent forward; a zero scalar if the model has no MoE layers. ``loss()``
         scales this by ``aux_coef``. The shared expert (no router) is excluded."""
         terms = [blk.ffn.aux_lbl for blk in self.blocks
@@ -413,11 +441,11 @@ class Dsv3(nn.Module):
              aux_coef: float = 0.0) -> torch.Tensor:
         """Mean cross-entropy over all tokens (fp32) — matches the engine's
         per-round HeadLoss normalization. ``tokens``/``targets`` are ``(B, T)``
-        int next-token ids. Pass ``aux_coef>0`` to add the routed-expert
-        load-balancing auxiliary loss ``α·E·Σ_e f_e·p̄_e`` (``α = aux_coef``,
-        ``p̄`` = mean normalized-sigmoid router prob) summed over the MoE layers
-        — this matches the engine's balance loss; the shared expert is excluded.
-        Default ``aux_coef=0`` → pure CE, bit-identical to the aux-free path."""
+        int next-token ids. Pass ``aux_coef>0`` to add DeepSeek-V3's
+        SEQUENCE-WISE balance loss (see the module docstring) summed over rows
+        and MoE layers — matches the engine's ``moe_seq_aux_loss_reference``;
+        the shared expert is excluded. Default ``aux_coef=0`` → pure CE,
+        bit-identical to the aux-free path."""
         logits = self.forward(tokens)
         ce = F.cross_entropy(
             logits.float().reshape(-1, logits.shape[-1]),

@@ -44,10 +44,16 @@ an OPTIONAL load-balancing auxiliary loss:
     model.loss(tokens, targets, aux_coef=0.0)   # aux_coef=0 -> pure mean CE
     model.loss(tokens, targets, aux_coef=0.01)  # + alpha * sum_layers L_layer
 
-`L_layer = E * sum_e f_e * p̄_e` (the standard Switch/GShard term, matching
-the engine's `moe_aux_loss_reference` / flextrain): `f_e = count_e/(T*K)` from
-the discrete top-K assignments, `p̄_e` = mean router probability per expert
-(full softmax for softmax routers; normalized sigmoid for `sigmoid_noaux_tc`).
+Softmax routers (olmoe, qwen3moe, qwen35moe): `L_layer = E * sum_e f_e * p̄_e`
+(the standard Switch/GShard term, matching the engine's
+`moe_aux_loss_reference` / flextrain): `f_e = count_e/(T*K)` from the discrete
+top-K assignments, `p̄_e` = mean full-softmax router probability per expert.
+`sigmoid_noaux_tc` routers (dsv3, dsv32, glm52): DeepSeek-V3's complementary
+SEQUENCE-WISE loss (matching the engine's `moe_seq_aux_loss_reference`) — per
+`(B, T)` row, `sum_e f_e^s * P_e^s` with `f_e^s = count_e^s * E/(K*T)` and
+`P_e^s` the row-mean NORMALIZED-sigmoid prob, summed over rows; their
+optimizer-time bias sign rule is exposed as `MoE.apply_bias_update(speed)`
+for the training harness.
 Uniform routing gives `L_layer = 1`; imbalance pushes it above 1. The shared
 expert (where present) has no router and is excluded. `model.load_balance_loss()`
 returns the summed per-layer term from the most recent forward.

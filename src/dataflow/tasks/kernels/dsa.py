@@ -297,8 +297,14 @@ if triton is not None:
                 bit = (word[:, None] >> (rn[None, :] & 63)) & 1
                 s = tl.where((bit == 1) & nmask[None, :], s, float("-inf"))
                 m_new = tl.maximum(m_i, tl.max(s, 1))
-                alpha = tl.exp(m_i - m_new)
-                p = tl.exp(s - m_new[:, None])
+                # a row can sit in an ALIVE tile (a sibling row's bits made it
+                # live) while having no live bits itself AND none seen yet:
+                # m_i == m_new == -inf there, and exp(-inf - -inf) is NaN. The
+                # correct update for such a row is alpha=1, p=0 (l/acc keep
+                # their zeros).
+                dead_row = m_new == float("-inf")
+                alpha = tl.where(dead_row, 1.0, tl.exp(m_i - m_new))
+                p = tl.where(dead_row[:, None], 0.0, tl.exp(s - m_new[:, None]))
                 l_i = l_i * alpha + tl.sum(p, 1)
                 vt = tl.load(v_ptr + rn[:, None] * svt + pid_h * svh + rv[None, :],
                              mask=nmask[:, None] & vmask[None, :], other=0.0)
@@ -538,7 +544,15 @@ if triton is not None:
         pid_n = tl.program_id(1)
         rm = pid_m * BM + tl.arange(0, BM)
         rn = pid_n * BN + tl.arange(0, BN)
-        if pid_n * BN > (pid_m + 1) * BM:  # fully above causal diag
+        if pid_n * BN > (pid_m + 1) * BM:
+            # fully above the causal diagonal: STORE the -inf rather than
+            # skipping — the launcher only prefills cross-sequence regions,
+            # so a skipped tile would keep stale workspace bytes (arena
+            # reuse), and garbage above the diagonal wins top-k, empties the
+            # row after causal re-suppression, and NaNs the softmax.
+            neg = tl.full((BM, BN), float("-inf"), tl.float32)
+            tl.store(s_ptr + rm[:, None] * s_stride + rn[None, :], neg,
+                     mask=(rm < L)[:, None] & (rn < L)[None, :])
             return
         mmask = rm < L
         nmask = rn < L

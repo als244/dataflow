@@ -154,7 +154,61 @@ def qwen35moe_smoke_preset():
     )
 
 
+# MLA-trio engine-parity smoke twins. LBL-OFF like the other MoE smokes
+# (aux_coef=0 AND bias_update_speed=0 — no load-balance functions on either
+# side); dsv32/glm52 additionally freeze the indexer (train_indexer=False):
+# the reference has no KL objective, and CE reaches the indexer on NEITHER
+# side (selection is detached), so both keep the indexer at its init while
+# it still drives the sparse selection.
+def dsv3_smoke_preset():
+    from dataflow.training.models.dsv3 import ShapedDsv3Config
+
+    return ShapedDsv3Config(
+        n_layers=4, d_model=256, n_heads=4, q_lora_rank=128, kv_lora_rank=64,
+        qk_nope_dim=32, qk_rope_dim=16, v_head_dim=32, d_ff_dense=512,
+        first_k_dense=1, n_experts=8, top_k=2, d_ff_expert=128,
+        n_group=4, topk_group=2, d_ff_shared=128,
+        aux_coef=0.0, bias_update_speed=0.0,
+        vocab_size=VOCAB_SIZE, seq_len=SMOKE_SEQ_LEN, batch=SMOKE_BATCH,
+        grad_accum_rounds=SMOKE_GRAD_ACCUM_ROUNDS,
+    )
+
+
+def dsv32_smoke_preset():
+    from dataflow.training.models.dsv32 import ShapedDsv32Config
+
+    return ShapedDsv32Config(
+        n_layers=4, d_model=256, n_heads=4, q_lora_rank=128, kv_lora_rank=64,
+        qk_nope_dim=32, qk_rope_dim=16, v_head_dim=32, d_ff_dense=512,
+        first_k_dense=1, n_experts=8, top_k=2, d_ff_expert=128,
+        n_group=4, topk_group=2, d_ff_shared=128,
+        index_n_heads=4, index_head_dim=32, index_topk=64,
+        aux_coef=0.0, bias_update_speed=0.0, train_indexer=False,
+        vocab_size=VOCAB_SIZE, seq_len=SMOKE_SEQ_LEN, batch=SMOKE_BATCH,
+        grad_accum_rounds=SMOKE_GRAD_ACCUM_ROUNDS,
+    )
+
+
+def glm52_smoke_preset():
+    from dataflow.training.models.glm52 import ShapedGlm52Config
+
+    return ShapedGlm52Config(
+        n_layers=6, d_model=256, n_heads=4, q_lora_rank=128, kv_lora_rank=64,
+        qk_nope_dim=32, qk_rope_dim=16, v_head_dim=32, d_ff_dense=512,
+        first_k_dense=1, n_experts=8, top_k=2, d_ff_expert=128,
+        n_group=4, topk_group=2, d_ff_shared=128,
+        index_n_heads=4, index_head_dim=32, index_topk=64,
+        indexer_types=("full", "full", "shared", "shared", "full", "shared"),
+        aux_coef=0.0, bias_update_speed=0.0, train_indexer=False,
+        vocab_size=VOCAB_SIZE, seq_len=SMOKE_SEQ_LEN, batch=SMOKE_BATCH,
+        grad_accum_rounds=SMOKE_GRAD_ACCUM_ROUNDS,
+    )
+
+
 RESOLVER_FAMILY_BY_TYPE = {
+    "ShapedDsv3Config": "dsv3",
+    "ShapedDsv32Config": "dsv32",
+    "ShapedGlm52Config": "glm52",
     "ShapedLlamaConfig": "llama3",
     "ShapedOlmoeConfig": "olmoe",
     "ShapedQwen3Config": "qwen3",
@@ -247,7 +301,43 @@ def qwen35moe_cfg_dict(cfg) -> dict:
     )
 
 
+def dsv3_cfg_dict(cfg) -> dict:
+    return dict(
+        n_layers=cfg.n_layers, d_model=cfg.d_model, n_heads=cfg.n_heads,
+        q_lora_rank=cfg.q_lora_rank, kv_lora_rank=cfg.kv_lora_rank,
+        qk_nope_dim=cfg.qk_nope_dim, qk_rope_dim=cfg.qk_rope_dim,
+        v_head_dim=cfg.v_head_dim, d_ff_dense=cfg.d_ff_dense,
+        first_k_dense=cfg.first_k_dense, n_experts=cfg.n_experts,
+        top_k=cfg.top_k, d_ff_expert=cfg.d_ff_expert, n_group=cfg.n_group,
+        topk_group=cfg.topk_group, routed_scaling=cfg.routed_scaling,
+        bias_update_speed=cfg.bias_update_speed, aux_coef=cfg.aux_coef,
+        n_shared_experts=cfg.n_shared_experts, d_ff_shared=cfg.d_ff_shared,
+        rope_base=cfg.rope_base,
+        vocab_size=cfg.vocab_size, seq_len=cfg.seq_len, batch=cfg.batch,
+        grad_accum_rounds=cfg.grad_accum_rounds, num_steps=cfg.num_steps,
+    )
+
+
+def dsv32_cfg_dict(cfg) -> dict:
+    d = dsv3_cfg_dict(cfg)
+    d.update(
+        index_n_heads=cfg.index_n_heads, index_head_dim=cfg.index_head_dim,
+        index_topk=cfg.index_topk, sparse_mode=cfg.sparse_mode,
+        train_indexer=cfg.train_indexer,
+    )
+    return d
+
+
+def glm52_cfg_dict(cfg) -> dict:
+    d = dsv32_cfg_dict(cfg)
+    d["indexer_types"] = list(cfg.indexer_types)
+    return d
+
+
 CFG_DICT_BY_TYPE = {
+    "ShapedDsv3Config": dsv3_cfg_dict,
+    "ShapedDsv32Config": dsv32_cfg_dict,
+    "ShapedGlm52Config": glm52_cfg_dict,
     "ShapedLlamaConfig": _llama3_cfg_dict,
     "ShapedOlmoeConfig": olmoe_cfg_dict,
     "ShapedQwen3Config": qwen3_cfg_dict,

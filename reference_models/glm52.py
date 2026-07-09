@@ -31,17 +31,19 @@ MoE FFN: DeepSeek-V3 ``sigmoid_noaux_tc`` routing (sigmoid scores, group-
 limited top-k selection on score+bias, weights = selected raw sigmoid scores
 renormalized x routed_scaling) + one UNGATED additive shared expert.
 
-SCOPE — ``loss`` returns mean CE; pass ``aux_coef>0`` to add the routed-expert
-load-balancing auxiliary loss ``α·E·Σ_e f_e·p̄_e`` (α=``aux_coef``, ``p̄`` =
-mean normalized-sigmoid router prob), summed over MoE layers — this matches the
-engine's balance loss, and the shared expert is excluded. Two other
-TRAINING-TIME injections that never enter the CE value stay deliberately
-OMITTED (engine gradient/heuristic paths, not part of the parity study here):
-(1) the indexer's KL distillation objective and its IndexShare multi-layer
-target (``train_indexer`` / L^I_multi) — the indexer here only PRODUCES the
-selection, it is not trained; (2) the noaux router-bias update rule
-(``w_router_bias`` is a fixed zero buffer). The paper's dense warm-up mode is
-also out of scope — only the sparse path exists.
+SCOPE — ``loss`` returns mean CE; pass ``aux_coef>0`` to add DeepSeek-V3's
+complementary SEQUENCE-WISE balance loss (per ``(B, T)`` row:
+``α·Σ_e f_e^s·P_e^s`` with ``f_e^s = count_e^s·E/(K·T)`` from the row's
+discrete top-K ids and ``P_e^s`` the row-mean normalized-sigmoid router prob;
+summed over rows and MoE layers) — matches the engine's
+``moe_seq_aux_loss_reference``; the shared expert is excluded. The indexer's
+KL distillation objective and its IndexShare multi-layer target
+(``train_indexer`` / L^I_multi) stay deliberately OMITTED — the indexer here
+only PRODUCES the selection, it is not trained. The noaux router-bias sign
+rule is an OPTIMIZER-TIME mechanism exposed as ``MoE.apply_bias_update(speed)``
+over the forward's stashed counts — the training harness calls it once per
+step (the buffer stays zero if never called). The paper's dense warm-up mode
+is also out of scope — only the sparse path exists.
 
 Numeric conventions MATCH the engine (bf16-parity, not a textbook fp32 model):
 weights/activations bf16 with fp32 reductions; RMSNorm eps 1e-5; the indexer,
@@ -276,12 +278,19 @@ class MoE(nn.Module):
         self.cfg = cfg
         d, E, f, fs = cfg.d_model, cfg.n_experts, cfg.d_ff_expert, cfg.d_ff_shared
         self.w_router = nn.Linear(d, E, bias=False)
-        # non-gradient balance bias: fixed zero here (the noaux bias-update rule
-        # is a training-time heuristic and stays omitted — it is separate from
-        # the optional load-balancing loss, which just reads the router scores)
+        # non-gradient balance bias: read by selection only. Its per-step
+        # sign-rule update is an OPTIMIZER-TIME mechanism (separate from the
+        # optional load-balancing loss) exposed as apply_bias_update(speed),
+        # called by the training harness on the forward's stashed counts.
         self.register_buffer("w_router_bias", torch.zeros(E))
+        # most recent forward's aggregate assignment counts (E,) int64
+        self.last_counts: torch.Tensor | None = None
         self.w13_experts = nn.Parameter(torch.empty(E, d, 2 * f))
         self.w2_experts = nn.Parameter(torch.empty(E, f, d))
+        # fan-in init so a from-scratch (non-bridged) model is well-conditioned
+        # (the parity bridge overwrites both stacks with the engine's init)
+        nn.init.normal_(self.w13_experts, std=d ** -0.5)
+        nn.init.normal_(self.w2_experts, std=f ** -0.5)
         self.w_s13 = nn.Linear(d, 2 * fs, bias=False)
         self.w_s2 = nn.Linear(fs, d, bias=False)
         # per-layer routed load-balancing aux term (fp32 scalar), recomputed each
@@ -311,33 +320,53 @@ class MoE(nn.Module):
         w = picked / picked.sum(-1, keepdim=True) * c.routed_scaling
         return w, ids
 
-    def _load_balance(self, logits: torch.Tensor, ids: torch.Tensor) -> torch.Tensor:
-        """Routed-expert load-balancing auxiliary term for this layer (fp32
-        scalar, NO coefficient): ``E · Σ_e f_e·p̄_e``.
+    def apply_bias_update(self, speed: float) -> None:
+        """DeepSeek's aux-free balance rule on the most recent forward's
+        assignment counts: ``b += speed * sign(mean(c) - c)``. An
+        OPTIMIZER-TIME mechanism — the training harness calls this once per
+        step after the weight update; the bias never sees autograd (it enters
+        selection only)."""
+        c = self.last_counts.float()
+        self.w_router_bias.add_(
+            torch.sign(c.mean() - c).to(self.w_router_bias.dtype), alpha=speed)
 
-        ``f_e`` = fraction of the discrete top-K routed assignments landing on
-        expert ``e`` (``count_e/(T·K)`` via ``bincount``, detached — the
-        selection carries no gradient). ``p̄_e`` = batch-mean of the full-E
+    def _load_balance(self, logits: torch.Tensor, ids: torch.Tensor,
+                      seq_len: int) -> torch.Tensor:
+        """DeepSeek-V3's complementary SEQUENCE-WISE balance term for this
+        layer (fp32 scalar, NO coefficient). Per sequence s (each length-
+        ``seq_len`` row of the flattened batch): ``L_s = Σ_e f_e^s·P_e^s``
+        with ``f_e^s = count_e^s·E/(K·T_s)`` from the row's discrete top-K
+        routed assignments (``bincount``, detached — the selection carries no
+        gradient) and ``P_e^s`` = mean over the row's tokens of the full-E
         normalized-sigmoid router probability (``s = sigmoid(logits)``,
-        ``p = s/s.sum(-1)``, ``p̄ = p.mean(tokens)``; gradient flows through
-        ``p̄``). Matches the engine's ``moe_seq_aux_loss_reference`` P; the
-        shared expert is excluded. Uniform routing gives ``1.0``; correlated
-        (imbalanced) routing gives ``> 1``."""
-        E = self.cfg.n_experts
-        with torch.no_grad():
-            counts = torch.bincount(ids.reshape(-1), minlength=E).float()   # (E,)
-            f = counts / ids.numel()                                # count_e/(T·K)
-        s = torch.sigmoid(logits.float())                           # (T, E)
-        p = s / s.sum(-1, keepdim=True)
-        p_bar = p.mean(0)                                           # (E,) over tokens
-        return E * (f * p_bar).sum()
+        ``p = s/s.sum(-1)``; gradient flows through ``P``). Summed over rows;
+        at one sequence this equals the global ``E·Σ_e f_e·p̄_e``. Matches the
+        engine's ``moe_seq_aux_loss_reference``; the shared expert is
+        excluded. Uniform routing gives ``1.0`` per row-sum-normalized term."""
+        c = self.cfg
+        E, K = c.n_experts, c.top_k
+        rows = logits.shape[0] // seq_len
+        s = torch.sigmoid(logits.float())                           # (N, E)
+        sn = (s / s.sum(-1, keepdim=True)).view(rows, seq_len, E)
+        row_ids = ids.view(rows, seq_len, K)
+        total = torch.zeros((), dtype=torch.float32, device=logits.device)
+        for row in range(rows):
+            with torch.no_grad():
+                counts = torch.bincount(row_ids[row].reshape(-1),
+                                        minlength=E).float()
+                f = counts * E / (K * seq_len)
+            total = total + (f * sn[row].mean(0)).sum()
+        return total
 
-    def forward(self, h2: torch.Tensor, resid: torch.Tensor) -> torch.Tensor:
+    def forward(self, h2: torch.Tensor, resid: torch.Tensor,
+                seq_len: int) -> torch.Tensor:
         c = self.cfg
         f = c.d_ff_expert
         logits = self.w_router(h2)                                 # (T, E) routed
         route_w, ids = self._route(logits)
-        self.aux_lbl = self._load_balance(logits, ids)             # fp32 scalar, no α
+        self.aux_lbl = self._load_balance(logits, ids, seq_len)    # fp32, no α
+        # step-aggregate counts (detached ints) for apply_bias_update
+        self.last_counts = torch.bincount(ids.reshape(-1), minlength=c.n_experts)
         routed = torch.zeros_like(h2, dtype=torch.float32)          # fp32 accumulate
         for e in range(c.n_experts):
             coef = (route_w * (ids == e)).sum(-1)                   # (N,) <=1 hit/row
@@ -369,7 +398,8 @@ class Block(nn.Module):
         h2 = self.ffn_norm(h_mid)
         if self.moe:
             B, T, d = h_mid.shape
-            y = self.ffn(h2.reshape(B * T, d), h_mid.reshape(B * T, d)).reshape(B, T, d)
+            y = self.ffn(h2.reshape(B * T, d), h_mid.reshape(B * T, d),
+                         T).reshape(B, T, d)
         else:
             y = h_mid + self.ffn(h2)
         return y, mask
@@ -405,11 +435,10 @@ class Glm52(nn.Module):
         return self.lm_head(self.final_norm(x))
 
     def load_balance_loss(self) -> torch.Tensor:
-        """Sum over MoE layers of the per-layer routed-expert load-balancing
-        auxiliary term ``E·Σ_e f_e·p̄_e`` stashed by the most recent forward
-        (fp32 scalar; ``0.0`` if the model has no MoE layer or has not been
-        run). No coefficient is applied here — ``loss`` scales it by
-        ``aux_coef``."""
+        """Sum over MoE layers of the per-layer SEQUENCE-WISE balance term
+        (no coefficient; see the module docstring) stashed by the most recent
+        forward (fp32 scalar; ``0.0`` if the model has no MoE layer or has
+        not been run). ``loss`` scales it by ``aux_coef``."""
         terms = [blk.ffn.aux_lbl for blk in self.blocks
                  if blk.moe and blk.ffn.aux_lbl is not None]
         if not terms:
@@ -421,12 +450,12 @@ class Glm52(nn.Module):
         """Mean cross-entropy over all tokens (fp32). ``tokens``/``targets`` are
         ``(B, T)`` int; targets are the next-token ids.
 
-        ``loss()`` returns mean CE; pass ``aux_coef>0`` to add the routed-expert
-        load-balancing auxiliary loss ``α·E·Σ_e f_e·p̄_e`` (α=``aux_coef``,
-        ``p̄`` = mean normalized-sigmoid router prob), summed over MoE layers —
-        matches the engine's balance loss; the shared expert is excluded. (The
-        DSA indexer-KL objective remains omitted.) ``aux_coef=0`` (the default)
-        is exactly the pure-CE value."""
+        ``loss()`` returns mean CE; pass ``aux_coef>0`` to add DeepSeek-V3's
+        SEQUENCE-WISE balance loss (see the module docstring), summed over
+        rows and MoE layers — matches the engine's
+        ``moe_seq_aux_loss_reference``; the shared expert is excluded. (The
+        DSA indexer-KL objective remains omitted.) ``aux_coef=0`` (the
+        default) is exactly the pure-CE value."""
         logits = self.forward(tokens)
         ce = F.cross_entropy(
             logits.float().reshape(-1, logits.shape[-1]),
