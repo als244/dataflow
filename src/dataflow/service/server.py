@@ -20,6 +20,7 @@ import os
 import queue
 import socket
 import threading
+from collections import defaultdict
 import time
 from dataclasses import dataclass, field
 
@@ -114,7 +115,7 @@ class EngineState:
         self.event_seq = 0
         self.subscribers: list["Connection"] = []
         self.shutdown_requested = threading.Event()
-        self._seq = {"c": 0, "s": 0, "r": 0}
+        self._seq = defaultdict(int)   # c/s/r + snap + future kinds
 
     # ---- ids ----
     def next_id(self, kind: str) -> str:
@@ -149,6 +150,12 @@ class Dispatcher(threading.Thread):
         self.fifo: "queue.Queue[QueuedCall | None]" = queue.Queue()
         self.handlers: dict[str, callable] = {}   # op -> fn(call) -> result
         self.cancel_flag = threading.Event()      # consumed by runs (S1.2)
+        # LEASED calls park here (no error reply) and retry on
+        # lease release. HANDLER RULE: LEASED must be raised BEFORE
+        # any handler-visible mutation (parked calls re-run from
+        # scratch); run() does a lease pre-pass for this reason.
+        self._parked: list[QueuedCall] = []
+        self._park_lock = threading.Lock()
 
     def submit(self, call: QueuedCall) -> None:
         with self.state.lock:
@@ -170,6 +177,10 @@ class Dispatcher(threading.Thread):
                 call.reply_to.push_call_done(call.ticket, result=result)
                 status = "ok"
             except ServiceError as e:
+                if e.code == "LEASED":
+                    with self._park_lock:
+                        self._parked.append(call)
+                    continue
                 call.reply_to.push_call_done(call.ticket, error=e.to_json())
                 status = e.code
             except Exception as e:  # noqa: BLE001 — daemon must survive
@@ -180,6 +191,14 @@ class Dispatcher(threading.Thread):
                 sess = self.state.sessions.get(call.session_id)
             if sess is not None:
                 sess.note_call(call.ticket, call.op, status)
+
+    def unpark_all(self) -> None:
+        with self._park_lock:
+            calls, self._parked = self._parked, []
+        for c in calls:
+            with self.state.lock:
+                self.state.queue_depth += 1
+            self.fifo.put(c)
 
     def stop(self) -> None:
         self.fifo.put(None)
@@ -322,11 +341,12 @@ class Server:
         self.critical_handlers: dict[str, callable] = {}
         self._register_core()
         self._sock: socket.socket | None = None
-        from . import handlers_runs, handlers_store
+        from . import handlers_runs, handlers_snapshot, handlers_store
 
         self.store = handlers_store.boot_store(self)
         handlers_store.install(self)
         handlers_runs.install(self)
+        handlers_snapshot.install(self)
 
     # ---- core handlers (S1.0) ----
     def _register_core(self) -> None:
@@ -446,6 +466,10 @@ class Server:
             except OSError:
                 pass
             self.dispatcher.join(timeout=30)
+            w = getattr(self, "snapshot_writer", None)
+            if w is not None:
+                w.stop()
+                w.join(timeout=30)
             if getattr(self, "store", None) is not None \
                     and self.store.slab is not None:
                 self.store.slab.free()

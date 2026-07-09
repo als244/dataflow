@@ -99,6 +99,11 @@ class SlabAllocator:
 class Lineage:
     parent: str | None = None
     dirty: bool = False
+    # parent's version AT DUPLICATION TIME — snapshot dedup is sound
+    # only while the parent's version still equals this (a clean dup
+    # does NOT imply byte-equality once the parent trains onward;
+    # design-stage catch, ledger Part V)
+    parent_version: int | None = None
 
 
 @dataclass
@@ -110,6 +115,7 @@ class ObjectRecord:
     protected: bool = False
     lineage: Lineage = field(default_factory=Lineage)
     lease_refs: int = 0                       # snapshot read-leases (S1.3)
+    version: int = 0                          # bumped on EVERY write
     last_write: dict | None = None
 
     def info(self) -> dict:
@@ -150,6 +156,10 @@ class Store:
     connection threads can iterate safely; byte copies into extents
     never hold it (extent ownership makes them race-free by
     construction)."""
+
+    # set by the server at boot: dispatcher.unpark_all — parked
+    # LEASED calls retry when a snapshot writer releases its leases
+    on_lease_release = None
 
     def __init__(self, capacity_bytes: int, *, slab=None):
         """``slab``: a hostmem.PinnedSlab (real boot) or None (fake boot
@@ -207,6 +217,7 @@ class Store:
         if data is not None:
             self.view(rec)[:] = bytes(data)
         rec.lineage.dirty = True
+        rec.version += 1
         rec.last_write = {"by": writer, "t": time.time()}
         return rec
 
@@ -276,6 +287,25 @@ class Store:
                 del self.objects[oid]
         return {"freed_bytes": freed, "n_objects": n, "skipped": skipped}
 
+    # ---- read-leases (S1.3): snapshot writers hold these ----
+    def acquire_leases(self, ids: list[str]) -> None:
+        with self.catalog_lock:
+            for oid in ids:
+                if oid not in self.objects:
+                    raise ServiceError("UNKNOWN_OBJECT", oid)
+            for oid in ids:
+                self.objects[oid].lease_refs += 1
+
+    def release_leases(self, ids: list[str]) -> None:
+        with self.catalog_lock:
+            for oid in ids:
+                rec = self.objects.get(oid)
+                if rec is not None and rec.lease_refs > 0:
+                    rec.lease_refs -= 1
+        hook = self.on_lease_release
+        if hook is not None:
+            hook()
+
     # ---- duplicate (S1: eager) ----
     def duplicate(self, src: str, dst: str) -> ObjectRecord:
         s = self._require(src)
@@ -284,7 +314,8 @@ class Store:
         with self.catalog_lock:
             ext = self.allocator.alloc(s.size_bytes)
             rec = ObjectRecord(dst, s.size_bytes, dict(s.meta), ext,
-                               lineage=Lineage(parent=src, dirty=False))
+                               lineage=Lineage(parent=src, dirty=False,
+                                               parent_version=s.version))
             self.objects[dst] = rec
         self.view(rec)[:] = self.view(s)
         rec.last_write = {"by": f"duplicate:{src}", "t": time.time()}

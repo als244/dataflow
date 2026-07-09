@@ -284,6 +284,36 @@ class EngineClient:
         return self._call("query_fast", {})
 
     # ---- programs + runs ----
+    def snapshot(self, scope: str, dest: str, *, client_meta=None,
+                 label=None, wait=True):
+        return self._call("snapshot",
+                          {"scope": scope, "dest": str(dest),
+                           "client_meta": client_meta or {},
+                           "label": label}, wait=wait)
+
+    def snapshot_status(self, snap_id: str):
+        return self._call("snapshot_status", {"snap_id": snap_id})
+
+    def wait_snapshot(self, snap_id: str, *, timeout=300.0, poll=0.05):
+        import time as _t
+
+        t0 = _t.monotonic()
+        while True:
+            s = self.snapshot_status(snap_id)
+            if s["state"] in ("done", "error"):
+                return s
+            if _t.monotonic() - t0 > timeout:
+                raise TimeoutError(f"snapshot {snap_id} still writing")
+            _t.sleep(poll)
+
+    def restore_snapshot(self, path: str, *, placement="initial",
+                         duplicates="recreate", overwrite=False,
+                         wait=True):
+        return self._call("restore_snapshot",
+                          {"path": str(path), "placement": placement,
+                           "duplicates": duplicates,
+                           "overwrite": overwrite}, wait=wait)
+
     def register_program(self, program, *, resolver: dict,
                          name: str | None = None, wait=True):
         return self._call("register_program",

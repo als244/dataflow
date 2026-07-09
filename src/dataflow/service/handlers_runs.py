@@ -168,6 +168,16 @@ def install(server) -> None:
         rebind = a.get("rebind") or {}
         fetch = a.get("fetch") or []
 
+        # lease pre-pass BEFORE any handler-visible mutation: LEASED
+        # parks this call for retry, so nothing (RunRecord, counters)
+        # may exist yet when it is raised (dispatcher park rule)
+        with store.catalog_lock:
+            for spec in program.initial_objects:
+                robj = store.objects.get(rebind.get(spec.id, spec.id))
+                if robj is not None and robj.lease_refs:
+                    raise ServiceError(
+                        "LEASED", f"{robj.id} leased by a snapshot")
+
         run_id = st.next_id("r")
         rec = RunRecord(run_id=run_id, prog_id=entry.prog_id, args=args,
                         tasks_total=len(program.tasks))
@@ -194,6 +204,10 @@ def install(server) -> None:
                         "BINDING_MISMATCH",
                         f"{spec.id}: {target} is {robj.size_bytes} B, "
                         f"program wants {spec.size_bytes} B")
+                # a run may mutate any bound resident in place (W/O)
+                # — advance the version so snapshot dedup stays sound
+                robj.lineage.dirty = True
+                robj.version += 1
                 values[spec.id] = bridge.store_buffer(store, robj)
 
         if entry.placement is None:
