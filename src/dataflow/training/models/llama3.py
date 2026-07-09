@@ -70,6 +70,11 @@ class ShapedLlamaConfig:
     # ragged packing: explicit per-round sequence lengths (sum = tokens
     # per round); None = uniform batch x seq_len
     seq_lens: tuple[int, ...] | None = None
+    # DYNAMIC packed mode (agenda C4): boundaries arrive as per-round
+    # DATA (bounds_{s}_{r} (s_max+1,) int32 sentinel-padded cu +
+    # positions_{s}_{r} (t,) int32, driver-supplied), not as static
+    # lens. Mutually exclusive with seq_lens. None = legacy modes.
+    s_max: int | None = None
 
     @property
     def tokens(self) -> int:

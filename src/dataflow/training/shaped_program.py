@@ -292,6 +292,15 @@ def build_shaped_program(
                 role="input", tensor=TensorMeta(dtype="int32", shape=(t,)),
             ))
             add_initial(f"targets_{s}_{r}", ids_bytes, "input", tensor=TensorMeta(dtype="int32", shape=(t,)))
+            if getattr(cfg, "s_max", None):
+                # dynamic packed mode: boundaries + rope positions are
+                # per-round INPUT DATA (driver-supplied; sentinel-padded
+                # cu is kernel-legal — probed: empty trailing segments
+                # bit-identical to trimmed)
+                add_initial(f"bounds_{s}_{r}", (cfg.s_max + 1) * 4, "input",
+                            tensor=TensorMeta(dtype="int32", shape=(cfg.s_max + 1,)))
+                add_initial(f"positions_{s}_{r}", t * 4, "input",
+                            tensor=TensorMeta(dtype="int32", shape=(t,)))
 
     tasks: list[TaskSpec] = []
     rewrites: list[RecomputeRewrite] = []
@@ -362,6 +371,10 @@ def build_shaped_program(
                 a_id = f"A_{s}_{r}_{i}"
                 level = levels.get(a_id, 0)
                 x_id = f"y_embed_{s}_{r}" if i == 0 else f"y_{s}_{r}_{i - 1}"
+                # dynamic packed mode: APPEND-ONLY (existing positional
+                # input indices must stay stable — the audit rule)
+                pk_ins = ([f"bounds_{s}_{r}", f"positions_{s}_{r}"]
+                          if getattr(cfg, "s_max", None) else [])
                 fwd_ins = [x_id, f"W_{i}"]
                 outs = [OutputSpec(id=f"y_{s}_{r}_{i}", size_bytes=y_bytes, role="activation",
                                    tensor=TensorMeta(dtype="bf16", shape=(t, d)))]
@@ -373,7 +386,8 @@ def build_shaped_program(
                                            role="activation"))
                 if i in meta_producer_of:
                     fwd_ins.append(f"M_{s}_{r}_{meta_producer_of[i]}")
-                task(f"block_fwd_{s}_{r}_{i}", f"{sp.key_prefix}_fwd", fwd_ins, outs,
+                task(f"block_fwd_{s}_{r}_{i}", f"{sp.key_prefix}_fwd",
+                     fwd_ins + pk_ins, outs,
                      sp.fwd_us, group="forward", params={"layer": i},
                      subops=sp.fwd_subops)
                 rewrites.append(RecomputeRewrite(
@@ -428,7 +442,7 @@ def build_shaped_program(
                     meta_ins.append(f"M_{s}_{r}_{meta_producer_of[i]}")
                 if levels.get(a_id, 0) == 1:
                     task(f"block_recompute_{s}_{r}_{i}", f"{sp.key_prefix}_recompute",
-                         [x_id, f"W_{i}"] + meta_ins,
+                         [x_id, f"W_{i}"] + meta_ins + pk_ins,
                          [OutputSpec(id=a_id, size_bytes=sp.a_bytes, role="activation")],
                          sp.recompute_us, group="recompute", params={"layer": i},
                          subops=sp.recompute_subops)
@@ -455,7 +469,12 @@ def build_shaped_program(
                     elif i in mem:
                         bwd_inputs.append(gid)
                         mutates = mutates + (gid,)
-                task(f"block_bwd_{s}_{r}_{i}", f"{sp.key_prefix}_bwd", bwd_inputs, outs,
+                # pk_ins joins at the CALL so it lands AFTER the
+                # accumulate-round dW / meta-group appends — "bounds/
+                # positions are always the final two inputs" is a real
+                # invariant only here
+                task(f"block_bwd_{s}_{r}_{i}", f"{sp.key_prefix}_bwd",
+                     bwd_inputs + pk_ins, outs,
                      sp.bwd_us, mutates=mutates, group="backward", params={"layer": i},
                      subops=sp.bwd_subops)
                 if interleaved and last_round:
