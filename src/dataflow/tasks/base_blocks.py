@@ -143,6 +143,23 @@ class _Base:
         lens = sl.get(r) if isinstance(sl, dict) else None
         return tuple(lens) if lens else self.dims.seq_spec
 
+    def _positions_dev(self, ctx, lens, device):
+        """Per-run memoized device positions for packed-args lens:
+        built ONCE per (run, lens) via PINNED staging + non_blocking
+        copy (a pageable .to() here would implicit-sync the dispatcher
+        mid-round; the ops-level lru cache would thrash on fresh lens
+        every step). All tasks of the run share the tensor."""
+        cache = ctx.run_cache
+        key = ("pos", tuple(lens), str(device))
+        if cache is not None and key in cache:
+            return cache[key]
+        host = torch.cat([torch.arange(n, dtype=torch.int32)
+                          for n in lens]).pin_memory()
+        dev = host.to(device, non_blocking=True)
+        if cache is not None:
+            cache[key] = dev
+        return dev
+
     def _meta_state(self, ctx) -> dict | None:
         """Family hook: st entries for METADATA objects (M_{s}_{r}_{i} —
         never-recompute forward artifacts: routing packs, selections).

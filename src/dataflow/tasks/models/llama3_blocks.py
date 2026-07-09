@@ -80,7 +80,10 @@ class BlockFwd(_Base):
                         a = self.cl.views(self._out(ctx, j))
                         break
             extras = self._meta_state(ctx) or {}
-            extras["seq"] = self._seq_for(ctx)
+            seq = self._seq_for(ctx)
+            extras["seq"] = seq
+            if seq is not d.seq_spec:      # packed-args mode only
+                extras["pos"] = self._positions_dev(ctx, seq, x.device)
             self._forward(kctx, x, w, y, a, extras=extras)
 
     # --- staged forward -------------------------------------------------------
@@ -114,7 +117,9 @@ class BlockFwd(_Base):
         h1, w, a = st["h1"], st["w"], st["a"]
         qm = h1 @ w["wq"]
         q = a["q"] if a is not None else torch.empty_like(qm)
-        pos = ops.positions_for(st.get("seq", d.seq_spec), qm.shape[0], qm.device)
+        pos = st.get("pos")
+        if pos is None:
+            pos = ops.positions_for(st.get("seq", d.seq_spec), qm.shape[0], qm.device)
         K.rope_fwd(kctx, qm, q, pos, d.n_heads, d.head_dim, d.rope_base)
         km = h1 @ w["wk"]
         k = a["k"] if a is not None else torch.empty_like(km)
@@ -248,7 +253,10 @@ class BlockRecompute(BlockFwd):
             w = self.wl_for(ctx.task).views(self._in(ctx, 1))
             a = self.cl.views(self._out(ctx, 0))
             extras = self._meta_state(ctx) or {}
-            extras["seq"] = self._seq_for(ctx)
+            seq = self._seq_for(ctx)
+            extras["seq"] = seq
+            if seq is not d.seq_spec:
+                extras["pos"] = self._positions_dev(ctx, seq, x.device)
             self._forward_context(kctx, x, w, a, extras=extras)
 
     def _forward_context(self, kctx, x, w, a, extras=None) -> None:
@@ -331,7 +339,12 @@ class BlockBwd(_Base):
                         dw = self.gl_for(ctx.task).views(self._out(ctx, j))
                         break
                 dx = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
-            object.__setattr__(self, "_seq_run", self._seq_for(ctx))
+            seq_run = self._seq_for(ctx)
+            object.__setattr__(self, "_seq_run", seq_run)
+            object.__setattr__(
+                self, "_pos_run",
+                self._positions_dev(ctx, seq_run, dy.device)
+                if seq_run is not d.seq_spec else None)
             meta = self._meta_state(ctx)
             if meta is None:
                 self._backward(kctx, dy, a, x, w, dx, dw, accum)
@@ -368,7 +381,9 @@ class BlockBwd(_Base):
         )
         del d_attn
         dq_r = torch.empty_like(dq)
-        pos = ops.positions_for(seq, dq.shape[0], dq.device)
+        pos = getattr(self, "_pos_run", None)
+        if pos is None:
+            pos = ops.positions_for(seq, dq.shape[0], dq.device)
         K.rope_bwd(kctx, dq, dq_r, pos, d.n_heads, d.head_dim, d.rope_base)
         del dq
         dk_r = torch.empty_like(dk)

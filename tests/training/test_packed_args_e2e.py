@@ -55,3 +55,64 @@ def test_packed_args_with_forced_recompute():
 def test_no_args_is_legacy():
     check_model_step(_cfg(), fast_memory_capacity=64 * 1024 * 1024,
                      tol=3e-2).assert_ok()
+
+
+def test_packed_mode_never_touches_pageable_lru(monkeypatch):
+    """THE implicit-sync gate (Shein): the ENGINE side of a packed
+    run must never reach the ops-level lru positions builder (CPU
+    cat + pageable .to() per fresh lens — cache thrash + mid-round
+    implicit sync). Positions come from the per-run pinned-staged
+    run_cache. (The golden reference legitimately uses the lru path
+    on the harness side, so this gate drives the engine alone.)"""
+    from dataflow.runtime import Engine
+    from dataflow.runtime.device.cuda import CudaBackend
+    from dataflow.runtime.device.fake import FakeBackend
+    from dataflow.tasks import ops
+    from dataflow.training.families import resolve_family
+    from dataflow.training.planning import plan_program
+
+    cfg = _cfg()
+    fam = resolve_family(cfg)
+    planned = plan_program(fam.lower(cfg),
+                           fast_memory_capacity=64 * 1024 * 1024)
+    backend = CudaBackend()
+    values = fam.initial_values(planned.program, cfg, backend, seed=3)
+    dry = Engine(FakeBackend()).execute(planned.program,
+                                        initial_buffers=values)
+
+    def _boom(*a, **k):
+        raise AssertionError(
+            "pageable _positions_cached reached from packed-args mode")
+
+    monkeypatch.setattr(ops, "_positions_cached", _boom)
+    result = Engine(backend).execute(
+        planned.program, resolver=fam.build_resolver(fam.dims_of(cfg)),
+        initial_buffers=values, pool_prewarm=dry.pool_demand,
+        run_args=RA)
+    result.close()
+    dry.close()
+    from dataflow.tasks.interop import clear_view_cache
+
+    clear_view_cache()
+    for buf in values.values():
+        backend.free(buf)
+
+
+def test_run_cache_memoizes_positions():
+    from dataflow.tasks.base_blocks import _Base
+    import torch as _t
+
+    class _Ctx:
+        run_cache = {}
+
+    class _Probe(_Base):
+        pass
+
+    probe = object.__new__(_Probe)
+    a = _Probe._positions_dev(probe, _Ctx, (5, 3), "cuda")
+    b = _Probe._positions_dev(probe, _Ctx, (5, 3), "cuda")
+    assert a is b, "second task must reuse the run-cached tensor"
+    assert a.device.type == "cuda" and a.dtype == _t.int32
+    assert a.cpu().tolist() == [0, 1, 2, 3, 4, 0, 1, 2]
+    c = _Probe._positions_dev(probe, _Ctx, (4, 4), "cuda")
+    assert c is not a and len(_Ctx.run_cache) == 2

@@ -343,6 +343,7 @@ class Engine:
             stats["token_detect_lat"] = 0.0
             stats["token_detect_n"] = 0
             state.stats = stats
+        run_cache: dict = {}   # per-run derived-metadata memo
         for task_pos, task in enumerate(program.tasks):
             # service boundary-cancel: observed ONLY here, between task
             # dispatches — in-flight work drains normally, the ledger
@@ -479,6 +480,7 @@ class Engine:
                     task=task, stream=compute, inputs=in_buffers, outputs=out_buffers,
                     mutates=mut_buffers, backend=self.backend,
                     run_args=run_args,
+                    run_cache=run_cache,
                 ))
             finally:
                 annotator.range_pop()
