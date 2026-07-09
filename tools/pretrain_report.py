@@ -122,18 +122,30 @@ def build(results_dir=RESULTS) -> str:
     return body
 
 
-HTML_SHELL = """<style>
+HTML_SHELL = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pretraining parity &amp; scaling</title>
+<style>
 body {{ max-width: 900px; margin: 2rem auto; padding: 0 1rem;
-  font-family: ui-sans-serif, system-ui, sans-serif; line-height: 1.5; }}
+  font-family: ui-sans-serif, system-ui, sans-serif; line-height: 1.5;
+  color: #1a1a1a; background: #fff; }}
+@media (prefers-color-scheme: dark) {{ body {{ color: #e6e6e6; background: #14161a; }} }}
 h1 {{ font-size: 1.5rem; }} h2 {{ font-size: 1.15rem; margin-top: 2rem; }}
 .chart {{ overflow-x: auto; margin: 1rem 0; }}
 table {{ border-collapse: collapse; width: 100%; font-size: 0.9rem; margin: 0.5rem 0; }}
 th, td {{ border: 1px solid; border-color: color-mix(in srgb, currentColor 20%, transparent);
   padding: 4px 8px; text-align: right; }}
 th:first-child, td:first-child {{ text-align: left; }}
-</style>
+.sub {{ opacity: 0.75; font-size: 0.9rem; }}
+</style></head><body>
 <h1>Pretraining: reference-vs-engine parity &amp; scaling</h1>
+<p class="sub">llama3-shaped, fineweb10B (gpt2, vocab 50304), 64K tokens/step,
+seq 2048, all-bf16, AdamW + cosine LR (peak 3e-4), 1000 steps. Reference =
+independent pytorch nn.Module; engine = dataflowd service at a device budget.
+Byte-identical init + one deterministic data stream on both sides.</p>
 {body}
+</body></html>
 """
 
 
