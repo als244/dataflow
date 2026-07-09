@@ -82,6 +82,27 @@ def test_bitlevel_segment_isolation():
     assert not torch.equal(out_a[:SEGS[0]], out_b[:SEGS[0]])
 
 
+def test_bwd_bitlevel_segment_isolation():
+    # bwd leak gate (the fwd one alone is not enough: dk/dv flow
+    # ACROSS the kv heads and could smear across segments in a
+    # buggy kernel even with clean fwd outputs)
+    q, k, v, cu = _case(7)
+    out, lse = _varlen(q, k, v, cu)
+    g = torch.randn_like(out)
+    dq_a, dk_a, dv_a = ops.flash_bwd(g, q, k, v, out, lse, H, HKV, D,
+                                     cu_seqlens=cu, max_seqlen=T)
+    g2 = g.clone()
+    g2[:SEGS[0]] += 1.0                         # perturb seg-0 GRADS only
+    dq_b, dk_b, dv_b = ops.flash_bwd(g2, q, k, v, out, lse, H, HKV, D,
+                                     cu_seqlens=cu, max_seqlen=T)
+    torch.cuda.synchronize()
+    s0 = SEGS[0]
+    assert torch.equal(dq_a[s0:], dq_b[s0:])
+    assert torch.equal(dk_a[s0:], dk_b[s0:])
+    assert torch.equal(dv_a[s0:], dv_b[s0:])
+    assert not torch.equal(dq_a[:s0], dq_b[:s0])
+
+
 def test_determinism_twice_bitwise():
     q, k, v, cu = _case(3)
     out_a, lse_a = _varlen(q, k, v, cu)
