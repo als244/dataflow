@@ -128,20 +128,34 @@ class _Base:
         acc.wanted = lambda name: name in dw
         return acc
 
+    def _round_of(self, ctx) -> str:
+        parts = ctx.task.id.rsplit("_", 3)
+        return parts[2] if len(parts) >= 3 else "0"
+
     def _seq_for(self, ctx):
-        """Sequence lens for THIS task's round: run_args["seq_lens"]
-        (packed mode — per-round lists keyed by round index as a
-        string; task ids carry {s}_{r} by the documented lowering
-        convention) else the static dims.seq_spec. Objects carry
-        bytes; args carry step metadata."""
+        """Per-round sequence LENS for this task. Packed mode:
+        run_args["seq_lens"] carries CUMULATIVE BOUNDARIES
+        [0, b1, ..., t] per round (Shein's notation); lens are the
+        diffs. Else the static dims.seq_spec. Objects carry bytes;
+        args carry step metadata."""
         ra = ctx.run_args or {}
         sl = ra.get("seq_lens")
         if not sl:
             return self.dims.seq_spec
-        parts = ctx.task.id.rsplit("_", 3)
-        r = parts[2] if len(parts) >= 3 else "0"
-        lens = sl.get(r) if isinstance(sl, dict) else None
-        return tuple(lens) if lens else self.dims.seq_spec
+        b = sl.get(self._round_of(ctx)) if isinstance(sl, dict) else None
+        if not b:
+            return self.dims.seq_spec
+        return tuple(b[i + 1] - b[i] for i in range(len(b) - 1))
+
+    def _cu_for(self, ctx):
+        """Device int32 boundary tensor for this round (mirrored once
+        at run start by the engine prologue) — feeds the SINGLE-LAUNCH
+        varlen attention path. None in static mode."""
+        ra = ctx.run_args or {}
+        dev = ra.get("seq_lens_cuda")
+        if not dev:
+            return None
+        return dev.get(self._round_of(ctx))
 
     def _positions_dev(self, ctx, lens, device):
         """Per-run memoized device positions for packed-args lens:

@@ -47,11 +47,14 @@ def _data(lens, valid, seed):
 
 
 def _args(k, lens, valid):
-    # padded tail (valid < T) becomes its own segment so attention
-    # stays defined there; CE ignores it via targets == -1 +
-    # valid_rows normalization
+    # BOUNDARY notation [0, ..., T]; padded tail (valid < T) is its
+    # own segment so attention stays defined there; CE ignores it via
+    # targets == -1 + valid_rows normalization
     seg = list(lens) if valid == T else list(lens) + [T - valid]
-    return {"step": k, "seq_lens": {"0": seg},
+    b = [0]
+    for L in seg:
+        b.append(b[-1] + L)
+    return {"step": k, "seq_lens": {"0": b},
             "valid_rows": {"loss_0_0": valid}}
 
 

@@ -344,6 +344,23 @@ class Engine:
             stats["token_detect_n"] = 0
             state.stats = stats
         run_cache: dict = {}   # per-run derived-metadata memo
+        # packed-mode prologue (documented convention, family-agnostic):
+        # run_args["seq_lens"] = {round: [0, b1, ..., t]} CUMULATIVE
+        # BOUNDARIES (host ints). Mirror each list to a device int32
+        # tensor ONCE, up front, via pinned staging + non_blocking
+        # copy — never a pageable H2D mid-round (implicit-sync class)
+        # — and expose them to every task as run_args["seq_lens_cuda"].
+        if run_args and run_args.get("seq_lens") and getattr(
+                self.backend, "physical", False):
+            import torch as _torch
+
+            _dev = {}
+            for _r, _b in run_args["seq_lens"].items():
+                _host = _torch.tensor(list(_b),
+                                      dtype=_torch.int32).pin_memory()
+                _dev[_r] = _host.to(f"cuda:{self.backend.device}",
+                                    non_blocking=True)
+            run_args = {**run_args, "seq_lens_cuda": _dev}
         for task_pos, task in enumerate(program.tasks):
             # service boundary-cancel: observed ONLY here, between task
             # dispatches — in-flight work drains normally, the ledger

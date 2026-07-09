@@ -19,7 +19,8 @@ from dataflow.training.models.llama3 import ShapedLlamaConfig, lower_llama3
 from dataflow.training.testing.gradcheck import check_model_step
 
 LENS = (73, 38, 17)
-RA = {"seq_lens": {"0": list(LENS)}}
+# boundary notation (Shein): cumulative [0, ..., t]
+RA = {"seq_lens": {"0": [0, 73, 111, 128]}}
 
 
 def _cfg(**kw):

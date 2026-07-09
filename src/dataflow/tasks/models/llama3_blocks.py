@@ -84,6 +84,7 @@ class BlockFwd(_Base):
             extras["seq"] = seq
             if seq is not d.seq_spec:      # packed-args mode only
                 extras["pos"] = self._positions_dev(ctx, seq, x.device)
+                extras["cu"] = self._cu_for(ctx)
             self._forward(kctx, x, w, y, a, extras=extras)
 
     # --- staged forward -------------------------------------------------------
@@ -134,10 +135,17 @@ class BlockFwd(_Base):
 
     @staticmethod
     def _stage_attn(kctx, K, d, st):
-        attn_out, lse = ops.flash_fwd(
-            st["q"], st["k"], st["v"], d.n_heads, d.n_kv_heads, d.head_dim,
-            st.get("seq", d.seq_spec)
-        )
+        cu = st.get("cu")
+        if cu is not None:
+            # packed mode: ONE varlen launch for all segments
+            attn_out, lse = ops.flash_fwd(
+                st["q"], st["k"], st["v"], d.n_heads, d.n_kv_heads,
+                d.head_dim, cu_seqlens=cu, max_seqlen=d.tokens)
+        else:
+            attn_out, lse = ops.flash_fwd(
+                st["q"], st["k"], st["v"], d.n_heads, d.n_kv_heads,
+                d.head_dim, st.get("seq", d.seq_spec)
+            )
         st.pop("q"), st.pop("k"), st.pop("v")
         st["attn_out"] = attn_out
         if st["a"] is not None:
@@ -257,6 +265,7 @@ class BlockRecompute(BlockFwd):
             extras["seq"] = seq
             if seq is not d.seq_spec:
                 extras["pos"] = self._positions_dev(ctx, seq, x.device)
+                extras["cu"] = self._cu_for(ctx)
             self._forward_context(kctx, x, w, a, extras=extras)
 
     def _forward_context(self, kctx, x, w, a, extras=None) -> None:
@@ -341,10 +350,13 @@ class BlockBwd(_Base):
                 dx = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
             seq_run = self._seq_for(ctx)
             object.__setattr__(self, "_seq_run", seq_run)
+            packed = seq_run is not d.seq_spec
             object.__setattr__(
                 self, "_pos_run",
                 self._positions_dev(ctx, seq_run, dy.device)
-                if seq_run is not d.seq_spec else None)
+                if packed else None)
+            object.__setattr__(
+                self, "_cu_run", self._cu_for(ctx) if packed else None)
             meta = self._meta_state(ctx)
             if meta is None:
                 self._backward(kctx, dy, a, x, w, dx, dw, accum)
@@ -375,10 +387,17 @@ class BlockBwd(_Base):
         if acc.wanted("wo"):
             acc("wo", a["attn_out"].T @ dh_mid)
         seq = getattr(self, "_seq_run", d.seq_spec)
-        dq, dk, dv = ops.flash_bwd(
-            d_attn, a["q"], a["k"], a["v"], a["attn_out"], a["lse"],
-            d.n_heads, d.n_kv_heads, d.head_dim, seq,
-        )
+        cu = getattr(self, "_cu_run", None)
+        if cu is not None:
+            dq, dk, dv = ops.flash_bwd(
+                d_attn, a["q"], a["k"], a["v"], a["attn_out"], a["lse"],
+                d.n_heads, d.n_kv_heads, d.head_dim,
+                cu_seqlens=cu, max_seqlen=d.tokens)
+        else:
+            dq, dk, dv = ops.flash_bwd(
+                d_attn, a["q"], a["k"], a["v"], a["attn_out"], a["lse"],
+                d.n_heads, d.n_kv_heads, d.head_dim, seq,
+            )
         del d_attn
         dq_r = torch.empty_like(dq)
         pos = getattr(self, "_pos_run", None)
