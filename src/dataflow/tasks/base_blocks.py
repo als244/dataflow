@@ -280,17 +280,19 @@ class HeadLoss(_Base):
                 dwh = None
             # packed batches: normalization = VALID rows (pads carry
             # IGNORE_INDEX targets). Host int via run_args — never a
-            # device count (hidden-sync rule). Keyed by the loss
-            # output id; absent => all rows (bit-identical legacy).
+            # device count (hidden-sync rule). ROUND-KEYED like
+            # seq_lens (uniform args schema); round derived from the
+            # loss output id "loss_{s}_{r}". Absent => all rows
+            # (bit-identical legacy).
             ra_h = ctx.run_args or {}
             vr = ra_h.get("valid_rows")
             norm_rows = d.tokens
             if vr is not None:
                 if isinstance(vr, dict):
-                    _k = (ctx.task.outputs[1].id
-                          if len(ctx.task.outputs) > 1 else None)
-                    if _k in vr:
-                        norm_rows = int(vr[_k])
+                    _r = (ctx.task.outputs[1].id.rsplit("_", 1)[-1]
+                          if len(ctx.task.outputs) > 1 else "0")
+                    if _r in vr:
+                        norm_rows = int(vr[_r])
                 else:
                     norm_rows = int(vr)
             chunk = head_chunk_rows(d.vocab_size)

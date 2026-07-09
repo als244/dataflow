@@ -55,7 +55,7 @@ def _args(k, lens, valid):
     for L in seg:
         b.append(b[-1] + L)
     return {"step": k, "seq_lens": {"0": b},
-            "valid_rows": {"loss_0_0": valid}}
+            "valid_rows": {"0": valid}}
 
 
 def test_daemon_packed_args_bit_equal(tmp_path):

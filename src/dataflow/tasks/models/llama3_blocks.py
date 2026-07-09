@@ -351,17 +351,15 @@ class BlockBwd(_Base):
                         dw = self.gl_for(ctx.task).views(self._out(ctx, j))
                         break
                 dx = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
+            # ONE per-launch stash: (seq, cu, max_q, pos) — packed
+            # metadata for _attn_bwd (single dispatcher thread)
             seq_run = self._seq_for(ctx)
-            object.__setattr__(self, "_seq_run", seq_run)
             packed = seq_run is not d.seq_spec
-            object.__setattr__(
-                self, "_pos_run",
-                self._pos_cuda_for(ctx) if packed else None)
-            object.__setattr__(
-                self, "_cu_run", self._cu_for(ctx) if packed else None)
-            object.__setattr__(
-                self, "_mx_run",
-                self._max_seqlen_for(ctx) if packed else None)
+            object.__setattr__(self, "_pk_run", (
+                seq_run,
+                self._cu_for(ctx) if packed else None,
+                self._max_seqlen_for(ctx) if packed else None,
+                self._pos_cuda_for(ctx) if packed else None))
             meta = self._meta_state(ctx)
             if meta is None:
                 self._backward(kctx, dy, a, x, w, dx, dw, accum)
@@ -391,13 +389,13 @@ class BlockBwd(_Base):
         d_attn = dh_mid @ w["wo"].T
         if acc.wanted("wo"):
             acc("wo", a["attn_out"].T @ dh_mid)
-        seq = getattr(self, "_seq_run", d.seq_spec)
-        cu = getattr(self, "_cu_run", None)
+        seq, cu, mx, pos = getattr(
+            self, "_pk_run", (d.seq_spec, None, None, None))
         if cu is not None:
             dq, dk, dv = ops.flash_bwd(
                 d_attn, a["q"], a["k"], a["v"], a["attn_out"], a["lse"],
                 d.n_heads, d.n_kv_heads, d.head_dim, cu_seqlens=cu,
-                max_seqlen=getattr(self, "_mx_run", None) or d.tokens)
+                max_seqlen=mx or d.tokens)
         else:
             dq, dk, dv = ops.flash_bwd(
                 d_attn, a["q"], a["k"], a["v"], a["attn_out"], a["lse"],
@@ -405,7 +403,6 @@ class BlockBwd(_Base):
             )
         del d_attn
         dq_r = torch.empty_like(dq)
-        pos = getattr(self, "_pos_run", None)
         if pos is None:
             pos = ops.positions_for(seq, dq.shape[0], dq.device)
         K.rope_bwd(kctx, dq, dq_r, pos, d.n_heads, d.head_dim, d.rope_base)
