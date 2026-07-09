@@ -213,3 +213,19 @@ def load_qwen35_init(model, cfg, get_bytes):
     dev = next(model.parameters()).device
     model.load_state_dict({k: v.to(dev) for k, v in sd.items()}, strict=True)
     return model
+
+
+# ===================== family dispatch (driver seam) ========================
+
+def build_reference_model(cfg, *, device="cuda", dtype=torch.bfloat16):
+    """Build the reference nn.Module for ``cfg``'s family."""
+    if type(cfg).__name__ == "ShapedQwen35Config":
+        return build_qwen35_reference(cfg, device=device, dtype=dtype)
+    return build_reference(cfg, device=device, dtype=dtype)
+
+
+def load_reference_init(model, cfg, dims, get_bytes):
+    """Load the engine's packed init into ``model`` (family-dispatched)."""
+    if type(cfg).__name__ == "ShapedQwen35Config":
+        return load_qwen35_init(model, cfg, get_bytes)
+    return load_engine_init(model, dims, cfg.n_layers, get_bytes)

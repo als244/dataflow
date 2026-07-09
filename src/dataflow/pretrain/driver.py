@@ -29,7 +29,7 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from . import bridge
-from .presets import cfg_dict, tokens_per_step
+from .presets import cfg_dict, resolver_family, tokens_per_step
 from .recipe import Recipe
 
 
@@ -120,9 +120,9 @@ def run_reference(cfg, recipe: Recipe, stream, steps: int, *, seed: int = 11,
     dims = fam.dims_of(cfg)
     backend = CudaBackend()
     values = fam.initial_values(fam.lower(cfg), cfg, backend, seed=seed)
-    model = bridge.build_reference(cfg, device=device)
-    bridge.load_engine_init(model, dims, cfg.n_layers,
-                            bridge.get_bytes_from_values(values))
+    model = bridge.build_reference_model(cfg, device=device)
+    bridge.load_reference_init(model, cfg, dims,
+                               bridge.get_bytes_from_values(values))
     for buf in values.values():        # only W_* were needed to bridge
         backend.free(buf)
     model.grad_checkpoint = grad_checkpoint
@@ -235,9 +235,10 @@ def run_engine(client, cfg, recipe: Recipe, stream, steps: int, *,
     planned = plan_at_budget(cfg, budget_gib, recompute=recompute)
     prog_dict = program_to_dict(planned.program)
     cd = cfg_dict(cfg)
-    resolver = {"family": "llama3", "cfg": cd, "hyper": recipe.hyper_spec()}
+    fam = resolver_family(cfg)
+    resolver = {"family": fam, "cfg": cd, "hyper": recipe.hyper_spec()}
 
-    client.materialize_group({"kind": "family_init_all", "family": "llama3",
+    client.materialize_group({"kind": "family_init_all", "family": fam,
                               "cfg": cd, "seed": seed})
     R = cfg.grad_accum_rounds
 

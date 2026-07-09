@@ -106,7 +106,7 @@ def cmd_smoke(args) -> int:
 
 
 def cmd_parity(args) -> int:
-    cfg = P.preset(args.preset)
+    cfg = P.resolve_preset(args.preset)
     steps = args.steps
     recipe = _recipe(steps)
     stream = make_stream(cfg.tokens)

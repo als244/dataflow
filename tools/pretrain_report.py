@@ -40,36 +40,39 @@ def build(results_dir=RESULTS) -> str:
     R = scaling.load_all(results_dir)
     sections = []
 
-    # ---- 1B parity: overlay reference vs engine budgets ----
-    par_keys = [
-        ("l3_1b_reference", "reference (pytorch)", PALETTE[0]),
-        ("l3_1b_engine_6gib", "engine @ 6 GiB", PALETTE[1]),
-        ("l3_1b_engine_14gib", "engine @ 14 GiB", PALETTE[2]),
-    ]
-    par_series = _loss_series(R, par_keys)
-    if par_series:
-        svg = svg_line_chart(par_series, title="1B — cross-entropy vs step",
-                             xlabel="optimizer step", ylabel="mean CE loss")
-        # parity metrics
+    # ---- parity groups: every {preset}_reference with matching engine budgets ----
+    refs = {k[: -len("_reference")]: v for k, v in R.items()
+            if k.endswith("_reference")}
+    for pkey in sorted(refs):
+        ref = refs[pkey]
+        engines = sorted((v for k, v in R.items() if k.startswith(pkey + "_engine_")),
+                         key=lambda e: e.budget_gib or 0)
+        if not engines:
+            continue
+        series = [Series(label="reference (pytorch)",
+                         x=list(range(len(ref.losses))), y=ref.losses,
+                         color=PALETTE[0], dashed=True)]
         prows = []
-        ref = R.get("l3_1b_reference")
-        if ref:
-            for key, label, _ in par_keys[1:]:
-                e = R.get(key)
-                if e:
-                    rep = parity.compare(ref.losses, e.losses, a_label="reference",
-                                         b_label=label)
-                    prows.append([label, f"{rep.step0_abs:.4f}", f"{rep.max_abs:.4f}",
-                                  f"{rep.final_abs:.4f}", f"{rep.ema_abs:.4f}",
-                                  "ALIGNED" if rep.passed else "DIVERGED"])
-            e6, e14 = R.get("l3_1b_engine_6gib"), R.get("l3_1b_engine_14gib")
-            if e6 and e14:
-                rep = parity.compare(e6.losses, e14.losses, a_label="6", b_label="14")
-                prows.append(["engine 6 vs 14 (budget-invariance)", f"{rep.step0_abs:.4f}",
-                              f"{rep.max_abs:.4f}", f"{rep.final_abs:.4f}",
-                              f"{rep.ema_abs:.4f}", "ALIGNED" if rep.passed else "DIVERGED"])
+        for i, e in enumerate(engines):
+            lbl = f"engine @ {e.budget_gib:g} GiB"
+            series.append(Series(label=lbl, x=list(range(len(e.losses))),
+                                 y=e.losses, color=PALETTE[(i + 1) % len(PALETTE)]))
+            rep = parity.compare(ref.losses, e.losses, a_label="reference", b_label=lbl)
+            prows.append([lbl, f"{rep.step0_abs:.4f}", f"{rep.max_abs:.4f}",
+                          f"{rep.final_abs:.4f}", f"{rep.ema_abs:.4f}",
+                          "ALIGNED" if rep.passed else "DIVERGED"])
+        if len(engines) == 2:
+            a, b = engines
+            rep = parity.compare(a.losses, b.losses, a_label=f"{a.budget_gib:g}",
+                                 b_label=f"{b.budget_gib:g}")
+            prows.append([f"engine {a.budget_gib:g} vs {b.budget_gib:g} (budget-invariance)",
+                          f"{rep.step0_abs:.4f}", f"{rep.max_abs:.4f}",
+                          f"{rep.final_abs:.4f}", f"{rep.ema_abs:.4f}",
+                          "ALIGNED" if rep.passed else "DIVERGED"])
+        svg = svg_line_chart(series, title=f"{pkey} — cross-entropy vs step",
+                             xlabel="optimizer step", ylabel="mean CE loss")
         tbl = _table(prows, ["comparison", "step0 Δ", "max Δ", "final Δ", "ema Δ", "verdict"])
-        sections.append(f"<section><h2>1B reference-vs-engine parity</h2>"
+        sections.append(f"<section><h2>{pkey} reference-vs-engine parity</h2>"
                         f"<div class='chart'>{svg}</div>{tbl}</section>")
 
     # ---- scaling ladder ----
