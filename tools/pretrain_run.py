@@ -171,7 +171,7 @@ def cmd_scaling(args) -> int:
                 r.meta["preset"] = name
                 r.meta["params"] = P.param_counts(cfg)
                 r.save(RESULTS / f"scaling_{name}_engine.json")
-                client.wipe("*", force=True)     # reset store for the next size
+                client.wipe("all", force=True)   # reset store for the next size
     return 0
 
 
