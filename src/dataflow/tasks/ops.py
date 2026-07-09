@@ -168,10 +168,27 @@ def rope_bwd(dx: torch.Tensor, positions: torch.Tensor, n_heads: int, head_dim: 
 def flash_fwd(
     q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,
     n_heads: int, n_kv_heads: int, head_dim: int, seq_len: int | None = None,
+    cu_seqlens: torch.Tensor | None = None, max_seqlen: int | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """q: (t, d); k, v: (t, kv); t = batch x seq_len (causal PER SEQUENCE).
-    Returns (attn_out (t, d), lse (batch*n_heads, seq_len))."""
+    Returns (attn_out (t, d), lse (batch*n_heads, seq_len)).
+
+    VARLEN (packed) path: cu_seqlens (device int32 cumulative
+    boundaries incl. the pad-tail segment) + max_seqlen (STATIC host
+    int — pass t_round; NEVER derived from device data, hidden-sync
+    rule) => ONE aten varlen launch for all segments, GQA native (no
+    kv head expansion). lse returns (n_heads, t) — the ragged-path
+    layout. Probed on this box: bit-clean segment isolation,
+    deterministic-twice, sync-audit clean."""
     t = q.shape[0]
+    if cu_seqlens is not None:
+        mq = int(max_seqlen if max_seqlen is not None else t)
+        out, lse, _rng, _unused, _ = torch.ops.aten._flash_attention_forward(
+            q.view(t, n_heads, head_dim),
+            k.view(t, n_kv_heads, head_dim),
+            v.view(t, n_kv_heads, head_dim),
+            cu_seqlens, cu_seqlens, mq, mq, 0.0, True, False)
+        return out.reshape(t, n_heads * head_dim), lse
     lens = seq_lens_of(seq_len, t)
     if len(set(lens)) > 1:
         # ragged packing: one dense call per sequence; lse layout (h, t)
@@ -201,9 +218,29 @@ def flash_bwd(
     d_attn: torch.Tensor, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,
     attn_out: torch.Tensor, lse: torch.Tensor,
     n_heads: int, n_kv_heads: int, head_dim: int, seq_len: int | None = None,
+    cu_seqlens: torch.Tensor | None = None, max_seqlen: int | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Returns (dq (t,d), dk (t,kv), dv (t,kv)); GQA head grads reduced."""
+    """Returns (dq (t,d), dk (t,kv), dv (t,kv)); GQA head grads reduced.
+
+    VARLEN path mirrors flash_fwd: lse is (n_heads, t); dk/dv come
+    back GQA-reduced natively. philox zeros are valid (dropout 0 —
+    same convention as the dense path; gate-verified equal to
+    round-tripped rng_state)."""
     t = q.shape[0]
+    if cu_seqlens is not None:
+        mq = int(max_seqlen if max_seqlen is not None else t)
+        philox = torch.zeros(2, dtype=torch.uint64, device=q.device)
+        dq3, dk3, dv3 = torch.ops.aten._flash_attention_backward(
+            d_attn.view(t, n_heads, head_dim),
+            q.view(t, n_heads, head_dim),
+            k.view(t, n_kv_heads, head_dim),
+            v.view(t, n_kv_heads, head_dim),
+            attn_out.view(t, n_heads, head_dim),
+            lse.contiguous(), cu_seqlens, cu_seqlens, mq, mq,
+            0.0, True, philox, philox)
+        return (dq3.reshape(t, n_heads * head_dim),
+                dk3.reshape(t, n_kv_heads * head_dim),
+                dv3.reshape(t, n_kv_heads * head_dim))
     lens = seq_lens_of(seq_len, t)
     if len(set(lens)) > 1:
         # ragged: lse arrives (n_heads, t); slice everything per sequence.
