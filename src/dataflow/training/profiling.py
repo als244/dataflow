@@ -176,9 +176,9 @@ def profile_program(
     for _t in program.tasks:
         _d = getattr(resolver(_t), "dims", None)
         if _d is not None:
-            from dataflow.runtime.engine import prologue_run_args, uniform_segments
+            from dataflow.runtime.engine import prologue_run_start, uniform_segments
 
-            _run_args = prologue_run_args(
+            _run_args = prologue_run_start(
                 {"segments": uniform_segments(_d, program)}, backend)
             break
 

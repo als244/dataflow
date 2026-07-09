@@ -109,25 +109,25 @@ def test_prologue_positions():
     import torch as _t
 
     from dataflow.runtime.device.cuda import CudaBackend
-    from dataflow.runtime.engine import prologue_run_args
+    from dataflow.runtime.engine import prologue_run_start
 
-    out = prologue_run_args({"seq_lens": {"0": [0, 5, 8]}}, CudaBackend())
+    out = prologue_run_start({"seq_lens": {"0": [0, 5, 8]}}, CudaBackend())
     seg = out["segments"]["0"]
     assert seg.positions.device.type == "cuda" and seg.positions.dtype == _t.int32
     assert seg.positions.cpu().tolist() == [0, 1, 2, 3, 4, 0, 1, 2]
 
 
 def test_prologue_derives_max_seqlen_and_mirrors():
-    """prologue_run_args: wire boundaries -> materialized Segments; tight
+    """prologue_run_start: wire boundaries -> materialized Segments; tight
     per-round max_len, device cu mirror; caller's dict untouched."""
     import torch as _t
 
-    from dataflow.runtime.engine import prologue_run_args
+    from dataflow.runtime.engine import prologue_run_start
     from dataflow.runtime.device.cuda import CudaBackend
 
     ra = {"step": 3,
           "seq_lens": {"0": [0, 73, 111, 128], "1": [0, 50, 128]}}
-    out = prologue_run_args(ra, CudaBackend())
+    out = prologue_run_start(ra, CudaBackend())
     assert out["segments"]["0"].max_len == 73 and out["segments"]["1"].max_len == 78
     assert "segments" not in ra  # caller's dict untouched
     cu0 = out["segments"]["0"].cu
@@ -135,6 +135,6 @@ def test_prologue_derives_max_seqlen_and_mirrors():
     assert cu0.cpu().tolist() == [0, 73, 111, 128]
 
     with pytest.raises(ValueError):
-        prologue_run_args({"seq_lens": {"0": [5, 3]}}, CudaBackend())
+        prologue_run_start({"seq_lens": {"0": [5, 3]}}, CudaBackend())
     with pytest.raises(ValueError):
-        prologue_run_args({"seq_lens": {"0": [0, 10, 7]}}, CudaBackend())
+        prologue_run_start({"seq_lens": {"0": [0, 10, 7]}}, CudaBackend())

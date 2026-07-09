@@ -38,7 +38,7 @@ from .trace import Interval, RunTrace, TraceEvent
 from .transfers import TransferDone, TransferEngine, TransferJob
 
 
-def prologue_run_args(run_args: dict, backend) -> dict:
+def prologue_run_start(run_args: dict, backend) -> dict:
     """Run-START prologue (family-agnostic): normalize run_args to per-round
     MATERIALIZED Segments — run_args["segments"] = {round: Segments} with the
     ``cu`` / ``positions`` device fields built ONCE, before task 0, via a
@@ -402,7 +402,7 @@ class Engine:
             stats["token_detect_n"] = 0
             state.stats = stats
         if run_args and (run_args.get("segments") or run_args.get("seq_lens")):
-            run_args = prologue_run_args(run_args, self.backend)
+            run_args = prologue_run_start(run_args, self.backend)
         for task_pos, task in enumerate(program.tasks):
             # service boundary-cancel: observed ONLY here, between task
             # dispatches — in-flight work drains normally, the ledger
