@@ -329,12 +329,20 @@ def ce_loss_fwd_bwd(
         lf = logits[lo:hi].float()
         lse = torch.logsumexp(lf, dim=-1, keepdim=True)
         tc = tl[lo:hi]
-        nll_sum += (lse.squeeze(-1) - lf.gather(1, tc.unsqueeze(1)).squeeze(1)).sum()
+        # ignore-index (targets < 0, e.g. packing pads): zero fwd
+        # contribution + zero dlogits row; mask-mul keeps reduction
+        # order fixed (deterministic)
+        valid = (tc >= 0)
+        tc_safe = tc.clamp_min(0)
+        nll_rows = lse.squeeze(-1) - lf.gather(
+            1, tc_safe.unsqueeze(1)).squeeze(1)
+        nll_sum += (nll_rows * valid.float()).sum()
         soft = torch.exp(lf - lse)
         soft.scatter_add_(
-            1, tc.unsqueeze(1),
+            1, tc_safe.unsqueeze(1),
             torch.full((hi - lo, 1), -1.0, device=logits.device, dtype=torch.float32),
         )
+        soft *= valid.unsqueeze(1).float()
         dlogits_out[lo:hi].copy_((soft / total).to(dlogits_out.dtype))
     loss_out.copy_((nll_sum / total).reshape(loss_out.shape))
 

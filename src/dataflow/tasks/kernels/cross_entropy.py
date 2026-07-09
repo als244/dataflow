@@ -69,8 +69,11 @@ if triton is not None:
         lse = m + tl.log(s)
 
         target = tl.load(targets_ptr + row).to(tl.int64)
-        x_t = tl.load(base + target).to(tl.float32)
-        tl.store(nll_ptr + row, lse - x_t)
+        # ignore-index (< 0): zero nll + zero dlogits row (packing pads)
+        valid = target >= 0
+        t_safe = tl.where(valid, target, 0)
+        x_t = tl.load(base + t_safe).to(tl.float32)
+        tl.store(nll_ptr + row, tl.where(valid, lse - x_t, 0.0))
 
         # pass 2: dlogits = (exp(x - lse) - onehot) / total_rows
         inv_n = 1.0 / total_rows
@@ -78,8 +81,8 @@ if triton is not None:
             mask = off + cols < vocab
             lv = tl.load(base + off + cols, mask=mask, other=0).to(tl.float32)
             soft = tl.exp(lv - lse)
-            onehot = ((off + cols).to(tl.int64) == target).to(tl.float32)
-            g = (soft - onehot) * inv_n
+            onehot = ((off + cols).to(tl.int64) == t_safe).to(tl.float32)
+            g = tl.where(valid, (soft - onehot) * inv_n, 0.0)
             tl.store(dlogits_ptr + row * vocab + off + cols,
                      g.to(dlogits_ptr.dtype.element_ty), mask=mask)
 

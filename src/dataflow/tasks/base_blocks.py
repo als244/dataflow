@@ -232,6 +232,21 @@ class HeadLoss(_Base):
                 dwh = self.hgl.views(self._out(ctx, 2))
             else:
                 dwh = None
+            # packed batches: normalization = VALID rows (pads carry
+            # IGNORE_INDEX targets). Host int via run_args — never a
+            # device count (hidden-sync rule). Keyed by the loss
+            # output id; absent => all rows (bit-identical legacy).
+            ra_h = ctx.run_args or {}
+            vr = ra_h.get("valid_rows")
+            norm_rows = d.tokens
+            if vr is not None:
+                if isinstance(vr, dict):
+                    _k = (ctx.task.outputs[1].id
+                          if len(ctx.task.outputs) > 1 else None)
+                    if _k in vr:
+                        norm_rows = int(vr[_k])
+                else:
+                    norm_rows = int(vr)
             chunk = head_chunk_rows(d.vocab_size)
             loss_acc = torch.zeros(1, dtype=torch.float32, device=y.device)
             part = torch.empty(1, dtype=torch.float32, device=y.device)
@@ -246,7 +261,8 @@ class HeadLoss(_Base):
                 logits = yn @ wh["w"].T                      # (c, V) — chunk scratch
                 dlogits = torch.empty_like(logits)
                 K.ce_loss_fwd_bwd(
-                    kctx, logits, targets[lo:hi], part, dlogits, total_rows=d.tokens,
+                    kctx, logits, targets[lo:hi], part, dlogits,
+                    total_rows=norm_rows,
                 )
                 loss_acc += part
                 if dwh is not None and "w" in dwh:
