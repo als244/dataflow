@@ -128,6 +128,29 @@ class _Base:
         acc.wanted = lambda name: name in dw
         return acc
 
+    def _pk_views(self, ctx):
+        """Dynamic packed mode (C4): bounds/positions arrive as the
+        FINAL TWO task inputs (lowering invariant) but are located by
+        ID PREFIX, never position. (None, None) in legacy modes."""
+        cu = pos = None
+        for oid in ctx.task.inputs:
+            if oid.startswith("bounds_"):
+                buf = ctx.inputs[oid]
+                cu = torch_view(buf, (buf.size_bytes // 4,), torch.int32)
+            elif oid.startswith("positions_"):
+                buf = ctx.inputs[oid]
+                pos = torch_view(buf, (buf.size_bytes // 4,), torch.int32)
+        return cu, pos
+
+    def _extras_with_pk(self, ctx, extras):
+        cu, pos = self._pk_views(ctx)
+        if cu is None:
+            return extras
+        extras = dict(extras) if extras else {}
+        extras["pk_cu"] = cu
+        extras["pk_pos"] = pos
+        return extras
+
     def _meta_state(self, ctx) -> dict | None:
         """Family hook: st entries for METADATA objects (M_{s}_{r}_{i} —
         never-recompute forward artifacts: routing packs, selections).
