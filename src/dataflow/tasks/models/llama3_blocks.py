@@ -351,15 +351,11 @@ class BlockBwd(_Base):
                         dw = self.gl_for(ctx.task).views(self._out(ctx, j))
                         break
                 dx = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
-            # ONE per-launch stash: (seq, cu, max_q, pos) — packed
-            # metadata for _attn_bwd (single dispatcher thread)
             seq_run = self._seq_for(ctx)
-            packed = seq_run is not d.seq_spec
-            object.__setattr__(self, "_pk_run", (
-                seq_run,
-                self._cu_for(ctx) if packed else None,
-                self._max_seqlen_for(ctx) if packed else None,
-                self._pos_cuda_for(ctx) if packed else None))
+            if seq_run is not d.seq_spec:
+                kctx.pk = (seq_run, self._cu_for(ctx),
+                           self._max_seqlen_for(ctx),
+                           self._pos_cuda_for(ctx))
             meta = self._meta_state(ctx)
             if meta is None:
                 self._backward(kctx, dy, a, x, w, dx, dw, accum)
@@ -389,8 +385,7 @@ class BlockBwd(_Base):
         d_attn = dh_mid @ w["wo"].T
         if acc.wanted("wo"):
             acc("wo", a["attn_out"].T @ dh_mid)
-        seq, cu, mx, pos = getattr(
-            self, "_pk_run", (d.seq_spec, None, None, None))
+        seq, cu, mx, pos = kctx.pk or (d.seq_spec, None, None, None)
         if cu is not None:
             dq, dk, dv = ops.flash_bwd(
                 d_attn, a["q"], a["k"], a["v"], a["attn_out"], a["lse"],
