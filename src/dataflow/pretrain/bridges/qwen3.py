@@ -75,3 +75,8 @@ def build_reference_model(cfg, *, device="cuda", dtype=torch.bfloat16) -> Qwen3:
 
 def load_reference_init(model, cfg, dims, get_bytes):
     return load_qwen3_init(model, cfg, get_bytes)
+
+
+def to_reference_state_dict(cfg, get_bytes) -> dict:
+    """Uniform-name alias for the generic gate runners."""
+    return to_qwen3_state_dict(cfg, get_bytes)

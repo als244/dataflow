@@ -50,3 +50,32 @@ def test_qwen3_engine_vs_reference():
     from dataflow.pretrain.presets import qwen3_smoke_preset
 
     run_family_parity(qwen3_smoke_preset())
+
+
+@pytest.mark.gpu
+def test_olmoe_engine_vs_reference():
+    """LBL-OFF (aux_coef=0): the reference trains pure CE, so the engine
+    must too."""
+    if not torch.cuda.is_available():
+        pytest.skip("no CUDA")
+    from dataflow.pretrain.presets import olmoe_smoke_preset
+
+    run_family_parity(olmoe_smoke_preset())
+
+
+@pytest.mark.gpu
+def test_qwen3moe_engine_vs_reference():
+    if not torch.cuda.is_available():
+        pytest.skip("no CUDA")
+    from dataflow.pretrain.presets import qwen3moe_smoke_preset
+
+    run_family_parity(qwen3moe_smoke_preset())
+
+
+@pytest.mark.gpu
+def test_qwen35moe_engine_vs_reference():
+    if not torch.cuda.is_available():
+        pytest.skip("no CUDA")
+    from dataflow.pretrain.presets import qwen35moe_smoke_preset
+
+    run_family_parity(qwen35moe_smoke_preset())

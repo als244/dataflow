@@ -114,10 +114,53 @@ def qwen3_smoke_preset():
     )
 
 
+# MoE engine-parity smoke twins (small dims, real 50304 vocab). All run
+# LBL-OFF (aux_coef=0 — no load-balance functions on either side): the
+# reference trains pure CE, so the engine must too; LBL-ON engine parity is
+# gated separately once the per-step aux machinery lands.
+def olmoe_smoke_preset():
+    from dataflow.training.models.olmoe import ShapedOlmoeConfig
+
+    return ShapedOlmoeConfig(
+        n_layers=4, d_model=256, n_heads=4, n_kv_heads=4, head_dim=64,
+        n_experts=8, top_k=2, d_ff_expert=512, aux_coef=0.0,
+        vocab_size=VOCAB_SIZE, seq_len=SMOKE_SEQ_LEN, batch=SMOKE_BATCH,
+        grad_accum_rounds=SMOKE_GRAD_ACCUM_ROUNDS,
+    )
+
+
+def qwen3moe_smoke_preset():
+    from dataflow.training.models.qwen3moe import ShapedQwen3MoeConfig
+
+    return ShapedQwen3MoeConfig(
+        n_layers=4, d_model=256, n_heads=4, n_kv_heads=2, head_dim=64,
+        n_experts=8, top_k=2, d_ff_expert=256, aux_coef=0.0,
+        vocab_size=VOCAB_SIZE, seq_len=SMOKE_SEQ_LEN, batch=SMOKE_BATCH,
+        grad_accum_rounds=SMOKE_GRAD_ACCUM_ROUNDS,
+    )
+
+
+def qwen35moe_smoke_preset():
+    from dataflow.training.models.qwen35moe import ShapedQwen35MoeConfig
+
+    return ShapedQwen35MoeConfig(
+        n_layers=4, d_model=256, full_attention_interval=4, n_heads=4,
+        n_kv_heads=2, head_dim=64, partial_rotary_factor=0.25,
+        lin_k_heads=2, lin_v_heads=4, lin_k_head_dim=32, lin_v_head_dim=32,
+        lin_conv_kernel=4, n_experts=8, top_k=2, d_ff_expert=256,
+        n_shared_experts=1, d_ff_shared=256, aux_coef=0.0,
+        vocab_size=VOCAB_SIZE, seq_len=SMOKE_SEQ_LEN, batch=SMOKE_BATCH,
+        grad_accum_rounds=SMOKE_GRAD_ACCUM_ROUNDS,
+    )
+
+
 RESOLVER_FAMILY_BY_TYPE = {
     "ShapedLlamaConfig": "llama3",
+    "ShapedOlmoeConfig": "olmoe",
     "ShapedQwen3Config": "qwen3",
+    "ShapedQwen3MoeConfig": "qwen3moe",
     "ShapedQwen35Config": "qwen35",
+    "ShapedQwen35MoeConfig": "qwen35moe",
 }
 
 
@@ -162,10 +205,55 @@ def qwen3_cfg_dict(cfg) -> dict:
     )
 
 
+def olmoe_cfg_dict(cfg) -> dict:
+    return dict(
+        n_layers=cfg.n_layers, d_model=cfg.d_model, n_heads=cfg.n_heads,
+        n_kv_heads=cfg.n_kv_heads, head_dim=cfg.head_dim,
+        n_experts=cfg.n_experts, top_k=cfg.top_k, d_ff_expert=cfg.d_ff_expert,
+        routing_mode=cfg.routing_mode, aux_coef=cfg.aux_coef,
+        rope_base=cfg.rope_base, vocab_size=cfg.vocab_size,
+        seq_len=cfg.seq_len, batch=cfg.batch,
+        grad_accum_rounds=cfg.grad_accum_rounds, num_steps=cfg.num_steps,
+    )
+
+
+def qwen3moe_cfg_dict(cfg) -> dict:
+    return dict(
+        n_layers=cfg.n_layers, d_model=cfg.d_model, n_heads=cfg.n_heads,
+        n_kv_heads=cfg.n_kv_heads, head_dim=cfg.head_dim,
+        n_experts=cfg.n_experts, top_k=cfg.top_k, d_ff_expert=cfg.d_ff_expert,
+        routing_mode=cfg.routing_mode, aux_coef=cfg.aux_coef,
+        rope_base=cfg.rope_base, vocab_size=cfg.vocab_size,
+        seq_len=cfg.seq_len, batch=cfg.batch,
+        grad_accum_rounds=cfg.grad_accum_rounds, num_steps=cfg.num_steps,
+    )
+
+
+def qwen35moe_cfg_dict(cfg) -> dict:
+    return dict(
+        n_layers=cfg.n_layers, d_model=cfg.d_model,
+        full_attention_interval=cfg.full_attention_interval,
+        n_heads=cfg.n_heads, n_kv_heads=cfg.n_kv_heads, head_dim=cfg.head_dim,
+        partial_rotary_factor=cfg.partial_rotary_factor,
+        lin_k_heads=cfg.lin_k_heads, lin_v_heads=cfg.lin_v_heads,
+        lin_k_head_dim=cfg.lin_k_head_dim, lin_v_head_dim=cfg.lin_v_head_dim,
+        lin_conv_kernel=cfg.lin_conv_kernel,
+        n_experts=cfg.n_experts, top_k=cfg.top_k, d_ff_expert=cfg.d_ff_expert,
+        n_shared_experts=cfg.n_shared_experts, d_ff_shared=cfg.d_ff_shared,
+        routing_mode=cfg.routing_mode, aux_coef=cfg.aux_coef,
+        rope_base=cfg.rope_base, tied_embeddings=cfg.tied_embeddings,
+        vocab_size=cfg.vocab_size, seq_len=cfg.seq_len, batch=cfg.batch,
+        grad_accum_rounds=cfg.grad_accum_rounds, num_steps=cfg.num_steps,
+    )
+
+
 CFG_DICT_BY_TYPE = {
     "ShapedLlamaConfig": _llama3_cfg_dict,
+    "ShapedOlmoeConfig": olmoe_cfg_dict,
     "ShapedQwen3Config": qwen3_cfg_dict,
+    "ShapedQwen3MoeConfig": qwen3moe_cfg_dict,
     "ShapedQwen35Config": _qwen35_cfg_dict,
+    "ShapedQwen35MoeConfig": qwen35moe_cfg_dict,
 }
 
 

@@ -80,3 +80,10 @@ def build_reference_model(cfg, *, device="cuda", dtype=torch.bfloat16) -> Llama3
 
 def load_reference_init(model, cfg, dims, get_bytes) -> Llama3:
     return load_engine_init(model, dims, cfg.n_layers, get_bytes)
+
+
+def to_reference_state_dict(cfg, get_bytes) -> dict:
+    """Uniform-name alias for the generic gate runners."""
+    from dataflow.training.models.llama3 import dims_of
+
+    return to_state_dict(dims_of(cfg), cfg.n_layers, get_bytes)
