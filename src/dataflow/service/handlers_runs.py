@@ -229,6 +229,9 @@ def install(server) -> None:
         with st.lock:
             st.current_run = rec.status()
             st.counters["runs_total"] += 1
+            sess = st.sessions.get(call.session_id)
+            if sess is not None:
+                sess.runs_submitted += 1
         st.emit("run_started", run_id=run_id, prog_id=entry.prog_id,
                 args=args)
 
@@ -277,6 +280,8 @@ def install(server) -> None:
             rec.trace_tail = list(tr.events)[-200:] if tr is not None else []
             with st.lock:
                 st.counters["tasks_executed"] += len(program.tasks)
+                if sess is not None and rec.started:
+                    sess.run_seconds_total += time.time() - rec.started
 
             bridge.capture_finals(store, program, values, result,
                                   writer=run_id)

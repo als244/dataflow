@@ -105,6 +105,9 @@ class SnapshotWriter(threading.Thread):
                 st.emit("snapshot_error", snap_id=snap_id,
                         error=f"{type(e).__name__}: {e}")
             finally:
+                with st.lock:
+                    if snap_id in st.snapshots_in_flight:
+                        st.snapshots_in_flight.remove(snap_id)
                 store.release_leases(job["lease_ids"])
 
 
@@ -167,6 +170,7 @@ def install(server) -> None:
         # — found when a KeyError after acquire wedged the suite)
         store.acquire_leases(ids)
         with st.lock:
+            st.snapshots_in_flight.append(snap_id)
             st.snapshots[snap_id] = {
                 "snap_id": snap_id, "state": "writing",
                 "bytes_done": 0, "bytes_total": offset,
