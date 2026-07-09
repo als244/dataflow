@@ -549,7 +549,7 @@ def test_glm52_leader_follower_pair_ladder():
 
     orig_topk = GR.dsa_topk_reference
     try:
-        GR.dsa_topk_reference = lambda s, k: meta_ld["dsa_idx"].long()
+        GR.dsa_topk_reference = lambda s, k, segments=None: meta_ld["dsa_idx"].long()
         golden._layer_ptr = 1
         y1_ref, aux1 = golden.block_forward(
             x_ref, leaves_ld, route_ids=meta_ld["route_ids"], segments=seg)

@@ -71,14 +71,23 @@ def _eager_topk(kctx, scores, idx_out):
     # scores.topk(k), so torch's device tie rule IS the model's rule (our
     # earlier smallest-index pin was a MoE-router convention imported by
     # mistake). Ties resolve identically in runtime and reference (both
-    # torch.topk on CUDA); per-input determinism unchanged; -inf pad
-    # picks remain mathematically irrelevant (scatter-then-causal). Also
-    # ~1.4x faster than the radix SORT (selection needs fewer passes).
+    # torch.topk PER SEQUENCE on the (L,L) block); -inf pad picks remain
+    # mathematically irrelevant (scatter-then-causal). Also ~1.4x faster
+    # than the radix SORT (selection needs fewer passes).
+    #
+    # ``scores`` is ONE sequence's (L,L) causal block; ``kk = min(k, L)``
+    # is DeepSeek's topk(min(index_topk, seqlen)) — a sequence shorter than
+    # top-k selects ALL of its causal keys (dense), the correct degenerate.
+    # Unused idx slots repeat the last selection (dedup-safe under the
+    # scatter-mask / bitmask; causal re-suppression drops any past-the-row).
     k = idx_out.shape[1]
+    kk = min(k, scores.shape[-1])
     for r0 in range(0, scores.shape[0], _ROW_CHUNK):
         r1 = min(r0 + _ROW_CHUNK, scores.shape[0])
-        _, order = torch.topk(scores[r0:r1], k, dim=-1, sorted=True)
-        idx_out[r0:r1].copy_(order.to(idx_out.dtype))
+        _, order = torch.topk(scores[r0:r1], kk, dim=-1, sorted=True)
+        idx_out[r0:r1, :kk].copy_(order.to(idx_out.dtype))
+        if kk < k:
+            idx_out[r0:r1, kk:].copy_(order[:, kk - 1:kk].to(idx_out.dtype))
 
 
 def _mask_for(idx, lo, hi, rows_lo, rows_hi):

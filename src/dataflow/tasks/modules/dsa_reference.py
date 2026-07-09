@@ -99,14 +99,31 @@ def _causal_mask(dims, t: int, device, segments=None) -> torch.Tensor:
     return m
 
 
-def dsa_topk_reference(scores: torch.Tensor, k: int) -> torch.Tensor:
-    """Top-k selection per row — torch.topk semantics (DeepSeek's model.py
-    selects via scores.topk(k); torch's device tie rule IS the model's
-    rule). Short prefixes pad with -inf columns; pad picks are causal-
-    re-suppressed by the mask builder, so they carry no gradient/output
-    weight."""
-    _, order = torch.topk(scores, k, dim=-1, sorted=True)
-    return order.to(torch.int64)
+def dsa_topk_reference(scores: torch.Tensor, k: int, segments=None) -> torch.Tensor:
+    """PER-SEQUENCE top-k, exactly DeepSeek's ``index_score.topk(min(index_topk,
+    end_pos))``: within each sequence's own (L, L) causal block select
+    ``min(k, L)`` keys — a sequence shorter than top-k selects ALL of its
+    causal keys (dense), the correct degenerate. This is NOT a global topk
+    over the packed (t, t): global selection is sequence-boundary-agnostic
+    (it only lands on the right answer because cross-sequence scores are
+    -inf), crashes when total tokens < k, and its (t,t)-vs-engine-(L,L)
+    width difference is what makes torch.topk break ties differently.
+    Running the SAME per-sequence (L, L) topk both sides removes that.
+
+    ``segments`` (None = one sequence over all rows) gives the boundaries.
+    Unused idx columns repeat the last selection (dedup-safe: the mask
+    builder's scatter + causal re-add drops any that point past the row)."""
+    t = scores.shape[0]
+    seg = segments if segments is not None else ops.Segments((t,))
+    idx = torch.empty(t, k, dtype=torch.int64, device=scores.device)
+    for lo, hi in seg.bounds:
+        L = hi - lo
+        kk = min(k, L)
+        _, order = torch.topk(scores[lo:hi, lo:hi], kk, dim=-1, sorted=True)
+        idx[lo:hi, :kk] = order + lo                      # sequence-local -> global
+        if kk < k:
+            idx[lo:hi, kk:] = order[:, kk - 1:kk] + lo
+    return idx
 
 
 def dsa_mask_from_idx(idx: torch.Tensor, dims, t: int, segments=None) -> torch.Tensor:
@@ -173,7 +190,7 @@ def dsa_selection_mask_reference(scores: torch.Tensor, d, t: int,
     DENSE WARM-UP: the full causal prefix (report formula 3) — no
     selection exists anywhere in the program."""
     if getattr(d, "sparse_mode", True):
-        sel = dsa_topk_reference(scores.detach(), d.index_topk)
+        sel = dsa_topk_reference(scores.detach(), d.index_topk, segments)
         return dsa_mask_from_idx(sel, d, t, segments)
     return _causal_mask(d, t, device, segments)
 

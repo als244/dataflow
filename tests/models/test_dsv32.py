@@ -192,6 +192,18 @@ def test_dsv32_batch2_packed_sequences_vs_golden():
                      field_atol=_BIAS_ATOL).assert_ok()
 
 
+def test_dsv32_short_sequences_lt_index_topk_vs_golden():
+    """Packed round with sequences SHORTER than index_topk (24): DSA
+    selection must clamp to min(k, L) PER SEQUENCE (DeepSeek's
+    topk(min(index_topk, seqlen))) — a short sequence attends densely to
+    its causal prefix. Regression gate: pre-fix the engine crashed
+    (torch.topk k>L) and the reference did a boundary-agnostic global
+    topk. seq_lens=(104, 16, 8): the 16- and 8-token sequences are < 24."""
+    cfg = _tiny_cfg(seq_lens=(104, 16, 8))
+    check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
+                     field_atol=_BIAS_ATOL).assert_ok()
+
+
 def test_dsv32_ga2_matches_golden():
     from dataflow.models.dsv32_reference import GoldenDsv32
     from dataflow.runtime import Engine
