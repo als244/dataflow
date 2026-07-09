@@ -28,7 +28,7 @@ _ROOT = str(Path(__file__).resolve().parents[3])
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from . import bridge
+from . import bridges
 from .presets import cfg_dict, resolver_family, tokens_per_step
 from .recipe import Recipe
 
@@ -120,9 +120,9 @@ def run_reference(cfg, recipe: Recipe, stream, steps: int, *, seed: int = 11,
     dims = fam.dims_of(cfg)
     backend = CudaBackend()
     values = fam.initial_values(fam.lower(cfg), cfg, backend, seed=seed)
-    model = bridge.build_reference_model(cfg, device=device)
-    bridge.load_reference_init(model, cfg, dims,
-                               bridge.get_bytes_from_values(values))
+    model = bridges.build_reference_model(cfg, device=device)
+    bridges.load_reference_init(model, cfg, dims,
+                                bridges.get_bytes_from_values(values))
     for buf in values.values():        # only W_* were needed to bridge
         backend.free(buf)
     model.grad_checkpoint = grad_checkpoint

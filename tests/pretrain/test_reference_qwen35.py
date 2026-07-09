@@ -44,11 +44,23 @@ def test_forward_shapes_and_learns():
 
 def _golden_crosscheck(tied: bool):
     from dataflow.models.qwen35_reference import GoldenQwen35
-    from dataflow.pretrain import bridge
+    from dataflow.pretrain.bridges import (
+        assert_state_dict_byte_identical,
+        get_bytes_from_values,
+    )
+    from dataflow.pretrain.bridges import qwen35 as qwen35_bridge
+    from dataflow.pretrain.crosscheck import (
+        assert_curves_close,
+        golden_curve,
+        reference_curve,
+        step_data,
+    )
     from dataflow.runtime.device.cuda import CudaBackend
+    from dataflow.tasks.base_blocks import AdamWHyper
     from dataflow.training.families import resolve_family
     from dataflow.training.models.qwen35 import ShapedQwen35Config
 
+    LR, WD = 1e-2, 0.1
     # batch=2 exercises the per-sequence reset in the conv + delta-rule
     base = ShapedQwen35Config.tiny_tied() if tied else ShapedQwen35Config.tiny()
     cfg = replace(base, seq_len=64, batch=2)
@@ -56,22 +68,20 @@ def _golden_crosscheck(tied: bool):
     dims = fam.dims_of(cfg)
     backend = CudaBackend()
     values = fam.initial_values(fam.lower(cfg), cfg, backend, seed=11)
-    gb = bridge.get_bytes_from_values(values)
+    gb = get_bytes_from_values(values)
     try:
         golden = GoldenQwen35.from_packed_bytes(
             dims, cfg.n_layers, gb("W_embed"),
             [gb(f"W_{i}") for i in range(cfg.n_layers)],
-            None if tied else gb("W_head"))
-        model = bridge.build_qwen35_reference(cfg, device="cuda")
-        bridge.load_qwen35_init(model, cfg, gb)
+            None if tied else gb("W_head"),
+            hyper=AdamWHyper(lr=LR, weight_decay=WD))
+        model = qwen35_bridge.build_qwen35_reference(cfg, device="cuda")
+        qwen35_bridge.load_qwen35_init(model, cfg, gb)
         # byte-identity of the loaded init (state_dict, not named_parameters:
         # the tied config shares one tensor for embed + lm_head, which
         # named_parameters deduplicates away)
-        sd = bridge.to_qwen35_state_dict(cfg, gb)
-        msd = model.state_dict()
-        assert set(sd) == set(msd), set(sd) ^ set(msd)
-        for k, v in sd.items():
-            assert torch.equal(msd[k].detach().cpu(), v.cpu()), k
+        assert_state_dict_byte_identical(
+            model, qwen35_bridge.to_qwen35_state_dict(cfg, gb))
         torch.manual_seed(1)
         tok = torch.randint(0, cfg.vocab_size, (dims.tokens,), device="cuda")
         tgt = torch.randint(0, cfg.vocab_size, (dims.tokens,), device="cuda")
@@ -79,6 +89,12 @@ def _golden_crosscheck(tied: bool):
         B, T = dims.tokens // dims.seq_len, dims.seq_len
         r_loss = float(model.loss(tok.view(B, T), tgt.view(B, T)).detach())
         assert abs(g_loss - r_loss) < 0.02, f"golden {g_loss} vs reference {r_loss}"
+
+        # short training-curve agreement (fresh iid data per step)
+        data = step_data(cfg.vocab_size, dims.tokens, steps=5, seed=3)
+        gc = golden_curve(golden, data)
+        rc = reference_curve(model, data, B, T, lr=LR, weight_decay=WD)
+        assert_curves_close(gc, rc, atol=0.05)
     finally:
         for buf in values.values():
             backend.free(buf)

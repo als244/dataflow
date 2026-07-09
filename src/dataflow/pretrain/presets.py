@@ -100,9 +100,33 @@ def qwen35_preset() -> "object":
     )
 
 
+# A qwen3-dense engine-parity smoke twin of SMOKE: small dims, the real
+# 50304 vocab, decoupled-head_dim family surface (per-head qk-norm).
+def qwen3_smoke_preset():
+    from dataflow.training.models.qwen3 import ShapedQwen3Config
+
+    return ShapedQwen3Config(
+        n_layers=SMOKE["n_layers"], d_model=SMOKE["d_model"],
+        n_heads=SMOKE["n_heads"], n_kv_heads=SMOKE["n_kv_heads"],
+        head_dim=SMOKE["d_model"] // SMOKE["n_heads"], d_ff=SMOKE["d_ff"],
+        vocab_size=VOCAB_SIZE, seq_len=SMOKE_SEQ_LEN, batch=SMOKE_BATCH,
+        grad_accum_rounds=SMOKE_GRAD_ACCUM_ROUNDS,
+    )
+
+
+RESOLVER_FAMILY_BY_TYPE = {
+    "ShapedLlamaConfig": "llama3",
+    "ShapedQwen3Config": "qwen3",
+    "ShapedQwen35Config": "qwen35",
+}
+
+
 def resolver_family(cfg) -> str:
-    return {"ShapedLlamaConfig": "llama3",
-            "ShapedQwen35Config": "qwen35"}[type(cfg).__name__]
+    name = type(cfg).__name__
+    if name not in RESOLVER_FAMILY_BY_TYPE:
+        raise KeyError(f"no resolver family for config type {name}; "
+                       f"known: {sorted(RESOLVER_FAMILY_BY_TYPE)}")
+    return RESOLVER_FAMILY_BY_TYPE[name]
 
 
 def _llama3_cfg_dict(cfg) -> dict:
@@ -129,15 +153,33 @@ def _qwen35_cfg_dict(cfg) -> dict:
     )
 
 
+def qwen3_cfg_dict(cfg) -> dict:
+    return dict(
+        n_layers=cfg.n_layers, d_model=cfg.d_model, n_heads=cfg.n_heads,
+        n_kv_heads=cfg.n_kv_heads, head_dim=cfg.head_dim, d_ff=cfg.d_ff,
+        vocab_size=cfg.vocab_size, seq_len=cfg.seq_len, batch=cfg.batch,
+        grad_accum_rounds=cfg.grad_accum_rounds, num_steps=cfg.num_steps,
+    )
+
+
+CFG_DICT_BY_TYPE = {
+    "ShapedLlamaConfig": _llama3_cfg_dict,
+    "ShapedQwen3Config": qwen3_cfg_dict,
+    "ShapedQwen35Config": _qwen35_cfg_dict,
+}
+
+
 def cfg_dict(cfg) -> dict:
     """JSON-able config for the wire resolver spec. The daemon rebuilds
-    ``config_type(**cfg)`` (bridge.resolver_for), so every field here must be
-    a constructor kwarg; omitted fields take their defaults (all-bf16
+    ``config_type(**cfg)`` (the service resolver), so every field here must
+    be a constructor kwarg; omitted fields take their defaults (all-bf16
     ``dtypes``, ``opt_policy='adamw'``, ``seq_lens=None`` uniform) — the SAME
     defaults the planned program used, so the rebuilt dims match."""
-    if type(cfg).__name__ == "ShapedQwen35Config":
-        return _qwen35_cfg_dict(cfg)
-    return _llama3_cfg_dict(cfg)
+    name = type(cfg).__name__
+    if name not in CFG_DICT_BY_TYPE:
+        raise KeyError(f"no cfg_dict serializer for config type {name}; "
+                       f"known: {sorted(CFG_DICT_BY_TYPE)}")
+    return CFG_DICT_BY_TYPE[name](cfg)
 
 
 def param_counts(cfg: ShapedLlamaConfig) -> dict:
