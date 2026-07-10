@@ -469,11 +469,31 @@ class AdamWStep(_Base):  # name kept for resolver back-compat; see OptimizerStep
                 grads_ready = torch.cuda.Event()
                 grads_ready.record(es)
                 gh.stream.wait_event(grads_ready)
-                for f in gl_.fields:
-                    gview = torch_view(g_buf, f.shape,
-                                       TORCH_DTYPE_BY_NAME[f.dtype],
-                                       offset_bytes=f.offset_bytes)
-                    gh.allreduce(gview)
+                dtypes = {f.dtype for f in gl_.fields}
+                if len(dtypes) == 1:
+                    # contiguous grad layout, uniform dtype: ONE fused
+                    # exchange for the whole layer's grads (wire-floor
+                    # sized) instead of a round trip per field —
+                    # elementwise sums, so bitwise-identical results
+                    total = 0
+                    for f in gl_.fields:
+                        n = 1
+                        for s in f.shape:
+                            n *= s
+                        dt_f = TORCH_DTYPE_BY_NAME[f.dtype]
+                        end = f.offset_bytes + n * dt_f.itemsize
+                        if end > total:
+                            total = end
+                    dt_all = TORCH_DTYPE_BY_NAME[gl_.fields[0].dtype]
+                    fused = torch_view(g_buf, (total // dt_all.itemsize,),
+                                       dt_all)
+                    gh.allreduce(fused)
+                else:
+                    for f in gl_.fields:
+                        gview = torch_view(g_buf, f.shape,
+                                           TORCH_DTYPE_BY_NAME[f.dtype],
+                                           offset_bytes=f.offset_bytes)
+                        gh.allreduce(gview)
                 summed = torch.cuda.Event()
                 summed.record(gh.stream)
                 es.wait_event(summed)

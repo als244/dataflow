@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import queue
 import threading
+import time
 from collections import deque
 
 import numpy as np
@@ -139,6 +140,13 @@ class HostmemComm:
         # Event is minted only when the pool runs dry) — steady-state
         # training reuses the same handful every step
         self.event_pool: deque = deque()
+        # phase-time accumulators (seconds + op/byte counts) — the
+        # breakdown behind every idle-gap question; coll_bench returns
+        # deltas of this dict
+        self.stats = {"ops": 0, "bytes": 0, "ev_sync_s": 0.0,
+                      "rdy_s": 0.0, "write_s": 0.0, "done_s": 0.0,
+                      "sock_send_s": 0.0, "sock_recv_s": 0.0,
+                      "reduce_s": 0.0}
         self.inbox: dict[tuple, object] = {}   # (seq, op) -> msg|bytes
         self.inbox_cv = threading.Condition()
         # Staging = TWO slab extents (out: D2H target + reduce accum +
@@ -310,20 +318,33 @@ class HostmemComm:
         the CQ ack (DONE — RC completion means remote-visible, so the
         socket DONE can never pass the data). Socket lane: one COLL
         data frame each way."""
+        stats = self.stats
+        stats["ops"] += 1
+        stats["bytes"] += nbytes
         qp = self.rdma_qp()
         if qp is not None:
+            t0 = time.monotonic()
             self.send_header(seq, "rdy",
                              raddr=self.nm.rdma.slab_base
                              + self.land.ext.offset,
                              rkey=self.nm.rdma.rkey(), nbytes=nbytes)
             rdy = self.await_entry(seq, "rdy")
+            t1 = time.monotonic()
+            stats["rdy_s"] += t1 - t0
             qp.write(self.out.ptr, int(rdy["raddr"]), int(rdy["rkey"]),
                      nbytes)
+            t2 = time.monotonic()
+            stats["write_s"] += t2 - t1
             self.send_header(seq, "done")
             self.await_entry(seq, "done")
+            stats["done_s"] += time.monotonic() - t2
             return self.land.t[:nbytes]
+        t0 = time.monotonic()
         self.send_data(seq, self.out.np[:nbytes])
+        t1 = time.monotonic()
+        stats["sock_send_s"] += t1 - t0
         peer = self.await_entry(seq, "data")
+        stats["sock_recv_s"] += time.monotonic() - t1
         return torch.frombuffer(peer, dtype=torch.uint8)
 
     def reduce_into_stage(self, stage_bytes, theirs_bytes, dtype,
@@ -343,11 +364,15 @@ class HostmemComm:
 
     def run_job(self, job: CollJob) -> None:
         action, dtype, nbytes, root = job.action
+        t0 = time.monotonic()
         job.ready_event.synchronize()           # D2H landed
+        self.stats["ev_sync_s"] += time.monotonic() - t0
         stage = self.out.t[:nbytes]
         if action == "allreduce":
             theirs = self.exchange(job.seq, nbytes)
+            tr = time.monotonic()
             self.reduce_into_stage(stage, theirs, dtype)
+            self.stats["reduce_s"] += time.monotonic() - tr
         elif action == "broadcast":
             if self.rank == root:
                 self.send_data(job.seq, self.out.np[:nbytes])

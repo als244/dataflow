@@ -120,7 +120,53 @@ def install(server) -> None:
         nm_now.groups.drop(a["name"])
         return {"ok": True}
 
+    def coll_bench(call):
+        """Replay a transfer PATTERN through the real collective path
+        (the same enqueue/exchange/reduce the optimizer tasks drive):
+        args {group, sizes: [bytes...], dtype, reps}. Both group
+        members must call concurrently (collectives are collective).
+        Returns per-rep walls + the comm's phase-time breakdown —
+        the microbench behind every idle-gap investigation."""
+        import time as time_mod
+
+        import torch
+
+        from ..tasks.interop import TORCH_DTYPE_BY_NAME
+
+        a = call.args
+        m = require_nm()
+        gh = m.group_handles().get(a["group"])
+        if gh is None or gh.comm is None:
+            raise ServiceError("BAD_REQUEST",
+                               f"group {a['group']!r} not ready")
+        dt = TORCH_DTYPE_BY_NAME[a.get("dtype", "bf16")]
+        sizes = [int(s) for s in a["sizes"]]
+        reps = int(a.get("reps", 3))
+        tensors = []
+        for nb in sizes:
+            t = torch.ones(nb // dt.itemsize, dtype=dt, device="cuda")
+            tensors.append(t)
+        before = dict(gh.comm.stats)
+        walls = []
+        for rep in range(reps):
+            torch.cuda.synchronize()
+            t0 = time_mod.monotonic()
+            for t in tensors:
+                gh.allreduce(t)
+            gh.stream.synchronize()
+            walls.append(round(time_mod.monotonic() - t0, 6))
+        after = gh.comm.stats
+        delta = {}
+        for key, val in after.items():
+            base = before.get(key, 0)
+            delta[key] = round(val - base, 6) if isinstance(val, float) \
+                else val - base
+        return {"walls_s": walls, "stats": delta,
+                "bytes_per_rep": sum(sizes),
+                "rdma_lane": gh.comm.rdma_qp() is not None}
+
     server.dispatcher.handlers.update({
+        "coll_bench": coll_bench,
         "create_peer_group": create_peer_group,
         "destroy_peer_group": destroy_peer_group,
         "peer_connect": peer_connect,

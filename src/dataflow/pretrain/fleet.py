@@ -210,8 +210,10 @@ def run_fleet_dp(global_cfg, recipe: Recipe, stream, steps: int, *,
                         rig.prof_out = f"/tmp/dp_prof_{host.name}"
                     wrap = nsys_command(host, rig.prof_out)
                 kill_daemon(host)
+                rdma_flag = (f"--peer-rdma-device {host.ib_dev}"
+                             if host.ib_dev else "")
                 paths = launch_daemon(host, slab_gib=rig.slab_gib,
-                                      wrap=wrap)
+                                      wrap=wrap, extra_flags=rdma_flag)
                 rig.launched = True
                 if host.is_local():
                     rig.sock = paths["sock"]
