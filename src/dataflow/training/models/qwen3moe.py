@@ -35,7 +35,7 @@ from dataflow.tasks.layouts import (
     qwen3moe_activation_layout,
     qwen3moe_weight_layout,
 )
-from dataflow.tasks.modules.moe.spec import MoESpec, moe_aux_temp_layout
+from dataflow.tasks.modules.moe.spec import MoESpec, moe_aux_layout, moe_aux_temp_layout
 
 from ..lowering import FamilyLayouts, LayerLayout, apply_exact_sizes, initial_values_from_layouts, size_of_factory
 from ..shaped_program import BF16, LayerKindSpec, ShapedHardware, build_shaped_program
@@ -195,6 +195,7 @@ def _kind_spec(cfg: ShapedQwen3MoeConfig, hw: ShapedHardware) -> LayerKindSpec:
         w_bytes=wl.total_bytes,
         a_bytes=cl.total_bytes,
         aux_temp_bytes=moe_aux_temp_layout(dims, dims.moe).total_bytes,
+        aux_bytes=moe_aux_layout(dims, dims.moe).total_bytes,
         fwd_us=fwd, bwd_us=bwd, recompute_us=fwd,
         optimizer_us=hw.mem_us(BF16 * 7.0 * total_params),
         fwd_subops=sub_fwd, bwd_subops=sub_bwd, recompute_subops=list(sub_fwd),
@@ -224,6 +225,7 @@ def build_shaped_qwen3moe(
     return build_shaped_program(
         cfg, hw=hw, family="qwen3moe-shaped",
         kinds={"moe": _kind_spec(cfg, hw)},
+        round_prologue=True,
         fast_memory_capacity=fast_memory_capacity,
         recompute_levels=recompute_levels, name=name,
         freeze=freeze_plan,
@@ -237,7 +239,8 @@ def family_layouts(cfg: ShapedQwen3MoeConfig) -> tuple[Qwen3MoeDims, FamilyLayou
         layers=[LayerLayout(kind="moe",
                             weights=qwen3moe_weight_layout(dims, layer=i),
                             activations=cl,
-                            aux_temp=moe_aux_temp_layout(dims, dims.moe))
+                            aux_temp=moe_aux_temp_layout(dims, dims.moe),
+                            aux=moe_aux_layout(dims, dims.moe))
                 for i in range(cfg.n_layers)],
         embed=embed_weight_layout(dims),
         head=head_weight_layout(dims),

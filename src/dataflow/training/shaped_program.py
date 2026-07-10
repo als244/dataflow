@@ -100,6 +100,16 @@ class LayerKindSpec:
     # A objects). 0 = the kind has no AuxTemp. A normal dataflow object
     # in every other respect (placement/offload/transfers).
     aux_temp_bytes: int = 0
+    # per-layer PERSISTENT Aux object (Aux_{i}) bytes: the per-step +
+    # all-of-training expert-assignment counts (host-backed resident like
+    # W/O; zeroed at round 0 by the round prologue, accumulated by every
+    # round's fwd, read by the LAST round's bwd). 0 = no Aux object.
+    aux_bytes: int = 0
+    # per-layer PERSISTENT Aux object (Aux_{i}) bytes: the per-step +
+    # all-of-training expert-assignment counts (host-backed resident like
+    # W/O; zeroed at round 0 by the round prologue, accumulated by every
+    # round's fwd, read by the LAST round's bwd). 0 = no Aux object.
+    aux_bytes: int = 0
 
 
 class LooseCosts:
@@ -218,6 +228,7 @@ def build_shaped_program(
     name: str | None = None,
     aux_shared=None,
     round_prologue: bool = False,
+    bias_update_in_bwd: bool = False,
     freeze=None,  # FreezePlan | None (training/freeze_plan.py)
 ) -> Program:
     """Build the (bare) shaped program for the given recompute levels.
@@ -280,6 +291,9 @@ def build_shaped_program(
     for i in range(cfg.n_layers):
         add_initial(f"W_{i}", layer_specs[i].w_bytes, "parameter", persist=True)
         add_initial(f"O_{i}", 2 * layer_specs[i].w_bytes, "optimizer_state", persist=True)
+        if layer_specs[i].aux_bytes:
+            add_initial(f"Aux_{i}", layer_specs[i].aux_bytes, "optimizer_state",
+                        persist=True)
     if not tied:
         add_initial("W_head", w_head, "parameter", persist=True,
                     tensor=TensorMeta(dtype="bf16", shape=(cfg.vocab_size, d)))
@@ -355,11 +369,15 @@ def build_shaped_program(
             last_round = r == cfg.grad_accum_rounds - 1
             # ---- round boundary (families that consume the round) ----
             if round_prologue:
-                task(f"prologue_round_{s}_{r}", "prologue_round", [],
+                aux_ids = tuple(f"Aux_{i}" for i in range(cfg.n_layers)
+                                if layer_specs[i].aux_bytes)
+                task(f"prologue_round_{s}_{r}", "prologue_round",
+                     list(aux_ids) if first_round else [],
                      [OutputSpec(id=f"current_round_{s}_{r}", size_bytes=4,
                                  role="activation",
                                  tensor=TensorMeta(dtype="int32", shape=(1,)))],
-                     1.0, group="forward", params={"round": r}, subops=[])
+                     1.0, group="forward", params={"round": r}, subops=[],
+                     mutates=(aux_ids if first_round else ()))
             # ---- forward ----
             task(
                 f"embed_fwd_{s}_{r}", "embed_fwd",
@@ -384,9 +402,14 @@ def build_shaped_program(
                                            role="activation"))
                 if i in aux_producer_of:
                     fwd_ins.append(f"AuxTemp_{s}_{r}_{aux_producer_of[i]}")
+                fwd_mut: tuple[str, ...] = ()
+                if sp.aux_bytes and round_prologue:
+                    fwd_ins.append(f"current_round_{s}_{r}")
+                    fwd_ins.append(f"Aux_{i}")
+                    fwd_mut = (f"Aux_{i}",)   # counts accumulate; recompute never has this edge
                 task(f"block_fwd_{s}_{r}_{i}", f"{sp.key_prefix}_fwd", fwd_ins, outs,
                      sp.fwd_us, group="forward", params={"layer": i},
-                     subops=sp.fwd_subops)
+                     mutates=fwd_mut, subops=sp.fwd_subops)
                 rewrites.append(RecomputeRewrite(
                     object_id=a_id,
                     f_task_id=f"block_fwd_{s}_{r}_{i}",
@@ -466,6 +489,13 @@ def build_shaped_program(
                     elif i in mem:
                         bwd_inputs.append(gid)
                         mutates = mutates + (gid,)
+                if sp.aux_bytes and round_prologue and last_round:
+                    # the STEP-aggregate counts (all rounds accumulated) —
+                    # noaux families also nudge the router bias inside W
+                    # here (appended: mutates[0] stays the dW convention)
+                    bwd_inputs.append(f"Aux_{i}")
+                    if bias_update_in_bwd:
+                        mutates = mutates + (f"W_{i}",)
                 task(f"block_bwd_{s}_{r}_{i}", f"{sp.key_prefix}_bwd", bwd_inputs, outs,
                      sp.bwd_us, mutates=mutates, group="backward", params={"layer": i},
                      subops=sp.bwd_subops)

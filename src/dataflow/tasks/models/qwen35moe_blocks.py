@@ -25,7 +25,7 @@ from ..layouts import (
     qwen35moe_lin_activation_layout,
     qwen35moe_lin_weight_layout,
 )
-from ..base_blocks import AdamWHyper, AdamWStep, EmbedBwd, EmbedFwd, HeadLoss
+from ..base_blocks import AdamWHyper, AdamWStep, EmbedBwd, EmbedFwd, HeadLoss, RoundPrologue
 from ..modules.moe.stages import MOE_SHARED_STAGES, MoEMetaState, MoEProfileFill, moe_mlp_tail_bwd
 from .qwen35_blocks import (
     Qwen35AttnBlockBwd,
@@ -144,6 +144,7 @@ def build_qwen35moe_resolver(
     kernels = kernels if kernels is not None else resolve_kernels()
     table = {
         "embed_fwd": EmbedFwd(dims, kernels),
+        "prologue_round": RoundPrologue(dims, kernels),
         "linmoe_fwd": Qwen35MoeLinBlockFwd(dims, kernels),
         "linmoe_recompute": Qwen35MoeLinBlockRecompute(dims, kernels),
         "linmoe_bwd": Qwen35MoeLinBlockBwd(dims, kernels),

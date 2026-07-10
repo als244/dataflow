@@ -551,9 +551,10 @@ def test_dsv32_block_ladder2(kind):
     errors["bwd:dx"] = rel_l2(dx, x_ref.grad)
     for name in dwv:
         if name == "w_router_bias":
-            cnt = torch.bincount(meta_views["route_ids"].reshape(-1).long(),
-                                 minlength=dims.moe.n_experts).float()
-            assert torch.equal(dwv[name].float(), cnt)
+            # the bias is policy-frozen: nothing rides its dW slot anymore
+            # (the per-step sign rule reads the persistent Aux counts in the
+            # LAST round's bwd — family model-step gates cover it e2e)
+            assert not dwv[name].float().abs().any()
             continue
         errors[f"bwd:d{name}"] = rel_l2(dwv[name], leaves[name].grad)
 

@@ -289,7 +289,7 @@ def initial_values_from_layouts(program: Program, dims, fl: FamilyLayouts,
             fill_weight_fields(buf, fl.embed, gen)
         elif spec.id == "W_head":
             fill_weight_fields(buf, fl.head, gen)
-        elif spec.id.startswith("O_"):
+        elif spec.id.startswith(("O_", "Aux_")):
             torch_view(buf, (spec.size_bytes,), torch.uint8).zero_()
         elif spec.id.startswith(("tokens_", "targets_")):
             ids = torch.randint(0, dims.vocab_size, (dims.tokens,), generator=gen, dtype=torch.int32)

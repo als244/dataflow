@@ -23,7 +23,7 @@ from ..layouts import (
     qwen3moe_activation_layout,
     qwen3moe_weight_layout,
 )
-from ..base_blocks import AdamWHyper, AdamWStep, EmbedBwd, EmbedFwd, HeadLoss
+from ..base_blocks import AdamWHyper, AdamWStep, EmbedBwd, EmbedFwd, HeadLoss, RoundPrologue
 from .llama3_blocks import BlockRecompute
 from ..modules.moe.stages import MOE_STAGES, MoEMetaState, MoEProfileFill, moe_mlp_tail_bwd
 from .qwen3_blocks import Qwen3BlockBwd, Qwen3BlockFwd
@@ -77,6 +77,7 @@ def build_qwen3moe_resolver(
     kernels = kernels if kernels is not None else resolve_kernels()
     table = {
         "embed_fwd": EmbedFwd(dims, kernels),
+        "prologue_round": RoundPrologue(dims, kernels),
         "q3moeattn_fwd": Qwen3MoeBlockFwd(dims, kernels),
         "q3moeattn_recompute": Qwen3MoeBlockRecompute(dims, kernels),
         "q3moeattn_bwd": Qwen3MoeBlockBwd(dims, kernels),

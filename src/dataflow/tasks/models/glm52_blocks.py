@@ -45,7 +45,7 @@ from ..layouts import (
     dsv32_moe_weight_layout,
     glm52_aux_temp_layout,
 )
-from ..base_blocks import AdamWHyper, AdamWStep, EmbedBwd, EmbedFwd, HeadLoss
+from ..base_blocks import AdamWHyper, AdamWStep, EmbedBwd, EmbedFwd, HeadLoss, RoundPrologue
 from .llama3_blocks import BlockRecompute
 from .dsv3_blocks import Dsv3DenseBlockFwd, Dsv3MoeBlockBwd, Dsv3MoeBlockFwd
 from .dsv32_blocks import (
@@ -64,7 +64,7 @@ from .dsv32_blocks import (
     _causal_bits,
     _seq_bounds,
 )
-from ..modules.moe.stages import MOE_SHARED_NOGATE_STAGES, moe_bias_update, moe_mlp_tail_bwd
+from ..modules.moe.stages import MOE_SHARED_NOGATE_STAGES, moe_mlp_tail_bwd
 
 
 def _glm52_moe_activation_layout(dims: Glm52Dims) -> PackedLayout:
@@ -665,15 +665,6 @@ def build_glm52_resolver(
             "dense warm-up trains ONLY the indexer; train_indexer=False "
             "in dense mode would train nothing"
         )
-    bias_special = {
-        "w_router_bias": partial(moe_bias_update,
-                                 speed=dims.moe.bias_update_speed),
-    }
-    if not dims.sparse_mode:
-        # warm-up freezing lives in the OPTIMIZER POLICY (dims.opt_policy
-        # defaults every field to "frozen"; idx fields -> adamw). The
-        # router-bias speed rule is frozen with everything else.
-        bias_special = {}
     _WL = {
         "gdl": dsv32_dense_weight_layout,
         "gml": dsv32_moe_weight_layout,
@@ -715,12 +706,12 @@ def build_glm52_resolver(
         opt_head = AdamWStep(dims, kernels, hyper, kind="head")
     table = {
         "embed_fwd": EmbedFwd(dims, kernels),
+        "prologue_round": RoundPrologue(dims, kernels),
         **blocks,
         "head_loss": HeadLoss(dims, kernels),
         "embed_bwd": EmbedBwd(dims, kernels),
         "optimizer_block": AdamWStep(
             dims, kernels, hyper, layout_for=_opt_layout,
-            update_specials=bias_special,
         ),
         "optimizer_embed": opt_embed,
         "optimizer_head": opt_head,

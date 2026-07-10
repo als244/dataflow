@@ -26,7 +26,7 @@ from typing import Mapping
 
 import torch
 
-from dataflow.tasks.optim import OptPolicy
+from dataflow.tasks.optim import OptPolicy, freeze
 from dataflow.core import Program
 from dataflow.tasks.layouts import (
     Dsv32Dims,
@@ -40,7 +40,7 @@ from dataflow.tasks.layouts import (
     embed_weight_layout,
     head_weight_layout,
 )
-from dataflow.tasks.modules.moe.spec import MoESpec
+from dataflow.tasks.modules.moe.spec import MoESpec, moe_aux_layout
 
 from ..lowering import FamilyLayouts, LayerLayout, apply_exact_sizes, initial_values_from_layouts, size_of_factory
 from ..shaped_program import BF16, LayerKindSpec, ShapedHardware, build_shaped_program
@@ -265,8 +265,10 @@ def dims_of_dsv32(cfg: ShapedDsv32Config) -> Dsv32Dims:
         overrides=(("w_idx_q", "adamw"), ("w_idx_k", "adamw"), ("idx_k_ln_w", "adamw"), ("idx_k_ln_b", "adamw"), ("w_idx_w", "adamw"),),
     )
     return Dsv32Dims(
-        opt_policy=(_sparse_opt_policy(cfg) if cfg.sparse_mode
-                    else warmup_policy),
+        opt_policy=freeze(_sparse_opt_policy(cfg) if cfg.sparse_mode
+                          else warmup_policy,
+                          fields=("w_router_bias",)),
+
         d_model=cfg.d_model, n_heads=cfg.n_heads,
         q_lora_rank=cfg.q_lora_rank, kv_lora_rank=cfg.kv_lora_rank,
         qk_nope_dim=cfg.qk_nope_dim, qk_rope_dim=cfg.qk_rope_dim,
@@ -308,7 +310,8 @@ def _kind_specs(cfg: ShapedDsv32Config, hw: ShapedHardware) -> dict[str, LayerKi
     attn_bytes = BF16 * t * 4 * h * qk + (
         4.0 * t * cfg.index_topk if cfg.sparse_mode else 0.0)
 
-    def spec(prefix, wl, cl, ffn_active, extra_traffic, aux_temp_bytes=0):
+    def spec(prefix, wl, cl, ffn_active, extra_traffic, aux_temp_bytes=0,
+             aux_bytes=0):
         total_params = sum(int(math.prod(fl.shape)) for fl in wl.fields)
         mm_flops = 2.0 * t * (mla_active + ffn_active)
         mm_bytes = BF16 * (total_params + 4 * t * d) + extra_traffic
@@ -333,6 +336,7 @@ def _kind_specs(cfg: ShapedDsv32Config, hw: ShapedHardware) -> dict[str, LayerKi
             w_bytes=wl.total_bytes,
             a_bytes=cl.total_bytes,
             aux_temp_bytes=aux_temp_bytes,
+            aux_bytes=aux_bytes,
             fwd_us=fwd, bwd_us=bwd, recompute_us=fwd,
             optimizer_us=hw.mem_us(BF16 * 7.0 * total_params),
             fwd_subops=sub_fwd, bwd_subops=sub_bwd, recompute_subops=list(sub_fwd),
@@ -356,6 +360,7 @@ def _kind_specs(cfg: ShapedDsv32Config, hw: ShapedHardware) -> dict[str, LayerKi
         "dsamoe", dsv32_moe_weight_layout(dims), dsv32_moe_activation_layout(dims),
         moe_active, moe_traffic,
         aux_temp_bytes=dsv32_aux_temp_layout(dims, "moe").total_bytes,
+        aux_bytes=moe_aux_layout(dims, dims.moe).total_bytes,
     )
     return {"dense": dense, "moe": moe}
 
@@ -403,6 +408,7 @@ def build_shaped_dsv32(
     return build_shaped_program(
         cfg, hw=hw, family="dsv32-shaped",
         kinds=_kind_specs(cfg, hw), layer_kinds=dims.kinds,
+        round_prologue=True, bias_update_in_bwd=True,
         fast_memory_capacity=fast_memory_capacity,
         recompute_levels=recompute_levels, name=name,
         freeze=(_ce_plan(cfg) if cfg.sparse_mode
@@ -423,7 +429,9 @@ def family_layouts(cfg: ShapedDsv32Config) -> tuple[Dsv32Dims, FamilyLayouts]:
         layers=[LayerLayout(kind=dims.kinds[i],
                             weights=_WEIGHT_BUILDERS[dims.kinds[i]](dims, layer=i),
                             activations=ctx[dims.kinds[i]],
-                            aux_temp=dsv32_aux_temp_layout(dims, dims.kinds[i]))
+                            aux_temp=dsv32_aux_temp_layout(dims, dims.kinds[i]),
+                            aux=(moe_aux_layout(dims, dims.moe)
+                                 if dims.kinds[i] == "moe" else None))
                 for i in range(cfg.n_layers)],
         embed=embed_weight_layout(dims),
         head=head_weight_layout(dims),

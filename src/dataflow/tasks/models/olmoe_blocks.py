@@ -32,7 +32,7 @@ from ..layouts import (
     olmoe_activation_layout,
     olmoe_weight_layout,
 )
-from ..base_blocks import AdamWHyper, AdamWStep, EmbedBwd, EmbedFwd, HeadLoss
+from ..base_blocks import AdamWHyper, AdamWStep, EmbedBwd, EmbedFwd, HeadLoss, RoundPrologue
 from .llama3_blocks import BlockBwd, BlockFwd, BlockRecompute
 from ..modules.moe.stages import MOE_STAGES, MoEMetaState, MoEProfileFill, moe_mlp_tail_bwd
 
@@ -201,6 +201,7 @@ def build_olmoe_resolver(
     kernels = kernels if kernels is not None else resolve_kernels()
     table = {
         "embed_fwd": EmbedFwd(dims, kernels),
+        "prologue_round": RoundPrologue(dims, kernels),
         "moeattn_fwd": OlmoeBlockFwd(dims, kernels),
         "moeattn_recompute": OlmoeBlockRecompute(dims, kernels),
         "moeattn_bwd": OlmoeBlockBwd(dims, kernels),

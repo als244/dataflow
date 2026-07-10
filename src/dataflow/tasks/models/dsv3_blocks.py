@@ -36,13 +36,12 @@ from ..layouts import (
     dsv3_moe_activation_layout,
     dsv3_moe_weight_layout,
 )
-from ..base_blocks import AdamWHyper, AdamWStep, EmbedBwd, EmbedFwd, HeadLoss
+from ..base_blocks import AdamWHyper, AdamWStep, EmbedBwd, EmbedFwd, HeadLoss, RoundPrologue
 from .llama3_blocks import BlockBwd, BlockFwd, BlockRecompute
 from ..modules.moe.stages import (
     MOE_SHARED_NOGATE_STAGES,
     MoEMetaState,
     MoEProfileFill,
-    moe_bias_update,
     moe_mlp_tail_bwd,
 )
 
@@ -370,11 +369,6 @@ def build_dsv3_resolver(
     kernels = kernels if kernels is not None else resolve_kernels()
     from functools import partial
 
-    bias_special = {
-        "w_router_bias": partial(moe_bias_update,
-                                 speed=dims.moe.bias_update_speed),
-    }
-
     def _opt_layout(d, task, size):
         layer = AdamWStep.layer_of(task)
         if d.kinds[layer] == "dense":
@@ -383,6 +377,7 @@ def build_dsv3_resolver(
 
     table = {
         "embed_fwd": EmbedFwd(dims, kernels),
+        "prologue_round": RoundPrologue(dims, kernels),
         "mladense_fwd": Dsv3DenseBlockFwd(dims, kernels),
         "mladense_recompute": Dsv3DenseBlockRecompute(dims, kernels),
         "mladense_bwd": Dsv3DenseBlockBwd(dims, kernels),
@@ -393,7 +388,6 @@ def build_dsv3_resolver(
         "embed_bwd": EmbedBwd(dims, kernels),
         "optimizer_block": AdamWStep(
             dims, kernels, hyper, layout_for=_opt_layout,
-            update_specials=bias_special,
         ),
         "optimizer_embed": AdamWStep(dims, kernels, hyper, kind="embed"),
         "optimizer_head": AdamWStep(dims, kernels, hyper, kind="head"),

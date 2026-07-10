@@ -32,7 +32,7 @@ from dataflow.tasks.layouts import (
     qwen35moe_lin_activation_layout,
     qwen35moe_lin_weight_layout,
 )
-from dataflow.tasks.modules.moe.spec import MoESpec, moe_aux_temp_layout
+from dataflow.tasks.modules.moe.spec import MoESpec, moe_aux_layout, moe_aux_temp_layout
 
 from ..lowering import FamilyLayouts, LayerLayout, apply_exact_sizes, initial_values_from_layouts, size_of_factory
 from .qwen35 import _a_log_init, _dt_bias_init
@@ -212,6 +212,7 @@ def _kind_specs(cfg: ShapedQwen35MoeConfig, hw: ShapedHardware) -> dict[str, Lay
             w_bytes=wl.total_bytes,
             a_bytes=cl.total_bytes,
             aux_temp_bytes=moe_aux_temp_layout(dims, dims.moe).total_bytes,
+            aux_bytes=moe_aux_layout(dims, dims.moe).total_bytes,
             fwd_us=fwd, bwd_us=bwd, recompute_us=fwd,
             optimizer_us=hw.mem_us(BF16 * 7.0 * total_params),
             fwd_subops=sub_fwd, bwd_subops=sub_bwd, recompute_subops=sub_fwd,
@@ -262,6 +263,7 @@ def build_shaped_qwen35moe(
         fast_memory_capacity=fast_memory_capacity,
         recompute_levels=recompute_levels, name=label,
         kinds=_kind_specs(cfg, hw), layer_kinds=dims.kinds,
+        round_prologue=True,
         freeze=freeze_plan,
     )
 
@@ -279,7 +281,8 @@ def family_layouts(cfg: ShapedQwen35MoeConfig) -> tuple[Qwen35MoeDims, FamilyLay
         layers=[LayerLayout(kind=dims.kinds[i],
                             weights=_WEIGHT_BUILDERS[dims.kinds[i]](dims, layer=i),
                             activations=ctx[dims.kinds[i]],
-                            aux_temp=moe_aux_temp_layout(dims, dims.moe))
+                            aux_temp=moe_aux_temp_layout(dims, dims.moe),
+                            aux=moe_aux_layout(dims, dims.moe))
                 for i in range(cfg.n_layers)],
         embed=embed_weight_layout(dims),
         head=head_weight_layout(dims),

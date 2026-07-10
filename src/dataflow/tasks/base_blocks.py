@@ -45,12 +45,20 @@ class RoundPrologue:
 
     def launch(self, ctx) -> None:
         from .interop import torch_view
+        from .modules.moe.spec import moe_aux_layout
 
         r = int(ctx.task.block_params["round"])
         if ctx.run_values is not None:
             ctx.run_values["current_round"] = r
         for buf in ctx.outputs.values():
             torch_view(buf, (1,), torch.int32).fill_(r)
+        if r == 0 and ctx.task.mutates:
+            # round 0 zeroes every aux layer's per-step counts (the
+            # all-of-training aggregate is untouched)
+            layout = moe_aux_layout(self.dims, self.dims.moe)
+            for m in ctx.task.mutates:
+                if m.startswith("Aux_"):
+                    layout.views(ctx.mutates[m])["expert_counts_current_step"].zero_()
 
 
 @dataclass(frozen=True)
@@ -171,6 +179,25 @@ class _Base:
                 f"provide run_args['seq_lens'] (the engine prologue then "
                 f"derives run_args['segments'] = {{round: Segments}})")
         return segs[r]
+
+    def _aux_counts_state(self, ctx) -> dict | None:
+        """Views of the layer's PERSISTENT Aux object (the per-step +
+        all-of-training expert counts): the forward finds it in mutates
+        (accumulate), the LAST round's backward in inputs (read the step
+        aggregate). None when the family/task has no Aux edge — recompute
+        never does, which IS the double-count guard."""
+        if getattr(self.dims, "moe", None) is None:
+            return None
+        from .modules.moe.spec import moe_aux_layout
+
+        layout = moe_aux_layout(self.dims, self.dims.moe)
+        for m in ctx.task.mutates:
+            if m.startswith("Aux_"):
+                return layout.views(ctx.mutates[m])
+        for j, oid in enumerate(ctx.task.inputs):
+            if oid.startswith("Aux_"):
+                return layout.views(self._in(ctx, j))
+        return None
 
     def _aux_temp_state(self, ctx) -> dict | None:
         """Family hook: st entries for METADATA objects (M_{s}_{r}_{i} —

@@ -695,21 +695,31 @@ def test_seq_aux_grad_vs_autograd():
     assert torch.allclose(ref_loss, total.detach(), rtol=1e-5, atol=1e-9)
 
 
-def test_bias_update_rule():
-    from dataflow.tasks.kernels import KernelCtx, resolve_kernels
-    from dataflow.tasks.modules.moe.stages import moe_bias_update
+def test_bias_update_rule_per_step_counts():
+    """The V3 sign rule as the moe bwd tail applies it: reading the
+    persistent Aux counts (the STEP aggregate) and nudging the bias in W —
+    once, on the last round (the grammar hands the Aux input only there)."""
+    from dataflow.tasks.modules.moe.spec import MoESpec, moe_aux_layout
 
-    K = resolve_kernels()
+    class CountsDims:
+        moe = MoESpec(n_experts=4, top_k=2, d_ff_expert=8,
+                      routing_mode="sigmoid_noaux_tc", n_group=1,
+                      topk_group=1, bias_update_speed=0.001)
+
+    layout = moe_aux_layout(CountsDims, CountsDims.moe)
+    assert [f.name for f in layout.fields] == [
+        "expert_counts_current_step", "expert_counts_overall"]
+    # the applied expression (stages.py bwd tail): b += speed*sign(mean - c)
     bias = torch.zeros(4, dtype=torch.float32, device="cuda")
-    counts = torch.tensor([10.0, 2.0, 4.0, 4.0], device="cuda")  # mean 5
-    moe_bias_update(KernelCtx(), K, bias, counts, speed=0.001)
-    # overloaded expert 0 pushed DOWN, underloaded 1 pushed UP, 2/3 up
+    counts = torch.tensor([10, 2, 4, 4], dtype=torch.int32, device="cuda")
+    c = counts.float()
+    bias.add_(torch.sign(c.mean() - c).to(bias.dtype), alpha=0.001)
     expected = torch.tensor([-0.001, 0.001, 0.001, 0.001], device="cuda")
     assert torch.allclose(bias, expected)
     # equal loads: sign(0) = 0 -> no drift
     bias2 = torch.full((4,), 0.5, device="cuda")
-    moe_bias_update(KernelCtx(), K, bias2, torch.full((4,), 8.0, device="cuda"),
-                    speed=0.001)
+    c2 = torch.full((4,), 8.0, device="cuda")
+    bias2.add_(torch.sign(c2.mean() - c2).to(bias2.dtype), alpha=0.001)
     assert torch.allclose(bias2, torch.full((4,), 0.5, device="cuda"))
 
 

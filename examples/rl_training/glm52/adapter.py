@@ -15,7 +15,11 @@ name = "glm52"
 
 
 def make_cfg():
-    return replace(ShapedGlm52Config.tiny(), train_indexer=False)
+    # routing is PINNED in the RL weave: the noaux balance rule is inert
+    # (and the engine's per-step counts come from the forwards this
+    # program deliberately lacks) — freeze it on both sides
+    return replace(ShapedGlm52Config.tiny(), train_indexer=False,
+                   bias_update_speed=0.0)
 
 
 def make_golden(dims, n_layers, leaves):

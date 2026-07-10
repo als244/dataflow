@@ -93,6 +93,16 @@ def stage_moe_route(kctx, K, d, st):
         K.moe_topk_softmax(
             kctx, logits, route_w, route_ids, top_k=moe.top_k, mode=moe.routing_mode
         )
+    counts = st.get("aux_counts")
+    if counts is not None:
+        # per-STEP expert histogram: every round's fwd accumulates into the
+        # layer's persistent Aux object (zeroed at round 0 by the round
+        # prologue; deterministic int scatter). Recompute never carries the
+        # Aux edge, so re-selection can never double-count.
+        ids = route_ids.reshape(-1).long()
+        ones = torch.ones_like(ids, dtype=torch.int32)
+        counts["expert_counts_current_step"].scatter_add_(0, ids, ones)
+        counts["expert_counts_overall"].scatter_add_(0, ids, ones.to(torch.int64))
     st.update(logits=logits, route_w=route_w, route_ids=route_ids)
 
 
@@ -289,16 +299,16 @@ def moe_mlp_tail_bwd(kctx, K, d, dy, a, w, dw, accum, acc, norm_bwd, *, resid_fi
         K.moe_router_bwd_sigmoid(
             kctx, dprob, a["route_w"], a["route_ids"], a["router_logits"], dlogits,
         )
-        # per-round expert counts ride the bias's dW slot (fp32 via the
-        # family's dtype-policy override): grad-accum aggregation for
-        # free; the optimizer's per-field special applies the V3 sign
-        # rule to the STEP total — AdamW math never touches the bias
-        if dw is not None and "w_router_bias" in dw:
-            cnt = (offsets[1:] - offsets[:-1]).to(torch.float32)
-            if accum:
-                dw["w_router_bias"].add_(cnt)
-            else:
-                dw["w_router_bias"].copy_(cnt)
+        # the V3 aux-free balance rule, applied ONCE PER STEP: the grammar
+        # wires the persistent Aux counts (all rounds accumulated) into the
+        # LAST round's bwd only, so the presence of a["aux_counts"] IS the
+        # last-round gate. AdamW math never touches the bias (policy-frozen).
+        counts_views = a.get("aux_counts")
+        if counts_views is not None and moe.bias_update_speed:
+            counts = counts_views["expert_counts_current_step"].float()
+            w["w_router_bias"].add_(
+                torch.sign(counts.mean() - counts).to(w["w_router_bias"].dtype),
+                alpha=moe.bias_update_speed)
         if moe.aux_coef > 0:
             # per-round aux load-balance needs per-sequence bounds: the round's
             # Segments (merged into `a` by the bwd launch), never d.seq_spec
@@ -307,7 +317,6 @@ def moe_mlp_tail_bwd(kctx, K, d, dy, a, w, dw, accum, acc, norm_bwd, *, resid_fi
                 alpha=moe.aux_coef, top_k=topk,
                 seq_bounds=tuple(a["_seg"].bounds),
             )
-        del cnt
     else:
         K.moe_router_bwd(
             kctx, dprob, a["route_w"], a["route_ids"], a["router_logits"], dlogits,
@@ -380,18 +389,6 @@ def moe_mlp_tail_bwd(kctx, K, d, dy, a, w, dw, accum, acc, norm_bwd, *, resid_fi
     acc("ffn_norm_w", dffn)
     dh_mid.add_(dy)
     return dh_mid
-
-
-def moe_bias_update(kctx, kernels, w_view, g_view, *, speed: float) -> None:
-    """DeepSeek-V3 balance-bias rule, applied by the family's AdamW
-    per-field special (update_specials={"w_router_bias": ...}) in place of
-    AdamW math: b_e += speed * sign(mean_load - load_e), on the STEP's
-    aggregate counts (the bwd tail accumulated per-round counts into the
-    bias's dW slot). fp32 in and out (dtype-policy override); plain torch
-    (2 elementwise ops on (E,)) — async, deterministic, not worth a
-    registry op."""
-    counts = g_view.float()
-    w_view.add_(torch.sign(counts.mean() - counts).to(w_view.dtype), alpha=speed)
 
 
 # --- profiling support ------------------------------------------------------------

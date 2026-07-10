@@ -18,30 +18,30 @@ from dataflow.training.models.dsv3 import ShapedDsv3Config, lower_dsv3
 from dataflow.training.models.dsv32 import ShapedDsv32Config, lower_dsv32
 from dataflow.training.models.glm52 import ShapedGlm52Config, lower_glm52
 
-# Constants last updated DELIBERATELY for the aux-object grammar (the
-# per-round metadata objects renamed M_{s}_{r}_{i} -> AuxTemp_{s}_{r}_{i}
-# and dM_{s}_{r}_{lead} -> dAuxTemp_{s}_{r}_{lead}; structure otherwise
-# unchanged). The five DENSE-family constants are UNTOUCHED — verified
-# byte-identical in the same commit (no aux objects in those chains).
+# Constants last updated DELIBERATELY for the per-step aux counts wiring:
+# persistent Aux_{i} objects + round prologues + fwd accumulate edges +
+# last-round bwd reads (noaux trio: bias rule moved into that bwd; the
+# policy-frozen bias also shrinks their dW). The five DENSE-family
+# constants are UNTOUCHED — verified byte-identical in the same commit.
 EXPECTED = {
     "llama3-tiny-ga2-s2": "28cb016ba2779a5c",
     "llama3-tiny-tail": "e06f9a28c9665f46",
     "qwen3-tiny-ga3": "fd8e2305dd04e271",
     "qwen35-tiny-ga2": "3a76b7ddade100eb",
     "qwen35-tiny-tied": "f6dd20935fc2ad10",
-    "olmoe-tiny": "213c075480eb6eb4",
-    "olmoe-tiny-ga2": "5bd614146a4c76bc",
-    "qwen35moe-tiny-ga2": "c158717e023a55b0",
-    "qwen3moe-tiny": "38a3f61397a4d91d",
-    "qwen3moe-tiny-ga2": "90e08015ff3c8379",
-    "dsv3-tiny": "fb3ee48042e5906c",
-    "dsv3-tiny-ga2": "5a0f399e32e62be1",
-    "dsv32-tiny": "f63908c078f99531",
-    "dsv32-tiny-ga2": "de894d6c97f359ae",
-    "dsv32-tiny-dense": "3744001828e42a4b",
-    "glm52-tiny": "225ea494965c06d0",
-    "glm52-tiny-ga2": "9fe67fd5aaf485c0",
-    "glm52-tiny-warmup": "6583684c8b8d9993",
+    "olmoe-tiny": "f1a58520d14ab14a",
+    "olmoe-tiny-ga2": "63099eceb206fdd8",
+    "qwen35moe-tiny-ga2": "cc86d9e311392976",
+    "qwen3moe-tiny": "122d79ea2c615b2d",
+    "qwen3moe-tiny-ga2": "63b00be44ffb2a04",
+    "dsv3-tiny": "1d01289effdbbd57",
+    "dsv3-tiny-ga2": "595d1d0fd22d7404",
+    "dsv32-tiny": "525c2e3b11f74752",
+    "dsv32-tiny-ga2": "146b7fd412d4bd2e",
+    "dsv32-tiny-dense": "92441deefbbca9cf",
+    "glm52-tiny": "e5d7b4fce92368d1",
+    "glm52-tiny-ga2": "a796a383240748e9",
+    "glm52-tiny-warmup": "cf8f22f2f258c090",
 }
 
 

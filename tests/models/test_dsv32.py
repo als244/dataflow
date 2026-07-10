@@ -368,8 +368,11 @@ def test_dsv32_measured_costs_replan_still_golden():
     fam = resolve_family(cfg)
     program = fam.lower(cfg)
     backend = CudaBackend()
-    profiles = profile_program(program, fam.build_resolver(fam.dims_of(cfg)), backend, soak_seconds=0)
-    measured = apply_measured_costs(program, profiles)
+    resolver = fam.build_resolver(fam.dims_of(cfg))
+    profiles = profile_program(program, resolver, backend, soak_seconds=0)
+    # the policy-frozen router bias puts these families on the
+    # frozen-fingerprint signature path: apply needs the same resolver
+    measured = apply_measured_costs(program, profiles, resolver=resolver)
     assert all("measured" in t.metadata for t in measured.tasks)
 
     base = _run()

@@ -81,6 +81,9 @@ class BlockFwd(_Base):
                         break
             extras = self._aux_temp_state(ctx) or {}
             extras["seg"] = self._attn_meta(ctx)
+            aux_counts = self._aux_counts_state(ctx)
+            if aux_counts is not None:
+                extras["aux_counts"] = aux_counts
             self._forward(kctx, x, w, y, a, extras=extras)
 
     # --- staged forward -------------------------------------------------------
@@ -334,6 +337,9 @@ class BlockBwd(_Base):
                         break
                 dx = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
             a = {**a, "_seg": self._attn_meta(ctx)}
+            aux_counts = self._aux_counts_state(ctx)
+            if aux_counts is not None:
+                a["aux_counts"] = aux_counts
             aux_temp = self._aux_temp_state(ctx)
             if aux_temp is None:
                 self._backward(kctx, dy, a, x, w, dx, dw, accum)
