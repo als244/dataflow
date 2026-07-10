@@ -147,10 +147,28 @@ def install(server) -> None:
     def transfer_status(conn, args):
         return require_nm().transfer_status(args["send_id"])
 
+    def profiler_control(conn, args):
+        """start|stop capture on THIS daemon's profiler (the vendor
+        annotator behind the backend) — the conductor brackets chosen
+        steps; nsys --capture-range=cudaProfilerApi records only the
+        bracketed region."""
+        from . import bridge
+
+        ann = bridge.get_backend(store).annotator
+        action = args["action"]
+        if action == "start":
+            ann.start_capture()
+        elif action == "stop":
+            ann.stop_capture()
+        else:
+            raise ServiceError("BAD_REQUEST", f"action {action!r}")
+        return {"ok": True, "enabled": getattr(ann, "enabled", False)}
+
     def list_peer_groups(conn, args):
         return [] if nm is None else nm.groups.infos()
 
     server.fast_handlers.update({
+        "profiler_control": profiler_control,
         "list_peer_groups": list_peer_groups,
         "list_peers": list_peers,
         "peer_status": peer_status,

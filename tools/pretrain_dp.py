@@ -36,6 +36,12 @@ def main() -> None:
     tr.add_argument("--peak-lr", type=float, default=3e-4)
     tr.add_argument("--seed", type=int, default=11)
     tr.add_argument("--out", required=True)
+    tr.add_argument("--profile", action="store_true",
+                    help="bracket steps with the vendor capture API "
+                         "(pair with nsys --capture-range=cudaProfilerApi); "
+                         "training CONTINUES after the window")
+    tr.add_argument("--profile-start-before-step", type=int, default=1)
+    tr.add_argument("--profile-stop-after-step", type=int, default=3)
     cp = sub.add_parser("compare")
     cp.add_argument("--a", required=True)
     cp.add_argument("--b", required=True)
@@ -50,9 +56,13 @@ def main() -> None:
         budgets = tuple(float(x) for x in args.budgets.split(","))
         slabs = tuple(float(x) for x in args.slabs.split(","))
         stream = make_stream(cfg.tokens)
+        profile = None
+        if args.profile:
+            profile = {"start": args.profile_start_before_step,
+                       "stop": args.profile_stop_after_step}
         res = run_fleet_dp(cfg, recipe, stream, args.steps,
                            rank_rounds=rounds, budgets=budgets,
-                           slabs=slabs, seed=args.seed)
+                           slabs=slabs, seed=args.seed, profile=profile)
         res.save(args.out)
         print(f"saved {args.out} (final loss {res.losses[-1]:.4f}, "
               f"steady {res.steady_tok_per_s:.0f} tok/s)")

@@ -362,6 +362,11 @@ class EngineClient:
     def transfer_status(self, send_id: str) -> dict:
         return self._call("transfer_status", {"send_id": send_id})
 
+    def profiler_control(self, action: str) -> dict:
+        """start|stop the daemon-side profiler capture (vendor API via
+        the annotator abstraction; nsys capture-range pairs with it)."""
+        return self._call("profiler_control", {"action": action})
+
     def wait_transfer(self, send_id: str, *, timeout: float = 30.0) -> dict:
         """Poll transfer_status until done/error (peer sends resolve on
         the REMOTE catalog commit, not on the local ticket)."""
