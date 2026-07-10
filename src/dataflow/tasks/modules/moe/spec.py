@@ -97,6 +97,15 @@ class MoESpec:
     # shared-expert combine style: True = sigma(gate)*shared (qwen35moe),
     # False = plain additive shared (DeepSeek-V3, no gate field at all)
     shared_gate: bool = True
+    # softmax-LBL mode: False (default) = PER-ROUND injection (exact at
+    # ga=1, the reference-comparison point; not ga-invariant at ga>1).
+    # True = RETAINED-INPUTS: each round's AuxTemp keeps the router input
+    # + full-softmax probs; the LAST round's bwd contracts the exact
+    # per-STEP aggregate (f_global from the Aux counts) into dW_router.
+    # ROUTER-ONLY there — the upstream aux gradient is necessarily dropped
+    # (earlier rounds' backwards have already run). Costs R*T*(d+E) extra
+    # AuxTemp memory. Softmax modes only.
+    lbl_retained_inputs: bool = False
 
     def __post_init__(self) -> None:
         if self.routing_mode not in _ROUTING_MODES:
@@ -125,6 +134,11 @@ class MoESpec:
             raise ValueError(
                 "n_group/topk_group/routed_scaling/bias_update_speed are "
                 "sigmoid_noaux_tc knobs"
+            )
+        if self.lbl_retained_inputs and self.routing_mode == "sigmoid_noaux_tc":
+            raise ValueError(
+                "lbl_retained_inputs is a softmax-LBL knob (noaux families "
+                "balance via the counts bias rule, no retained inputs)"
             )
         if self.n_shared_experts not in (0, 1):
             raise ValueError("v1 supports n_shared_experts in {0, 1}")
@@ -227,12 +241,22 @@ def moe_aux_temp_specs(dims, moe: MoESpec) -> list[tuple[str, tuple[int, ...], s
     not part of the discrete decision."""
     t = dims.tokens
     rows = moe_local_rows(moe, t)
-    return [
+    specs: list[tuple[str, tuple[int, ...], str]] = [
         ("route_w", (t, moe.top_k), "bf16"),
         ("route_ids", (t, moe.top_k), "int32"),
         ("route_order", (rows,), "int32"),
         ("route_offsets", (moe.n_local_experts + 1,), "int32"),
     ]
+    if moe.lbl_retained_inputs:
+        # the deferred exact-aggregate LBL's retained ingredients: the
+        # router input (a copy of h2) and the FULL-softmax probs, consumed
+        # by the LAST round's bwd (a longer read-distance, same
+        # consume-pinned recompute role as the rest of the pack)
+        specs += [
+            ("lbl_x", (t, dims.d_model), "bf16"),
+            ("lbl_probs", (t, moe.n_experts), "fp32"),
+        ]
+    return specs
 
 
 def moe_aux_temp_layout(dims, moe: MoESpec):

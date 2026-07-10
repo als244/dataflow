@@ -113,7 +113,7 @@ def _indexer_inputs(kctx, K, d, h1, q_lora_n, w, pos):
     return q_idx, k_idx, wts.contiguous()
 
 
-class Dsv32MetaState:
+class Dsv32AuxTempState:
     """Metadata-object plumbing (one implementation for fwd/rc/bwd): the
     layer's M object packs ALL its never-recompute artifacts — the dsa
     selection ("dsa_idx") and the routing pack (moe kinds) — in one
@@ -206,7 +206,7 @@ class Dsv32ProfileFill(MoEProfileFill):
 
 
 @dataclass(frozen=True)
-class Dsv32DenseBlockFwd(Dsv32MetaState, Dsv32ProfileFill, Dsv3DenseBlockFwd):
+class Dsv32DenseBlockFwd(Dsv32AuxTempState, Dsv32ProfileFill, Dsv3DenseBlockFwd):
     # Dsv32ProfileFill is mixed in via the concrete class list below
     # (kept off this base to keep the stage-definition class minimal)
     dims: Dsv32Dims = None  # type: ignore[assignment]
@@ -320,7 +320,7 @@ class Dsv32DenseBlockRecompute(Dsv32DenseBlockFwd, BlockRecompute):
 
 
 @dataclass(frozen=True)
-class Dsv32DenseBlockBwd(Dsv32MetaState, Dsv32ProfileFill, Dsv3DenseBlockBwd):
+class Dsv32DenseBlockBwd(Dsv32AuxTempState, Dsv32ProfileFill, Dsv3DenseBlockBwd):
     dims: Dsv32Dims = None  # type: ignore[assignment]
 
     def _weight_layout(self, layer: int | None = None) -> PackedLayout:
@@ -651,7 +651,7 @@ class _WarmupKLMixin:
 
 
 @dataclass(frozen=True)
-class Dsv32WarmupDenseBlockFwd(Dsv32MetaState, Dsv3DenseBlockFwd):
+class Dsv32WarmupDenseBlockFwd(Dsv32AuxTempState, Dsv3DenseBlockFwd):
     """Dense warm-up forward = dsv3's flash path verbatim (no selection,
     no dsa_idx ctx); only the layouts widen for the indexer weights."""
 
@@ -671,7 +671,7 @@ class Dsv32WarmupDenseBlockRecompute(Dsv32WarmupDenseBlockFwd, BlockRecompute):
 
 
 @dataclass(frozen=True)
-class Dsv32WarmupDenseBlockBwd(Dsv32MetaState, _WarmupKLMixin, Dsv3DenseBlockBwd):
+class Dsv32WarmupDenseBlockBwd(Dsv32AuxTempState, _WarmupKLMixin, Dsv3DenseBlockBwd):
     dims: Dsv32Dims = None  # type: ignore[assignment]
     _indexer_kl_bwd = Dsv32DenseBlockBwd._indexer_kl_bwd
 
@@ -684,7 +684,7 @@ class Dsv32WarmupDenseBlockBwd(Dsv32MetaState, _WarmupKLMixin, Dsv3DenseBlockBwd
 
 
 @dataclass(frozen=True)
-class Dsv32WarmupMoeBlockFwd(Dsv32MetaState, Dsv32ProfileFill, Dsv3MoeBlockFwd):
+class Dsv32WarmupMoeBlockFwd(Dsv32AuxTempState, Dsv32ProfileFill, Dsv3MoeBlockFwd):
     AUX_TEMP_KIND = "moe"
     dims: Dsv32Dims = None  # type: ignore[assignment]
 
@@ -702,7 +702,7 @@ class Dsv32WarmupMoeBlockRecompute(Dsv32WarmupMoeBlockFwd, BlockRecompute):
 
 
 @dataclass(frozen=True)
-class Dsv32WarmupMoeBlockBwd(Dsv32MetaState, Dsv32ProfileFill, _WarmupKLMixin, Dsv3MoeBlockBwd):
+class Dsv32WarmupMoeBlockBwd(Dsv32AuxTempState, Dsv32ProfileFill, _WarmupKLMixin, Dsv3MoeBlockBwd):
     AUX_TEMP_KIND = "moe"
     dims: Dsv32Dims = None  # type: ignore[assignment]
     _indexer_kl_bwd = Dsv32DenseBlockBwd._indexer_kl_bwd

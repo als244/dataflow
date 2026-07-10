@@ -25,12 +25,12 @@ from ..layouts import (
 )
 from ..base_blocks import AdamWHyper, AdamWStep, EmbedBwd, EmbedFwd, HeadLoss, RoundPrologue
 from .llama3_blocks import BlockRecompute
-from ..modules.moe.stages import MOE_STAGES, MoEMetaState, MoEProfileFill, moe_mlp_tail_bwd
+from ..modules.moe.stages import MOE_STAGES, MoEAuxTempState, MoEProfileFill, moe_mlp_tail_bwd
 from .qwen3_blocks import Qwen3BlockBwd, Qwen3BlockFwd
 
 
 @dataclass(frozen=True)
-class Qwen3MoeBlockFwd(MoEMetaState, MoEProfileFill, Qwen3BlockFwd):
+class Qwen3MoeBlockFwd(MoEAuxTempState, MoEProfileFill, Qwen3BlockFwd):
     dims: Qwen3MoeDims = None  # type: ignore[assignment]
 
     def _weight_layout(self, layer: int | None = None) -> PackedLayout:
@@ -50,7 +50,7 @@ class Qwen3MoeBlockRecompute(Qwen3MoeBlockFwd, BlockRecompute):
 
 
 @dataclass(frozen=True)
-class Qwen3MoeBlockBwd(MoEMetaState, MoEProfileFill, Qwen3BlockBwd):
+class Qwen3MoeBlockBwd(MoEAuxTempState, MoEProfileFill, Qwen3BlockBwd):
     dims: Qwen3MoeDims = None  # type: ignore[assignment]
 
     def _weight_layout(self, layer: int | None = None) -> PackedLayout:

@@ -229,6 +229,7 @@ def build_shaped_program(
     aux_shared=None,
     round_prologue: bool = False,
     bias_update_in_bwd: bool = False,
+    retained_lbl: bool = False,
     freeze=None,  # FreezePlan | None (training/freeze_plan.py)
 ) -> Program:
     """Build the (bare) shaped program for the given recompute levels.
@@ -496,6 +497,12 @@ def build_shaped_program(
                     bwd_inputs.append(f"Aux_{i}")
                     if bias_update_in_bwd:
                         mutates = mutates + (f"W_{i}",)
+                    if retained_lbl and sp.aux_temp_bytes:
+                        # retained-inputs LBL: the deferred exact-aggregate
+                        # contraction reads EVERY round's retained pack (the
+                        # own round's AuxTemp is already in aux_ins)
+                        bwd_inputs.extend(f"AuxTemp_{s}_{rr}_{i}"
+                                          for rr in range(r))
                 task(f"block_bwd_{s}_{r}_{i}", f"{sp.key_prefix}_bwd", bwd_inputs, outs,
                      sp.bwd_us, mutates=mutates, group="backward", params={"layer": i},
                      subops=sp.bwd_subops)

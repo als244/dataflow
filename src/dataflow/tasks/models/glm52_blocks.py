@@ -82,7 +82,7 @@ def _dm_cols(d) -> int:
     return d.index_topk if getattr(d, "sparse_mode", True) else d.seq_len
 
 
-class Glm52MetaState:
+class Glm52AuxTempState:
     """Own M + (followers) producer's M + (grouped bwds) dM."""
 
     AUX_TEMP_KIND = "gdl"
@@ -317,7 +317,7 @@ class _Glm52LeaderKL:
 
 
 @dataclass(frozen=True)
-class Glm52DlBlockFwd(Glm52MetaState, Glm52ProfileFill, Dsv32DenseBlockFwd):
+class Glm52DlBlockFwd(Glm52AuxTempState, Glm52ProfileFill, Dsv32DenseBlockFwd):
     dims: Glm52Dims = None  # type: ignore[assignment]
     AUX_TEMP_KIND = "gdl"
 
@@ -335,7 +335,7 @@ class Glm52DlBlockRecompute(Glm52DlBlockFwd, BlockRecompute):
 
 
 @dataclass(frozen=True)
-class Glm52DlBlockBwd(_Glm52LeaderKL, Glm52MetaState, Glm52ProfileFill,
+class Glm52DlBlockBwd(_Glm52LeaderKL, Glm52AuxTempState, Glm52ProfileFill,
                       Dsv32DenseBlockBwd):
     dims: Glm52Dims = None  # type: ignore[assignment]
     AUX_TEMP_KIND = "gdl"
@@ -349,7 +349,7 @@ class Glm52DlBlockBwd(_Glm52LeaderKL, Glm52MetaState, Glm52ProfileFill,
 
 
 @dataclass(frozen=True)
-class Glm52MlBlockFwd(Glm52MetaState, Glm52ProfileFill, Dsv32MoeBlockFwd):
+class Glm52MlBlockFwd(Glm52AuxTempState, Glm52ProfileFill, Dsv32MoeBlockFwd):
     dims: Glm52Dims = None  # type: ignore[assignment]
     AUX_TEMP_KIND = "gml"
 
@@ -367,7 +367,7 @@ class Glm52MlBlockRecompute(Glm52MlBlockFwd, BlockRecompute):
 
 
 @dataclass(frozen=True)
-class Glm52MlBlockBwd(_Glm52LeaderKL, Glm52MetaState, Glm52ProfileFill,
+class Glm52MlBlockBwd(_Glm52LeaderKL, Glm52AuxTempState, Glm52ProfileFill,
                       Dsv32MoeBlockBwd):
     dims: Glm52Dims = None  # type: ignore[assignment]
     AUX_TEMP_KIND = "gml"
@@ -384,7 +384,7 @@ class Glm52MlBlockBwd(_Glm52LeaderKL, Glm52MetaState, Glm52ProfileFill,
 
 
 @dataclass(frozen=True)
-class Glm52MfBlockFwd(Glm52MetaState, Glm52ProfileFill, Dsv32MoeBlockFwd):
+class Glm52MfBlockFwd(Glm52AuxTempState, Glm52ProfileFill, Dsv32MoeBlockFwd):
     """Follower forward: PLAIN dsv3 MLA stages (no indexer tap, no
     select) + the sparse core on the producer's selection + MoE tail."""
 
@@ -413,7 +413,7 @@ class Glm52MfBlockRecompute(Glm52MfBlockFwd, BlockRecompute):
 
 
 @dataclass(frozen=True)
-class Glm52MfBlockBwd(Glm52MetaState, Glm52ProfileFill, Dsv32MoeBlockBwd):
+class Glm52MfBlockBwd(Glm52AuxTempState, Glm52ProfileFill, Dsv32MoeBlockBwd):
     """Follower backward: sparse core bwd on the shared selection + the
     layer's target contribution into dM; NO indexer chains (the follower
     has no indexer weights)."""
@@ -568,7 +568,7 @@ class _Glm52WarmupFollowerKL:
 
 
 @dataclass(frozen=True)
-class Glm52WarmupDlBlockFwd(Glm52MetaState, Dsv32WarmupDenseBlockFwd):
+class Glm52WarmupDlBlockFwd(Glm52AuxTempState, Dsv32WarmupDenseBlockFwd):
     dims: Glm52Dims = None  # type: ignore[assignment]
     AUX_TEMP_KIND = "gdl"
 
@@ -583,7 +583,7 @@ class Glm52WarmupDlBlockRecompute(Glm52WarmupDlBlockFwd, BlockRecompute):
 
 
 @dataclass(frozen=True)
-class Glm52WarmupDlBlockBwd(Glm52MetaState, _Glm52WarmupLeaderKL,
+class Glm52WarmupDlBlockBwd(Glm52AuxTempState, _Glm52WarmupLeaderKL,
                             Dsv32WarmupDenseBlockBwd):
     dims: Glm52Dims = None  # type: ignore[assignment]
     AUX_TEMP_KIND = "gdl"
@@ -594,7 +594,7 @@ class Glm52WarmupDlBlockBwd(Glm52MetaState, _Glm52WarmupLeaderKL,
 
 
 @dataclass(frozen=True)
-class Glm52WarmupMlBlockFwd(Glm52MetaState, Glm52ProfileFill,
+class Glm52WarmupMlBlockFwd(Glm52AuxTempState, Glm52ProfileFill,
                             Dsv32WarmupMoeBlockFwd):
     dims: Glm52Dims = None  # type: ignore[assignment]
     AUX_TEMP_KIND = "gml"
@@ -610,7 +610,7 @@ class Glm52WarmupMlBlockRecompute(Glm52WarmupMlBlockFwd, BlockRecompute):
 
 
 @dataclass(frozen=True)
-class Glm52WarmupMlBlockBwd(Glm52MetaState, Glm52ProfileFill,
+class Glm52WarmupMlBlockBwd(Glm52AuxTempState, Glm52ProfileFill,
                             _Glm52WarmupLeaderKL, Dsv32WarmupMoeBlockBwd):
     dims: Glm52Dims = None  # type: ignore[assignment]
     AUX_TEMP_KIND = "gml"
@@ -621,7 +621,7 @@ class Glm52WarmupMlBlockBwd(Glm52MetaState, Glm52ProfileFill,
 
 
 @dataclass(frozen=True)
-class Glm52WarmupMfBlockFwd(Glm52MetaState, Glm52ProfileFill,
+class Glm52WarmupMfBlockFwd(Glm52AuxTempState, Glm52ProfileFill,
                             Dsv32WarmupMoeBlockFwd):
     dims: Glm52Dims = None  # type: ignore[assignment]
     AUX_TEMP_KIND = "gmf"
@@ -640,7 +640,7 @@ class Glm52WarmupMfBlockRecompute(Glm52WarmupMfBlockFwd, BlockRecompute):
 
 
 @dataclass(frozen=True)
-class Glm52WarmupMfBlockBwd(Glm52MetaState, Glm52ProfileFill,
+class Glm52WarmupMfBlockBwd(Glm52AuxTempState, Glm52ProfileFill,
                             _Glm52WarmupFollowerKL, Dsv32WarmupMoeBlockBwd):
     dims: Glm52Dims = None  # type: ignore[assignment]
     AUX_TEMP_KIND = "gmf"

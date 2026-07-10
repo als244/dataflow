@@ -93,6 +93,12 @@ def stage_moe_route(kctx, K, d, st):
         K.moe_topk_softmax(
             kctx, logits, route_w, route_ids, top_k=moe.top_k, mode=moe.routing_mode
         )
+    if dst is not None and "lbl_probs" in dst:
+        # retained-inputs LBL: keep the FULL-softmax probs + the router
+        # input for the LAST round's exact-aggregate contraction (writes
+        # elided on recompute via the aux_temp_ready early-return above)
+        dst["lbl_probs"].copy_(torch.softmax(logits.float(), dim=-1))
+        dst["lbl_x"].copy_(h2)
     counts = st.get("aux_counts")
     if counts is not None:
         # per-STEP expert histogram: every round's fwd accumulates into the
@@ -322,7 +328,7 @@ def moe_mlp_tail_bwd(kctx, K, d, dy, a, w, dw, accum, acc, norm_bwd, *, resid_fi
             kctx, dprob, a["route_w"], a["route_ids"], a["router_logits"], dlogits,
             mode=moe.routing_mode,
         )
-        if moe.aux_coef > 0:
+        if moe.aux_coef > 0 and not moe.lbl_retained_inputs:
             counts = (offsets[1:] - offsets[:-1]).contiguous()
             K.moe_aux_lb_grad(
                 kctx, a["router_logits"], counts, dlogits,
@@ -334,6 +340,29 @@ def moe_mlp_tail_bwd(kctx, K, d, dy, a, w, dw, accum, acc, norm_bwd, *, resid_fi
     del dlogits
     if acc.wanted("w_router"):
         acc("w_router", h2.T @ dlogits_bf)
+    lbl_counts = a.get("aux_counts")
+    if (moe.aux_coef > 0 and moe.lbl_retained_inputs and not noaux
+            and lbl_counts is not None and dw is not None
+            and "w_router" in dw and acc.wanted("w_router")):
+        # deferred EXACT per-STEP LBL (retained-inputs mode): contract every
+        # round's retained (x_r, p_r) with f_global from the step-aggregate
+        # counts, straight into dW_router — the presence of the Aux input IS
+        # the last-round gate. ROUTER-ONLY: the upstream aux gradient is
+        # necessarily dropped (earlier rounds' backwards have already run).
+        packs = a.get("lbl_retained")
+        if packs is None:   # ga=1: the own round's views are merged into a
+            packs = [{"lbl_x": a["lbl_x"], "lbl_probs": a["lbl_probs"]}]
+        t_step = t * len(packs)
+        counts_f = lbl_counts["expert_counts_current_step"].float()
+        fvec = counts_f / (t_step * moe.top_k)
+        lbl_scale = moe.aux_coef * moe.n_experts / t_step
+        for pack in packs:
+            p = pack["lbl_probs"]                              # (t, E) fp32
+            fdot = p @ fvec                                    # (t,)
+            dzr = lbl_scale * p * (fvec.unsqueeze(0) - fdot.unsqueeze(1))
+            dw["w_router"].add_(
+                (pack["lbl_x"].float().T @ dzr).to(dw["w_router"].dtype))
+            del fdot, dzr
     dh2.addmm_(dlogits_bf, w["w_router"].T)
     del dlogits_bf
 
@@ -394,7 +423,11 @@ def moe_mlp_tail_bwd(kctx, K, d, dy, a, w, dw, accum, acc, norm_bwd, *, resid_fi
 # --- profiling support ------------------------------------------------------------
 
 
-class MoEMetaState:
+def round_of_pack(entry):
+    return entry[0]
+
+
+class MoEAuxTempState:
     """Metadata-object plumbing for pure-MoE families: the layer's M
     holds the discrete routing pack (moe_aux_temp_specs). Exposed to stages
     as st["aux_temp"]; recompute sets aux_temp_ready (the moe stages then skip
@@ -408,21 +441,34 @@ class MoEMetaState:
         layout = moe_aux_temp_layout(self.dims, _spec(self.dims))
         key = ctx.task.compute_block_key
         if key.endswith(("_recompute", "_bwd")):
+            found = []      # (round, views) for every AuxTemp input
             for j, oid in enumerate(ctx.task.inputs):
                 if oid.startswith("AuxTemp_"):
-                    st = {"aux_temp": layout.views(self._in(ctx, j))}
-                    if key.endswith("_recompute"):
-                        st["aux_temp_ready"] = True
-                    return st
-            raise RuntimeError(f"no M_ input on {ctx.task.id}")
+                    found.append((int(oid.split("_")[-2]),
+                                  layout.views(self._in(ctx, j))))
+            if not found:
+                raise RuntimeError(f"no AuxTemp_ input on {ctx.task.id}")
+            own_round = int(ctx.task.id.split("_")[-2])
+            own = next((v for r, v in found if r == own_round), found[0][1])
+            st = {"aux_temp": own}
+            if key.endswith("_recompute"):
+                st["aux_temp_ready"] = True
+            elif len(found) > 1:
+                # retained-inputs LBL: the LAST round's bwd sees every
+                # round's pack — ordered by round for the contraction
+                st["lbl_retained"] = [v for _, v in sorted(found,
+                                                           key=round_of_pack)]
+            return st
         for j, o in enumerate(ctx.task.outputs):
             if o.id.startswith("AuxTemp_"):
                 return {"aux_temp": layout.views(self._out(ctx, j))}
-        raise RuntimeError(f"no M_ output on {ctx.task.id}")
+        raise RuntimeError(f"no AuxTemp_ output on {ctx.task.id}")
 
     def _backward(self, kctx, dy, a, x, w, dx_out, dw, accum, aux_temp=None):
         if aux_temp:
             a = {**a, **aux_temp["aux_temp"]}
+            if "lbl_retained" in aux_temp:
+                a["lbl_retained"] = aux_temp["lbl_retained"]
         super()._backward(kctx, dy, a, x, w, dx_out, dw, accum)
 
 

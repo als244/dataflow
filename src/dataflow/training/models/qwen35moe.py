@@ -63,6 +63,10 @@ class ShapedQwen35MoeConfig:
     d_ff_shared: int = 512
     routing_mode: str = "topk_then_softmax"   # norm_topk_prob=true
     aux_coef: float = 0.001
+    # softmax-LBL mode: False = per-round injection (default; exact at
+    # ga=1); True = retained-inputs per-STEP exact aggregate (ga-invariant,
+    # router-only — see MoESpec.lbl_retained_inputs)
+    lbl_retained_inputs: bool = False
     # shared
     vocab_size: int = 248_320
     seq_len: int = 4096
@@ -149,6 +153,7 @@ def moe_spec_of(cfg: ShapedQwen35MoeConfig) -> MoESpec:
     return MoESpec(
         n_experts=cfg.n_experts, top_k=cfg.top_k, d_ff_expert=cfg.d_ff_expert,
         routing_mode=cfg.routing_mode, aux_coef=cfg.aux_coef,
+        lbl_retained_inputs=cfg.lbl_retained_inputs,
         n_shared_experts=cfg.n_shared_experts, d_ff_shared=cfg.d_ff_shared,
     )
 
@@ -264,6 +269,7 @@ def build_shaped_qwen35moe(
         recompute_levels=recompute_levels, name=label,
         kinds=_kind_specs(cfg, hw), layer_kinds=dims.kinds,
         round_prologue=True,
+        retained_lbl=dims_fp.moe.lbl_retained_inputs,
         freeze=freeze_plan,
     )
 

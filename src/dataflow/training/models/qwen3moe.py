@@ -53,6 +53,10 @@ class ShapedQwen3MoeConfig:
     d_ff_expert: int = 768
     routing_mode: str = "topk_then_softmax"   # norm_topk_prob=true
     aux_coef: float = 0.001
+    # softmax-LBL mode: False = per-round injection (default; exact at
+    # ga=1); True = retained-inputs per-STEP exact aggregate (ga-invariant,
+    # router-only — see MoESpec.lbl_retained_inputs)
+    lbl_retained_inputs: bool = False
     vocab_size: int = 151_936
     seq_len: int = 4096
     batch: int = 1
@@ -139,6 +143,7 @@ def moe_spec_of(cfg: ShapedQwen3MoeConfig) -> MoESpec:
     return MoESpec(
         n_experts=cfg.n_experts, top_k=cfg.top_k, d_ff_expert=cfg.d_ff_expert,
         routing_mode=cfg.routing_mode, aux_coef=cfg.aux_coef,
+        lbl_retained_inputs=cfg.lbl_retained_inputs,
     )
 
 
@@ -226,6 +231,7 @@ def build_shaped_qwen3moe(
         cfg, hw=hw, family="qwen3moe-shaped",
         kinds={"moe": _kind_spec(cfg, hw)},
         round_prologue=True,
+        retained_lbl=dims_fp.moe.lbl_retained_inputs,
         fast_memory_capacity=fast_memory_capacity,
         recompute_levels=recompute_levels, name=name,
         freeze=freeze_plan,
