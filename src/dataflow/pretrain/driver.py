@@ -187,7 +187,9 @@ def run_reference(cfg, recipe: Recipe, stream, steps: int, *, seed: int = 11,
 
 @contextmanager
 def daemon_client(slab_gib: float = 100.0, *, socket: str | None = None,
-                  device: int = 0, attach: bool = False, log=print):
+                  device: int = 0, attach: bool = False, log=print,
+                  peer_name: str | None = None,
+                  peer_listen: str | None = None):
     """Yield a connected ``EngineClient``. By default boots an in-process
     dataflowd (the full service stack — wire protocol, store, dispatcher —
     hosted in a thread) with an EXPLICIT slab (never 'auto'); set
@@ -208,7 +210,9 @@ def daemon_client(slab_gib: float = 100.0, *, socket: str | None = None,
     log(f"[daemon] booting in-process dataflowd slab={slab_gib} GiB dev={device}")
     t0 = time.perf_counter()
     server = Server(EngineConfig(socket_path=sock, slab_backing_gib=slab_gib,
-                                 device=device, fake=False))
+                                 device=device, fake=False,
+                                 peer_name=peer_name,
+                                 peer_listen=peer_listen))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     ok = False
     for _ in range(6000):              # up to ~60s for the pinned slab to arm
