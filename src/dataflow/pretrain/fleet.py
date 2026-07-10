@@ -54,7 +54,9 @@ CHI_PEER_ADDR = "192.168.50.23:29700"
 # Canonical nsys wrapper. capture-range=cudaProfilerApi arms nsys but
 # records ONLY the window bracketed by the profiler_control verb
 # (SwitchableAnnotator start/stop_capture -> cudaProfilerStart/Stop).
-NSYS_TRACE = "cuda,nvtx,nccl,osrt,cublas,cudnn"
+# NOTE nsys 2025.5.2 rejects a 'nccl' trace value — NCCL activity is
+# captured through cuda kernels + its NVTX ranges instead.
+NSYS_TRACE = "cuda,nvtx,osrt,cublas,cudnn"
 CHI_IB_DEV = "mlx5_1"      # enp114s0f1np1 = 192.168.50.23 (25G link)
 TUB_IB_DEV = "mlx5_0"      # enp4s0f0np0  = 192.168.50.32 (25G link)
 
