@@ -2,7 +2,7 @@
 
 dsv3's backbone (MLA + noaux_tc MoE + hybrid depth) with DSA — lightning
 indexer + fine-grained top-k selection — in EVERY layer's attention.
-Sparse mode only in v1 (Shein order: sparse correctness -> sparse perf ->
+Sparse mode only in v1 (locked build order: sparse correctness -> sparse perf ->
 dense warm-up last); ``sparse_mode=False`` = the dense warm-up mode.
 
 Presets:

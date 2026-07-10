@@ -1,7 +1,7 @@
 """glm52 (IndexShare) lowering gates — CPU-only.
 
 Pins the M/dM metadata grammar: every layer's discrete artifacts live in
-its M object (never recomputed — Shein invariant); IndexShare followers
+its M object (never recomputed — locked invariant); IndexShare followers
 additionally consume the PRODUCER layer's M (the shared dsa selection);
 the KL-target accumulator dM follows the reverse-order
 create/mutate/consume chain; singleton groups have no dM."""

@@ -19,7 +19,7 @@ from dataflow.training.models.llama3 import ShapedLlamaConfig, lower_llama3
 from dataflow.training.testing.gradcheck import check_model_step
 
 LENS = (73, 38, 17)
-# boundary notation (Shein): cumulative [0, ..., t]
+# boundary notation (convention): cumulative [0, ..., t]
 RA = {"seq_lens": {"0": [0, 73, 111, 128]}}
 
 
@@ -59,7 +59,7 @@ def test_no_args_is_legacy():
 
 
 def test_packed_mode_materializes_positions_once(monkeypatch):
-    """THE implicit-sync gate (Shein): a packed run materializes the round's
+    """THE implicit-sync gate: a packed run materializes the round's
     Segments (cu/positions device tensors) EXACTLY ONCE — the prologue's
     pinned + non_blocking copy, before task 0 — never per-block or per-round.
     Blocks read seg.positions/seg.cu as fields; a regression that rebuilt a

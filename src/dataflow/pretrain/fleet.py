@@ -1,25 +1,26 @@
-"""Fleet DP driver (conductor v1): TWO daemons — chicago (this box) +
-tubingen over ssh — training ONE model data-parallel with weighted
-round distribution and the global-denominator convention.
+"""Fleet DP driver (conductor v1): one daemon per topology-group host
+training ONE model data-parallel with weighted round distribution and
+the global-denominator convention.
 
-The conductor: boots/attaches both daemons (tubingen's S1 socket rides
-an ssh UNIX-socket forward — client-over-TCP is a follow-up), connects
-the peer link over the direct 25 GbE addresses, registers PER-RANK
-programs (same model, per-rank grad_accum_rounds = the weighted round
-split of the ORIGINAL global config; dp_group baked into optimizer
-tasks), performs the WARM-UP + RE-SEED + RE-PUT dance (kernel loads
-must precede any parked collective; family_init_all refills token
-buffers too — findings, P4a), creates the group, then drives lockstep
-steps: each rank gets ITS SLICE of the original stream's rounds, both
-runs fire concurrently, per-round losses (each Sum(nll)/GLOBAL_valid)
-sum across ranks into the global step mean — directly comparable to
-the single-box curves in results/pretrain/.
+The conductor: boots (or attaches to) every member daemon — remote
+control planes ride ssh unix-socket forwards — connects the peer link
+over the topology's data-plane addresses, registers PER-RANK programs
+(same model, per-rank grad_accum_rounds = the weighted round split of
+the ORIGINAL global config; the dp group baked into optimizer tasks),
+performs the WARM-UP + RE-SEED + RE-PUT dance (kernel loads must
+precede any parked collective; family_init_all refills token buffers
+too — findings), creates the group, then drives lockstep steps: each
+rank gets ITS SLICE of the original stream's rounds, all runs fire
+concurrently, per-round losses (each Sum(nll)/GLOBAL_valid) sum across
+ranks into the global step mean — directly comparable to the
+single-box curves in results/pretrain/.
+
+All machine facts (hosts, addresses, devices, sizes) come from
+topology.toml — see topology.example.toml.
 """
 from __future__ import annotations
 
-import json
 import os
-import subprocess
 import threading
 import time
 from dataclasses import replace
@@ -35,80 +36,19 @@ from dataflow.training.shaped_program import (
     roofline_block_kind_spec,
 )
 
-from .driver import RunResult, daemon_client
+from .driver import RunResult
+from .hostops import (
+    daemon_paths,
+    fetch_file,
+    kill_daemon,
+    launch_daemon,
+    nsys_command,
+    uds_forward,
+    wait_daemon_exit,
+)
 from .presets import cfg_dict, tokens_per_step
 from .recipe import Recipe
-
-TUB = "tubingen_local"     # LAN alias (192.168.50.31); the bare
-                           # "tubingen" alias resolves to the WAN
-                           # public IP and hairpins through the router
-TUB_PY = "/home/shein/miniconda3/envs/dataflow/bin/python"
-TUB_REPO = "/home/shein/Documents/dataflow"
-TUB_SOCK = "/tmp/dataflowd-fleet.sock"
-TUB_UNIT = "dataflow-fleet"        # transient systemd --user unit
-TUB_LOG = "/tmp/dataflowd-fleet.log"
-TUB_PROF_OUT = "/tmp/dp_prof_tubingen"
-TUB_PEER_ADDR = "192.168.50.32:29700"
-CHI_PEER_ADDR = "192.168.50.23:29700"
-
-# Canonical nsys wrapper. capture-range=cudaProfilerApi arms nsys but
-# records ONLY the window bracketed by the profiler_control verb
-# (SwitchableAnnotator start/stop_capture -> cudaProfilerStart/Stop).
-# NOTE nsys 2025.5.2 rejects a 'nccl' trace value — NCCL activity is
-# captured through cuda kernels + its NVTX ranges instead.
-NSYS_TRACE = "cuda,nvtx,osrt,cublas,cudnn"
-CHI_IB_DEV = "mlx5_1"      # enp114s0f1np1 = 192.168.50.23 (25G link)
-TUB_IB_DEV = "mlx5_0"      # enp4s0f0np0  = 192.168.50.32 (25G link)
-
-
-def nsys_command(out_path: str, ib_dev: str, nsys: str = "nsys") -> str:
-    return (f"{nsys} profile --trace={NSYS_TRACE} "
-            f"--capture-range=cudaProfilerApi --capture-range-end=stop "
-            f"--gpu-metrics-devices=0 --ib-net-info-devices={ib_dev} "
-            f"-o {out_path} --force-overwrite true")
-
-
-def ssh(cmd: str, *, timeout: float = 240.0) -> str:
-    out = subprocess.run(["ssh", "-o", "BatchMode=yes", TUB, cmd],
-                         capture_output=True, text=True, timeout=timeout)
-    if out.returncode != 0:
-        raise RuntimeError(f"ssh rc={out.returncode}: {out.stderr[-400:]}")
-    return out.stdout
-
-
-def launch_remote_daemon(slab_gib: float, profile: bool) -> None:
-    """Start tubingen's daemon as a TRANSIENT systemd --user unit.
-
-    Never fire-and-forget a raw "cmd &" over ssh here: when cmd is an
-    nsys wrapper, nsys's helper daemons keep the ssh session's pipes
-    open and the remote bash never releases the session — the client
-    ssh then blocks for minutes (the sporadic "ssh hang", findings).
-    systemd-run detaches the daemon from the session entirely and
-    gives teardown a handle that needs no /proc-scanning pattern kill.
-    Requires loginctl enable-linger on the remote user (set up once).
-    """
-    wrap = nsys_command(TUB_PROF_OUT, TUB_IB_DEV,
-                        nsys="/usr/local/bin/nsys") if profile else ""
-    wrap = os.environ.get("FLEET_TUB_LAUNCH_PREFIX", wrap)
-    ssh(f"rm -f {TUB_LOG}; "
-        f"systemd-run --user --collect --unit {TUB_UNIT} "
-        f"-p WorkingDirectory={TUB_REPO} "
-        f"-p StandardOutput=append:{TUB_LOG} "
-        f"-p StandardError=append:{TUB_LOG} "
-        f"{wrap} {TUB_PY} -u tools/dataflowd.py start "
-        f"--socket {TUB_SOCK} --slab-gib {slab_gib} "
-        f"--peer-name tubingen --peer-listen {TUB_PEER_ADDR}",
-        timeout=60.0)
-
-
-def kill_remote_daemon() -> None:
-    # systemctl stop = clean SIGTERM to the unit's cgroup; nsys (when
-    # profiling) finalizes its report before exiting. NO pkill/fuser:
-    # /proc-scanning pattern kills stall for minutes on this box, and
-    # the daemon may not match a stable pattern under a wrapper anyway.
-    ssh(f"systemctl --user stop {TUB_UNIT} 2>/dev/null; "
-        f"systemctl --user reset-failed {TUB_UNIT} 2>/dev/null; "
-        f"rm -f {TUB_SOCK}; true", timeout=180.0)
+from .topology import load_topology
 
 
 def lower_with_group(cfg, dp_group: str, recompute_levels=None):
@@ -188,99 +128,161 @@ def put_rank_rounds(rank: RankState, stream, step: int,
     return valid
 
 
-def run_fleet_dp(global_cfg, recipe: Recipe, stream, steps: int, *,
-                 rank_rounds=(6, 2), budgets=(14.0, 12.0),
-                 slabs=(60.0, 30.0), seed: int = 11, log=print,
-                 log_every: int = 10, profile: dict | None = None
-                 ) -> RunResult:
-    """Train ``global_cfg``'s step batch across the pair; returns the
-    conductor's RunResult (losses = GLOBAL step means)."""
-    r_global = global_cfg.grad_accum_rounds
-    assert sum(rank_rounds) == r_global, (rank_rounds, r_global)
-    cfgs = [replace(global_cfg, grad_accum_rounds=k) for k in rank_rounds]
-    round_map = (tuple(range(rank_rounds[0])),
-                 tuple(range(rank_rounds[0], r_global)))
-
-    # ---- ATTACH-ONLY mode: daemons pre-launched externally; the
-    # conductor performs ZERO ssh/process management (profiling rigs,
-    # and the workaround for the ssh-in-conductor stall — findings)
-    attach_tub = os.environ.get("FLEET_ATTACH_TUB_SOCK")
-    attach_chi = os.environ.get("FLEET_ATTACH_CHI_SOCK")
-    if attach_tub and attach_chi:
-        tub_client = EngineClient(attach_tub, client_name="fleet-tub")
-        chi_client = EngineClient(attach_chi, client_name="fleet-chi")
-        try:
-            return fleet_loop(chi_client, tub_client, cfgs, round_map,
-                              recipe, stream, steps, budgets=budgets,
-                              seed=seed, log=log, log_every=log_every,
-                              tokens_step=tokens_per_step(global_cfg),
-                              r_global=r_global, profile=profile)
-        finally:
-            for c in (tub_client, chi_client):
-                try:
-                    c.close()
-                except Exception:
-                    pass
-
-    # ---- tubingen daemon + ssh socket forward -------------------------
-    kill_remote_daemon()
-    launch_remote_daemon(slabs[1], profile=profile is not None)
-    local_fwd = f"/tmp/dataflow-fleet-tub-{os.getpid()}.sock"
-    fwd = subprocess.Popen(
-        ["ssh", "-N", "-o", "BatchMode=yes",
-         "-o", "StreamLocalBindUnlink=yes",
-         "-L", f"{local_fwd}:{TUB_SOCK}", TUB],
-        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL)
-    deadline = time.time() + 120
-    tub_client = None
+def wait_client(sock: str, *, name: str, timeout_s: float,
+                fail_hint: str) -> EngineClient:
+    deadline = time.time() + timeout_s
     while time.time() < deadline:
         try:
-            probe = EngineClient(local_fwd, client_name="probe")
+            probe = EngineClient(sock, client_name="probe")
             probe.health()
             probe.close()
-            tub_client = EngineClient(local_fwd, client_name="fleet-tub")
-            break
+            return EngineClient(sock, client_name=name)
         except Exception:
             time.sleep(1.0)
-    if tub_client is None:
-        fwd.terminate()
-        raise RuntimeError("tubingen daemon unreachable; see "
-                           "tubingen:/tmp/dataflowd-fleet.log")
-    log(f"[fleet] tubingen up (slab {slabs[1]} GiB, forward {local_fwd})")
+    raise RuntimeError(fail_hint)
 
-    with daemon_client(slab_gib=slabs[0], log=log,
-                       peer_name="chicago",
-                       peer_listen=CHI_PEER_ADDR) as chi_client:
-        try:
-            return fleet_loop(chi_client, tub_client, cfgs, round_map,
-                              recipe, stream, steps, budgets=budgets,
-                              seed=seed, log=log, log_every=log_every,
-                              tokens_step=tokens_per_step(global_cfg),
-                              r_global=r_global, profile=profile)
-        finally:
+
+class HostRig:
+    """One group member's runtime state under the conductor."""
+
+    def __init__(self, host, slab_gib: float, budget_gib: float):
+        self.host = host
+        self.slab_gib = slab_gib
+        self.budget_gib = budget_gib
+        self.launched = False
+        self.forward = None
+        self.sock: str | None = None
+        self.client: EngineClient | None = None
+        self.prof_out: str | None = None
+
+
+def run_fleet_dp(global_cfg, recipe: Recipe, stream, steps: int, *,
+                 rank_rounds=(6, 2), budgets=None, slabs=None,
+                 topology=None, group: str = "dp", attach=None,
+                 seed: int = 11, log=print, log_every: int = 10,
+                 profile: dict | None = None,
+                 prof_dir: str = "results/pretrain/logs") -> RunResult:
+    """Train ``global_cfg``'s step batch across the group's hosts;
+    returns the conductor's RunResult (losses = GLOBAL step means).
+
+    ``attach`` maps host names to pre-launched daemon sockets (their
+    lifecycle stays with the caller); every other member is launched
+    here — profiled runs wrap each launched daemon in the canonical
+    nsys command and fetch remote reports into ``prof_dir``."""
+    topo = topology if topology is not None else load_topology()
+    gspec = topo.group(group)
+    hosts = topo.group_hosts(group)
+    world = len(hosts)
+    if world != 2:
+        raise ValueError(f"the hostmem fleet driver is world-2 for "
+                         f"now; group {group!r} has {world} members")
+    if len(rank_rounds) != world:
+        raise ValueError(f"rank_rounds {rank_rounds} vs {world} members")
+    r_global = global_cfg.grad_accum_rounds
+    if sum(rank_rounds) != r_global:
+        raise ValueError(f"rank_rounds {rank_rounds} must sum to the "
+                         f"global grad_accum_rounds {r_global}")
+    budgets = tuple(budgets) if budgets else tuple(h.budget_gib
+                                                   for h in hosts)
+    slabs = tuple(slabs) if slabs else tuple(h.slab_gib for h in hosts)
+    cfgs = [replace(global_cfg, grad_accum_rounds=k) for k in rank_rounds]
+    round_map = []
+    start = 0
+    for k in rank_rounds:
+        round_map.append(tuple(range(start, start + k)))
+        start += k
+
+    attach = dict(attach or {})
+    rigs = [HostRig(h, slabs[i], budgets[i])
+            for i, h in enumerate(hosts)]
+    try:
+        for rig in rigs:
+            host = rig.host
+            if host.name in attach:
+                rig.sock = attach[host.name]
+            else:
+                wrap = ""
+                if profile is not None:
+                    if host.is_local():
+                        rig.prof_out = str(Path(prof_dir).resolve()
+                                           / f"dp_prof_{host.name}")
+                    else:
+                        rig.prof_out = f"/tmp/dp_prof_{host.name}"
+                    wrap = nsys_command(host, rig.prof_out)
+                kill_daemon(host)
+                paths = launch_daemon(host, slab_gib=rig.slab_gib,
+                                      wrap=wrap)
+                rig.launched = True
+                if host.is_local():
+                    rig.sock = paths["sock"]
+                else:
+                    local_sock = (f"/tmp/dataflow-fleet-{host.name}-"
+                                  f"{os.getpid()}.sock")
+                    rig.forward = uds_forward(host, paths["sock"],
+                                              local_sock)
+                    rig.sock = local_sock
+            log_path = daemon_paths(host)["log"]
+            rig.client = wait_client(
+                rig.sock, name=f"fleet-{host.name}", timeout_s=180,
+                fail_hint=(f"{host.name} daemon unreachable; see "
+                           f"{log_path} on that host"))
+            log(f"[fleet] {host.name} up (slab {rig.slab_gib} GiB)")
+
+        ranks = [RankState(rig.host.name, rig.client, cfgs[i],
+                           round_map[i]) for i, rig in enumerate(rigs)]
+        coordinator = ranks[0].client
+        for other in rigs[1:]:
+            coordinator.peer_connect(other.host.name,
+                                     other.host.peer_listen)
+        return fleet_loop(ranks, gspec, recipe, stream, steps,
+                          budgets=budgets, seed=seed, log=log,
+                          log_every=log_every,
+                          tokens_step=tokens_per_step(global_cfg),
+                          r_global=r_global, profile=profile)
+    finally:
+        for rig in rigs:
+            if rig.client is None:
+                continue
             try:
-                tub_client.close()
+                if rig.launched:
+                    rig.client.shutdown()   # daemon exits; a profiler
+                else:                       # wrapper then finalizes
+                    rig.client.close()
             except Exception:
                 pass
-            fwd.terminate()
-            kill_remote_daemon()
+        for rig in rigs:
+            if not rig.launched:
+                continue
+            try:
+                wait_daemon_exit(rig.host, timeout_s=180.0)
+                if rig.prof_out is not None and not rig.host.is_local():
+                    dest = str(Path(prof_dir)
+                               / f"dp_prof_{rig.host.name}.nsys-rep")
+                    if fetch_file(rig.host, rig.prof_out + ".nsys-rep",
+                                  dest):
+                        log(f"[fleet] fetched {dest}")
+                    else:
+                        log(f"[fleet] WARNING: no report fetched from "
+                            f"{rig.host.name} ({rig.prof_out}.nsys-rep)")
+                kill_daemon(rig.host)
+            except Exception as e:
+                log(f"[fleet] teardown {rig.host.name}: {e}")
+            if rig.forward is not None:
+                rig.forward.terminate()
 
 
-def fleet_loop(chi_client, tub_client, cfgs, round_map, recipe, stream,
-               steps, *, budgets, seed, log, log_every, tokens_step,
-               r_global, profile: dict | None = None) -> RunResult:
-    ranks = [RankState("chicago", chi_client, cfgs[0], round_map[0]),
-             RankState("tubingen", tub_client, cfgs[1], round_map[1])]
+def fleet_loop(ranks, gspec, recipe, stream, steps, *, budgets, seed,
+               log, log_every, tokens_step, r_global,
+               profile: dict | None = None) -> RunResult:
+    world = len(ranks)
 
-    # ---- peer link + per-rank register + warm-up ----------------------
-    chi_client.peer_connect("tubingen", TUB_PEER_ADDR)
+    # ---- per-rank register + warm-up ----------------------------------
     for i, rank in enumerate(ranks):
         planned = plan_program(
-            lower_with_group(rank.cfg, "dp"),
+            lower_with_group(rank.cfg, gspec.name),
             fast_memory_capacity=int(budgets[i] * 1024 ** 3),
             recompute=True,
-            build_variant=GroupedBuildVariant(rank.cfg, "dp"))
+            build_variant=GroupedBuildVariant(rank.cfg, gspec.name))
         prog_dict = program_to_dict(planned.program)
         resolver = {"family": "llama3", "cfg": cfg_dict(rank.cfg),
                     "hyper": recipe.hyper_spec()}
@@ -310,13 +312,16 @@ def fleet_loop(chi_client, tub_client, cfgs, round_map, recipe, stream,
         put_rank_rounds(rank, stream, 0, r_global)
         log(f"[fleet] {rank.name}: warm-up done, re-seeded")
 
-    chi_client._call("create_peer_group",
-                     {"name": "dp", "members": ["chicago", "tubingen"],
-                      "backend": "hostmem"})
-    log("[fleet] dp group up (hostmem, world 2)")
+    ranks[0].client._call("create_peer_group",
+                          {"name": gspec.name,
+                           "members": list(gspec.members),
+                           "backend": gspec.backend})
+    log(f"[fleet] {gspec.name} group up ({gspec.backend}, "
+        f"world {world})")
 
     res = RunResult(backend="fleet-dp", budget_gib=budgets[0],
-                    meta={"seed": seed, "world": 2,
+                    meta={"seed": seed, "world": world,
+                          "hosts": [r.name for r in ranks],
                           "rank_rounds": [len(r.rounds) for r in ranks],
                           "prog_ids": [r.prog_id for r in ranks],
                           "budgets_gib": list(budgets),

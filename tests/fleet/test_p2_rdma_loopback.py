@@ -12,12 +12,17 @@ if not torch.cuda.is_available():
     pytest.skip("no CUDA device", allow_module_level=True)
 pytest.importorskip("pyverbs")
 
+from dataflow.pretrain.topology import load_topology_or_none  # noqa: E402
 from dataflow.service import EngineClient, EngineConfig, Server  # noqa: E402
 from dataflow.service.peer.rdma import roce_v2_ipv4_gid  # noqa: E402
 
 pytestmark = pytest.mark.fleet
 
-DEV = "mlx5_1"
+TOPO = load_topology_or_none()
+DEV = TOPO.local().ib_dev if TOPO is not None else None
+if DEV is None:
+    pytest.skip("rdma loopback needs a topology.toml with ib_dev on "
+                "the local host", allow_module_level=True)
 if roce_v2_ipv4_gid(DEV) is None:
     pytest.skip(f"no RoCE v2 GID on {DEV}", allow_module_level=True)
 

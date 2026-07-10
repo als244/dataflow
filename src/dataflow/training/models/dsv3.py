@@ -6,7 +6,7 @@ with sigmoid_noaux_tc routing (group-limited biased selection, raw-
 sigmoid renormalized weights x routed_scaling, NON-GRADIENT balance bias
 with the per-step sign rule) and the UNGATED shared expert. Sequence-
 wise complementary aux at alpha=1e-4. HF deepseek-ai/DeepSeek-V3 config;
-no MTP (main model only — Shein call); their eps 1e-6 vs our global
+no MTP (main model only — a locked scope decision); their eps 1e-6 vs our global
 1e-5 kept, standing note.
 
 Presets vs host RAM (this box ~175 GiB usable):

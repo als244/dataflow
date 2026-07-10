@@ -103,7 +103,7 @@ class _PcieContender:
     idle-bus profiling -> tasks +5..7% slower in-run; SATURATED bidi
     contention (this mode) -> tasks 3..6% FASTER in-run, i.e. the bound
     from the other side (the real bus duty cycle was ~34%/21%, not 100%).
-    DEFAULT ON (Shein, 2026-07-06): between the two available biases,
+    DEFAULT ON (locked 2026-07-06): between the two available biases,
     saturated contention is the better default — the error is smaller
     (+3..6% vs -5..-7% per task) and CONSERVATIVE (sim under-promises,
     real over-delivers), and the planner internalizes contention, which

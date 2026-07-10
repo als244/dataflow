@@ -428,7 +428,7 @@ def test_dsv32_multistep_matches_golden_and_loss_decreases():
 
 
 def test_dsv32_frozen_indexer_ablation():
-    """train_indexer=False (Shein ablation knob): model-step still matches
+    """train_indexer=False (the ablation knob): model-step still matches
     golden AND the five indexer fields are BIT-FROZEN across the step
     (no gradients, no AdamW, not even weight decay)."""
     import dataclasses

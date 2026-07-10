@@ -67,7 +67,7 @@ CONFIGS = {
     "qwen35-9b-s4k-bs8ga2": ShapedQwen35Config.qwen35_9b(batch=8, grad_accum_rounds=2),
     "qwen35-9b-s4k-bs16ga1": ShapedQwen35Config.qwen35_9b(batch=16, grad_accum_rounds=1),
     # seq-1024 family: 64 sequences/step (65,536 tokens/step) chunked four ways
-    # frontier edge probes (Shein): single-sequence rounds / single-round batch
+    # frontier edge probes (locked set): single-sequence rounds / single-round batch
     "8b-s1k-bs1ga64": ShapedLlamaConfig.llama3_8b(seq_len=1024, batch=1, grad_accum_rounds=64),
     "8b-s1k-bs64ga1": ShapedLlamaConfig.llama3_8b(seq_len=1024, batch=64, grad_accum_rounds=1),
     "8b-s1k-bs2ga32": ShapedLlamaConfig.llama3_8b(seq_len=1024, batch=2, grad_accum_rounds=32),
@@ -612,7 +612,7 @@ def main() -> None:
     _values_dirty = [False]   # True once any train() has stepped the weights
 
     for gib in budget_list:
-        # QUOTING CONVENTION (Shein, 2026-07-03): sweeps are quoted in DEVICE
+        # QUOTING CONVENTION (locked 2026-07-03): sweeps are quoted in DEVICE
         # budget — "28 GiB" means verified device usage <= 28 GiB. In
         # --device-gib mode budget_gib is therefore the ENVELOPE; the derived
         # ledger number stays in planned_budget_gib. --budgets (ledger) rows

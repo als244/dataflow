@@ -2,7 +2,7 @@
 reference and engine backends read, so the only variable between them is
 the execution engine.
 
-Locked (Shein 2026-07-09): AdamW β(0.9, 0.95), weight decay 0.1 applied
+Locked (2026-07-09): AdamW β(0.9, 0.95), weight decay 0.1 applied
 UNIFORMLY (the engine's ``adamw`` policy decays every field including norm
 gains; the reference mirrors that for exact parity — not the textbook
 norm-exclusion), NO gradient clipping, cosine LR with linear warmup. Peak

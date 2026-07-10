@@ -1,7 +1,7 @@
 """Webapp export gate: exported programs are accepted by the actual webapp backend.
 
 Runs the FastAPI app in-process (TestClient) — the same code path as
-https://dataflowsim.sunshein.net/ — and posts a schema-source simulation.
+the deployed webapp — and posts a schema-source simulation.
 """
 from dataclasses import asdict
 

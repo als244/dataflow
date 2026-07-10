@@ -1,0 +1,44 @@
+# Fleet topology — hosts, network addresses, memory sizes, groups.
+#
+# Copy to topology.toml at the repo root (gitignored, per-setup) and
+# edit for your machines. Every machine-specific fact the fleet
+# tooling needs lives in that file; the codebase names no hosts,
+# addresses, or filesystem paths.
+
+# Host the conductor (tools/pretrain_dp.py, fleet tests) runs on.
+# Must name one of the [hosts.*] entries, and that entry must be
+# local (no `ssh` key).
+conductor = "alpha"
+
+[hosts.alpha]
+# No `ssh` key: local host. `python` and `repo` default to the
+# running interpreter and this checkout.
+# Data-plane bind (ip:port). Use the fast link between the boxes.
+peer_listen = "10.0.0.1:29700"
+# RDMA HCA (rdma-host transport + nsys --ib-net-info-devices).
+# Omit if the host has none.
+ib_dev = "mlx5_0"
+# Pinned host slab for the daemon / device fast-memory budget the
+# planner lowers against.
+slab_gib = 60.0
+budget_gib = 14.0
+
+[hosts.beta]
+# ssh destination for the control plane (an ~/.ssh/config alias or
+# user@addr). Prefer a LAN/direct route, never a WAN hairpin.
+ssh = "beta-lan"
+# Remote hosts must give absolute python + repo-checkout paths.
+python = "/opt/conda/envs/dataflow/bin/python"
+repo = "/home/user/dataflow"
+# Optional nsys binary for profiled runs (default "nsys").
+# nsys = "/usr/local/bin/nsys"
+peer_listen = "10.0.0.2:29700"
+ib_dev = "mlx5_0"
+slab_gib = 30.0
+budget_gib = 12.0
+
+[groups.dp]
+# Rank = position in this list; the first member is the group
+# coordinator (its daemon holds the control star).
+members = ["alpha", "beta"]
+backend = "hostmem"

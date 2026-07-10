@@ -134,7 +134,7 @@ def train(
     session = Session(backend=backend)
     gen = torch.Generator().manual_seed(seed + 1)
 
-    # Bench data semantics (Shein): random token sequences with SHIFTED
+    # Bench data semantics (locked): random token sequences with SHIFTED
     # targets (next-token, mimicking pretraining), unique across the
     # batch and ga rounds WITHIN a step, and REPEATED across steps — so
     # a healthy run shows a real learning signal: step-0 loss ~ ln(V)

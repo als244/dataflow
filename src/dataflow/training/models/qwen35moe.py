@@ -9,7 +9,7 @@ params at the faithful 35B-A3B shape.
 HOST-RAM REALITY: the full 35B needs
 ~277 GB pinned W+dW+O — this box (188 GB) cannot run it; the config exists
 for lowering/planning validation + tiny-scale correctness. Perf rows use
-``qwen35moe_20l`` (Shein-confirmed): 20 layers (15 lin + 5 full), E=256,
+``qwen35moe_20l`` (confirmed preset): 20 layers (15 lin + 5 full), E=256,
 everything else stock — ~17.8B params, ~143 GB pinned, recompute-dominant
 plans expected, and it preserves the mechanisms under stress (E=256
 router, ~1.7 GB W_i / ~3.4 GB O_i objects, hybrid 3:1, shared expert,

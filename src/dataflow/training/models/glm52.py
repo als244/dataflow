@@ -6,8 +6,8 @@ indexer; "shared" layers carry NO indexer weights and reuse the nearest
 preceding full layer's top-k selection. The pattern is greedy-searched
 upstream, so it is an explicit per-layer tuple here, never a formula.
 
-The selection crosses layer boundaries as a FIRST-CLASS OBJECT (Shein's
-"explicit obj" call):
+The selection crosses layer boundaries as a FIRST-CLASS OBJECT (the
+locked "explicit obj" decision):
 
 - ``S_{s}_{r}_{g}`` (t, k) int32 — emitted by the leader's fwd (extra
   output), consumed by follower fwds, ALL member recomputes (the leader

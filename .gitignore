@@ -17,3 +17,6 @@ refs/
 docs/notes/
 results/
 datasets/
+
+# per-setup fleet topology (see topology.example.toml)
+topology.toml

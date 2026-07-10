@@ -627,7 +627,7 @@ class Dsv32Dims(Dsv3Dims):
     index_head_dim: int = 64
     index_topk: int = 1024
     sparse_mode: bool = True
-    # ablation knob (Shein): False = FREEZE the indexer — no KL loss, no
+    # ablation knob: False = FREEZE the indexer — no KL loss, no
     # indexer gradients, optimizer skips its five fields entirely (not
     # even weight decay). Default True = paper-faithful sparse training
     # (the KL is the indexer's ONLY training signal).

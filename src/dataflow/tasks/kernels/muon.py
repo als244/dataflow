@@ -1,6 +1,6 @@
 """muon_step: Nesterov momentum + quintic Newton-Schulz orthogonalized
 update, ported from flextrain (refs/flextrain/flextrain/ops/_kernels/
-muon.py — the reference Shein pointed at) and adapted to the registry
+muon.py — the designated reference) and adapted to the registry
 ABI + batched rank-3 expert stacks.
 
 Faithful semantics kept from the port:

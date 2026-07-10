@@ -438,7 +438,7 @@ class Store:
     # ---- transient extents (execution-context pool draws) ----
     # Named in the PROGRAM (dW_*, A_* ...), uncataloged here: these are
     # run-scoped bytes carved from the same slab as residents — ONE
-    # pinned budget (Shein: "shouldn't this be part of the slab?").
+    # pinned budget (design review: "shouldn't this be part of the slab?").
     def alloc_transient(self, owner: str, size_bytes: int):
         with self.catalog_lock:
             ext = self.allocator.alloc(size_bytes)   # CAPACITY on exhaust

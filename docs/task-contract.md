@@ -130,7 +130,7 @@ rising order of engine change:
   `moe_local_rows` is the seam where this policy already lives; EP
   capacity policies may force it anyway.
 - **A. Host-visible outputs (the principled dynamic option).** Two design
-  corrections from Shein shaped this (2026-07-06), replacing an earlier
+  design-review corrections shaped this (2026-07-06), replacing an earlier
   transfer-directive sketch: (1) the first-order mechanism separating a
   benign readback from aten's pathology is **pinned vs. pageable** — a
   kernel-write or memcpy into pinned host memory never blocks the calling
@@ -175,7 +175,7 @@ rising order of engine change:
 
 ### The rejected alternative, argued honestly: a sanctioned early block
 
-Shein's challenge (2026-07-06): flextrain's dispatch thread just
+A design-review challenge (2026-07-06): flextrain's dispatch thread just
 `.synchronize()`s after the sort and reads pinned counts — why not allow
 that? The concession first: **it would work today, at ~1%/step.** Strict
 pacing is precisely what makes a *deliberate early* sync cheap — the

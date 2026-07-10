@@ -151,7 +151,7 @@ Outputs per (config, budget): a row in
 fidelity, recompute chosen, `envelope_ok`), plus `{stem}.annotated.json`
 (the executed plan — replayable via `--annotated`, capacities stamped in
 `Program.metadata`) and `{stem}.webapp.json` (upload at the
-[webapp](https://dataflowsim.sunshein.net/) for the simulator's expected
+webapp simulator (webapp/) for the simulator's expected
 timeline), and the full console log under `logs/`.
 
 ## What a row means (the legality contract)

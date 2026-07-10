@@ -1,6 +1,6 @@
 """Service-owned host memory: pinned slab, capacity heuristics, views.
 
-Self-contained on purpose (Shein): the service package does not import
+Self-contained on purpose: the service package does not import
 the runtime's device layer. The two facts it needs are small and
 copied here:
 - cudaHostAlloc is page-granular and pins at ~5 GiB/s on this class of

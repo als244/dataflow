@@ -1,5 +1,5 @@
 """THE sanctioned seam between the self-contained service core and the
-wider dataflow package (Shein: service/ stays self-contained; family
+wider dataflow package (rule: service/ stays self-contained; family
 fills and — in S1.2 — engine execution inherently ARE the wider
 package, so they cross here and only here). Nothing else under
 service/ imports dataflow.* modules.
@@ -53,7 +53,7 @@ _STREAMS: dict = {}           # store-id -> ONE stream trio shared by
                               # STREAM-AWARE — per-program streams made
                               # each program's cached scratch dead to the
                               # next (+4-7 GiB reserved PER PROGRAM,
-                              # Shein's 29-GiB dev-20 observation).
+                              # the observed 29-GiB dev case).
                               # Streams are program-agnostic WITHIN a
                               # daemon (one run at a time per daemon);
                               # scoping by store exists for in-process
@@ -134,7 +134,7 @@ def close_session(prog_id: str, store=None) -> bool:
     s = _SESSIONS.pop(session_key(prog_id, store), None)
     if s is not None:
         s.close()
-        # NO empty_cache here (Shein: many short programs — the cost is
+        # NO empty_cache here (many short programs — the cost is
         # too high, and same-shape programs reuse the retained cache).
         # Only the peak COUNTER resets, so each program's device-peak
         # report is row-scoped; retained cache still counts as reserved

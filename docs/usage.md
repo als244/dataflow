@@ -62,7 +62,7 @@ What the pieces guarantee:
   possible headroom overflows), later steps must report
   `step_slab_overflows == 0`.
 
-Visualize any program in the webapp (https://dataflowsim.sunshein.net/):
+Visualize any program in the webapp simulator (webapp/):
 `dataflow.core.convert.to_webapp_program(program)` produces the upload JSON
 (cost subops included, so hardware sliders re-resolve runtimes). A REAL run
 uploads too: `tools/gap_analysis.py` (or a replay that persists its trace)

@@ -1,7 +1,7 @@
 """Llama3-shaped model presets for the pretraining study + the locked
 training configuration.
 
-The training config is fixed (Shein 2026-07-09): sequences of length 2048
+The training config is fixed (locked 2026-07-09): sequences of length 2048
 (uniform, no ragged packing), 4 per round → 8192 tokens/round, 8 grad-accum
 rounds → 65,536 (~64K) tokens/step, gpt2 vocab padded to 50304. The scaling
 ladder reuses this exact config; only the model shape changes.

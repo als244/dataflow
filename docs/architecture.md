@@ -6,7 +6,7 @@ subpackage's README.
 ## What this project is
 
 A CPU–GPU dataflow runtime realizing the model demonstrated by
-[dataflow_sim](https://dataflowsim.sunshein.net/): programs are linear chains
+the webapp simulator (webapp/): programs are linear chains
 of tasks over named objects; each task declares input / mutated / output
 objects; after a task completes, annotated directives fire — **release**
 (free fast memory), **offload** (async copy fast→backing, then free),

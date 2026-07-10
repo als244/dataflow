@@ -2,7 +2,7 @@
 
 Two tools turn a real training run into inspectable artifacts: a
 sim-vs-real gap decomposition on disk, and a single uploadable file
-the [webapp simulator](https://dataflowsim.sunshein.net/) renders as a
+the webapp simulator (webapp/) renders as a
 TRUE event timeline diffed against the simulator's prediction.
 
 (Naming note: exporting *programs* needs no tool — every bench cell

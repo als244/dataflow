@@ -1,7 +1,8 @@
-"""Fleet DP pretraining: the two-box data-parallel twin of
-tools/pretrain_run.py. Trains a ladder preset across chicago+tubingen
-with weighted round distribution and compares the curve against the
-recorded single-box run.
+"""Fleet DP pretraining: the data-parallel twin of
+tools/pretrain_run.py. Trains a ladder preset across a topology
+group's hosts (topology.toml — see topology.example.toml) with
+weighted round distribution and compares the curve against a recorded
+single-box run.
 
     python tools/pretrain_dp.py train --preset l3_1b --steps 1000 \
         --rounds 6,2 --out results/pretrain/l3_1b_dp.json
@@ -21,6 +22,13 @@ from dataflow.pretrain.fineweb import make_stream
 from dataflow.pretrain.fleet import run_fleet_dp
 from dataflow.pretrain.presets import preset
 from dataflow.pretrain.recipe import Recipe
+from dataflow.pretrain.topology import load_topology
+
+
+def floats_or_none(raw: str):
+    if not raw:
+        return None
+    return tuple(float(x) for x in raw.split(","))
 
 
 def main() -> None:
@@ -29,17 +37,32 @@ def main() -> None:
     tr = sub.add_parser("train")
     tr.add_argument("--preset", default="l3_1b")
     tr.add_argument("--steps", type=int, default=1000)
+    tr.add_argument("--topology", default=None,
+                    help="topology.toml path (default: cwd, repo root)")
+    tr.add_argument("--group", default="dp",
+                    help="topology group to train across")
     tr.add_argument("--rounds", default="6,2",
-                    help="per-rank round counts (chicago,tubingen)")
-    tr.add_argument("--budgets", default="14,12")
-    tr.add_argument("--slabs", default="60,30")
+                    help="per-rank round counts, one per group member "
+                         "(rank order = member order)")
+    tr.add_argument("--budgets", default="",
+                    help="per-rank device budgets GiB "
+                         "(default: topology budget_gib)")
+    tr.add_argument("--slabs", default="",
+                    help="per-rank host slabs GiB "
+                         "(default: topology slab_gib)")
+    tr.add_argument("--attach", action="append", default=[],
+                    metavar="HOST=SOCK",
+                    help="attach to a pre-launched daemon instead of "
+                         "launching one (repeatable; lifecycle stays "
+                         "with the caller)")
     tr.add_argument("--peak-lr", type=float, default=3e-4)
     tr.add_argument("--seed", type=int, default=11)
     tr.add_argument("--out", required=True)
     tr.add_argument("--profile", action="store_true",
-                    help="bracket steps with the vendor capture API "
-                         "(pair with nsys --capture-range=cudaProfilerApi); "
-                         "training CONTINUES after the window")
+                    help="bracket steps with the vendor capture API; "
+                         "launched daemons are wrapped in the canonical "
+                         "nsys command and remote reports are fetched "
+                         "back; training CONTINUES after the window")
     tr.add_argument("--profile-start-before-step", type=int, default=1)
     tr.add_argument("--profile-stop-after-step", type=int, default=3)
     cp = sub.add_parser("compare")
@@ -53,16 +76,24 @@ def main() -> None:
                         warmup_steps=max(1, args.steps // 10),
                         total_steps=args.steps)
         rounds = tuple(int(x) for x in args.rounds.split(","))
-        budgets = tuple(float(x) for x in args.budgets.split(","))
-        slabs = tuple(float(x) for x in args.slabs.split(","))
+        attach = {}
+        for item in args.attach:
+            name, sep, sock = item.partition("=")
+            if not sep or not sock:
+                p.error(f"--attach wants HOST=SOCK, got {item!r}")
+            attach[name] = sock
         stream = make_stream(cfg.tokens)
         profile = None
         if args.profile:
             profile = {"start": args.profile_start_before_step,
                        "stop": args.profile_stop_after_step}
         res = run_fleet_dp(cfg, recipe, stream, args.steps,
-                           rank_rounds=rounds, budgets=budgets,
-                           slabs=slabs, seed=args.seed, profile=profile)
+                           rank_rounds=rounds,
+                           budgets=floats_or_none(args.budgets),
+                           slabs=floats_or_none(args.slabs),
+                           topology=load_topology(args.topology),
+                           group=args.group, attach=attach,
+                           seed=args.seed, profile=profile)
         res.save(args.out)
         print(f"saved {args.out} (final loss {res.losses[-1]:.4f}, "
               f"steady {res.steady_tok_per_s:.0f} tok/s)")
