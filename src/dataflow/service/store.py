@@ -287,6 +287,71 @@ class Store:
                 del self.objects[oid]
         return {"freed_bytes": freed, "n_objects": n, "skipped": skipped}
 
+    # ---- inbound peer transfers (peer plane): reserve -> fill -> adopt.
+    # The NM thread calls reserve/release; ADOPT runs on the dispatcher
+    # (queued commit verb). All checks + allocator ops are ATOMIC under
+    # catalog_lock because the NM is a SECOND WRITER — the unlocked
+    # pre-checks in put() are a single-dispatcher-writer luxury.
+
+    def reserve_inbound(self, dest_id: str, size_bytes: int, *,
+                        overwrite: bool = False):
+        """(extent, None) on success; (None, nack_code) on refusal.
+        The extent is the object's FINAL home (zero-copy landing); it is
+        NM-owned and catalog-invisible until adopt_inbound."""
+        with self.catalog_lock:
+            rec = self.objects.get(dest_id)
+            if rec is not None:
+                if rec.lease_refs:
+                    return None, "BUSY"
+                if not overwrite:
+                    return None, "COLLISION"
+                if rec.size_bytes != size_bytes:
+                    return None, "COLLISION"
+            try:
+                ext = self.allocator.alloc(size_bytes)
+            except ServiceError:
+                return None, "CAPACITY"
+            return ext, None
+
+    def release_inbound(self, ext: Extent) -> None:
+        with self.catalog_lock:
+            self.allocator.release(ext)
+
+    def adopt_inbound(self, dest_id: str, ext: Extent, size_bytes: int,
+                      *, meta: dict | None = None,
+                      from_peer: str | None = None) -> ObjectRecord:
+        """Dispatcher-side COMMIT: bind dest_id to the already-filled
+        extent (metadata only — no bytes move). Overwrite swaps extents
+        and releases the old one (sizes matched at reserve time)."""
+        with self.catalog_lock:
+            old = self.objects.get(dest_id)
+            if old is not None:
+                if old.lease_refs:
+                    # leased since reserve: raise BEFORE any mutation —
+                    # the dispatcher PARKS the commit and retries it
+                    # when the lease releases (reservation stays held;
+                    # the bytes are safe, the ack just waits)
+                    raise ServiceError("LEASED", dest_id)
+                self.allocator.release(old.extent)
+            rec = ObjectRecord(dest_id, size_bytes, meta or {}, ext,
+                               lineage=Lineage(dirty=True))
+            if old is not None:
+                rec.protected = old.protected
+                rec.version = old.version
+            rec.version += 1
+            rec.last_write = {"by": f"peer:{from_peer}", "t": time.time()}
+            self.objects[dest_id] = rec
+            return rec
+
+    def view_extent(self, ext: Extent, size_bytes: int) -> memoryview:
+        """Writable view over a reserved (uncataloged) extent — the
+        zero-copy landing target for the NM's payload reads."""
+        if self._bytes is not None:
+            return memoryview(self._bytes)[ext.offset:ext.offset + size_bytes]
+        from .hostmem import bytes_view
+
+        return bytes_view(self.slab.ptr + ext.offset, size_bytes)
+
     # ---- read-leases (S1.3): snapshot writers hold these ----
     def acquire_leases(self, ids: list[str]) -> None:
         with self.catalog_lock:

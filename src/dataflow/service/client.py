@@ -338,6 +338,44 @@ class EngineClient:
     def load_plugin(self, spec: dict, *, wait=True):
         return self._call("load_plugin", {"spec": spec}, wait=wait)
 
+    # ---- peer plane (dataflow-peer/s2) ----
+    def peer_connect(self, name: str, control_addr: str) -> dict:
+        return self._call("peer_connect",
+                          {"name": name, "control_addr": control_addr})
+
+    def peer_disconnect(self, peer_id: str) -> dict:
+        return self._call("peer_disconnect", {"peer_id": peer_id})
+
+    def list_peers(self) -> list:
+        return self._call("list_peers", {})
+
+    def send_object(self, oid: str, peer_id: str, *, as_id=None,
+                    overwrite: bool = False) -> dict:
+        return self._call("send_object",
+                          {"oid": oid, "peer_id": peer_id, "as_id": as_id,
+                           "overwrite": overwrite})
+
+    def send_object_group(self, ogid: str, peer_id: str, **kw) -> dict:
+        return self._call("send_object_group",
+                          {"ogid": ogid, "peer_id": peer_id, **kw})
+
+    def transfer_status(self, send_id: str) -> dict:
+        return self._call("transfer_status", {"send_id": send_id})
+
+    def wait_transfer(self, send_id: str, *, timeout: float = 30.0) -> dict:
+        """Poll transfer_status until done/error (peer sends resolve on
+        the REMOTE catalog commit, not on the local ticket)."""
+        import time as _t
+
+        t0 = _t.monotonic()
+        while True:
+            row = self.transfer_status(send_id)
+            if row["state"] in ("done", "error"):
+                return row
+            if _t.monotonic() - t0 > timeout:
+                raise TimeoutError(f"transfer {send_id}: {row}")
+            _t.sleep(0.02)
+
     def run(self, prog_id: str, *, args: dict | None = None,
             rebind: dict | None = None, fetch=(), label=None,
             wait=True, timeout=None):

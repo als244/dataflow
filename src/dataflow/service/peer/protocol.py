@@ -56,7 +56,7 @@ class TransferState(str, Enum):
 
 
 def payload_checksum(data) -> int:
-    return zlib.crc32(bytes(data)) & 0xFFFFFFFF
+    return zlib.crc32(data) & 0xFFFFFFFF     # buffer protocol: no copy
 
 
 def rts(send_id: str, dest_id: str, nbytes: int, *, meta=None,

@@ -39,9 +39,11 @@ class Reservation:
     fake hands a bytearray."""
 
     dest_id: str
-    buffer: bytearray
+    buffer: object                 # memoryview (real) | bytearray (tests)
     raddr: int = 0
     rkey: int = 0
+    extent: object = None          # the store Extent (real env only)
+    landed_zero_copy: bool = False # reader recv_into'd the final extent
 
 
 class ReceiverEnv:
@@ -49,20 +51,18 @@ class ReceiverEnv:
     implementation routes reserve/release through the LOCKED allocator
     and commit through the dispatcher (metadata-only bind)."""
 
-    def object_exists(self, dest_id: str) -> bool:
+    def try_reserve(self, dest_id: str, nbytes: int, overwrite: bool):
+        """ATOMIC collision/lease/capacity check + reservation (the NM
+        is a SECOND store writer — split checks would be a TOCTOU).
+        Returns (Reservation, None) or (None, nack code str)."""
         raise NotImplementedError
 
-    def object_size(self, dest_id: str) -> int:
-        raise NotImplementedError
-
-    def object_leased(self, dest_id: str) -> bool:
-        raise NotImplementedError
-
-    def reserve(self, dest_id: str, nbytes: int) -> Reservation | None:
-        """None => CAPACITY refusal (allocator or in-flight quota)."""
-        raise NotImplementedError
-
-    def commit(self, res: Reservation, meta: dict) -> None:
+    def commit(self, res: Reservation, meta: dict, send_id: str) -> bool:
+        """True = committed synchronously (tests). False = the commit
+        was QUEUED (the real embedder routes it through the dispatcher);
+        the embedder MUST later call PeerCore.commit_done(send_id) —
+        DONE_ACK waits for catalog truth (spec: ticket resolves on
+        remote catalog commit)."""
         raise NotImplementedError
 
     def release(self, res: Reservation) -> None:
@@ -84,9 +84,10 @@ class SenderTicket:
 @dataclass
 class SenderMachine:
     ticket: SenderTicket
-    payload: bytes
+    payload: object                # bytes (tests) | memoryview (zero-copy)
     overwrite: bool
     meta: dict
+    on_finish: object = None       # callable(ticket) | None (NM hook)
     tries: int = 0
     next_rts_at: float = 0.0
     awaiting_ack_since: float | None = None
@@ -104,6 +105,7 @@ class ReceiverMachine:
     next_seq: int = 0
     received: int = 0
     last_progress: float = 0.0
+    committing: bool = False
 
 
 class PeerCore:
@@ -126,15 +128,18 @@ class PeerCore:
 
     # ------------------------------------------------ sender side
 
-    def start_send(self, dest_id: str, payload: bytes, *,
+    def start_send(self, dest_id: str, payload, *,
                    overwrite: bool = False, meta: dict | None = None,
-                   ) -> SenderTicket:
+                   on_finish=None) -> SenderTicket:
         self.seq += 1
         send_id = f"s{self.seq}"
         ticket = SenderTicket(send_id=send_id, dest_id=dest_id,
                               bytes_total=len(payload))
-        machine = SenderMachine(ticket=ticket, payload=bytes(payload),
+        if not isinstance(payload, memoryview):
+            payload = bytes(payload)       # tests; real sends hand views
+        machine = SenderMachine(ticket=ticket, payload=payload,
                                 overwrite=overwrite, meta=dict(meta or {}),
+                                on_finish=on_finish,
                                 last_progress=self.clock())
         self.senders[send_id] = machine
         queue = self.dest_queues.setdefault(dest_id, deque())
@@ -162,6 +167,8 @@ class PeerCore:
         t.state = state
         t.error = error
         self.senders.pop(t.send_id, None)
+        if machine.on_finish is not None:
+            machine.on_finish(t)
         queue = self.dest_queues.get(t.dest_id)
         if queue and queue[0] == t.send_id:
             queue.popleft()
@@ -213,25 +220,18 @@ class PeerCore:
             return                                  # duplicate mid-flight
         dest_id = msg["dest_id"]
         nbytes = int(msg["bytes"])
-        if self.env.object_leased(dest_id):
-            self.send(P.nack(send_id, NackCode.BUSY), None)
-            return
-        if self.env.object_exists(dest_id):
-            if not msg.get("overwrite"):
-                self.send(P.nack(send_id, NackCode.COLLISION), None)
-                return
-            if self.env.object_size(dest_id) != nbytes:
-                self.send(P.nack(send_id, NackCode.COLLISION), None)
-                return
-        res = self.env.reserve(dest_id, nbytes)
+        res, code = self.env.try_reserve(dest_id, nbytes,
+                                         bool(msg.get("overwrite")))
         if res is None:
-            self.send(P.nack(send_id, NackCode.CAPACITY), None)
+            self.send(P.nack(send_id, NackCode(code)), None)
             return
         if msg.get("eager"):
             res.buffer[:] = payload or b""
-            self.env.commit(res, msg.get("meta") or {})
-            self.remember_completed(send_id)
-            self.send(P.done_ack(send_id), None)
+            machine = ReceiverMachine(
+                send_id=send_id, res=res, meta=msg.get("meta") or {},
+                expect_bytes=nbytes, last_progress=self.clock())
+            self.receivers[send_id] = machine
+            self.finish_commit(machine)
             return
         self.receivers[send_id] = ReceiverMachine(
             send_id=send_id, res=res, meta=msg.get("meta") or {},
@@ -251,10 +251,16 @@ class PeerCore:
                                 f"{machine.next_seq} (ordered-stream "
                                 f"violation)")
             return
-        data = payload or b""
-        lo = machine.received
-        machine.res.buffer[lo:lo + len(data)] = data
-        machine.received += len(data)
+        landed = msg.get("landed")
+        if landed is not None:
+            # the link reader recv_into'd the final extent already
+            machine.res.landed_zero_copy = True
+            machine.received += int(landed)
+        else:
+            data = payload or b""
+            lo = machine.received
+            machine.res.buffer[lo:lo + len(data)] = data
+            machine.received += len(data)
         machine.next_seq += 1
         machine.last_progress = self.clock()
 
@@ -274,8 +280,20 @@ class PeerCore:
         if P.payload_checksum(machine.res.buffer) != msg["checksum"]:
             self.abort_receiver(machine, "checksum mismatch")
             return
-        self.env.commit(machine.res, machine.meta)
-        self.receivers.pop(send_id, None)
+        self.finish_commit(machine)
+
+    def finish_commit(self, machine: ReceiverMachine) -> None:
+        machine.committing = True
+        machine.last_progress = self.clock()
+        if self.env.commit(machine.res, machine.meta, machine.send_id):
+            self.commit_done(machine.send_id)
+
+    def commit_done(self, send_id: str) -> None:
+        """Embedder callback: the queued catalog commit landed —
+        NOW the ack goes out and the dedup ring remembers."""
+        machine = self.receivers.pop(send_id, None)
+        if machine is None:
+            return
         self.remember_completed(send_id)
         self.send(P.done_ack(send_id), None)
 
@@ -353,6 +371,8 @@ class PeerCore:
                 self.finish_sender(machine, TransferState.ERROR,
                                    "TRANSFER_ABORTED inactivity")
         for machine in list(self.receivers.values()):
+            if machine.committing:
+                continue          # queued commit may wait out a run
             if now - machine.last_progress >= self.inactivity_s:
                 self.abort_receiver(machine, "inactivity")
 

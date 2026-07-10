@@ -52,6 +52,11 @@ class EngineConfig:
     device: int = 0
     kernel_set: str | None = None
     fake: bool = False                       # CPU-only boot (tests)
+    # peer plane (dataflow-peer/s2): enabled when peer_name is set;
+    # peer_listen = "host:port" for the NM's OWN listener
+    peer_name: str | None = None
+    peer_listen: str | None = None
+    peer_chunk_bytes: int = 128 * 1024 * 1024
 
     def public(self) -> dict:
         return {
@@ -341,12 +346,14 @@ class Server:
         self.critical_handlers: dict[str, callable] = {}
         self._register_core()
         self._sock: socket.socket | None = None
-        from . import handlers_runs, handlers_snapshot, handlers_store
+        from . import (handlers_peers, handlers_runs, handlers_snapshot,
+                       handlers_store)
 
         self.store = handlers_store.boot_store(self)
         handlers_store.install(self)
         handlers_runs.install(self)
         handlers_snapshot.install(self)
+        handlers_peers.install(self)
 
     # ---- core handlers (S1.0) ----
     def _register_core(self) -> None:
@@ -472,6 +479,9 @@ class Server:
                 w.join(timeout=30)
             from . import bridge
 
+            nm = getattr(self, "nm", None)
+            if nm is not None:
+                nm.stop()          # abort transfers before the slab dies
             # sessions FIRST (their pools free transients through the
             # store), slab after — the reverse order dangles the pools
             bridge.close_all_sessions()

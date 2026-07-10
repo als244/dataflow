@@ -45,28 +45,27 @@ class FakeStoreEnv(ReceiverEnv):
     commit_calls: int = 0
     release_calls: int = 0
 
-    def object_exists(self, dest_id):
-        return dest_id in self.committed
-
-    def object_size(self, dest_id):
-        return len(self.committed[dest_id])
-
-    def object_leased(self, dest_id):
-        return dest_id in self.leased
-
-    def reserve(self, dest_id, nbytes):
-        self.reserve_calls += 1
+    def try_reserve(self, dest_id, nbytes, overwrite):
+        if dest_id in self.leased:
+            return None, "BUSY"
+        if dest_id in self.committed:
+            if not overwrite:
+                return None, "COLLISION"
+            if len(self.committed[dest_id]) != nbytes:
+                return None, "COLLISION"
         held = sum(len(r.buffer) for r in self.live)
         if held + nbytes > self.capacity:
-            return None
+            return None, "CAPACITY"
+        self.reserve_calls += 1
         res = Reservation(dest_id=dest_id, buffer=bytearray(nbytes))
         self.live.append(res)
-        return res
+        return res, None
 
-    def commit(self, res, meta):
+    def commit(self, res, meta, send_id):
         self.commit_calls += 1
         self.committed[res.dest_id] = bytes(res.buffer)
         self.live.remove(res)
+        return True
 
     def release(self, res):
         self.release_calls += 1
@@ -307,3 +306,50 @@ def test_collective_queue_fifo():
     assert order == ["allreduce:dW_0", "allreduce:counts_0",
                      "allreduce:dW_1"]
     assert q.completed == order
+
+
+# ------------------------------ async commit ---------------------------------
+
+@dataclass
+class AsyncCommitEnv(FakeStoreEnv):
+    """Commit returns False (queued through a 'dispatcher'); the test
+    plays the dispatcher and calls commit_done later."""
+
+    pending: list = field(default_factory=list)
+
+    def commit(self, res, meta, send_id):
+        self.pending.append(res)
+        return False
+
+    def finish(self, core):
+        for res in self.pending:
+            self.commit_calls += 1
+            self.committed[res.dest_id] = bytes(res.buffer)
+            self.live.remove(res)
+            core.commit_done(f"s{1}")
+        self.pending.clear()
+
+
+def test_async_commit_defers_ack_and_survives_inactivity():
+    clock = FakeClock()
+    env = AsyncCommitEnv()
+    link = MemLink()
+    a = PeerCore(FakeStoreEnv(), link.endpoint_ab, clock, chunk_bytes=64,
+                 inactivity_s=5.0)
+    b = PeerCore(env, link.endpoint_ba, clock, chunk_bytes=64,
+                 inactivity_s=5.0)
+    data = big_payload()
+    t = a.start_send("W_0", data)
+    drain(link, a, b)
+    # bytes verified, commit queued: NO ack yet, sender still COMMITTING
+    assert t.state == TransferState.COMMITTING
+    assert env.pending and env.commit_calls == 0
+    # a long run holds the dispatcher: the committing receiver must NOT
+    # be inactivity-reaped while it waits
+    clock.advance(20.0)
+    b.tick()
+    assert env.pending and not env.release_calls
+    env.finish(b)                              # the "dispatcher" lands it
+    drain(link, a, b)
+    assert t.state == TransferState.DONE
+    assert env.committed["W_0"] == data
