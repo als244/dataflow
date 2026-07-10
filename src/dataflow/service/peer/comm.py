@@ -182,15 +182,23 @@ class HostmemComm:
         qp = getattr(link, "rdma_qp", None) if link is not None else None
         if nm.rdma is not None and qp is not None:
             deadline = time.monotonic() + 15.0
-            while not qp.ready and time.monotonic() < deadline:
+            while time.monotonic() < deadline:
+                if qp.ready and link.remote_rdma_up.is_set():
+                    break
                 time.sleep(0.05)
-            if not qp.ready:
-                raise RuntimeError(
-                    f"group {group_name!r}: rdma advertised on the "
-                    f"{peer_name} link but QPs never reached RTS")
-            self.lane = "rdma"
-            self.dev_land = torch.empty(scratch_bytes,
-                                        dtype=torch.uint8, device="cuda")
+            if qp.ready and link.remote_rdma_up.is_set():
+                self.lane = "rdma"
+                self.dev_land = torch.empty(scratch_bytes,
+                                            dtype=torch.uint8,
+                                            device="cuda")
+            else:
+                # advertised but down (probe demotion / bring-up
+                # failure): SYMMETRIC by construction — the peer sees
+                # the same not-ready state — so both sides take the
+                # socket lane. Loud, never fatal.
+                nm.state.emit("group_lane_fallback", name=group_name,
+                              peer_id=peer_name, lane="socket")
+        if self.lane == "rdma":
             self.warm_device_reduce()
         # release flag: a DEDICATED cudaHostAlloc(Mapped) word — NOT a
         # torch pinned-pool tensor (pool blocks are not reliably

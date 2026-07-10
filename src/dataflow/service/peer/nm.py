@@ -104,6 +104,7 @@ class PeerLink:
         self.bw_ack = threading.Event()
         self.bw_rdy = threading.Event()
         self.bw_rdy_msg: dict | None = None
+        self.remote_rdma_up = threading.Event()
 
     def send_frame(self, msg, payload=None):
         try:
@@ -502,12 +503,21 @@ class NetworkManager:
                     qp.connect(msg)
                     with self.lock:
                         link.core.rdma_writer = RdmaWriterHook(self, link)
+                    # tell the peer OUR side reached RTS — one-sided
+                    # writes are only safe once BOTH ends are up, and
+                    # the peer cannot see our QP state (a probe write
+                    # racing the responder's RTR blows the RC retry
+                    # window and errors the QP — findings)
+                    link.send_frame({"kind": "RDMA_UP"})
                     self.state.emit("peer_rdma_up", peer_id=link.peer_id)
                     if link.dialer:
                         threading.Thread(
                             target=BwProbeRdma(self, link),
                             name=f"nm-bwprobe-{link.peer_id}",
                             daemon=True).start()
+                continue
+            if kind == "RDMA_UP":
+                link.remote_rdma_up.set()
                 continue
             if kind == "GROUP_JOIN":
                 from .groups import GroupRecord
@@ -577,7 +587,14 @@ class NetworkManager:
                 if link.bwprobe_ext is not None:
                     self.store.release_scratch(link.bwprobe_ext)
                     link.bwprobe_ext = None
-                self.record_bw(link, "rdma", float(msg["gbps"]))
+                if msg.get("error"):
+                    if link.rdma_qp is not None:
+                        link.rdma_qp.ready = False
+                    self.state.emit("peer_bw_error",
+                                    peer_id=link.peer_id, plane="rdma",
+                                    why=f"peer probe: {msg['error']}")
+                else:
+                    self.record_bw(link, "rdma", float(msg["gbps"]))
                 continue
             if kind == "COLL":
                 comm = self.comm_of(msg["group"])
@@ -774,6 +791,8 @@ class BwProbeRdma:
         n = mib << 20
         src = None
         try:
+            if not link.remote_rdma_up.wait(15.0):
+                raise RuntimeError("peer never announced RDMA_UP")
             link.bw_rdy.clear()
             link.send_frame({"kind": "BWPROBE_RDMA_REQ", "bytes": n})
             if not link.bw_rdy.wait(15.0):
@@ -792,10 +811,13 @@ class BwProbeRdma:
                              "gbps": round(gbps, 2)})
         except Exception as ex:
             # a failed probe write can leave the QP in ERROR (later
-            # WRs flush with wc status 5): demote the lane so comms
-            # fall back to socket instead of building on a dead QP
+            # WRs flush with wc status 5): demote the lane — on BOTH
+            # sides (an asymmetric demotion recreates the cross-lane
+            # deadlock) — and fall back to socket
             if link.rdma_qp is not None:
                 link.rdma_qp.ready = False
+            link.send_frame({"kind": "BWPROBE_RDMA_DONE",
+                             "error": repr(ex)})
             nm.state.emit("peer_bw_error", peer_id=link.peer_id,
                           plane="rdma", why=repr(ex))
         finally:
