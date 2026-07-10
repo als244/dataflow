@@ -18,9 +18,12 @@ discipline); pass out= only when the destination is a ctx VIEW
       dw[e] (+)= x_e.T @ dy_e   (out-of-place result, bf16-rounded, then
       copy_/add_ — the same rounding convention as the dense ``acc()``)
 
-Rows at/after offsets[-1] are zero-filled in fwd/dgrad outputs and ignored
-by wgrad (in our use offsets[-1] == M always). Empty segments are legal:
-their dw slice is ZERO-filled in create mode (pinned by ladder test).
+``offsets[-1] == M`` is a CONTRACT, not a convention: rows at/after
+offsets[-1] are impl-defined (audit probe: eager zero-fills them, triton
+leaves the buffer's prior bytes, aten computes garbage) — no caller may
+pass a short offsets vector against a taller buffer. Empty segments are
+legal: their dw slice is ZERO-filled in create mode (pinned by ladder
+test).
 
 Default implementation is ``triton`` (ours): device-side offsets end to
 end — a tiny async prep computes per-expert TILE prefix sums on device,

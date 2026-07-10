@@ -746,6 +746,10 @@ if triton is not None:
         """Head-summed masked attention probs (t-local (L,L) fp32 per seq)
         — the indexer KL target's expensive half, at flash-tile speeds."""
         BM, BN = 64, 64
+        # the WHOLE buffer, not per-seq slices: with multi-seq bounds the
+        # cross-sequence blocks are never stored by any launch, and a
+        # reused buffer would hand the consumer another task's bytes
+        p_out.zero_()
         for si, (lo, hi) in enumerate(seq_bounds):
             length = hi - lo
             words = (length + 63) // 64
@@ -756,7 +760,6 @@ if triton is not None:
                                    device=q.device)
                 _pack_local_bits(idx[lo:hi], lo, length, bits)
             p_slice = p_out[lo:hi, lo:hi] if p_out.shape[0] != length else p_out
-            p_slice.zero_()
             grid = ((length + BM - 1) // BM, (length + BN - 1) // BN)
             _probs_sum_kernel[grid](
                 q[lo:hi], kf[lo:hi], bits, lse[:, lo:hi], p_slice,
@@ -780,6 +783,7 @@ def _eager_probs_sum(kctx, q, kf, idx, lse, p_out, *,
     scale = head_dim ** -0.5
     q3 = q.view(t, n_heads, head_dim)
     k3 = kf.view(t, n_heads, head_dim)
+    p_out.zero_()          # cross-seq blocks are no launch's store target
     for lo, hi in seq_bounds:
         length = hi - lo
         p_slice = p_out[lo:hi, lo:hi] if p_out.shape[0] != length else p_out
