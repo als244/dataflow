@@ -60,6 +60,7 @@ class EngineConfig:
     peer_rdma_device: str | None = None      # e.g. "mlx5_1" => rdma-host
     peer_coll_scratch_mib: int = 512         # per-group pinned comm scratch
     peer_bw_probe_mib: int = 128             # connect-time bw probe (0=off)
+    host_bw_probe_mib: int = 256             # boot host/PCIe bw probe (0=off)
 
     def public(self) -> dict:
         return {
@@ -353,6 +354,15 @@ class Server:
                        handlers_store)
 
         self.store = handlers_store.boot_store(self)
+        self.host_bw = {}
+        if not config.fake:
+            from .hostbw import measure_host_bw
+
+            try:
+                self.host_bw = measure_host_bw(
+                    getattr(config, "host_bw_probe_mib", 256))
+            except Exception:
+                self.host_bw = {}
         handlers_store.install(self)
         handlers_runs.install(self)
         handlers_snapshot.install(self)
@@ -378,6 +388,7 @@ class Server:
                         "fast": None,          # fast residency: S2
                     },
                     "counters": dict(st.counters),
+                    "host_bw_gbs": dict(self.host_bw),
                     "current_run": st.current_run,
                     "queue_depth": st.queue_depth,
                     "sessions": [
