@@ -343,6 +343,17 @@ class Store:
             self.objects[dest_id] = rec
             return rec
 
+    def alloc_scratch(self, nbytes: int) -> Extent:
+        """Raw slab extent OUTSIDE the object catalog (comm staging):
+        NIC-registered pinned memory with no object semantics. Pair
+        with release_scratch."""
+        with self.catalog_lock:
+            return self.allocator.alloc(nbytes)
+
+    def release_scratch(self, ext: Extent) -> None:
+        with self.catalog_lock:
+            self.allocator.release(ext)
+
     def view_extent(self, ext: Extent, size_bytes: int) -> memoryview:
         """Writable view over a reserved (uncataloged) extent — the
         zero-copy landing target for the NM's payload reads."""

@@ -1,48 +1,62 @@
-"""hostmem comm backend: device-buffer collectives staged through
-pinned host scratch, exchanged over the peer link, reduced in fp32 on
-the CPU — the shared-GPU loopback path and the no-GPUDirect two-box
-path (spec §4).
+"""hostmem comm backend: device-buffer collectives staged through the
+store's REGISTERED slab and exchanged peer-to-peer — RDMA_WRITE when
+the link has RC QPs up, socket COLL frames otherwise (spec §4). The
+shared-GPU loopback path and the no-GPUDirect two-box path.
+
+Zero host<->host copies by construction: the staging regions are slab
+extents, i.e. memory the NIC already has registered (the same MR that
+object sends use) — the D2H stage lands gradient bytes DIRECTLY in
+NIC-reachable memory, the peer's RDMA_WRITE lands DIRECTLY in ours,
+and the reduction runs in place over the two regions. The only
+device<->host copies are the unavoidable D2H/H2D (no GPUDirect on
+these parts); there is no intermediate host buffer anywhere on the
+rdma path. The socket fallback keeps the kernel's recv copy and
+nothing else.
 
 Choreography per op, ENQUEUE-ONLY from the caller's thread (the task
-launch never blocks):
+launch never blocks — async by default; sync points are the GPU
+stream's own dependencies):
 
     caller (on gh.stream):        worker thread (one per group):
-      D2H tensor -> scratch
+      D2H tensor -> out region
       record CUDA event  ------->   event.synchronize()
-      cuStreamWaitValue32(flag,      exchange scratch with the peer
-        GEQ, seq)                    (COLL frames on the link; the
-      H2D scratch -> tensor          link READER feeds the inbox, so
-      [caller returns]               both sides send-then-recv without
-                                     deadlock)
-                                     rank-ordered fp32 reduce
+      cuStreamWaitValue32(flag,      exchange with the peer:
+        GEQ, seq)                      rdma: RDY hdr (my landing addr)
+      H2D out region -> tensor              -> RDMA_WRITE out region
+      [caller returns]                      -> peer's landing region
+                                            -> DONE hdr after CQ ack
+                                       sock: COLL frame carries bytes
+                                     reduce IN PLACE (native dtype by
+                                       default; see below)
                                      flag store = seq  ==> stream
                                      resumes, H2D drains
 
-The spec sketched a hostfn posting the job; a recorded EVENT gives the
-worker the same ordering guarantee with no host-callback machinery —
-the job is queued directly at call time and the worker waits on the
-event before touching scratch. The stream-side park/release is exactly
-the pinned decision (cuStreamWaitValue32 on a mapped pinned flag,
-monotonic per-group sequence, plain host store releases; probed live
-on this hardware before this file was written).
+Reduction dtype: ``reduce_dtype="native"`` (default) sums in the
+tensor's own dtype — one in-place pass, no conversions, and at world 2
+a single add is commutative, so replicas stay BITWISE identical.
+``reduce_dtype="f32"`` keeps the legacy rank-ordered fp32 accumulate
+(rank0 + rank1 always) for exactness experiments. Configure per group
+via create_peer_group.
 
-Rank-ordered accumulation: the sum is ALWAYS rank0 + rank1 (fp32),
-never mine + theirs — every member computes bitwise-identical results.
 World 2 only in v1 (pairwise exchange-and-add; ring topologies arrive
-when a world > 2 exists to test them). Wire dtype = the tensor's own
-(bf16 in practice); accumulation fp32.
+when a world > 2 exists to test them). broadcast / reduce_scatter /
+all_gather ride socket frames in v1 — allreduce is the training hot
+path and gets the rdma lane first.
 """
 from __future__ import annotations
 
 import queue
 import threading
 
+import numpy as np
 import torch
 from cuda.bindings import driver as cudriver
 
 from ...runtime.groups import GroupHandle
 
 FLAG_WAIT_GEQ = None  # resolved at probe time
+
+TORCH_BY_REDUCE = {"f32": torch.float32}
 
 
 def stream_wait_value_supported() -> bool:
@@ -64,13 +78,27 @@ def stream_wait_value_supported() -> bool:
 
 
 class CollJob:
-    def __init__(self, seq: int, ready_event, action, payload_view,
-                 recv_view):
+    def __init__(self, seq: int, ready_event, action):
         self.seq = seq
         self.ready_event = ready_event    # D2H landed when this fires
-        self.action = action              # worker verb
-        self.payload_view = payload_view  # bytes we SEND (or None)
-        self.recv_view = recv_view        # where peer bytes LAND (or None)
+        self.action = action              # (verb, dtype, nbytes, root)
+
+
+class SlabRegion:
+    """A scratch extent inside the store slab: NIC-registered memory
+    with torch/numpy views over it and its absolute pointer."""
+
+    def __init__(self, store, nbytes: int):
+        self.store = store
+        self.nbytes = nbytes
+        self.ext = store.alloc_scratch(nbytes)
+        view = store.view_extent(self.ext, nbytes)
+        self.np = np.frombuffer(view, dtype=np.uint8)
+        self.t = torch.from_numpy(self.np)
+        self.ptr = store.slab.ptr + self.ext.offset
+
+    def release(self) -> None:
+        self.store.release_scratch(self.ext)
 
 
 class HostmemComm:
@@ -78,30 +106,38 @@ class HostmemComm:
     link (the coordinator star IS the pairwise link at world 2)."""
 
     def __init__(self, nm, group_name: str, rank: int, world: int,
-                 peer_name: str, scratch_bytes: int = 512 << 20):
+                 peer_name: str, scratch_bytes: int = 512 << 20,
+                 reduce_dtype: str = "native"):
         if world != 2:
             raise RuntimeError(
                 f"hostmem v1 is pairwise (world 2); group "
                 f"{group_name!r} has world {world} — ring topologies "
                 f"arrive with a real >2 fleet")
+        if reduce_dtype not in ("native", *TORCH_BY_REDUCE):
+            raise RuntimeError(f"unknown reduce_dtype {reduce_dtype!r}")
         self.nm = nm
         self.group = group_name
         self.rank = rank
         self.world = world
         self.peer_name = peer_name
+        self.reduce_dtype = reduce_dtype
         self.stream = torch.cuda.Stream()
         self.seq = 0
         self.jobs: queue.SimpleQueue = queue.SimpleQueue()
-        self.inbox: dict[int, bytes] = {}
+        self.inbox: dict[tuple, object] = {}   # (seq, op) -> msg|bytes
         self.inbox_cv = threading.Condition()
-        # ONE up-front pinned allocation, NEVER regrown: cudaHostAlloc
-        # can device-sync, and a device with ANY stream parked on the
-        # wait-value flag never quiesces — a mid-flight regrow wedged
-        # the whole GPU (both daemons!) the first time field sizes
-        # grew between back-to-back collectives (findings, P4a).
-        self.scratch = torch.empty(scratch_bytes, dtype=torch.uint8,
-                                   pin_memory=True)
-        self.scratch_np = self.scratch.numpy()   # wire view (buffer proto)
+        # Staging = TWO slab extents (out: D2H target + reduce accum +
+        # H2D source; land: the peer's RDMA_WRITEs arrive here). Slab
+        # memory is cudaHostAlloc'd AND inside the NIC's MR — nothing
+        # is copied to get bytes NIC-reachable, and nothing is
+        # allocated after boot (cudaHostAlloc against a parked device
+        # wedges the GPU — findings). Sized once, clamped to slab/8
+        # per region; ensure_scratch raises LOUD past it.
+        cap = getattr(nm.store.allocator, "capacity", None)
+        if cap:
+            scratch_bytes = min(scratch_bytes, cap // 8)
+        self.out = SlabRegion(nm.store, scratch_bytes)
+        self.land = SlabRegion(nm.store, scratch_bytes)
         self.flag = torch.zeros(1, dtype=torch.int32, pin_memory=True)
         err, dptr = cudriver.cuMemHostGetDevicePointer(
             self.flag.data_ptr(), 0)
@@ -117,41 +153,74 @@ class HostmemComm:
 
     # ---------------------------------------------------- link plumbing
 
-    def deliver(self, seq: int, payload: bytes) -> None:
+    def deliver(self, msg: dict, payload: bytes) -> None:
         """Called by the link READER thread for COLL frames."""
+        key = (int(msg["seq"]), msg.get("op", "data"))
         with self.inbox_cv:
-            self.inbox[seq] = payload
+            self.inbox[key] = payload if key[1] == "data" else msg
             self.inbox_cv.notify_all()
 
-    def send_frame(self, seq: int, view) -> None:
+    def link(self):
         link = self.nm.links.get(self.peer_name)
         if link is None or not link.alive:
             raise RuntimeError(f"peer {self.peer_name} down")
-        link.send_frame({"kind": "COLL", "group": self.group,
-                         "seq": seq}, view)
+        return link
 
-    def await_peer(self, seq: int, timeout: float = 120.0) -> bytes:
+    def rdma_qp(self):
+        """The link's RC QP when the rdma lane is usable, else None."""
+        if self.nm.rdma is None:
+            return None
+        qp = getattr(self.nm.links.get(self.peer_name), "rdma_qp", None)
+        return qp if qp is not None and qp.ready else None
+
+    def send_data(self, seq: int, view) -> None:
+        self.link().send_frame({"kind": "COLL", "group": self.group,
+                                "seq": seq, "op": "data"}, view)
+
+    def send_header(self, seq: int, op: str, **fields) -> None:
+        self.link().send_frame({"kind": "COLL", "group": self.group,
+                                "seq": seq, "op": op, **fields})
+
+    def await_entry(self, seq: int, op: str, timeout: float = 120.0):
+        key = (seq, op)
         with self.inbox_cv:
             ok = self.inbox_cv.wait_for(
-                notify_check(self.inbox, seq), timeout)
+                notify_check(self.inbox, key), timeout)
             if not ok:
-                raise RuntimeError(f"collective seq {seq}: peer timeout")
-            return self.inbox.pop(seq)
+                raise RuntimeError(
+                    f"collective seq {seq}: peer {op} timeout")
+            return self.inbox.pop(key)
 
     def fail(self, why: str) -> None:
         self.dead = why
         self.flag[0] = 2_000_000_000       # release any parked stream
         self.nm.group_error(self.group, why, fan_out=None)
 
+    def close(self) -> None:
+        """Idempotent teardown: stop the worker, release parked
+        streams, hand the slab extents back."""
+        self.dead = self.dead or "shutdown"
+        self.flag[0] = 2_000_000_000
+        self.jobs.put(None)
+        if self.worker.is_alive():
+            self.worker.join(timeout=10.0)
+        if self.worker.is_alive():
+            return   # mid-collective wedge: leak the extents rather
+                     # than hand live-referenced slab memory back
+        for region in (self.out, self.land):
+            if region is not None:
+                region.release()
+        self.out = self.land = None
+
     # ---------------------------------------------------- caller side
 
     def ensure_scratch(self, nbytes: int) -> None:
-        if self.scratch.numel() < nbytes:
+        if self.out.nbytes < nbytes:
             raise RuntimeError(
-                f"collective op of {nbytes} B exceeds the group's "
-                f"pinned scratch ({self.scratch.numel()} B) — raise "
-                f"EngineConfig.peer_coll_scratch_mib (regrowing here "
-                f"would cudaHostAlloc against a parked device)")
+                f"collective op of {nbytes} B exceeds the group's slab "
+                f"scratch ({self.out.nbytes} B) — raise "
+                f"EngineConfig.peer_coll_scratch_mib (and slab size: "
+                f"regions are clamped to slab/8)")
 
     def enqueue(self, tensor, action: str, *, send_stage=True,
                 recv_into_tensor=True, root: int | None = None,
@@ -163,7 +232,7 @@ class HostmemComm:
         seq = self.seq
         nbytes = tensor.numel() * tensor.element_size()
         self.ensure_scratch(nbytes)
-        stage = self.scratch[:nbytes]
+        stage = self.out.t[:nbytes]
         ev = torch.cuda.Event()
         with torch.cuda.stream(self.stream):
             if send_stage:
@@ -180,7 +249,7 @@ class HostmemComm:
                     target.reshape(-1).copy_(
                         stage.view(target.dtype)[:tn], non_blocking=True)
         self.jobs.put(CollJob(seq, ev, (action, tensor.dtype, nbytes,
-                                        root, None), stage, stage))
+                                        root)))
         if not self.wait_value_ok:
             # fallback: block the CALLER until the worker releases,
             # THEN enqueue the copy-back — correctness identical,
@@ -211,58 +280,84 @@ class HostmemComm:
                 self.fail(f"collective failed: {ex}")
                 return
 
+    def exchange(self, seq: int, nbytes: int):
+        """Swap ``nbytes`` of the out region with the peer; returns a
+        uint8 view of THEIR bytes. rdma lane: tell the peer where my
+        landing region is (RDY), RDMA_WRITE into theirs, confirm after
+        the CQ ack (DONE — RC completion means remote-visible, so the
+        socket DONE can never pass the data). Socket lane: one COLL
+        data frame each way."""
+        qp = self.rdma_qp()
+        if qp is not None:
+            self.send_header(seq, "rdy",
+                             raddr=self.nm.rdma.slab_base
+                             + self.land.ext.offset,
+                             rkey=self.nm.rdma.rkey(), nbytes=nbytes)
+            rdy = self.await_entry(seq, "rdy")
+            qp.write(self.out.ptr, int(rdy["raddr"]), int(rdy["rkey"]),
+                     nbytes)
+            self.send_header(seq, "done")
+            self.await_entry(seq, "done")
+            return self.land.t[:nbytes]
+        self.send_data(seq, self.out.np[:nbytes])
+        peer = self.await_entry(seq, "data")
+        return torch.frombuffer(peer, dtype=torch.uint8)
+
+    def reduce_into_stage(self, stage_bytes, theirs_bytes, dtype,
+                          lo: int = 0) -> None:
+        """stage[lo:] += theirs, honoring reduce_dtype. Native mode is
+        ONE in-place pass (world-2 add commutes => replicas bitwise
+        identical). f32 mode keeps the legacy rank-ordered accumulate."""
+        mine = stage_bytes.view(dtype)
+        theirs = theirs_bytes.view(dtype)
+        if self.reduce_dtype == "native":
+            mine.add_(theirs)
+            return
+        acc = TORCH_BY_REDUCE[self.reduce_dtype]
+        first, second = ((mine, theirs) if self.rank == 0
+                         else (theirs, mine))
+        mine.copy_((first.to(acc) + second.to(acc)).to(dtype))
+
     def run_job(self, job: CollJob) -> None:
-        action, dtype, nbytes, root, _ = job.action
+        action, dtype, nbytes, root = job.action
         job.ready_event.synchronize()           # D2H landed
-        stage = job.payload_view[:nbytes]
-        np_stage = self.scratch_np[:nbytes]
+        stage = self.out.t[:nbytes]
         if action == "allreduce":
-            self.send_frame(job.seq, np_stage)
-            peer = self.await_peer(job.seq)
-            mine = stage.view(dtype).float()
-            theirs = torch.frombuffer(bytearray(peer),
-                                      dtype=torch.uint8).view(dtype).float()
-            first, second = ((mine, theirs) if self.rank == 0
-                             else (theirs, mine))
-            stage.view(dtype).copy_((first + second).to(dtype))
+            theirs = self.exchange(job.seq, nbytes)
+            self.reduce_into_stage(stage, theirs, dtype)
         elif action == "broadcast":
             if self.rank == root:
-                self.send_frame(job.seq, np_stage)
+                self.send_data(job.seq, self.out.np[:nbytes])
             else:
-                peer = self.await_peer(job.seq)
-                stage[:] = torch.frombuffer(bytearray(peer),
-                                            dtype=torch.uint8)
+                peer = self.await_entry(job.seq, "data")
+                stage.copy_(torch.frombuffer(peer, dtype=torch.uint8))
         elif action == "reduce":
             if self.rank != root:
-                self.send_frame(job.seq, np_stage)
+                self.send_data(job.seq, self.out.np[:nbytes])
             else:
-                peer = self.await_peer(job.seq)
-                mine = stage.view(dtype).float()
-                theirs = torch.frombuffer(
-                    bytearray(peer), dtype=torch.uint8).view(dtype).float()
-                first, second = ((mine, theirs) if self.rank == 0
-                                 else (theirs, mine))
-                stage.view(dtype).copy_((first + second).to(dtype))
+                peer = self.await_entry(job.seq, "data")
+                self.reduce_into_stage(
+                    stage, torch.frombuffer(peer, dtype=torch.uint8),
+                    dtype)
         elif action == "reduce_scatter":
             half = nbytes // 2
             peer_lo = half if self.rank == 0 else 0
             own_lo = 0 if self.rank == 0 else half
-            self.send_frame(job.seq, np_stage[peer_lo:peer_lo + half])
-            peer = self.await_peer(job.seq)
-            mine = stage[own_lo:own_lo + half].view(dtype).float()
-            theirs = torch.frombuffer(bytearray(peer),
-                                      dtype=torch.uint8).view(dtype).float()
-            first, second = ((mine, theirs) if self.rank == 0
-                             else (theirs, mine))
-            stage[:half].view(dtype).copy_((first + second).to(dtype))
+            self.send_data(job.seq, self.out.np[peer_lo:peer_lo + half])
+            peer = self.await_entry(job.seq, "data")
+            own = self.out.t[own_lo:own_lo + half]
+            self.reduce_into_stage(
+                own, torch.frombuffer(peer, dtype=torch.uint8), dtype)
+            if own_lo != 0:
+                stage[:half].copy_(own)
         elif action == "all_gather":
             half = nbytes // 2
             own_lo = 0 if self.rank == 0 else half
-            self.send_frame(job.seq, np_stage[own_lo:own_lo + half])
-            peer = self.await_peer(job.seq)
+            self.send_data(job.seq, self.out.np[own_lo:own_lo + half])
+            peer = self.await_entry(job.seq, "data")
             peer_lo = half if self.rank == 0 else 0
-            stage[peer_lo:peer_lo + half] = torch.frombuffer(
-                bytearray(peer), dtype=torch.uint8)
+            self.out.t[peer_lo:peer_lo + half].copy_(
+                torch.frombuffer(peer, dtype=torch.uint8))
         else:
             raise ValueError(action)
 
@@ -297,7 +392,7 @@ class HostmemComm:
         nbytes = full.numel() * full.element_size()
         half = nbytes // 2
         self.ensure_scratch(nbytes)
-        stage = self.scratch[:nbytes]
+        stage = self.out.t[:nbytes]
         ev = torch.cuda.Event()
         with torch.cuda.stream(self.stream):
             stage.view(full.dtype)[:full.numel()].copy_(
@@ -311,7 +406,7 @@ class HostmemComm:
                     stage[:half].view(out.dtype)[:out.numel()],
                     non_blocking=True)
         self.jobs.put(CollJob(seq, ev, (action, full.dtype, nbytes,
-                                        None, None), stage, stage))
+                                        None)))
         if not self.wait_value_ok:
             spin_until(self.flag, seq, self.dead_check)
             with torch.cuda.stream(self.stream):
@@ -328,7 +423,7 @@ class HostmemComm:
         half = nbytes // 2
         own_lo = 0 if self.rank == 0 else half
         self.ensure_scratch(nbytes)
-        stage = self.scratch[:nbytes]
+        stage = self.out.t[:nbytes]
         ev = torch.cuda.Event()
         with torch.cuda.stream(self.stream):
             stage[own_lo:own_lo + half].view(own_slice.dtype)[
@@ -343,7 +438,7 @@ class HostmemComm:
                     stage.view(full.dtype)[:full.numel()],
                     non_blocking=True)
         self.jobs.put(CollJob(seq, ev, ("all_gather", full.dtype, nbytes,
-                                        None, None), stage, stage))
+                                        None)))
         if not self.wait_value_ok:
             spin_until(self.flag, seq, self.dead_check)
             with torch.cuda.stream(self.stream):
@@ -353,12 +448,12 @@ class HostmemComm:
 
 
 class notify_check:
-    def __init__(self, inbox: dict, seq: int):
+    def __init__(self, inbox: dict, key: tuple):
         self.inbox = inbox
-        self.seq = seq
+        self.key = key
 
     def __call__(self) -> bool:
-        return self.seq in self.inbox
+        return self.key in self.inbox
 
 
 def spin_until(flag, target: int, dead_check, timeout: float = 300.0):
@@ -381,7 +476,9 @@ def build_comm(nm, rec) -> HostmemComm | None:
     peers = [m for i, m in enumerate(rec.members) if i != rec.self_rank]
     scratch = getattr(nm.server.config, "peer_coll_scratch_mib", 512) << 20
     return HostmemComm(nm, rec.name, rec.self_rank, len(rec.members),
-                       peers[0], scratch_bytes=scratch)
+                       peers[0], scratch_bytes=scratch,
+                       reduce_dtype=getattr(rec, "reduce_dtype",
+                                            "native"))
 
 
 def build_handle(nm, rec) -> GroupHandle:

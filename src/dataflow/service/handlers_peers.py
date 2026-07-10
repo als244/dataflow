@@ -105,12 +105,19 @@ def install(server) -> None:
 
     def create_peer_group(call):
         a = call.args
-        return require_nm().create_group(a["name"], list(a["members"]),
-                                         a.get("backend", "auto"))
+        return require_nm().create_group(
+            a["name"], list(a["members"]), a.get("backend", "auto"),
+            reduce_dtype=a.get("reduce_dtype", "native"))
 
     def destroy_peer_group(call):
         a = call.args
-        require_nm().groups.drop(a["name"])
+        nm_now = require_nm()
+        with nm_now.groups.lock:
+            rec = nm_now.groups.groups.get(a["name"])
+        handle = rec.handle if rec is not None else None
+        if handle is not None and handle.comm is not None:
+            handle.comm.close()
+        nm_now.groups.drop(a["name"])
         return {"ok": True}
 
     server.dispatcher.handlers.update({

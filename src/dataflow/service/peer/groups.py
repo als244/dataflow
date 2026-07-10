@@ -26,6 +26,7 @@ class GroupRecord:
     backend: str
     self_rank: int
     coordinator: str              # peer name of rank 0's daemon
+    reduce_dtype: str = "native"  # collective accumulation dtype
     ready: bool = False
     acks: set = field(default_factory=set)
     error: str | None = None

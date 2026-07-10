@@ -104,3 +104,49 @@ def test_rdma_eager_still_rides_control(rig):
     assert rig["ca"].wait_transfer(out["send_id"])["state"] == "done"
     rec = rig["sb"].store.objects["rdma_tiny"]
     assert bytes(rig["sb"].store.view(rec)) == b"y" * 600
+
+
+def test_rdma_allreduce_zero_copy_from_registered_slab(rig):
+    """Collectives over the rdma lane: staging regions are SLAB extents
+    (inside the NIC's MR — nothing is copied to become NIC-reachable),
+    the exchange is a one-sided RDMA_WRITE into the peer's landing
+    region, and the native-dtype reduce matches the fp32 reference
+    bitwise at world 2."""
+    sa, sb, ca = rig["sa"], rig["sb"], rig["ca"]
+    ca._call("create_peer_group",
+             {"name": "rdp", "members": ["rd-alpha", "rd-beta"],
+              "backend": "hostmem"})
+    ha = sa.nm.group_handles()["rdp"]
+    hb = sb.nm.group_handles()["rdp"]
+    for server, h in ((sa, ha), (sb, hb)):
+        comm = h.comm
+        assert comm is not None and comm.reduce_dtype == "native"
+        assert comm.rdma_qp() is not None, "rdma lane not up for COLL"
+        slab = server.store.slab
+        cap = server.store.allocator.capacity
+        for region in (comm.out, comm.land):
+            assert slab.ptr <= region.ptr < slab.ptr + cap, \
+                "scratch must live inside the registered slab MR"
+
+    g = torch.Generator(device="cuda").manual_seed(7)
+    a = torch.randn(1 << 20, device="cuda", generator=g,
+                    dtype=torch.float32).to(torch.bfloat16)
+    b = torch.randn(1 << 20, device="cuda", generator=g,
+                    dtype=torch.float32).to(torch.bfloat16)
+    want = (a.float() + b.float()).to(torch.bfloat16)
+    ta, tb = a.clone(), b.clone()
+    err = []
+
+    def post(h, t):
+        try:
+            h.allreduce(t)
+        except Exception as e:
+            err.append(e)
+
+    ja = threading.Thread(target=post, args=(ha, ta))
+    jb = threading.Thread(target=post, args=(hb, tb))
+    ja.start(); jb.start(); ja.join(30); jb.join(30)
+    assert not err, err
+    ha.stream.synchronize(); hb.stream.synchronize()
+    assert torch.equal(ta, tb), "replicas diverged"
+    assert torch.equal(ta, want), "sum wrong vs fp32 reference"

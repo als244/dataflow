@@ -176,10 +176,8 @@ class NetworkManager:
         for rec in self.groups.ready_records():
             handle = rec.handle
             if handle is not None and handle.comm is not None:
-                comm = handle.comm
-                comm.dead = comm.dead or "shutdown"
-                comm.flag[0] = 2_000_000_000   # release parked streams
-                comm.jobs.put(None)            # worker exits its loop
+                handle.comm.close()            # releases parked streams,
+                                               # worker, slab scratch
         if self.listener is not None:
             try:
                 self.listener.close()
@@ -291,7 +289,8 @@ class NetworkManager:
         self.state.emit("peer_down", peer_id=link.peer_id, why=why)
 
     def create_group(self, name: str, members: list, backend: str,
-                     *, timeout: float = 20.0) -> dict:
+                     *, reduce_dtype: str = "native",
+                     timeout: float = 20.0) -> dict:
         """Coordinator side: THIS daemon must be rank 0 of members and
         hold star links to every other member."""
         from .groups import GroupRecord
@@ -306,13 +305,15 @@ class NetworkManager:
                                    f"star links missing: {missing}")
         rec = GroupRecord(name=name, members=tuple(members),
                           backend=backend, self_rank=0,
-                          coordinator=self.peer_name)
+                          coordinator=self.peer_name,
+                          reduce_dtype=reduce_dtype)
         try:
             self.groups.create(rec)
         except ValueError:
             raise ServiceError("GROUP_EXISTS", name)
         join = {"kind": "GROUP_JOIN", "name": name,
-                "members": list(members), "backend": backend}
+                "members": list(members), "backend": backend,
+                "reduce_dtype": reduce_dtype}
         with self.lock:
             for m in members[1:]:
                 self.links[m].send_frame(join)
@@ -468,7 +469,8 @@ class NetworkManager:
                     name=msg["name"], members=members,
                     backend=msg["backend"],
                     self_rank=members.index(self.peer_name),
-                    coordinator=link.peer_id)
+                    coordinator=link.peer_id,
+                    reduce_dtype=msg.get("reduce_dtype", "native"))
                 self.groups.adopt(rec)
                 link.send_frame({"kind": "GROUP_ACK", "name": msg["name"],
                                  "member": self.peer_name})
@@ -486,7 +488,7 @@ class NetworkManager:
             if kind == "COLL":
                 comm = self.comm_of(msg["group"])
                 if comm is not None:
-                    comm.deliver(int(msg["seq"]), payload or b"")
+                    comm.deliver(msg, payload or b"")
                 continue
             with self.lock:
                 link.core.handle(msg, payload)
