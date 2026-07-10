@@ -93,10 +93,11 @@ def run_wait_value_probe() -> bool:
 
 
 class CollJob:
-    def __init__(self, seq: int, ready_event, action):
+    def __init__(self, seq: int, ready_event, action, lane: str):
         self.seq = seq
         self.ready_event = ready_event    # D2H landed when this fires
         self.action = action              # (verb, dtype, nbytes, root)
+        self.lane = lane                  # "rdma" | "socket"
 
 
 class SlabRegion:
@@ -164,6 +165,33 @@ class HostmemComm:
             scratch_bytes = min(scratch_bytes, cap // 8)
         self.out = SlabRegion(nm.store, scratch_bytes)
         self.land = SlabRegion(nm.store, scratch_bytes)
+        # device landing buffer (rdma lane): the peer's bytes are
+        # H2D'd here and reduced ON DEVICE into the caller's tensor —
+        # zero CPU passes, and the reduce stops depending on host
+        # memory bandwidth entirely (a CPU add pays 3x traffic per
+        # payload byte and contends with the exchange DMA)
+        # LANE is a static, SYMMETRIC decision made once at build:
+        # both ends advertised rdma in the HELLO iff link.rdma_qp
+        # exists on both sides, so both comms reach the same verdict —
+        # per-op local guessing raced (one rank on the socket
+        # protocol, the peer on rdma = cross-lane deadlock, findings).
+        # When rdma is coming, WAIT for the QP pair to reach RTS.
+        self.lane = "socket"
+        self.dev_land = None
+        link = nm.links.get(peer_name)
+        qp = getattr(link, "rdma_qp", None) if link is not None else None
+        if nm.rdma is not None and qp is not None:
+            deadline = time.monotonic() + 15.0
+            while not qp.ready and time.monotonic() < deadline:
+                time.sleep(0.05)
+            if not qp.ready:
+                raise RuntimeError(
+                    f"group {group_name!r}: rdma advertised on the "
+                    f"{peer_name} link but QPs never reached RTS")
+            self.lane = "rdma"
+            self.dev_land = torch.empty(scratch_bytes,
+                                        dtype=torch.uint8, device="cuda")
+            self.warm_device_reduce()
         # release flag: a DEDICATED cudaHostAlloc(Mapped) word — NOT a
         # torch pinned-pool tensor (pool blocks are not reliably
         # device-mappable; a second comm in one process hit exactly
@@ -189,6 +217,23 @@ class HostmemComm:
                                        name=f"nm-coll-{group_name}",
                                        daemon=True)
         self.worker.start()
+
+    def warm_device_reduce(self) -> None:
+        """First-launch kernel loads need device quiescence, which a
+        waitvalue-parked stream denies (the established trap, now at
+        the comm layer): load every kernel the post-park device reduce
+        uses — H2D copy, native add_, and the f32-path casts — while
+        the device is still unparked at build time."""
+        with torch.cuda.stream(self.stream):
+            for dt in (torch.bfloat16, torch.float32, torch.float16):
+                host = self.land.t[:64].view(dt)
+                dev = self.dev_land[:64].view(dt)
+                mine = self.dev_land[64:128].view(dt)
+                dev.copy_(host, non_blocking=True)
+                mine.add_(dev)
+                mine.copy_((mine.to(torch.float32)
+                            + dev.to(torch.float32)).to(dt))
+        self.stream.synchronize()
 
     # ---------------------------------------------------- link plumbing
 
@@ -275,12 +320,17 @@ class HostmemComm:
         nbytes = tensor.numel() * tensor.element_size()
         self.ensure_scratch(nbytes)
         stage = self.out.t[:nbytes]
+        lane = self.lane if action == "allreduce" else "socket"
         ev = self.event_pool.popleft() if self.event_pool \
             else torch.cuda.Event()
-        # order after the PRODUCER: the caller's tensor may still be
-        # mid-write on its own stream; the D2H below runs on the comm
-        # stream and must not race it
-        self.stream.wait_stream(torch.cuda.current_stream())
+        # PRODUCER CONTRACT: the tensor must already be ordered
+        # against this group's stream (training records grads_ready
+        # on the compute stream and gh.stream.wait_event's it; tests
+        # and benches synchronize their fills). The comm must NOT
+        # wait_stream(current) here: recording on the LEGACY default
+        # stream captures every other blocking stream — with two
+        # parked comm streams in one process that is a deadlock cycle
+        # (findings).
         with torch.cuda.stream(self.stream):
             if send_stage:
                 stage.view(tensor.dtype)[:tensor.numel()].copy_(
@@ -292,11 +342,9 @@ class HostmemComm:
                     FLAG_WAIT_GEQ)
                 if recv_into_tensor:
                     target = tensor if out is None else out
-                    tn = target.numel()
-                    target.reshape(-1).copy_(
-                        stage.view(target.dtype)[:tn], non_blocking=True)
+                    self.enqueue_recv(target, stage, nbytes, lane)
         self.jobs.put(CollJob(seq, ev, (action, tensor.dtype, nbytes,
-                                        root)))
+                                        root), lane))
         if not self.wait_value_ok:
             # fallback: block the CALLER until the worker releases,
             # THEN enqueue the copy-back — correctness identical,
@@ -304,11 +352,30 @@ class HostmemComm:
             spin_until(self.flag, seq, self.dead_check)
             if recv_into_tensor:
                 target = tensor if out is None else out
-                tn = target.numel()
                 with torch.cuda.stream(self.stream):
-                    target.reshape(-1).copy_(
-                        stage.view(target.dtype)[:tn], non_blocking=True)
+                    self.enqueue_recv(target, stage, nbytes, lane)
         return seq
+
+    def enqueue_recv(self, target, stage, nbytes: int, lane: str):
+        """Stream ops that run AFTER the flag releases. Socket lane:
+        the worker reduced on the CPU into stage — copy the sum back.
+        rdma lane: the peer's raw bytes sit in the LAND region — H2D
+        them and reduce ON DEVICE into the caller's tensor."""
+        tn = target.numel()
+        flat = target.reshape(-1)
+        if lane == "socket":
+            flat.copy_(stage.view(target.dtype)[:tn], non_blocking=True)
+            return
+        theirs_host = self.land.t[:nbytes].view(target.dtype)[:tn]
+        theirs = self.dev_land[:nbytes].view(target.dtype)[:tn]
+        theirs.copy_(theirs_host, non_blocking=True)
+        if self.reduce_dtype == "native":
+            flat.add_(theirs)
+            return
+        acc = TORCH_BY_REDUCE[self.reduce_dtype]
+        first, second = ((flat, theirs) if self.rank == 0
+                         else (theirs, flat))
+        flat.copy_((first.to(acc) + second.to(acc)).to(target.dtype))
 
     def dead_check(self) -> bool:
         return self.dead is not None
@@ -388,6 +455,13 @@ class HostmemComm:
         self.stats["ev_sync_s"] += time.monotonic() - t0
         stage = self.out.t[:nbytes]
         if action == "allreduce":
+            if job.lane == "rdma":
+                qp = self.rdma_qp()
+                if qp is None:
+                    raise RuntimeError("rdma lane vanished mid-op")
+                self.exchange(job.seq, nbytes)   # bytes land; the
+                return                           # parked stream does
+                                                 # the DEVICE reduce
             theirs = self.exchange(job.seq, nbytes)
             tr = time.monotonic()
             self.reduce_into_stage(stage, theirs, dtype)
@@ -462,7 +536,6 @@ class HostmemComm:
         stage = self.out.t[:nbytes]
         ev = self.event_pool.popleft() if self.event_pool \
             else torch.cuda.Event()
-        self.stream.wait_stream(torch.cuda.current_stream())
         with torch.cuda.stream(self.stream):
             stage.view(full.dtype)[:full.numel()].copy_(
                 full.reshape(-1), non_blocking=True)
@@ -475,7 +548,7 @@ class HostmemComm:
                     stage[:half].view(out.dtype)[:out.numel()],
                     non_blocking=True)
         self.jobs.put(CollJob(seq, ev, (action, full.dtype, nbytes,
-                                        None)))
+                                        None), "socket"))
         if not self.wait_value_ok:
             spin_until(self.flag, seq, self.dead_check)
             with torch.cuda.stream(self.stream):
@@ -495,7 +568,6 @@ class HostmemComm:
         stage = self.out.t[:nbytes]
         ev = self.event_pool.popleft() if self.event_pool \
             else torch.cuda.Event()
-        self.stream.wait_stream(torch.cuda.current_stream())
         with torch.cuda.stream(self.stream):
             stage[own_lo:own_lo + half].view(own_slice.dtype)[
                 :own_slice.numel()].copy_(own_slice.reshape(-1),
@@ -508,8 +580,8 @@ class HostmemComm:
                 full.reshape(-1).copy_(
                     stage.view(full.dtype)[:full.numel()],
                     non_blocking=True)
-        self.jobs.put(CollJob(seq, ev, ("all_gather", full.dtype, nbytes,
-                                        None)))
+        self.jobs.put(CollJob(seq, ev, ("all_gather", full.dtype,
+                                        nbytes, None), "socket"))
         if not self.wait_value_ok:
             spin_until(self.flag, seq, self.dead_check)
             with torch.cuda.stream(self.stream):

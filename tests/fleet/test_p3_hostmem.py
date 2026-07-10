@@ -57,7 +57,10 @@ def rig(tmp_path_factory):
 
 
 def both(fn_a, fn_b):
-    """Post both ranks' halves of a collective concurrently."""
+    """Post both ranks' halves of a collective concurrently. The
+    producer contract: tensors must be ready before posting — tests
+    fill on the default stream, so synchronize first."""
+    torch.cuda.synchronize()
     err = []
     def run(fn):
         try:
@@ -184,10 +187,12 @@ def test_stream_parks_until_worker_releases(rig):
     if not (ha.comm.wait_value_ok and hb.comm.wait_value_ok):
         pytest.skip("wait-value unsupported; fallback path is blocking")
     t_a = torch.ones(1 << 22, device="cuda", dtype=torch.bfloat16)
+    torch.cuda.default_stream().synchronize()   # producer contract
     ha.allreduce(t_a)                        # only rank 0 posts...
     time.sleep(0.2)
     assert not ha.stream.query(), "stream should be parked mid-collective"
     t_b = torch.ones(1 << 22, device="cuda", dtype=torch.bfloat16)
+    torch.cuda.default_stream().synchronize()   # producer contract
     hb.allreduce(t_b)                        # ...until rank 1 joins
     synced(ha, hb)
     assert float(t_a[0]) == 2.0 == float(t_b[0])

@@ -163,6 +163,7 @@ def test_rdma_allreduce_zero_copy_from_registered_slab(rig):
         except Exception as e:
             err.append(e)
 
+    torch.cuda.default_stream().synchronize()   # producer contract
     ja = threading.Thread(target=post, args=(ha, ta))
     jb = threading.Thread(target=post, args=(hb, tb))
     ja.start(); jb.start(); ja.join(30); jb.join(30)
