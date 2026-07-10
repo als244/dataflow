@@ -46,16 +46,21 @@ def fill_family_objects(store, fill: dict, *, writer: str) -> dict:
 # Resolver/program/placement caches + the run path. Everything here
 # imports the wider package; nothing outside bridge.py does.
 
-_BACKEND = None
-_STREAMS = None               # ONE stream trio shared by all execution
-                              # contexts: torch's caching allocator is
+_BACKEND: dict = {}
+_STREAMS: dict = {}           # store-id -> ONE stream trio shared by
+                              # that DAEMON's execution contexts:
+                              # torch's caching allocator is
                               # STREAM-AWARE — per-program streams made
                               # each program's cached scratch dead to the
                               # next (+4-7 GiB reserved PER PROGRAM,
                               # Shein's 29-GiB dev-20 observation).
-                              # Streams are program-agnostic (one run at
-                              # a time); sharing makes the cache fully
-                              # reusable at zero recurring cost.
+                              # Streams are program-agnostic WITHIN a
+                              # daemon (one run at a time per daemon);
+                              # scoping by store exists for in-process
+                              # multi-daemon rigs, where two CONCURRENT
+                              # engines on one trio corrupted transfer
+                              # accounting (completion-for-unknown-job +
+                              # phantom deadlocks — findings, P4a).
 _SESSIONS: dict = {}          # prog_id -> Session (adoption is
                               # program-scoped: the engine's placement
                               # adoption records assume ONE shape-stable
@@ -66,32 +71,47 @@ _SESSIONS: dict = {}          # prog_id -> Session (adoption is
 _RESOLVERS: dict = {}
 
 
-def get_backend():
-    global _BACKEND
-    if _BACKEND is None:
+def get_backend(store=None):
+    """One CudaBackend PER DAEMON (store identity): the backend
+    tracks in-flight transfer completions — two concurrent engines
+    sharing one instance cross-contaminated tokens ("completion for a
+    job that is not in flight" + phantom deadlocks; findings, P4a).
+    Single-daemon processes see exactly one instance, as before."""
+    key = id(store) if store is not None else 0
+    if key not in _BACKEND:
         from dataflow.runtime.device.cuda import CudaBackend
 
-        _BACKEND = CudaBackend()
-    return _BACKEND
+        _BACKEND[key] = CudaBackend()
+    return _BACKEND[key]
+
+
+def session_key(prog_id: str, store) -> tuple:
+    """Sessions are STORE-scoped: prog_id is a content hash, so two
+    in-process daemons (or one daemon relaunched) collide on it —
+    the store object is the daemon identity. (Found twice: the
+    relaunch UAF, then its concurrent sibling when two live daemons
+    first RAN the same program in one test process.)"""
+    return (id(store) if store is not None else 0, prog_id)
 
 
 def get_session(prog_id: str, store=None):
-    """One Session PER REGISTERED PROGRAM: streams + BufferPool +
-    placement-adoption records reused across that program's runs,
-    never across programs. With a real store, the pool's BACKING
-    transients draw lazily from the STORE SLAB (one pinned budget;
-    only the real high-water is carved — the conservative demand
-    bound never allocates)."""
-    if prog_id not in _SESSIONS:
+    """One Session PER (STORE, REGISTERED PROGRAM): streams +
+    BufferPool + placement-adoption records reused across that
+    program's runs, never across programs or daemons. With a real
+    store, the pool's BACKING transients draw lazily from the STORE
+    SLAB (one pinned budget; only the real high-water is carved — the
+    conservative demand bound never allocates)."""
+    key = session_key(prog_id, store)
+    if key not in _SESSIONS:
         from dataflow.runtime.device.cuda import Buffer
         from dataflow.runtime.engine import Session
 
-        global _STREAMS
-        if _STREAMS is None:
-            b = get_backend()
-            _STREAMS = (b.create_stream("compute"),
-                        b.create_stream("h2d"),
-                        b.create_stream("d2h"))
+        skey = id(store) if store is not None else 0
+        if skey not in _STREAMS:
+            b = get_backend(store)
+            _STREAMS[skey] = (b.create_stream("compute"),
+                              b.create_stream("h2d"),
+                              b.create_stream("d2h"))
         ext_pair = None
         if store is not None and store.slab is not None:
             def _alloc(size, _store=store, _owner=prog_id):
@@ -104,14 +124,14 @@ def get_session(prog_id: str, store=None):
                 _store.free_transient(buf.raw[1])
 
             ext_pair = (_alloc, _free)
-        _SESSIONS[prog_id] = Session(backend=get_backend(),
-                                     streams=_STREAMS,
-                                     external_backing=ext_pair)
-    return _SESSIONS[prog_id]
+        _SESSIONS[key] = Session(backend=get_backend(store),
+                                 streams=_STREAMS[skey],
+                                 external_backing=ext_pair)
+    return _SESSIONS[key]
 
 
-def close_session(prog_id: str) -> bool:
-    s = _SESSIONS.pop(prog_id, None)
+def close_session(prog_id: str, store=None) -> bool:
+    s = _SESSIONS.pop(session_key(prog_id, store), None)
     if s is not None:
         s.close()
         # NO empty_cache here (Shein: many short programs — the cost is
@@ -126,22 +146,32 @@ def close_session(prog_id: str) -> bool:
     return False
 
 
-def close_all_sessions() -> int:
+def close_all_sessions(store=None) -> int:
     """Drain and drop EVERY cached session. Server shutdown must call
     this BEFORE freeing the store slab: sessions hold BufferPools whose
     backing transients live in that slab (and free through the store),
     so a session that outlives its daemon dangles — the next in-process
     daemon boot re-hashes an identical program to the SAME prog_id and
     would inherit freed pointers (segfault in the first backing copy).
-    Module state here is single-daemon by design (shared backend and
-    streams), so closing all is exact, not overkill."""
+    Pass the daemon's ``store`` to close ONLY its sessions — required
+    when multiple in-process daemons are live (fleet tests); backend
+    and streams remain process-shared by design."""
     n = 0
-    for prog_id in list(_SESSIONS):
+    for key in list(_SESSIONS):
+        if store is not None and key[0] != id(store):
+            continue                      # another live daemon's session
+        s = _SESSIONS.pop(key, None)
+        if s is None:
+            continue
         try:
-            if close_session(prog_id):
-                n += 1
+            s.close()
+            n += 1
         except Exception:
-            _SESSIONS.pop(prog_id, None)
+            pass
+    if n:
+        import torch
+
+        torch.cuda.reset_peak_memory_stats()
     return n
 
 
@@ -251,7 +281,7 @@ def execute_run(program, resolver, values, *, prog_id, store=None,
     from dataflow.runtime.engine import CancelledRun, ExecutionError
 
     try:
-        result = Engine(get_backend(),
+        result = Engine(get_backend(store),
                         session=get_session(prog_id, store=store)).execute(
             program, resolver=resolver, initial_buffers=values,
             pool_prewarm=pool_demand, placement=placement,
@@ -259,22 +289,22 @@ def execute_run(program, resolver, values, *, prog_id, store=None,
         )
         return result, None, None
     except CancelledRun as e:
-        _abort_drain()
+        _abort_drain(store)
         return None, "CANCELLED", str(e)
     except ExecutionError as e:
-        _abort_drain()
+        _abort_drain(store)
         return None, "RUN_FAILED", str(e)
     except Exception as e:  # noqa: BLE001 — daemon survives anything
-        _abort_drain()
+        _abort_drain(store)
         return None, "RUN_FAILED", f"{type(e).__name__}: {e}"
 
 
-def _abort_drain():
+def _abort_drain(store=None):
     """After a cancelled/failed run: the daemon's Session lives on, so
     the dead run's pending completions must not leak into the next
     run (bug found by the cancel gate: "completion for a job that is
     not in flight" on the follow-up run)."""
-    n = get_backend().drain_aborted()
+    n = get_backend(store).drain_aborted()
     return n
 
 

@@ -228,6 +228,9 @@ def build_shaped_program(
     name: str | None = None,
     aux_shared=None,
     round_prologue: bool = False,
+    dp_group: str | None = None,   # optimizer tasks carry the group ROLE
+                                   # name; present handle => allreduce(dW)
+                                   # before the update (P4a data parallel)
     bias_update_in_bwd: bool = False,
     retained_lbl: bool = False,
     freeze=None,  # FreezePlan | None (training/freeze_plan.py)
@@ -343,18 +346,21 @@ def build_shaped_program(
         # final mutation of its gradient (last round's backward task), so O
         # prefetches and W/O writebacks overlap the rest of the backward
         # instead of draining serially after all compute is done.
+        opt_params = {"dp_group": dp_group} if dp_group else {}
+
         def opt_embed(s: int = s) -> None:
             task(f"optimizer_embed_{s}", "optimizer_embed",
                  ["W_embed", f"dW_embed_{s}", "O_embed"], [],
                  loose.optimizer_us["embed"], mutates=("W_embed", "O_embed"),
-                 group="optimizer")
+                 group="optimizer",
+                 params=dict(opt_params) if opt_params else None)
 
         def opt_block(i: int, s: int = s) -> None:
             sp = layer_specs[i]
             task(f"optimizer_{s}_{i}", "optimizer_block",
                  [f"W_{i}", f"dW_{s}_{i}", f"O_{i}"], [],
                  sp.optimizer_us, mutates=(f"W_{i}", f"O_{i}"),
-                 group="optimizer", params={"layer": i},
+                 group="optimizer", params={"layer": i, **opt_params},
                  subops=sp.optimizer_subops)
 
         def opt_head(s: int = s) -> None:
@@ -363,7 +369,8 @@ def build_shaped_program(
             task(f"optimizer_head_{s}", "optimizer_head",
                  ["W_head", f"dW_head_{s}", "O_head"], [],
                  loose.optimizer_us["head"], mutates=("W_head", "O_head"),
-                 group="optimizer")
+                 group="optimizer",
+                 params=dict(opt_params) if opt_params else None)
 
         for r in range(cfg.grad_accum_rounds):
             first_round = r == 0

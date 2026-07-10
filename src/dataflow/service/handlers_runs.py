@@ -143,7 +143,7 @@ def install(server) -> None:
         if call.args["prog_id"] not in programs:
             raise ServiceError("UNKNOWN_PROGRAM", call.args["prog_id"])
         del programs[call.args["prog_id"]]
-        released = bridge.close_session(call.args["prog_id"])
+        released = bridge.close_session(call.args["prog_id"], store)
         return {"ok": True, "session_released": released}
 
     def profile_program_h(call):

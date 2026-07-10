@@ -15,7 +15,7 @@ from dataflow.core import TaskSpec
 from dataflow.runtime.executable import TaskContext
 
 from . import ops
-from .interop import external_stream, torch_view
+from .interop import TORCH_DTYPE_BY_NAME, external_stream, torch_view
 from .kernels import KernelCtx, KernelSet, resolve_kernels
 from .layouts import (
     LlamaDims,
@@ -456,6 +456,27 @@ class AdamWStep(_Base):  # name kept for resolver back-compat; see OptimizerStep
             o_buf = (ctx.mutates[ctx.task.mutates[1]]
                      if len(ctx.task.mutates) > 1 else None)
             wl_, gl_, ol_, ns = self._layouts(ctx.task, w_buf.size_bytes)
+            # data-parallel gradient sum (P4a): the group ROLE name is
+            # baked in block_params; the HANDLE arrives per run via
+            # ctx.groups. Present => per-field allreduce(dW) on the
+            # GROUP stream with event edges both ways (enqueue-only);
+            # absent => standalone run of the same artifact (valid
+            # exactly because plain-allreduce DP is rank-complete).
+            dp_name = ctx.task.block_params.get("dp_group")
+            gh = (getattr(ctx, "groups", None) or {}).get(dp_name) \
+                if dp_name else None
+            if gh is not None:
+                grads_ready = torch.cuda.Event()
+                grads_ready.record(es)
+                gh.stream.wait_event(grads_ready)
+                for f in gl_.fields:
+                    gview = torch_view(g_buf, f.shape,
+                                       TORCH_DTYPE_BY_NAME[f.dtype],
+                                       offset_bytes=f.offset_bytes)
+                    gh.allreduce(gview)
+                summed = torch.cuda.Event()
+                summed.record(gh.stream)
+                es.wait_event(summed)
             ra = getattr(ctx, "run_args", None) or {}
             # service runs bind the global step per run (run_args);
             # in-process paths keep baking it into block_params

@@ -58,6 +58,7 @@ class EngineConfig:
     peer_listen: str | None = None
     peer_chunk_bytes: int = 128 * 1024 * 1024
     peer_rdma_device: str | None = None      # e.g. "mlx5_1" => rdma-host
+    peer_coll_scratch_mib: int = 512         # per-group pinned comm scratch
 
     def public(self) -> dict:
         return {
@@ -485,7 +486,7 @@ class Server:
                 nm.stop()          # abort transfers before the slab dies
             # sessions FIRST (their pools free transients through the
             # store), slab after — the reverse order dangles the pools
-            bridge.close_all_sessions()
+            bridge.close_all_sessions(getattr(self, "store", None))
             if getattr(self, "store", None) is not None \
                     and self.store.slab is not None:
                 self.store.slab.free()

@@ -78,7 +78,7 @@ class HostmemComm:
     link (the coordinator star IS the pairwise link at world 2)."""
 
     def __init__(self, nm, group_name: str, rank: int, world: int,
-                 peer_name: str):
+                 peer_name: str, scratch_bytes: int = 512 << 20):
         if world != 2:
             raise RuntimeError(
                 f"hostmem v1 is pairwise (world 2); group "
@@ -94,7 +94,13 @@ class HostmemComm:
         self.jobs: queue.SimpleQueue = queue.SimpleQueue()
         self.inbox: dict[int, bytes] = {}
         self.inbox_cv = threading.Condition()
-        self.scratch = torch.empty(0, dtype=torch.uint8, pin_memory=True)
+        # ONE up-front pinned allocation, NEVER regrown: cudaHostAlloc
+        # can device-sync, and a device with ANY stream parked on the
+        # wait-value flag never quiesces — a mid-flight regrow wedged
+        # the whole GPU (both daemons!) the first time field sizes
+        # grew between back-to-back collectives (findings, P4a).
+        self.scratch = torch.empty(scratch_bytes, dtype=torch.uint8,
+                                   pin_memory=True)
         self.scratch_np = self.scratch.numpy()   # wire view (buffer proto)
         self.flag = torch.zeros(1, dtype=torch.int32, pin_memory=True)
         err, dptr = cudriver.cuMemHostGetDevicePointer(
@@ -141,9 +147,11 @@ class HostmemComm:
 
     def ensure_scratch(self, nbytes: int) -> None:
         if self.scratch.numel() < nbytes:
-            self.scratch = torch.empty(nbytes, dtype=torch.uint8,
-                                       pin_memory=True)
-            self.scratch_np = self.scratch.numpy()
+            raise RuntimeError(
+                f"collective op of {nbytes} B exceeds the group's "
+                f"pinned scratch ({self.scratch.numel()} B) — raise "
+                f"EngineConfig.peer_coll_scratch_mib (regrowing here "
+                f"would cudaHostAlloc against a parked device)")
 
     def enqueue(self, tensor, action: str, *, send_stage=True,
                 recv_into_tensor=True, root: int | None = None,
@@ -371,8 +379,9 @@ def build_comm(nm, rec) -> HostmemComm | None:
     if not torch.cuda.is_available() or nm.store.slab is None:
         return None
     peers = [m for i, m in enumerate(rec.members) if i != rec.self_rank]
+    scratch = getattr(nm.server.config, "peer_coll_scratch_mib", 512) << 20
     return HostmemComm(nm, rec.name, rec.self_rank, len(rec.members),
-                       peers[0])
+                       peers[0], scratch_bytes=scratch)
 
 
 def build_handle(nm, rec) -> GroupHandle:

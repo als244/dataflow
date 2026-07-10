@@ -173,6 +173,13 @@ class NetworkManager:
 
     def stop(self) -> None:
         self.stop_flag.set()
+        for rec in self.groups.ready_records():
+            handle = rec.handle
+            if handle is not None and handle.comm is not None:
+                comm = handle.comm
+                comm.dead = comm.dead or "shutdown"
+                comm.flag[0] = 2_000_000_000   # release parked streams
+                comm.jobs.put(None)            # worker exits its loop
         if self.listener is not None:
             try:
                 self.listener.close()
