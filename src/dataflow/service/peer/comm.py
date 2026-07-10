@@ -50,9 +50,12 @@ import threading
 import time
 from collections import deque
 
+import ctypes
+
 import numpy as np
 import torch
 from cuda.bindings import driver as cudriver
+from cuda.bindings import runtime as cudart
 
 from ...runtime.groups import GroupHandle
 
@@ -161,13 +164,26 @@ class HostmemComm:
             scratch_bytes = min(scratch_bytes, cap // 8)
         self.out = SlabRegion(nm.store, scratch_bytes)
         self.land = SlabRegion(nm.store, scratch_bytes)
-        self.flag = torch.zeros(1, dtype=torch.int32, pin_memory=True)
-        err, dptr = cudriver.cuMemHostGetDevicePointer(
-            self.flag.data_ptr(), 0)
+        # release flag: a DEDICATED cudaHostAlloc(Mapped) word — NOT a
+        # torch pinned-pool tensor (pool blocks are not reliably
+        # device-mappable; a second comm in one process hit exactly
+        # that). If mapping is still refused, degrade to the blocking
+        # spin fallback instead of failing group bring-up.
+        err, host_ptr = cudart.cudaHostAlloc(
+            4, cudart.cudaHostAllocMapped)
         if int(err) != 0:
-            raise RuntimeError("mapped pinned flag unavailable")
-        self.flag_dptr = int(dptr)
-        self.wait_value_ok = stream_wait_value_supported()
+            raise RuntimeError(f"cudaHostAlloc(flag) failed: {err}")
+        self.flag_host_ptr = int(host_ptr)
+        raw = (ctypes.c_int32 * 1).from_address(self.flag_host_ptr)
+        self.flag = np.frombuffer(raw, dtype=np.int32)
+        self.flag[0] = 0
+        self.flag_dptr = None
+        err, dptr = cudriver.cuMemHostGetDevicePointer(
+            self.flag_host_ptr, 0)
+        if int(err) == 0:
+            self.flag_dptr = int(dptr)
+        self.wait_value_ok = (self.flag_dptr is not None
+                              and stream_wait_value_supported())
         self.dead: str | None = None
         self.worker = threading.Thread(target=self.worker_loop,
                                        name=f"nm-coll-{group_name}",
@@ -234,6 +250,9 @@ class HostmemComm:
             if region is not None:
                 region.release()
         self.out = self.land = None
+        if self.flag_host_ptr is not None:
+            cudart.cudaFreeHost(self.flag_host_ptr)
+            self.flag_host_ptr = None
 
     # ---------------------------------------------------- caller side
 
