@@ -62,7 +62,7 @@ def capture(golden, tokens):
 
 
 def meta_layout(dims, i):
-    return dsv32_meta_layout(dims, dims.kind_of(i))
+    return dsv32_meta_layout(dims, dims.kinds[i])
 
 
 def meta_fields(dims, i, captured):

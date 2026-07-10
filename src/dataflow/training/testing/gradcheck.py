@@ -109,13 +109,13 @@ def check_block_backward(dims, *, family=None, seed: int = 0, tol: float = 3e-2)
     seg = Segments.of_dims(dims).on("cuda")
 
     # our forward with saved context
-    a = _ctx_tensors(family.context_layout(dims))
+    a = _ctx_tensors(family.activation_layout(dims))
     y = torch.empty_like(x)
     fwd._forward(kctx, x, w, y, a, extras={"seg": seg})
 
     # recompute-path equivalence: the RECOMPUTE executable's truncated
     # forward must rebuild an identical context from the same x
-    a2 = _ctx_tensors(family.context_layout(dims))
+    a2 = _ctx_tensors(family.activation_layout(dims))
     family.block_recompute(dims, kernels)._forward_context(kctx, x, w, a2, extras={"seg": seg})
     # the truncated recompute intentionally does NOT produce y (the block
     # output is never a backward dependency) — context equality is the claim

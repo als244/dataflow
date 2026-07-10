@@ -33,16 +33,16 @@ from dataflow.tasks.layouts import (
     dsv32_meta_layout,
     DTypePolicy,
     ParamDTypes,
-    dsv32_dense_context_layout,
+    dsv32_dense_activation_layout,
     dsv32_dense_weight_layout,
-    dsv32_moe_context_layout,
+    dsv32_moe_activation_layout,
     dsv32_moe_weight_layout,
     embed_weight_layout,
     head_weight_layout,
 )
 from dataflow.tasks.modules.moe.spec import MoESpec
 
-from ..lowering import FamilyLayouts, apply_exact_sizes, initial_values_from_layouts, size_of_factory
+from ..lowering import FamilyLayouts, LayerLayout, apply_exact_sizes, initial_values_from_layouts, size_of_factory
 from ..shaped_program import BF16, LayerKindSpec, ShapedHardware, build_shaped_program
 
 _DSV32_DTYPES = DTypePolicy(overrides=(
@@ -276,6 +276,8 @@ def dims_of_dsv32(cfg: ShapedDsv32Config) -> Dsv32Dims:
         tokens=cfg.tokens, seq_len=cfg.seq_len, rope_base=cfg.rope_base,
         dtypes=getattr(cfg, "dtypes", None) or _DSV32_DTYPES,
         seq_lens=getattr(cfg, "seq_lens", None),
+        kinds=tuple("dense" if i < cfg.first_k_dense else "moe"
+                    for i in range(cfg.n_layers)),
         moe=moe_spec_of(cfg),
         index_n_heads=cfg.index_n_heads, index_head_dim=cfg.index_head_dim,
         index_topk=cfg.index_topk, sparse_mode=cfg.sparse_mode,
@@ -340,7 +342,7 @@ def _kind_specs(cfg: ShapedDsv32Config, hw: ShapedHardware) -> dict[str, LayerKi
         )
 
     dense = spec(
-        "dsadense", dsv32_dense_weight_layout(dims), dsv32_dense_context_layout(dims),
+        "dsadense", dsv32_dense_weight_layout(dims), dsv32_dense_activation_layout(dims),
         3 * cfg.d_ff_dense * d, 0.0,
         meta_bytes=dsv32_meta_layout(dims, "dense").total_bytes,
     )
@@ -351,7 +353,7 @@ def _kind_specs(cfg: ShapedDsv32Config, hw: ShapedHardware) -> dict[str, LayerKi
     )
     moe_traffic = BF16 * t * k * (3 * f + 2 * d)
     moe = spec(
-        "dsamoe", dsv32_moe_weight_layout(dims), dsv32_moe_context_layout(dims),
+        "dsamoe", dsv32_moe_weight_layout(dims), dsv32_moe_activation_layout(dims),
         moe_active, moe_traffic,
         meta_bytes=dsv32_meta_layout(dims, "moe").total_bytes,
     )
@@ -366,7 +368,7 @@ def _ce_plan(cfg):
     dims_fp, fl_fp = family_layouts(cfg)
     return derive_freeze_plan(
         dims_fp, cfg.n_layers,
-        lambda i: [f.name for f in fl_fp.block_weight_at(i).fields],
+        lambda i: [f.name for f in fl_fp.layers[i].weights.fields],
         tied_embeddings=bool(getattr(cfg, "tied_embeddings", False)),
     )
 
@@ -378,7 +380,7 @@ def _warmup_plan(dims, n_layers):
     from ..freeze_plan import derive_freeze_plan
 
     def fields_of(i):
-        wl = (dsv32_dense_weight_layout(dims) if dims.kind_of(i) == "dense"
+        wl = (dsv32_dense_weight_layout(dims) if dims.kinds[i] == "dense"
               else dsv32_moe_weight_layout(dims))
         return [f.name for f in wl.fields]
 
@@ -400,7 +402,7 @@ def build_shaped_dsv32(
     # cross-layer sharing — glm52 is the family that passes meta_shared
     return build_shaped_program(
         cfg, hw=hw, family="dsv32-shaped",
-        kinds=_kind_specs(cfg, hw), kind_of=dims.kind_of,
+        kinds=_kind_specs(cfg, hw), layer_kinds=dims.kinds,
         fast_memory_capacity=fast_memory_capacity,
         recompute_levels=recompute_levels, name=name,
         freeze=(_ce_plan(cfg) if cfg.sparse_mode
@@ -414,13 +416,15 @@ _WEIGHT_BUILDERS = {"dense": dsv32_dense_weight_layout, "moe": dsv32_moe_weight_
 def family_layouts(cfg: ShapedDsv32Config) -> tuple[Dsv32Dims, FamilyLayouts]:
     dims = dims_of_dsv32(cfg)
     ctx = {
-        "dense": dsv32_dense_context_layout(dims),
-        "moe": dsv32_moe_context_layout(dims),
+        "dense": dsv32_dense_activation_layout(dims),
+        "moe": dsv32_moe_activation_layout(dims),
     }
     return dims, FamilyLayouts(
-        n_layers=cfg.n_layers,
-        block_weight_at=lambda i: _WEIGHT_BUILDERS[dims.kind_of(i)](dims, layer=i),
-        block_context_at=lambda i: ctx[dims.kind_of(i)],
+        layers=[LayerLayout(kind=dims.kinds[i],
+                            weights=_WEIGHT_BUILDERS[dims.kinds[i]](dims, layer=i),
+                            activations=ctx[dims.kinds[i]],
+                            aux=dsv32_meta_layout(dims, dims.kinds[i]))
+                for i in range(cfg.n_layers)],
         embed=embed_weight_layout(dims),
         head=head_weight_layout(dims),
         init_specials={
@@ -429,7 +433,6 @@ def family_layouts(cfg: ShapedDsv32Config) -> tuple[Dsv32Dims, FamilyLayouts]:
             "idx_k_ln_w": lambda n, gen: torch.ones(n),
             "idx_k_ln_b": lambda n, gen: torch.zeros(n),
         },
-        block_meta_at=lambda i: dsv32_meta_layout(dims, dims.kind_of(i)),
     )
 
 

@@ -71,7 +71,7 @@ def test_golden_qwen35moe_trains():
         dims, cfg.n_layers, table(),
         [
             packed(
-                qwen35moe_attn_weight_layout(dims) if dims.kind_of(i) == "full"
+                qwen35moe_attn_weight_layout(dims) if dims.kinds[i] == "full"
                 else qwen35moe_lin_weight_layout(dims)
             )
             for i in range(cfg.n_layers)
@@ -231,15 +231,15 @@ def test_qwen35moe_attn_block_ladder2():
 
 def test_qwen35moe_stage_context_completeness():
     from dataflow.tasks.layouts import (
-        qwen35moe_attn_context_layout,
-        qwen35moe_lin_context_layout,
+        qwen35moe_attn_activation_layout,
+        qwen35moe_lin_activation_layout,
     )
     from dataflow.tasks.models.qwen35moe_blocks import Qwen35MoeAttnBlockFwd, Qwen35MoeLinBlockFwd
 
     dims = _tiny_dims()
     for cls, cl in (
-        (Qwen35MoeLinBlockFwd, qwen35moe_lin_context_layout(dims)),
-        (Qwen35MoeAttnBlockFwd, qwen35moe_attn_context_layout(dims)),
+        (Qwen35MoeLinBlockFwd, qwen35moe_lin_activation_layout(dims)),
+        (Qwen35MoeAttnBlockFwd, qwen35moe_attn_activation_layout(dims)),
     ):
         declared = {f.name for f in cl.fields}
         emitted = cls.context_fields_emitted()
@@ -360,7 +360,7 @@ def _run(engine_kwargs=None, resolver_wrapper=None, program=None, seed=7):
     layouts = {"W_embed": None, "W_head": head_weight_layout(dims)}
     for i in range(cfg.n_layers):
         layouts[f"W_{i}"] = (
-            qwen35moe_attn_weight_layout(dims) if dims.kind_of(i) == "full"
+            qwen35moe_attn_weight_layout(dims) if dims.kinds[i] == "full"
             else qwen35moe_lin_weight_layout(dims)
         )
     out = {}

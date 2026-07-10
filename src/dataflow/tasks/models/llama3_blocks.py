@@ -38,7 +38,7 @@ from ..kernels import KernelCtx, KernelSet, resolve_kernels
 from ..layouts import (
     LlamaDims,
     PackedLayout,
-    context_layout,
+    activation_layout,
     embed_weight_layout,
     grad_layout,
     head_weight_layout,

@@ -58,7 +58,7 @@ class GoldenGlm52(GoldenDsv3):
     def block_layout(self, layer: int | None = None) -> PackedLayout:
         if layer is None:
             return dsv32_moe_weight_layout(self.dims, layer=layer)
-        kind = self.dims.kind_of(layer)
+        kind = self.dims.kinds[layer]
         if kind == "gdl":
             return dsv32_dense_weight_layout(self.dims, layer=layer)
         if kind == "gml":

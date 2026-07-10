@@ -20,7 +20,7 @@ from ..kernels import KernelSet, resolve_kernels
 from ..layouts import (
     PackedLayout,
     Qwen3MoeDims,
-    qwen3moe_context_layout,
+    qwen3moe_activation_layout,
     qwen3moe_weight_layout,
 )
 from ..base_blocks import AdamWHyper, AdamWStep, EmbedBwd, EmbedFwd, HeadLoss
@@ -38,7 +38,7 @@ class Qwen3MoeBlockFwd(MoEMetaState, MoEProfileFill, Qwen3BlockFwd):
 
     @property
     def cl(self) -> PackedLayout:
-        return qwen3moe_context_layout(self.dims)
+        return qwen3moe_activation_layout(self.dims)
 
     # qwen3's attention stages through resid1_norm2, then the MoE tail
     STAGES = Qwen3BlockFwd.STAGES[:5] + MOE_STAGES
@@ -58,7 +58,7 @@ class Qwen3MoeBlockBwd(MoEMetaState, MoEProfileFill, Qwen3BlockBwd):
 
     @property
     def cl(self) -> PackedLayout:
-        return qwen3moe_context_layout(self.dims)
+        return qwen3moe_activation_layout(self.dims)
 
     def _mlp_bwd(self, kctx, dy, a, w, dw, accum, acc, norm_bwd):
         return moe_mlp_tail_bwd(

@@ -300,8 +300,8 @@ def weight_layout(dims: LlamaDims, layer: int | None = None) -> PackedLayout:
     ], layer=layer))
 
 
-def context_layout(dims: LlamaDims) -> PackedLayout:
-    """Saved backward context for one block forward (the `A_*` object).
+def activation_layout(dims: LlamaDims) -> PackedLayout:
+    """Saved-for-backward activations for one block forward (the `A_*` object).
 
     Saves exactly what block backward needs beyond (x, W): post-rope q/k, v,
     flash lse + attention output, the post-attention residual (h_mid), both
@@ -366,8 +366,8 @@ def olmoe_weight_layout(dims: OlmoeDims, layer: int | None = None) -> PackedLayo
     ] + moe_weight_specs(dims, dims.moe), layer=layer))
 
 
-def olmoe_context_layout(dims: OlmoeDims) -> PackedLayout:
-    """Saved backward context for one OLMoE block: qwen3's save-pre-norm
+def olmoe_activation_layout(dims: OlmoeDims) -> PackedLayout:
+    """Saved-for-backward activations for one OLMoE block: qwen3's save-pre-norm
     convention with FULL-ROW rstds (one per token), plus the MoE tail's
     routing decision + pre-activations (tasks/moe/spec.py)."""
     from .modules.moe.spec import moe_context_specs
@@ -387,8 +387,8 @@ def olmoe_context_layout(dims: OlmoeDims) -> PackedLayout:
     ] + moe_context_specs(dims, dims.moe, meta=True))
 
 
-def qwen3_context_layout(dims: Qwen3Dims) -> PackedLayout:
-    """Saved backward context for one Qwen3 block forward.
+def qwen3_activation_layout(dims: Qwen3Dims) -> PackedLayout:
+    """Saved-for-backward activations for one Qwen3 block forward.
 
     qk-norm changes what is worth saving: instead of post-rope q/k we save
     the PRE-norm projections (qm/km) plus the per-head rstds — backward then
@@ -441,7 +441,7 @@ def qwen3moe_weight_layout(dims: Qwen3MoeDims, layer: int | None = None) -> Pack
     ] + moe_weight_specs(dims, dims.moe), layer=layer))
 
 
-def qwen3moe_context_layout(dims: Qwen3MoeDims) -> PackedLayout:
+def qwen3moe_activation_layout(dims: Qwen3MoeDims) -> PackedLayout:
     """qwen3's save-pre-norm convention with PER-HEAD rstds, plus the MoE
     tail's routing decision + pre-activations (tasks/moe/spec.py)."""
     from .modules.moe.spec import moe_context_specs
@@ -507,13 +507,14 @@ class Dsv3Dims:
     def v_dim(self) -> int:       # attention-output width fed to wo
         return self.n_heads * self.v_head_dim
 
-    def kind_of(self, layer: int) -> str:
-        return "dense" if layer < self.first_k_dense else "moe"
     # per-field optimizer assignment (tasks/optim.py): "adamw" (default,
     # historical behavior) | "sgd" | "sgdm" | "muon" | an OptPolicy with
     # fnmatch overrides. update_specials (noaux bias, frozen) stay the
     # highest-priority per-field override on top of this.
     opt_policy: object = "adamw"
+    # per-layer chain kinds ("dense"/"moe" here), one entry per layer —
+    # populated by dims_of_* (dims alone don't know n_layers). DATA, indexed.
+    kinds: tuple[str, ...] = ()
 
 
 def _dsv3_attn_weight_specs(dims: Dsv3Dims) -> list[tuple[str, tuple[int, ...]]]:
@@ -581,7 +582,7 @@ def dsv3_dense_weight_layout(dims: Dsv3Dims, layer: int | None = None) -> Packed
     ], layer=layer))
 
 
-def dsv3_dense_context_layout(dims: Dsv3Dims) -> PackedLayout:
+def dsv3_dense_activation_layout(dims: Dsv3Dims) -> PackedLayout:
     t, ff = dims.tokens, dims.d_ff
     return PackedLayout.build(_warmup_ctx_filter(
         _dsv3_attn_ctx_specs(dims) + [
@@ -599,7 +600,7 @@ def dsv3_moe_weight_layout(dims: Dsv3Dims, layer: int | None = None) -> PackedLa
     ))
 
 
-def dsv3_moe_context_layout(dims: Dsv3Dims) -> PackedLayout:
+def dsv3_moe_activation_layout(dims: Dsv3Dims) -> PackedLayout:
     from .modules.moe.spec import moe_context_specs
 
     return PackedLayout.build(
@@ -671,12 +672,6 @@ class Glm52Dims(Dsv32Dims):
     def leaders(self) -> tuple[int, ...]:
         return tuple(i for i, r in enumerate(self.indexer_types) if r == "full")
 
-    def kind_of(self, layer: int) -> str:
-        ffn_dense = layer < self.first_k_dense
-        full = self.indexer_types[layer] == "full"
-        if ffn_dense:
-            return "gdl"  # dense shared rejected at dims validation
-        return "gml" if full else "gmf"
 
 
 def _dsv32_attn_weight_specs(dims: Dsv32Dims) -> list[tuple[str, tuple[int, ...]]]:
@@ -708,7 +703,7 @@ def dsv32_dense_weight_layout(dims: Dsv32Dims, layer: int | None = None) -> Pack
     ], layer=layer))
 
 
-def dsv32_dense_context_layout(dims: Dsv32Dims) -> PackedLayout:
+def dsv32_dense_activation_layout(dims: Dsv32Dims) -> PackedLayout:
     t, ff = dims.tokens, dims.d_ff
     return PackedLayout.build(_warmup_ctx_filter(
         _dsv32_attn_ctx_specs(dims) + [
@@ -726,7 +721,7 @@ def dsv32_moe_weight_layout(dims: Dsv32Dims, layer: int | None = None) -> Packed
     ))
 
 
-def dsv32_moe_context_layout(dims: Dsv32Dims) -> PackedLayout:
+def dsv32_moe_activation_layout(dims: Dsv32Dims) -> PackedLayout:
     from .modules.moe.spec import moe_context_specs
 
     return PackedLayout.build(_warmup_ctx_filter(
@@ -832,13 +827,14 @@ class Qwen35Dims:
     def ba_dim(self) -> int:
         return 2 * self.lin_v_heads
 
-    def kind_of(self, layer: int) -> str:
-        return "full" if (layer + 1) % self.full_attention_interval == 0 else "lin"
     # per-field optimizer assignment (tasks/optim.py): "adamw" (default,
     # historical behavior) | "sgd" | "sgdm" | "muon" | an OptPolicy with
     # fnmatch overrides. update_specials (noaux bias, frozen) stay the
     # highest-priority per-field override on top of this.
     opt_policy: object = "adamw"
+    # per-layer chain kinds ("lin"/"full" here), one entry per layer —
+    # populated by dims_of_* (dims alone don't know n_layers). DATA, indexed.
+    kinds: tuple[str, ...] = ()
 
 
 def _qwen35_lin_attn_specs(dims) -> list[tuple[str, tuple[int, ...]]]:
@@ -922,7 +918,7 @@ def qwen35_lin_weight_layout(dims: Qwen35Dims, layer: int | None = None) -> Pack
     ))
 
 
-def qwen35_lin_context_layout(dims: Qwen35Dims) -> PackedLayout:
+def qwen35_lin_activation_layout(dims: Qwen35Dims) -> PackedLayout:
     """DeltaNet saved context (design §3d): projections + fla's saved
     outputs; post-conv and q/k l2norms are recomputed in backward."""
     t, ff = dims.tokens, dims.d_ff
@@ -939,7 +935,7 @@ def qwen35_attn_weight_layout(dims: Qwen35Dims, layer: int | None = None) -> Pac
     ))
 
 
-def qwen35_attn_context_layout(dims: Qwen35Dims) -> PackedLayout:
+def qwen35_attn_activation_layout(dims: Qwen35Dims) -> PackedLayout:
     """Gated-attention saved context: pre-norm q (qm) + per-head rstds
     (qwen3 pattern — backward rebuilds post-norm/rope), k likewise, v,
     pre-sigmoid gate, flash outputs, xo, MLP projections."""
@@ -969,7 +965,7 @@ def qwen35moe_lin_weight_layout(dims: Qwen35MoeDims, layer: int | None = None) -
     ))
 
 
-def qwen35moe_lin_context_layout(dims: Qwen35MoeDims) -> PackedLayout:
+def qwen35moe_lin_activation_layout(dims: Qwen35MoeDims) -> PackedLayout:
     from .modules.moe.spec import moe_context_specs
 
     return PackedLayout.build(
@@ -985,7 +981,7 @@ def qwen35moe_attn_weight_layout(dims: Qwen35MoeDims, layer: int | None = None) 
     ))
 
 
-def qwen35moe_attn_context_layout(dims: Qwen35MoeDims) -> PackedLayout:
+def qwen35moe_attn_activation_layout(dims: Qwen35MoeDims) -> PackedLayout:
     from .modules.moe.spec import moe_context_specs
 
     return PackedLayout.build(

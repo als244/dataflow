@@ -29,20 +29,35 @@ from dataflow.tasks.layouts import PackedLayout, grad_layout, opt_state_layout
 
 
 @dataclass(frozen=True)
-class FamilyLayouts:
-    """Which packed layout backs each weight object of a family."""
+class LayerLayout:
+    """One layer's packed layouts + chain kind. Per-layer info is DATA,
+    indexed (``fl.layers[i].weights``), never a callable hook."""
 
-    n_layers: int
-    block_weight_at: Callable[[int], PackedLayout]   # layer -> W_{i} layout
-    block_context_at: Callable[[int], PackedLayout]  # layer -> A_* layout
+    kind: str                        # the chain kind key ("block", "moe", "lin"/"full", ...)
+    weights: PackedLayout            # W_{i}
+    activations: PackedLayout        # A_{s}_{r}_{i} (saved-for-backward activations)
+    # M_{s}_{r}_{i} layout (metadata objects: never-recompute forward
+    # artifacts — routing packs, selections). None = no metadata object.
+    aux: PackedLayout | None = None
+
+
+@dataclass(frozen=True)
+class FamilyLayouts:
+    """Which packed layout backs each object of a family: one LayerLayout
+    per layer (built up front — depth-dependent dtype policies make W_0 and
+    W_1 different bytes; heterogeneous families differ by kind), plus the
+    embed/head tables and any special init distributions (qwen3.5's
+    A_log/dt_bias)."""
+
+    layers: list[LayerLayout]
     embed: PackedLayout          # W_embed (tied families: the head layout)
     head: PackedLayout           # W_head (unused branches when tied)
     embed_ns: str = "embed"      # policy namespace: "head" when tied
     init_specials: Mapping[str, Callable] | None = None  # field -> (n, gen) -> tensor
-    # layer -> M_{s}_{r}_{i} layout (metadata objects: never-recompute
-    # forward artifacts — routing packs, selections). None/empty layout =
-    # the layer has no metadata.
-    block_meta_at: Callable[[int], PackedLayout] | None = None
+
+    @property
+    def n_layers(self) -> int:
+        return len(self.layers)
 
 
 def size_of_factory(dims, fl: FamilyLayouts):
@@ -52,13 +67,13 @@ def size_of_factory(dims, fl: FamilyLayouts):
     coincides with the historical uniform sizes."""
     p = dims.dtypes
     n = fl.n_layers
-    wl_i = [fl.block_weight_at(i) for i in range(n)]
-    a_i = [fl.block_context_at(i).total_bytes for i in range(n)]
+    wl_i = [ll.weights for ll in fl.layers]
+    a_i = [ll.activations.total_bytes for ll in fl.layers]
     op = getattr(dims, "opt_policy", None)
     dw_i = [grad_layout(wl_i[i], p, layer=i, opt_policy=op).total_bytes
             for i in range(n)]
-    m_i = ([fl.block_meta_at(i).total_bytes for i in range(n)]
-           if fl.block_meta_at is not None else None)
+    m_i = ([ll.aux.total_bytes for ll in fl.layers]
+           if all(ll.aux is not None for ll in fl.layers) else None)
     op = getattr(dims, "opt_policy", None)
     o_i = [opt_state_layout(wl_i[i], p, layer=i, opt_policy=op).total_bytes
            for i in range(n)]
@@ -258,7 +273,7 @@ def initial_values_from_layouts(program: Program, dims, fl: FamilyLayouts,
             buffers[spec.id] = buf
         if spec.id.startswith("W_") and spec.id not in ("W_embed", "W_head"):
             layer = int(spec.id.split("_")[1])
-            fill_weight_fields(buf, fl.block_weight_at(layer), gen,
+            fill_weight_fields(buf, fl.layers[layer].weights, gen,
                                special=fl.init_specials)
         elif spec.id == "W_embed":
             fill_weight_fields(buf, fl.embed, gen)

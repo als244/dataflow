@@ -32,7 +32,7 @@ class GoldenDsv3(GoldenOlmoe):
     dims: Dsv3Dims  # re-typed; position and (lack of) default inherited
 
     def block_layout(self, layer: int | None = None) -> PackedLayout:
-        if layer is not None and self.dims.kind_of(layer) == "dense":
+        if layer is not None and self.dims.kinds[layer] == "dense":
             return dsv3_dense_weight_layout(self.dims, layer=layer)
         return dsv3_moe_weight_layout(self.dims, layer=layer)
 

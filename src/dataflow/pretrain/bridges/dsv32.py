@@ -72,7 +72,7 @@ def to_dsv32_state_dict(cfg, get_bytes) -> dict:
     sd["final_norm.weight"] = hw["final_norm_w"].clone()
     for i in range(cfg.n_layers):
         p = f"blocks.{i}"
-        dense = dims.kind_of(i) == "dense"
+        dense = dims.kinds[i] == "dense"
         layout = dsv32_dense_weight_layout if dense else dsv32_moe_weight_layout
         w = layout(dims, layer=i).unpack_tensor(get_bytes(f"W_{i}"))
         sd[f"{p}.attn_norm.weight"] = w["attn_norm_w"].clone()

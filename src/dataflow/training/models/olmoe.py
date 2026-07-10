@@ -25,12 +25,12 @@ from dataflow.tasks.layouts import (
     OlmoeDims,
     embed_weight_layout,
     head_weight_layout,
-    olmoe_context_layout,
+    olmoe_activation_layout,
     olmoe_weight_layout,
 )
 from dataflow.tasks.modules.moe.spec import MoESpec, moe_meta_layout
 
-from ..lowering import FamilyLayouts, apply_exact_sizes, initial_values_from_layouts, size_of_factory
+from ..lowering import FamilyLayouts, LayerLayout, apply_exact_sizes, initial_values_from_layouts, size_of_factory
 from ..shaped_program import BF16, LayerKindSpec, ShapedHardware, build_shaped_program
 
 
@@ -140,7 +140,7 @@ def _kind_spec(cfg: ShapedOlmoeConfig, hw: ShapedHardware) -> LayerKindSpec:
     """One MoE-attention kind. FLOPs = active params; bytes = full stack."""
     dims = dims_of_olmoe(cfg)
     wl = olmoe_weight_layout(dims, layer=0)
-    cl = olmoe_context_layout(dims)
+    cl = olmoe_activation_layout(dims)
     t, d, seq = cfg.tokens, cfg.d_model, cfg.seq_len
     q, kv, f, k = cfg.q_dim, cfg.kv_dim, cfg.d_ff_expert, cfg.top_k
 
@@ -196,7 +196,7 @@ def build_shaped_olmoe(
     dims_fp, fl_fp = family_layouts(cfg)
     freeze_plan = derive_freeze_plan(
         dims_fp, cfg.n_layers,
-        lambda i: [f.name for f in fl_fp.block_weight_at(i).fields],
+        lambda i: [f.name for f in fl_fp.layers[i].weights.fields],
         tied_embeddings=bool(getattr(cfg, "tied_embeddings", False)),
     )
     return build_shaped_program(
@@ -210,14 +210,15 @@ def build_shaped_olmoe(
 
 def family_layouts(cfg: ShapedOlmoeConfig) -> tuple[OlmoeDims, FamilyLayouts]:
     dims = dims_of_olmoe(cfg)
-    cl = olmoe_context_layout(dims)
+    cl = olmoe_activation_layout(dims)
     return dims, FamilyLayouts(
-        n_layers=cfg.n_layers,
-        block_weight_at=lambda i: olmoe_weight_layout(dims, layer=i),
-        block_context_at=lambda i: cl,
+        layers=[LayerLayout(kind="moe",
+                            weights=olmoe_weight_layout(dims, layer=i),
+                            activations=cl,
+                            aux=moe_meta_layout(dims, dims.moe))
+                for i in range(cfg.n_layers)],
         embed=embed_weight_layout(dims),
         head=head_weight_layout(dims),
-        block_meta_at=lambda i: moe_meta_layout(dims, dims.moe),
     )
 
 

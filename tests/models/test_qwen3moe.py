@@ -186,10 +186,10 @@ def test_qwen3moe_block_ladder2():
 
 
 def test_qwen3moe_stage_context_completeness():
-    from dataflow.tasks.layouts import qwen3moe_context_layout
+    from dataflow.tasks.layouts import qwen3moe_activation_layout
     from dataflow.tasks.models.qwen3moe_blocks import Qwen3MoeBlockFwd
 
-    cl = qwen3moe_context_layout(_tiny_dims())
+    cl = qwen3moe_activation_layout(_tiny_dims())
     declared = {f.name for f in cl.fields}
     emitted = Qwen3MoeBlockFwd.context_fields_emitted()
     assert declared == emitted, declared ^ emitted

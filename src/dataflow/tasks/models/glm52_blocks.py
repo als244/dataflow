@@ -39,7 +39,7 @@ from ..kernels import KernelSet, resolve_kernels
 from ..layouts import (
     Glm52Dims,
     PackedLayout,
-    dsv3_dense_context_layout,
+    dsv3_dense_activation_layout,
     dsv3_moe_weight_layout,
     dsv32_dense_weight_layout,
     dsv32_moe_weight_layout,
@@ -67,7 +67,7 @@ from .dsv32_blocks import (
 from ..modules.moe.stages import MOE_SHARED_NOGATE_STAGES, moe_bias_update, moe_mlp_tail_bwd
 
 
-def _glm52_moe_context_layout(dims: Glm52Dims) -> PackedLayout:
+def _glm52_moe_activation_layout(dims: Glm52Dims) -> PackedLayout:
     from ..layouts import _dsv3_attn_ctx_specs, _warmup_ctx_filter
     from ..modules.moe.spec import moe_context_specs
 
@@ -326,7 +326,7 @@ class Glm52DlBlockFwd(Glm52MetaState, Glm52ProfileFill, Dsv32DenseBlockFwd):
 
     @property
     def cl(self) -> PackedLayout:
-        return dsv3_dense_context_layout(self.dims)
+        return dsv3_dense_activation_layout(self.dims)
 
 
 @dataclass(frozen=True)
@@ -345,7 +345,7 @@ class Glm52DlBlockBwd(_Glm52LeaderKL, Glm52MetaState, Glm52ProfileFill,
 
     @property
     def cl(self) -> PackedLayout:
-        return dsv3_dense_context_layout(self.dims)
+        return dsv3_dense_activation_layout(self.dims)
 
 
 @dataclass(frozen=True)
@@ -358,7 +358,7 @@ class Glm52MlBlockFwd(Glm52MetaState, Glm52ProfileFill, Dsv32MoeBlockFwd):
 
     @property
     def cl(self) -> PackedLayout:
-        return _glm52_moe_context_layout(self.dims)
+        return _glm52_moe_activation_layout(self.dims)
 
 
 @dataclass(frozen=True)
@@ -377,7 +377,7 @@ class Glm52MlBlockBwd(_Glm52LeaderKL, Glm52MetaState, Glm52ProfileFill,
 
     @property
     def cl(self) -> PackedLayout:
-        return _glm52_moe_context_layout(self.dims)
+        return _glm52_moe_activation_layout(self.dims)
 
 
 # ---- FOLLOWER kind (dsv3 MLA + shared selection; no indexer) ---------------
@@ -396,7 +396,7 @@ class Glm52MfBlockFwd(Glm52MetaState, Glm52ProfileFill, Dsv32MoeBlockFwd):
 
     @property
     def cl(self) -> PackedLayout:
-        return _glm52_moe_context_layout(self.dims)
+        return _glm52_moe_activation_layout(self.dims)
 
     STAGES = (
         Dsv3DenseBlockFwd.MLA_STAGES[0],                     # attn_norm
@@ -426,7 +426,7 @@ class Glm52MfBlockBwd(Glm52MetaState, Glm52ProfileFill, Dsv32MoeBlockBwd):
 
     @property
     def cl(self) -> PackedLayout:
-        return _glm52_moe_context_layout(self.dims)
+        return _glm52_moe_activation_layout(self.dims)
 
     def _backward(self, kctx, dy, a, x, w, dx_out, dw, accum, meta=None):
         if meta:
@@ -574,7 +574,7 @@ class Glm52WarmupDlBlockFwd(Glm52MetaState, Dsv32WarmupDenseBlockFwd):
 
     @property
     def cl(self) -> PackedLayout:
-        return dsv3_dense_context_layout(self.dims)
+        return dsv3_dense_activation_layout(self.dims)
 
 
 @dataclass(frozen=True)
@@ -590,7 +590,7 @@ class Glm52WarmupDlBlockBwd(Glm52MetaState, _Glm52WarmupLeaderKL,
 
     @property
     def cl(self) -> PackedLayout:
-        return dsv3_dense_context_layout(self.dims)
+        return dsv3_dense_activation_layout(self.dims)
 
 
 @dataclass(frozen=True)
@@ -601,7 +601,7 @@ class Glm52WarmupMlBlockFwd(Glm52MetaState, Glm52ProfileFill,
 
     @property
     def cl(self) -> PackedLayout:
-        return _glm52_moe_context_layout(self.dims)
+        return _glm52_moe_activation_layout(self.dims)
 
 
 @dataclass(frozen=True)
@@ -617,7 +617,7 @@ class Glm52WarmupMlBlockBwd(Glm52MetaState, Glm52ProfileFill,
 
     @property
     def cl(self) -> PackedLayout:
-        return _glm52_moe_context_layout(self.dims)
+        return _glm52_moe_activation_layout(self.dims)
 
 
 @dataclass(frozen=True)
@@ -631,7 +631,7 @@ class Glm52WarmupMfBlockFwd(Glm52MetaState, Glm52ProfileFill,
 
     @property
     def cl(self) -> PackedLayout:
-        return _glm52_moe_context_layout(self.dims)
+        return _glm52_moe_activation_layout(self.dims)
 
 
 @dataclass(frozen=True)
@@ -650,7 +650,7 @@ class Glm52WarmupMfBlockBwd(Glm52MetaState, Glm52ProfileFill,
 
     @property
     def cl(self) -> PackedLayout:
-        return _glm52_moe_context_layout(self.dims)
+        return _glm52_moe_activation_layout(self.dims)
 
 
 def build_glm52_resolver(
@@ -682,7 +682,7 @@ def build_glm52_resolver(
 
     def _opt_layout(d, task, size):
         layer = AdamWStep.layer_of(task)
-        return _WL[d.kind_of(layer)](d, layer=layer), None
+        return _WL[d.kinds[layer]](d, layer=layer), None
 
     if dims.sparse_mode:
         blocks = {

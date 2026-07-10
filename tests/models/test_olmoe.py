@@ -186,10 +186,10 @@ def test_olmoe_block_ladder2():
 
 
 def test_olmoe_stage_context_completeness():
-    from dataflow.tasks.layouts import olmoe_context_layout
+    from dataflow.tasks.layouts import olmoe_activation_layout
     from dataflow.tasks.models.olmoe_blocks import OlmoeBlockFwd
 
-    cl = olmoe_context_layout(_tiny_dims())
+    cl = olmoe_activation_layout(_tiny_dims())
     declared = {f.name for f in cl.fields}
     emitted = OlmoeBlockFwd.context_fields_emitted()
     assert declared == emitted, declared ^ emitted

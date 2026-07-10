@@ -92,7 +92,7 @@ def test_dense_warmup_and_frozen_indexer_modes():
                          layer=0, opt_policy=wdims.opt_policy).total_bytes
     dws = {k: v for k, v in sizes.items() if k.startswith("dW_")}
     follower_layers = {i for i in range(cfg.n_layers)
-                       if wdims.kind_of(i) == "gmf"}
+                       if wdims.kinds[i] == "gmf"}
     for oid, b in dws.items():
         layer = int(oid.rsplit("_", 1)[1])
         assert layer not in follower_layers, f"follower {oid} should be pruned"

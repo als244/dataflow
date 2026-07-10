@@ -22,7 +22,7 @@ from dataflow.core import TaskSpec
 
 from .. import ops
 from ..kernels import KernelSet, resolve_kernels
-from ..layouts import PackedLayout, Qwen3Dims, qwen3_context_layout, qwen3_weight_layout
+from ..layouts import PackedLayout, Qwen3Dims, qwen3_activation_layout, qwen3_weight_layout
 from ..base_blocks import AdamWHyper, AdamWStep, EmbedBwd, EmbedFwd, HeadLoss
 from .llama3_blocks import BlockBwd, BlockFwd, BlockRecompute
 
@@ -36,7 +36,7 @@ class Qwen3BlockFwd(BlockFwd):
 
     @property
     def cl(self) -> PackedLayout:
-        return qwen3_context_layout(self.dims)
+        return qwen3_activation_layout(self.dims)
 
     # --- stages (see BlockFwd for the authoring contract) ---------------------
 
@@ -127,7 +127,7 @@ class Qwen3BlockBwd(BlockBwd):
 
     @property
     def cl(self) -> PackedLayout:
-        return qwen3_context_layout(self.dims)
+        return qwen3_activation_layout(self.dims)
 
     def _attn_bwd(self, kctx, dh_mid, a, x, w, acc, norm_bwd, dx_out) -> None:
         # attention part (qk-norm variant); the shared dense MLP tail runs

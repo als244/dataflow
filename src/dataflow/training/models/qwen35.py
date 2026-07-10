@@ -19,12 +19,12 @@ from dataflow.tasks.layouts import (
     Qwen35Dims,
     embed_weight_layout,
     head_weight_layout,
-    qwen35_attn_context_layout,
+    qwen35_attn_activation_layout,
     qwen35_attn_weight_layout,
-    qwen35_lin_context_layout,
+    qwen35_lin_activation_layout,
     qwen35_lin_weight_layout,
 )
-from ..lowering import FamilyLayouts, apply_exact_sizes, initial_values_from_layouts, size_of_factory
+from ..lowering import FamilyLayouts, LayerLayout, apply_exact_sizes, initial_values_from_layouts, size_of_factory
 from ..shaped_program import LayerKindSpec, ShapedHardware, build_shaped_program
 
 
@@ -134,6 +134,9 @@ def dims_of_qwen35(cfg: ShapedQwen35Config) -> Qwen35Dims:
         tokens=cfg.tokens, seq_len=cfg.seq_len, rope_base=cfg.rope_base,
         dtypes=getattr(cfg, "dtypes", None) or DTypePolicy(),
         seq_lens=getattr(cfg, "seq_lens", None),
+        kinds=tuple(
+            "full" if (i + 1) % cfg.full_attention_interval == 0 else "lin"
+            for i in range(cfg.n_layers)),
     )
 
 
@@ -183,14 +186,14 @@ def _kind_specs(cfg: ShapedQwen35Config, hw: ShapedHardware) -> dict[str, LayerK
     lin_mm = d * dims.qkvz_dim + d * dims.ba_dim + dims.value_dim * d + 3 * d * ff
     lin_scan_flops = 2.0 * t * dims.lin_v_heads * dims.lin_k_head_dim * dims.lin_v_head_dim * 2
     lin_mem = BF16 * t * (2 * dims.conv_dim + 2 * dims.value_dim)
-    lin = spec("linattn", qwen35_lin_weight_layout(dims), qwen35_lin_context_layout(dims),
+    lin = spec("linattn", qwen35_lin_weight_layout(dims), qwen35_lin_activation_layout(dims),
                lin_mm, lin_scan_flops, BF16 * t * 2 * dims.value_dim, lin_mem)
 
     # full-attn: causal flash over head_dim with GQA
     full_mm = d * 2 * dims.attn_dim + 2 * d * dims.kv_dim + dims.attn_dim * d + 3 * d * ff
     attn_flops = 2.0 * t * seq * dims.attn_dim
     attn_bytes = BF16 * t * (2 * dims.attn_dim + 2 * dims.kv_dim)
-    full = spec("gattn", qwen35_attn_weight_layout(dims), qwen35_attn_context_layout(dims),
+    full = spec("gattn", qwen35_attn_weight_layout(dims), qwen35_attn_activation_layout(dims),
                 full_mm, attn_flops, attn_bytes, 0.0)
 
     return {"lin": lin, "full": full}
@@ -215,14 +218,14 @@ def build_shaped_qwen35(
     dims_fp, fl_fp = family_layouts(cfg)
     freeze_plan = derive_freeze_plan(
         dims_fp, cfg.n_layers,
-        lambda i: [f.name for f in fl_fp.block_weight_at(i).fields],
+        lambda i: [f.name for f in fl_fp.layers[i].weights.fields],
         tied_embeddings=bool(getattr(cfg, "tied_embeddings", False)),
     )
     return build_shaped_program(
         cfg, hw=hw, family="qwen35-shaped",
         fast_memory_capacity=fast_memory_capacity,
         recompute_levels=recompute_levels, name=label,
-        kinds=_kind_specs(cfg, hw), kind_of=dims.kind_of,
+        kinds=_kind_specs(cfg, hw), layer_kinds=dims.kinds,
         freeze=freeze_plan,
     )
 
@@ -249,15 +252,16 @@ def _dt_bias_init(n, gen):
 def family_layouts(cfg: ShapedQwen35Config):
     dims = dims_of_qwen35(cfg)
     ctx = {
-        "lin": qwen35_lin_context_layout(dims),
-        "full": qwen35_attn_context_layout(dims),
+        "lin": qwen35_lin_activation_layout(dims),
+        "full": qwen35_attn_activation_layout(dims),
     }
     hl = head_weight_layout(dims)
     tied = cfg.tied_embeddings
     return dims, FamilyLayouts(
-        n_layers=cfg.n_layers,
-        block_weight_at=lambda i: _WEIGHT_BUILDERS[dims.kind_of(i)](dims, layer=i),
-        block_context_at=lambda i: ctx[dims.kind_of(i)],
+        layers=[LayerLayout(kind=dims.kinds[i],
+                            weights=_WEIGHT_BUILDERS[dims.kinds[i]](dims, layer=i),
+                            activations=ctx[dims.kinds[i]])
+                for i in range(cfg.n_layers)],
         embed=hl if tied else embed_weight_layout(dims),
         head=hl,
         embed_ns="head" if tied else "embed",

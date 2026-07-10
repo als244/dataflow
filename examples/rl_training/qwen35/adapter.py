@@ -20,7 +20,7 @@ def make_golden(dims, n_layers, leaves):
 
 def _fwd(golden, i, x):
     w = golden.w_blocks[i]
-    if golden.dims.kind_of(i) == "lin":
+    if golden.dims.kinds[i] == "lin":
         return golden.lin_block_forward(x, w)
     return golden.full_block_forward(x, w)
 

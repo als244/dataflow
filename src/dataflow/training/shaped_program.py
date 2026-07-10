@@ -13,7 +13,7 @@ A family supplies:
     vocab_size, tokens, seq_len, batch, grad_accum_rounds, num_steps,
     optimizer_placement, embed_params, head_params, tied_embeddings?);
   - one ``LayerKindSpec`` per layer kind (sizes + roofline cost seeds +
-    compute_block_key prefix) and a ``kind_of(layer)`` table — uniform
+    compute_block_key prefix) and per-layer ``layer_kinds`` — uniform
     dense-transformer families can seed theirs with
     ``roofline_block_kind_spec``.
 
@@ -75,7 +75,7 @@ class LayerKindSpec:
     """Everything the chain builder needs about ONE layer kind.
 
     Heterogeneous families (qwen3.5: DeltaNet + gated-attention layers)
-    pass a spec per kind + a ``kind_of(layer)`` table; uniform families
+    pass a spec per kind + per-layer ``layer_kinds``; uniform families
     pass a single kind. Task IDS are kind-independent
     (``block_fwd_{s}_{r}_{i}``); only compute_block_keys and sizes/costs
     vary, so planner/runtime/tooling conventions hold.
@@ -210,7 +210,7 @@ def build_shaped_program(
     cfg,
     *,
     kinds: Mapping[str, LayerKindSpec],
-    kind_of=None,
+    layer_kinds: tuple[str, ...] | None = None,
     family: str,
     hw: ShapedHardware | None = None,
     fast_memory_capacity: int | None = None,
@@ -253,10 +253,10 @@ def build_shaped_program(
     y_bytes = bf16(t * d)
     ids_bytes = dtype_nbytes((t,), "int32")
 
-    if kind_of is None:
-        _default_kind = next(iter(kinds))
-        kind_of = lambda i: _default_kind  # noqa: E731
-    spec_of = lambda i: kinds[kind_of(i)]  # noqa: E731
+    if layer_kinds is None:
+        default_kind = next(iter(kinds))
+        layer_kinds = tuple(default_kind for _ in range(cfg.n_layers))
+    layer_specs = [kinds[k] for k in layer_kinds]
     tied = bool(getattr(cfg, "tied_embeddings", False))
 
     initial: list[ObjectSpec] = []
@@ -274,8 +274,8 @@ def build_shaped_program(
                 tensor=None if tied else TensorMeta(dtype="bf16", shape=(cfg.vocab_size, d)))
     add_initial("O_embed", 2 * w_embed, "optimizer_state", persist=True)
     for i in range(cfg.n_layers):
-        add_initial(f"W_{i}", spec_of(i).w_bytes, "parameter", persist=True)
-        add_initial(f"O_{i}", 2 * spec_of(i).w_bytes, "optimizer_state", persist=True)
+        add_initial(f"W_{i}", layer_specs[i].w_bytes, "parameter", persist=True)
+        add_initial(f"O_{i}", 2 * layer_specs[i].w_bytes, "optimizer_state", persist=True)
     if not tied:
         add_initial("W_head", w_head, "parameter", persist=True,
                     tensor=TensorMeta(dtype="bf16", shape=(cfg.vocab_size, d)))
@@ -331,7 +331,7 @@ def build_shaped_program(
                  group="optimizer")
 
         def opt_block(i: int, s: int = s) -> None:
-            sp = spec_of(i)
+            sp = layer_specs[i]
             task(f"optimizer_{s}_{i}", "optimizer_block",
                  [f"W_{i}", f"dW_{s}_{i}", f"O_{i}"], [],
                  sp.optimizer_us, mutates=(f"W_{i}", f"O_{i}"),
@@ -358,7 +358,7 @@ def build_shaped_program(
                 loose.embed_fwd_us, group="forward",
             )
             for i in range(cfg.n_layers):
-                sp = spec_of(i)
+                sp = layer_specs[i]
                 a_id = f"A_{s}_{r}_{i}"
                 level = levels.get(a_id, 0)
                 x_id = f"y_embed_{s}_{r}" if i == 0 else f"y_{s}_{r}_{i - 1}"
@@ -420,7 +420,7 @@ def build_shaped_program(
             for i in reversed(range(cfg.n_layers)):
                 a_id = f"A_{s}_{r}_{i}"
                 x_id = f"y_embed_{s}_{r}" if i == 0 else f"y_{s}_{r}_{i - 1}"
-                sp = spec_of(i)
+                sp = layer_specs[i]
                 meta_ins = []
                 if sp.meta_bytes:
                     meta_ins.append(f"M_{s}_{r}_{i}")

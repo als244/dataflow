@@ -29,7 +29,7 @@ from ..kernels import KernelSet, resolve_kernels
 from ..layouts import (
     OlmoeDims,
     PackedLayout,
-    olmoe_context_layout,
+    olmoe_activation_layout,
     olmoe_weight_layout,
 )
 from ..base_blocks import AdamWHyper, AdamWStep, EmbedBwd, EmbedFwd, HeadLoss
@@ -46,7 +46,7 @@ class OlmoeBlockFwd(MoEMetaState, MoEProfileFill, BlockFwd):
 
     @property
     def cl(self) -> PackedLayout:
-        return olmoe_context_layout(self.dims)
+        return olmoe_activation_layout(self.dims)
 
     # --- stages (see BlockFwd for the authoring contract) ---------------------
 
@@ -123,7 +123,7 @@ class OlmoeBlockBwd(MoEMetaState, MoEProfileFill, BlockBwd):
 
     @property
     def cl(self) -> PackedLayout:
-        return olmoe_context_layout(self.dims)
+        return olmoe_activation_layout(self.dims)
 
     def _mlp_bwd(self, kctx, dy, a, w, dw, accum, acc, norm_bwd):
         return moe_mlp_tail_bwd(

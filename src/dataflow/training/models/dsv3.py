@@ -36,16 +36,16 @@ from dataflow.tasks.layouts import (
     Dsv3Dims,
     DTypePolicy,
     ParamDTypes,
-    dsv3_dense_context_layout,
+    dsv3_dense_activation_layout,
     dsv3_dense_weight_layout,
-    dsv3_moe_context_layout,
+    dsv3_moe_activation_layout,
     dsv3_moe_weight_layout,
     embed_weight_layout,
     head_weight_layout,
 )
 from dataflow.tasks.modules.moe.spec import MoESpec, moe_meta_layout
 
-from ..lowering import FamilyLayouts, apply_exact_sizes, initial_values_from_layouts, size_of_factory
+from ..lowering import FamilyLayouts, LayerLayout, apply_exact_sizes, initial_values_from_layouts, size_of_factory
 from ..shaped_program import BF16, LayerKindSpec, ShapedHardware, build_shaped_program
 
 _DSV3_DTYPES = DTypePolicy(overrides=(
@@ -233,6 +233,8 @@ def dims_of_dsv3(cfg: ShapedDsv3Config) -> Dsv3Dims:
         dtypes=getattr(cfg, "dtypes", None) or _DSV3_DTYPES,
         seq_lens=getattr(cfg, "seq_lens", None),
         moe=moe_spec_of(cfg),
+        kinds=tuple("dense" if i < cfg.first_k_dense else "moe"
+                    for i in range(cfg.n_layers)),
     )
 
 
@@ -283,7 +285,7 @@ def _kind_specs(cfg: ShapedDsv3Config, hw: ShapedHardware) -> dict[str, LayerKin
         )
 
     dense = spec(
-        "mladense", dsv3_dense_weight_layout(dims), dsv3_dense_context_layout(dims),
+        "mladense", dsv3_dense_weight_layout(dims), dsv3_dense_activation_layout(dims),
         3 * cfg.d_ff_dense * d, 0.0,
     )
     f, fs, k = cfg.d_ff_expert, cfg.d_ff_shared, cfg.top_k
@@ -293,7 +295,7 @@ def _kind_specs(cfg: ShapedDsv3Config, hw: ShapedHardware) -> dict[str, LayerKin
     )
     moe_traffic = BF16 * t * k * (3 * f + 2 * d)
     moe = spec(
-        "mlamoe", dsv3_moe_weight_layout(dims), dsv3_moe_context_layout(dims),
+        "mlamoe", dsv3_moe_weight_layout(dims), dsv3_moe_activation_layout(dims),
         moe_active, moe_traffic,
         meta_bytes=moe_meta_layout(dims, dims.moe).total_bytes,
     )
@@ -315,12 +317,12 @@ def build_shaped_dsv3(
     dims_fp, fl_fp = family_layouts(cfg)
     freeze_plan = derive_freeze_plan(
         dims_fp, cfg.n_layers,
-        lambda i: [f.name for f in fl_fp.block_weight_at(i).fields],
+        lambda i: [f.name for f in fl_fp.layers[i].weights.fields],
         tied_embeddings=bool(getattr(cfg, "tied_embeddings", False)),
     )
     return build_shaped_program(
         cfg, hw=hw, family="dsv3-shaped",
-        kinds=_kind_specs(cfg, hw), kind_of=dims.kind_of,
+        kinds=_kind_specs(cfg, hw), layer_kinds=dims.kinds,
         fast_memory_capacity=fast_memory_capacity,
         recompute_levels=recompute_levels, name=name,
         freeze=freeze_plan,
@@ -333,20 +335,23 @@ _WEIGHT_BUILDERS = {"dense": dsv3_dense_weight_layout, "moe": dsv3_moe_weight_la
 def family_layouts(cfg: ShapedDsv3Config) -> tuple[Dsv3Dims, FamilyLayouts]:
     dims = dims_of_dsv3(cfg)
     ctx = {
-        "dense": dsv3_dense_context_layout(dims),
-        "moe": dsv3_moe_context_layout(dims),
+        "dense": dsv3_dense_activation_layout(dims),
+        "moe": dsv3_moe_activation_layout(dims),
     }
     return dims, FamilyLayouts(
-        n_layers=cfg.n_layers,
-        block_weight_at=lambda i: _WEIGHT_BUILDERS[dims.kind_of(i)](dims, layer=i),
-        block_context_at=lambda i: ctx[dims.kind_of(i)],
+        layers=[LayerLayout(kind=dims.kinds[i],
+                            weights=_WEIGHT_BUILDERS[dims.kinds[i]](dims, layer=i),
+                            activations=ctx[dims.kinds[i]],
+                            aux=(moe_meta_layout(dims, dims.moe)
+                                 if dims.kinds[i] == "moe"
+                                 else PackedLayout.build([])))
+                for i in range(cfg.n_layers)],
         embed=embed_weight_layout(dims),
         head=head_weight_layout(dims),
         init_specials={
             # the balance bias starts at ZERO (V3) — never randn
             "w_router_bias": lambda n, gen: torch.zeros(n),
         },
-        block_meta_at=lambda i: (moe_meta_layout(dims, dims.moe) if dims.kind_of(i) == "moe" else PackedLayout.build([])),
     )
 
 

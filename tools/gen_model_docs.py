@@ -73,16 +73,16 @@ def _meta_layout(family: str, dims, layer: int):
         if family in ("dsv32",):
             from dataflow.tasks.layouts import dsv32_meta_layout
 
-            return dsv32_meta_layout(dims, dims.kind_of(layer))
+            return dsv32_meta_layout(dims, dims.kinds[layer])
         if family in ("glm52",):
             from dataflow.tasks.layouts import glm52_meta_layout
 
-            return glm52_meta_layout(dims, dims.kind_of(layer))
+            return glm52_meta_layout(dims, dims.kinds[layer])
         if family in ("olmoe", "qwen3moe", "qwen35moe", "dsv3"):
             from dataflow.tasks.modules.moe.spec import moe_meta_layout
 
-            kind_of = getattr(dims, "kind_of", lambda i: "moe")
-            kind = kind_of(layer)
+            layer_kinds = getattr(dims, "kinds", ())
+            kind = layer_kinds[layer] if layer_kinds else "moe"
             if "dense" in str(kind) or str(kind) in ("lin", "full"):
                 return None
             return moe_meta_layout(dims, dims.moe)
@@ -340,8 +340,9 @@ def gen_page(name: str, preset: str, record: bool,
                 kern_cache[name] = kern_seqs
 
     L = cfg.n_layers
-    kind_of = getattr(dims, "kind_of", lambda i: "block")
-    kinds_seq = [str(kind_of(i)) for i in range(L)]
+    layer_kinds = getattr(dims, "kinds", ())
+    kinds_seq = ([str(k) for k in layer_kinds] if layer_kinds
+                 else ["block"] * L)
     rep_layer = {k: kinds_seq.index(k) for k in dict.fromkeys(kinds_seq)}
 
     out = [f"# {name} / `{preset}` @ {tag}: tasks, objects, kernels",

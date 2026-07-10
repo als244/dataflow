@@ -73,11 +73,11 @@ class Family:
     block_bwd: type | None = None
     block_recompute: type | None = None
     weight_layout: Callable | None = None
-    context_layout: Callable | None = None
+    activation_layout: Callable | None = None
 
 
 def _llama3() -> Family:
-    from dataflow.tasks.layouts import context_layout, weight_layout
+    from dataflow.tasks.layouts import activation_layout, weight_layout
     from dataflow.tasks.models.llama3_blocks import BlockBwd, BlockFwd, BlockRecompute, build_resolver
     from .models.llama3 import dims_of, initial_values, lower_llama3
     from .models.llama3 import ShapedLlamaConfig
@@ -99,12 +99,12 @@ def _llama3() -> Family:
         block_bwd=BlockBwd,
         block_recompute=BlockRecompute,
         weight_layout=weight_layout,
-        context_layout=context_layout,
+        activation_layout=activation_layout,
     )
 
 
 def _qwen3() -> Family:
-    from dataflow.tasks.layouts import qwen3_context_layout, qwen3_weight_layout
+    from dataflow.tasks.layouts import qwen3_activation_layout, qwen3_weight_layout
     from dataflow.tasks.models.qwen3_blocks import (
         Qwen3BlockBwd,
         Qwen3BlockFwd,
@@ -131,7 +131,7 @@ def _qwen3() -> Family:
         block_bwd=Qwen3BlockBwd,
         block_recompute=Qwen3BlockRecompute,
         weight_layout=qwen3_weight_layout,
-        context_layout=qwen3_context_layout,
+        activation_layout=qwen3_activation_layout,
     )
 
 

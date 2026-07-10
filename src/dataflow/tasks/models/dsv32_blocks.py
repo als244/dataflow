@@ -36,9 +36,9 @@ from ..interop import torch_view
 from ..layouts import (
     Dsv32Dims,
     PackedLayout,
-    dsv32_dense_context_layout,
+    dsv32_dense_activation_layout,
     dsv32_dense_weight_layout,
-    dsv32_moe_context_layout,
+    dsv32_moe_activation_layout,
     dsv32_moe_weight_layout,
     dsv32_meta_layout,
 )
@@ -216,7 +216,7 @@ class Dsv32DenseBlockFwd(Dsv32MetaState, Dsv32ProfileFill, Dsv3DenseBlockFwd):
 
     @property
     def cl(self) -> PackedLayout:
-        return dsv32_dense_context_layout(self.dims)
+        return dsv32_dense_activation_layout(self.dims)
 
     @staticmethod
     def _stage_mla_q(kctx, K, d, st):
@@ -328,7 +328,7 @@ class Dsv32DenseBlockBwd(Dsv32MetaState, Dsv32ProfileFill, Dsv3DenseBlockBwd):
 
     @property
     def cl(self) -> PackedLayout:
-        return dsv32_dense_context_layout(self.dims)
+        return dsv32_dense_activation_layout(self.dims)
 
     def _backward(self, kctx, dy, a, x, w, dx_out, dw, accum, meta=None):
         # merge the M views into the saved-state dict: downstream reads
@@ -545,7 +545,7 @@ class Dsv32MoeBlockFwd(Dsv32DenseBlockFwd):
 
     @property
     def cl(self) -> PackedLayout:
-        return dsv32_moe_context_layout(self.dims)
+        return dsv32_moe_activation_layout(self.dims)
 
     STAGES = Dsv32DenseBlockFwd.MLA_STAGES + MOE_SHARED_NOGATE_STAGES
 
@@ -563,7 +563,7 @@ class Dsv32MoeBlockBwd(Dsv32DenseBlockBwd):
 
     @property
     def cl(self) -> PackedLayout:
-        return dsv32_moe_context_layout(self.dims)
+        return dsv32_moe_activation_layout(self.dims)
 
     def _mlp_bwd(self, kctx, dy, a, w, dw, accum, acc, norm_bwd):
         return moe_mlp_tail_bwd(
@@ -661,7 +661,7 @@ class Dsv32WarmupDenseBlockFwd(Dsv32MetaState, Dsv3DenseBlockFwd):
 
     @property
     def cl(self) -> PackedLayout:
-        return dsv32_dense_context_layout(self.dims)
+        return dsv32_dense_activation_layout(self.dims)
 
 
 @dataclass(frozen=True)
@@ -679,7 +679,7 @@ class Dsv32WarmupDenseBlockBwd(Dsv32MetaState, _WarmupKLMixin, Dsv3DenseBlockBwd
 
     @property
     def cl(self) -> PackedLayout:
-        return dsv32_dense_context_layout(self.dims)
+        return dsv32_dense_activation_layout(self.dims)
 
 
 @dataclass(frozen=True)
@@ -692,7 +692,7 @@ class Dsv32WarmupMoeBlockFwd(Dsv32MetaState, Dsv32ProfileFill, Dsv3MoeBlockFwd):
 
     @property
     def cl(self) -> PackedLayout:
-        return dsv32_moe_context_layout(self.dims)
+        return dsv32_moe_activation_layout(self.dims)
 
 
 @dataclass(frozen=True)
@@ -711,7 +711,7 @@ class Dsv32WarmupMoeBlockBwd(Dsv32MetaState, Dsv32ProfileFill, _WarmupKLMixin, D
 
     @property
     def cl(self) -> PackedLayout:
-        return dsv32_moe_context_layout(self.dims)
+        return dsv32_moe_activation_layout(self.dims)
 
 
 _IDX_FIELDS = ("w_idx_q", "w_idx_k", "idx_k_ln_w", "idx_k_ln_b", "w_idx_w")
@@ -741,7 +741,7 @@ def build_dsv32_resolver(
         bias_special = {}
     def _opt_layout(d, task, size):
         layer = AdamWStep.layer_of(task)
-        if d.kind_of(layer) == "dense":
+        if d.kinds[layer] == "dense":
             return dsv32_dense_weight_layout(d, layer=layer), None
         return dsv32_moe_weight_layout(d, layer=layer), None
 

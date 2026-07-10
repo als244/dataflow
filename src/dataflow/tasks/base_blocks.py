@@ -20,7 +20,7 @@ from .kernels import KernelCtx, KernelSet, resolve_kernels
 from .layouts import (
     LlamaDims,
     PackedLayout,
-    context_layout,
+    activation_layout,
     embed_weight_layout,
     grad_layout,
     head_weight_layout,
@@ -86,7 +86,7 @@ class _Base:
 
     @property
     def cl(self) -> PackedLayout:
-        return context_layout(self.dims)
+        return activation_layout(self.dims)
 
     def _stream_ctx(self, ctx: TaskContext):
         es = external_stream(ctx.stream)

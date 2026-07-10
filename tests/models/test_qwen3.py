@@ -10,7 +10,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from dataflow.tasks.layouts import Qwen3Dims, qwen3_context_layout  # noqa: E402
+from dataflow.tasks.layouts import Qwen3Dims, qwen3_activation_layout  # noqa: E402
 from dataflow.tasks.models.qwen3_blocks import Qwen3BlockFwd  # noqa: E402
 from dataflow.training.models.qwen3 import dims_of_qwen3, lower_qwen3  # noqa: E402
 from dataflow.training.models.qwen3 import ShapedQwen3Config  # noqa: E402
@@ -25,7 +25,7 @@ CFG = ShapedQwen3Config(
 
 def test_qwen3_stage_context_completeness():
     dims = dims_of_qwen3(CFG)
-    declared = {f.name for f in qwen3_context_layout(dims).fields}
+    declared = {f.name for f in qwen3_activation_layout(dims).fields}
     emitted = Qwen3BlockFwd.context_fields_emitted()
     assert declared == emitted, declared ^ emitted
 

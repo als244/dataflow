@@ -451,7 +451,7 @@ def test_dsv32_frozen_indexer_ablation():
     wl_of = {}
     from dataflow.tasks.layouts import dsv32_dense_weight_layout, dsv32_moe_weight_layout
     for i in range(cfg.n_layers):
-        wl = (dsv32_dense_weight_layout(dims) if dims.kind_of(i) == "dense"
+        wl = (dsv32_dense_weight_layout(dims) if dims.kinds[i] == "dense"
               else dsv32_moe_weight_layout(dims))
         wl_of[i] = wl
         buf = values[f"W_{i}"]
@@ -511,7 +511,7 @@ def test_dsv32_dense_warmup_model_step():
     before = {}
     wl_of = {}
     for i in range(cfg.n_layers):
-        wl = (dsv32_dense_weight_layout(dims) if dims.kind_of(i) == "dense"
+        wl = (dsv32_dense_weight_layout(dims) if dims.kinds[i] == "dense"
               else dsv32_moe_weight_layout(dims))
         wl_of[i] = wl
         buf = values[f"W_{i}"]

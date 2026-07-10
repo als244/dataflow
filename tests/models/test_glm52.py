@@ -659,7 +659,7 @@ def test_glm52_dense_warmup_freeze_and_movement():
     idx_fields = ("w_idx_q", "w_idx_k", "idx_k_ln_w", "idx_k_ln_b", "w_idx_w")
     wl_of = {}
     for i in range(cfg.n_layers):
-        kind = dims.kind_of(i)
+        kind = dims.kinds[i]
         wl_of[i] = {"gdl": dsv32_dense_weight_layout,
                     "gml": dsv32_moe_weight_layout,
                     "gmf": dsv3_moe_weight_layout}[kind](dims)

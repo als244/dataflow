@@ -69,7 +69,7 @@ def to_glm52_state_dict(cfg, get_bytes) -> dict:
     sd["final_norm.weight"] = hw["final_norm_w"].clone()
     for i in range(cfg.n_layers):
         p = f"blocks.{i}"
-        kind = dims.kind_of(i)                       # gdl | gml | gmf
+        kind = dims.kinds[i]                       # gdl | gml | gmf
         w = _weight_layout_for(dims, kind).unpack_tensor(get_bytes(f"W_{i}"))
         sd[f"{p}.attn_norm.weight"] = w["attn_norm_w"].clone()
         sd[f"{p}.attn.w_q_a.weight"] = transposed(w["w_q_a"])

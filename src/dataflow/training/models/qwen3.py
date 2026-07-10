@@ -16,10 +16,10 @@ from dataflow.tasks.layouts import (
     Qwen3Dims,
     embed_weight_layout,
     head_weight_layout,
-    qwen3_context_layout,
+    qwen3_activation_layout,
     qwen3_weight_layout,
 )
-from ..lowering import FamilyLayouts, apply_exact_sizes, initial_values_from_layouts, size_of_factory
+from ..lowering import FamilyLayouts, LayerLayout, apply_exact_sizes, initial_values_from_layouts, size_of_factory
 from ..shaped_program import ShapedHardware, build_shaped_program, roofline_block_kind_spec
 
 
@@ -116,7 +116,7 @@ def build_shaped_qwen3(
     dims_fp, fl_fp = family_layouts(cfg)
     freeze_plan = derive_freeze_plan(
         dims_fp, cfg.n_layers,
-        lambda i: [f.name for f in fl_fp.block_weight_at(i).fields],
+        lambda i: [f.name for f in fl_fp.layers[i].weights.fields],
         tied_embeddings=bool(getattr(cfg, "tied_embeddings", False)),
     )
     return build_shaped_program(
@@ -146,11 +146,12 @@ def dims_of_qwen3(cfg: ShapedQwen3Config) -> Qwen3Dims:
 
 def family_layouts(cfg: ShapedQwen3Config) -> tuple[Qwen3Dims, FamilyLayouts]:
     dims = dims_of_qwen3(cfg)
-    cl = qwen3_context_layout(dims)
+    cl = qwen3_activation_layout(dims)
     return dims, FamilyLayouts(
-        n_layers=cfg.n_layers,
-        block_weight_at=lambda i: qwen3_weight_layout(dims, layer=i),
-        block_context_at=lambda i: cl,
+        layers=[LayerLayout(kind="block",
+                            weights=qwen3_weight_layout(dims, layer=i),
+                            activations=cl)
+                for i in range(cfg.n_layers)],
         embed=embed_weight_layout(dims),
         head=head_weight_layout(dims),
     )

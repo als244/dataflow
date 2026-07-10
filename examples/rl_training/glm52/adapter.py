@@ -41,11 +41,11 @@ def capture(golden, tokens):
 
 
 def meta_layout(dims, i):
-    return glm52_meta_layout(dims, dims.kind_of(i))
+    return glm52_meta_layout(dims, dims.kinds[i])
 
 
 def meta_fields(dims, i, captured):
-    kind = dims.kind_of(i)
+    kind = dims.kinds[i]
     fields = {}
     if kind in ("gdl", "gml"):
         fields["dsa_idx"] = captured["sel"][i]

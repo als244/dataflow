@@ -31,9 +31,9 @@ from ..kernels import KernelSet, resolve_kernels
 from ..layouts import (
     Dsv3Dims,
     PackedLayout,
-    dsv3_dense_context_layout,
+    dsv3_dense_activation_layout,
     dsv3_dense_weight_layout,
-    dsv3_moe_context_layout,
+    dsv3_moe_activation_layout,
     dsv3_moe_weight_layout,
 )
 from ..base_blocks import AdamWHyper, AdamWStep, EmbedBwd, EmbedFwd, HeadLoss
@@ -100,7 +100,7 @@ class Dsv3DenseBlockFwd(BlockFwd):
 
     @property
     def cl(self) -> PackedLayout:
-        return dsv3_dense_context_layout(self.dims)
+        return dsv3_dense_activation_layout(self.dims)
 
     # --- stages ---------------------------------------------------------------
 
@@ -240,7 +240,7 @@ class Dsv3DenseBlockBwd(BlockBwd):
 
     @property
     def cl(self) -> PackedLayout:
-        return dsv3_dense_context_layout(self.dims)
+        return dsv3_dense_activation_layout(self.dims)
 
     def _attn_bwd(self, kctx, dh_mid, a, x, w, acc, norm_bwd, dx_out) -> None:
         # MLA backward: re-expand from the compressed latents, flash-bwd at
@@ -336,7 +336,7 @@ class Dsv3MoeBlockFwd(MoEMetaState, MoEProfileFill, Dsv3DenseBlockFwd):
 
     @property
     def cl(self) -> PackedLayout:
-        return dsv3_moe_context_layout(self.dims)
+        return dsv3_moe_activation_layout(self.dims)
 
     STAGES = Dsv3DenseBlockFwd.MLA_STAGES + MOE_SHARED_NOGATE_STAGES
 
@@ -353,7 +353,7 @@ class Dsv3MoeBlockBwd(MoEMetaState, MoEProfileFill, Dsv3DenseBlockBwd):
 
     @property
     def cl(self) -> PackedLayout:
-        return dsv3_moe_context_layout(self.dims)
+        return dsv3_moe_activation_layout(self.dims)
 
     def _mlp_bwd(self, kctx, dy, a, w, dw, accum, acc, norm_bwd):
         return moe_mlp_tail_bwd(
@@ -377,7 +377,7 @@ def build_dsv3_resolver(
 
     def _opt_layout(d, task, size):
         layer = AdamWStep.layer_of(task)
-        if d.kind_of(layer) == "dense":
+        if d.kinds[layer] == "dense":
             return dsv3_dense_weight_layout(d, layer=layer), None
         return dsv3_moe_weight_layout(d, layer=layer), None
 

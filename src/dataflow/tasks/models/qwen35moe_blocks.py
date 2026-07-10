@@ -20,9 +20,9 @@ from ..layouts import (
     Qwen35MoeDims,
     embed_weight_layout,
     head_weight_layout,
-    qwen35moe_attn_context_layout,
+    qwen35moe_attn_activation_layout,
     qwen35moe_attn_weight_layout,
-    qwen35moe_lin_context_layout,
+    qwen35moe_lin_activation_layout,
     qwen35moe_lin_weight_layout,
 )
 from ..base_blocks import AdamWHyper, AdamWStep, EmbedBwd, EmbedFwd, HeadLoss
@@ -55,7 +55,7 @@ class Qwen35MoeLinBlockFwd(MoEMetaState, MoEProfileFill, Qwen35LinBlockFwd):
 
     @property
     def cl(self) -> PackedLayout:
-        return qwen35moe_lin_context_layout(self.dims)
+        return qwen35moe_lin_activation_layout(self.dims)
 
     STAGES = _stage_prefix(Qwen35LinBlockFwd.STAGES, "ffn_norm") + MOE_SHARED_STAGES
 
@@ -74,7 +74,7 @@ class Qwen35MoeLinBlockBwd(MoEMetaState, MoEProfileFill, Qwen35LinBlockBwd):
 
     @property
     def cl(self) -> PackedLayout:
-        return qwen35moe_lin_context_layout(self.dims)
+        return qwen35moe_lin_activation_layout(self.dims)
 
     def _mlp_bwd(self, kctx, dy, a, w, dw, accum, acc, norm_bwd):
         return moe_mlp_tail_bwd(
@@ -97,7 +97,7 @@ class Qwen35MoeAttnBlockFwd(MoEMetaState, MoEProfileFill, Qwen35AttnBlockFwd):
 
     @property
     def cl(self) -> PackedLayout:
-        return qwen35moe_attn_context_layout(self.dims)
+        return qwen35moe_attn_activation_layout(self.dims)
 
     STAGES = _stage_prefix(Qwen35AttnBlockFwd.STAGES, "ffn_norm") + MOE_SHARED_STAGES
 
@@ -116,7 +116,7 @@ class Qwen35MoeAttnBlockBwd(MoEMetaState, MoEProfileFill, Qwen35AttnBlockBwd):
 
     @property
     def cl(self) -> PackedLayout:
-        return qwen35moe_attn_context_layout(self.dims)
+        return qwen35moe_attn_activation_layout(self.dims)
 
     def _mlp_bwd(self, kctx, dy, a, w, dw, accum, acc, norm_bwd):
         return moe_mlp_tail_bwd(
@@ -130,7 +130,7 @@ def _opt_block_layout(d, task, w_size):
     AdamWStep size assert stays as the tripwire)."""
     layer = AdamWStep.layer_of(task)
     build = (
-        qwen35moe_attn_weight_layout if d.kind_of(layer) == "full"
+        qwen35moe_attn_weight_layout if d.kinds[layer] == "full"
         else qwen35moe_lin_weight_layout
     )
     return build(d, layer=layer), None

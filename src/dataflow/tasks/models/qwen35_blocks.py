@@ -44,9 +44,9 @@ from ..layouts import (
     Qwen35Dims,
     embed_weight_layout,
     head_weight_layout,
-    qwen35_attn_context_layout,
+    qwen35_attn_activation_layout,
     qwen35_attn_weight_layout,
-    qwen35_lin_context_layout,
+    qwen35_lin_activation_layout,
     qwen35_lin_weight_layout,
 )
 from ..base_blocks import AdamWHyper, AdamWStep, EmbedBwd, EmbedFwd, HeadLoss
@@ -80,7 +80,7 @@ class Qwen35LinBlockFwd(BlockFwd):
 
     @property
     def cl(self) -> PackedLayout:
-        return qwen35_lin_context_layout(self.dims)
+        return qwen35_lin_activation_layout(self.dims)
 
     @staticmethod
     def _stage_attn_norm(kctx, K, d, st):
@@ -223,7 +223,7 @@ class Qwen35LinBlockBwd(BlockBwd):
 
     @property
     def cl(self) -> PackedLayout:
-        return qwen35_lin_context_layout(self.dims)
+        return qwen35_lin_activation_layout(self.dims)
 
     def _attn_bwd(self, kctx, dxo, a, x, w, acc, norm_bwd, dx_out) -> None:
         # DeltaNet part; the shared dense MLP tail already ran via
@@ -352,7 +352,7 @@ class Qwen35AttnBlockFwd(BlockFwd):
 
     @property
     def cl(self) -> PackedLayout:
-        return qwen35_attn_context_layout(self.dims)
+        return qwen35_attn_activation_layout(self.dims)
 
     @staticmethod
     def _partial_rope(kctx, K, d, x, heads, pos, *, bwd: bool = False):
@@ -478,7 +478,7 @@ class Qwen35AttnBlockBwd(BlockBwd):
 
     @property
     def cl(self) -> PackedLayout:
-        return qwen35_attn_context_layout(self.dims)
+        return qwen35_attn_activation_layout(self.dims)
 
     def _attn_bwd(self, kctx, dxo, a, x, w, acc, norm_bwd, dx_out) -> None:
         # gated-attention part; the shared dense MLP tail already ran via
@@ -559,7 +559,7 @@ def _opt_block_layout(d, task, w_size):
     (the AdamWStep size assert stays as the tripwire)."""
     layer = AdamWStep.layer_of(task)
     build = (
-        qwen35_attn_weight_layout if d.kind_of(layer) == "full"
+        qwen35_attn_weight_layout if d.kinds[layer] == "full"
         else qwen35_lin_weight_layout
     )
     return build(d, layer=layer), None

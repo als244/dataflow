@@ -333,13 +333,13 @@ def test_dsv3_block_ladder2(kind):
 def test_dsv3_stage_context_completeness():
     from dataflow.tasks.models.dsv3_blocks import Dsv3DenseBlockFwd, Dsv3MoeBlockFwd
     from dataflow.tasks.layouts import (
-        dsv3_dense_context_layout,
-        dsv3_moe_context_layout,
+        dsv3_dense_activation_layout,
+        dsv3_moe_activation_layout,
     )
 
     dims = _dsv3_dims()
-    for cls, cl in ((Dsv3DenseBlockFwd, dsv3_dense_context_layout(dims)),
-                    (Dsv3MoeBlockFwd, dsv3_moe_context_layout(dims))):
+    for cls, cl in ((Dsv3DenseBlockFwd, dsv3_dense_activation_layout(dims)),
+                    (Dsv3MoeBlockFwd, dsv3_moe_activation_layout(dims))):
         declared = {f.name for f in cl.fields}
         emitted = cls.context_fields_emitted()
         assert declared == emitted, (cls.__name__, declared ^ emitted)

@@ -30,12 +30,12 @@ from dataflow.core import Program
 from dataflow.tasks.layouts import (
     DTypePolicy,
     LlamaDims,
-    context_layout,
+    activation_layout,
     embed_weight_layout,
     head_weight_layout,
     weight_layout,
 )
-from ..lowering import FamilyLayouts, apply_exact_sizes, initial_values_from_layouts, size_of_factory
+from ..lowering import FamilyLayouts, LayerLayout, apply_exact_sizes, initial_values_from_layouts, size_of_factory
 from ..shaped_program import ShapedHardware, build_shaped_program, roofline_block_kind_spec
 
 
@@ -177,11 +177,11 @@ def dims_of(cfg: ShapedLlamaConfig) -> LlamaDims:
 
 def family_layouts(cfg: ShapedLlamaConfig) -> tuple[LlamaDims, FamilyLayouts]:
     dims = dims_of(cfg)
-    cl = context_layout(dims)
+    cl = activation_layout(dims)
     return dims, FamilyLayouts(
-        n_layers=cfg.n_layers,
-        block_weight_at=lambda i: weight_layout(dims, layer=i),
-        block_context_at=lambda i: cl,
+        layers=[LayerLayout(kind="block", weights=weight_layout(dims, layer=i),
+                            activations=cl)
+                for i in range(cfg.n_layers)],
         embed=embed_weight_layout(dims),
         head=head_weight_layout(dims),
     )

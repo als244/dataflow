@@ -59,7 +59,7 @@ def to_qwen35_state_dict(cfg, get_bytes) -> dict:
         sd["final_norm.weight"] = hw["final_norm_w"].clone()
     for i in range(cfg.n_layers):
         p = f"blocks.{i}"
-        if dims.kind_of(i) == "lin":
+        if dims.kinds[i] == "lin":
             w = qwen35_lin_weight_layout(dims, layer=i).unpack_tensor(get_bytes(f"W_{i}"))
             sd[f"{p}.attn_norm.weight"] = w["attn_norm_w"].clone()
             sd[f"{p}.mixer.w_qkvz.weight"] = transposed(w["w_qkvz"])

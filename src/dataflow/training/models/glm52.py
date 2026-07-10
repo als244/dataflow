@@ -50,8 +50,8 @@ from dataflow.tasks.layouts import (
     Glm52Dims,
     glm52_meta_layout,
     ParamDTypes,
-    dsv3_dense_context_layout,
-    dsv3_moe_context_layout,
+    dsv3_dense_activation_layout,
+    dsv3_moe_activation_layout,
     dsv3_moe_weight_layout,
     dsv32_dense_weight_layout,
     dsv32_moe_weight_layout,
@@ -60,7 +60,7 @@ from dataflow.tasks.layouts import (
 )
 from dataflow.tasks.modules.moe.spec import MoESpec
 
-from ..lowering import FamilyLayouts, apply_exact_sizes, initial_values_from_layouts, size_of_factory
+from ..lowering import FamilyLayouts, LayerLayout, apply_exact_sizes, initial_values_from_layouts, size_of_factory
 from ..shaped_program import (
     BF16,
     LayerKindSpec,
@@ -307,6 +307,9 @@ def dims_of_glm52(cfg: ShapedGlm52Config) -> Glm52Dims:
         tokens=cfg.tokens, seq_len=cfg.seq_len, rope_base=cfg.rope_base,
         dtypes=getattr(cfg, "dtypes", None) or _GLM52_DTYPES,
         seq_lens=getattr(cfg, "seq_lens", None),
+        kinds=tuple("gdl" if i < cfg.first_k_dense
+                    else ("gml" if types[i] == "full" else "gmf")
+                    for i in range(cfg.n_layers)),
         moe=moe_spec_of(cfg),
         index_n_heads=cfg.index_n_heads, index_head_dim=cfg.index_head_dim,
         index_topk=cfg.index_topk, sparse_mode=cfg.sparse_mode,
@@ -324,7 +327,7 @@ def _weight_layout_for(dims: Glm52Dims, kind: str):
     return _LEADER_WEIGHTS[kind](dims)
 
 
-def _ctx_layout_for(dims: Glm52Dims, kind: str):
+def _activation_layout_for(dims: Glm52Dims, kind: str):
     # selection-object grammar: no dsa_idx anywhere (S object) and the
     # routing pack lives in the per-layer SEL object (moe kinds)
     from dataflow.tasks.modules.moe.spec import moe_context_specs
@@ -335,7 +338,7 @@ def _ctx_layout_for(dims: Glm52Dims, kind: str):
     )
 
     if kind == "gdl":
-        return dsv3_dense_context_layout(dims)
+        return dsv3_dense_activation_layout(dims)
     return PackedLayout.build(_warmup_ctx_filter(
         _dsv3_attn_ctx_specs(dims) + moe_context_specs(dims, dims.moe, meta=True),
         dims))
@@ -407,13 +410,13 @@ def _kind_specs(cfg: ShapedGlm52Config, hw: ShapedHardware) -> dict[str, LayerKi
     moe_traffic = BF16 * t * k * (3 * f + 2 * d)
     return {
         "gdl": spec("gdl", True, _weight_layout_for(dims, "gdl"),
-                    _ctx_layout_for(dims, "gdl"), 3 * cfg.d_ff_dense * d, 0.0,
+                    _activation_layout_for(dims, "gdl"), 3 * cfg.d_ff_dense * d, 0.0,
                     meta_bytes=glm52_meta_layout(dims, "gdl").total_bytes),
         "gml": spec("gml", True, _weight_layout_for(dims, "gml"),
-                    _ctx_layout_for(dims, "gml"), moe_active, moe_traffic,
+                    _activation_layout_for(dims, "gml"), moe_active, moe_traffic,
                     meta_bytes=glm52_meta_layout(dims, "gml").total_bytes),
         "gmf": spec("gmf", False, _weight_layout_for(dims, "gmf"),
-                    _ctx_layout_for(dims, "gmf"), moe_active, moe_traffic,
+                    _activation_layout_for(dims, "gmf"), moe_active, moe_traffic,
                     meta_bytes=glm52_meta_layout(dims, "gmf").total_bytes),
     }
 
@@ -426,7 +429,7 @@ def _ce_plan(cfg):
     dims_fp, fl_fp = family_layouts(cfg)
     return derive_freeze_plan(
         dims_fp, cfg.n_layers,
-        lambda i: [f.name for f in fl_fp.block_weight_at(i).fields],
+        lambda i: [f.name for f in fl_fp.layers[i].weights.fields],
         tied_embeddings=bool(getattr(cfg, "tied_embeddings", False)),
     )
 
@@ -441,7 +444,7 @@ def _warmup_plan(dims, n_layers):
                          if dims.leader_of(i) == i)
     return derive_freeze_plan(
         dims, n_layers,
-        lambda i: [f.name for f in _weight_layout_for(dims, dims.kind_of(i)).fields],
+        lambda i: [f.name for f in _weight_layout_for(dims, dims.kinds[i]).fields],
         objective="indexer_kl", loss_contributors=contributors,
     )
 
@@ -468,7 +471,7 @@ def build_shaped_glm52(
     ]
     return build_shaped_program(
         cfg, hw=hw, family="glm52-shaped",
-        kinds=_kind_specs(cfg, hw), kind_of=dims.kind_of,
+        kinds=_kind_specs(cfg, hw), layer_kinds=dims.kinds,
         fast_memory_capacity=fast_memory_capacity,
         recompute_levels=recompute_levels, name=name,
         meta_shared=shares,
@@ -480,9 +483,11 @@ def build_shaped_glm52(
 def family_layouts(cfg: ShapedGlm52Config) -> tuple[Glm52Dims, FamilyLayouts]:
     dims = dims_of_glm52(cfg)
     return dims, FamilyLayouts(
-        n_layers=cfg.n_layers,
-        block_weight_at=lambda i: _weight_layout_for(dims, dims.kind_of(i)),
-        block_context_at=lambda i: _ctx_layout_for(dims, dims.kind_of(i)),
+        layers=[LayerLayout(kind=dims.kinds[i],
+                            weights=_weight_layout_for(dims, dims.kinds[i]),
+                            activations=_activation_layout_for(dims, dims.kinds[i]),
+                            aux=glm52_meta_layout(dims, dims.kinds[i]))
+                for i in range(cfg.n_layers)],
         embed=embed_weight_layout(dims),
         head=head_weight_layout(dims),
         init_specials={
@@ -490,7 +495,6 @@ def family_layouts(cfg: ShapedGlm52Config) -> tuple[Glm52Dims, FamilyLayouts]:
             "idx_k_ln_w": lambda n, gen: torch.ones(n),
             "idx_k_ln_b": lambda n, gen: torch.zeros(n),
         },
-        block_meta_at=lambda i: glm52_meta_layout(dims, dims.kind_of(i)),
     )
 
 

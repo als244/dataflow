@@ -49,7 +49,7 @@ class GoldenQwen35:
     def layer_layout(self, i: int) -> PackedLayout:
         d = self.dims
         build = (
-            qwen35_attn_weight_layout if d.kind_of(i) == "full"
+            qwen35_attn_weight_layout if d.kinds[i] == "full"
             else qwen35_lin_weight_layout
         )
         return build(d, layer=i)
@@ -152,7 +152,7 @@ class GoldenQwen35:
         for i in range(d.n_layers):
             w = self.w_blocks[i]
             x = (
-                self.full_block_forward(x, w, seg) if d.kind_of(i) == "full"
+                self.full_block_forward(x, w, seg) if d.kinds[i] == "full"
                 else self.lin_block_forward(x, w, seg)
             )
         logits = ops.rmsnorm_reference(x, hv["final_norm_w"]) @ hv["w"].T

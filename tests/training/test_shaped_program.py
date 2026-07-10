@@ -174,7 +174,7 @@ def test_heterogeneous_kinds_emit_per_kind_keys_and_sizes():
     }
     program = build_shaped_program(
         cfg, family="llama3-shaped",
-        kinds=kinds, kind_of=lambda i: "lin" if i == 0 else "full",
+        kinds=kinds, layer_kinds=("lin", "full"),
     )
     validate_program(program)
     by_id = {t.id: t for t in program.tasks}

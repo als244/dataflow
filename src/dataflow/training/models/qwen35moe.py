@@ -27,14 +27,14 @@ from dataflow.tasks.layouts import (
     Qwen35MoeDims,
     embed_weight_layout,
     head_weight_layout,
-    qwen35moe_attn_context_layout,
+    qwen35moe_attn_activation_layout,
     qwen35moe_attn_weight_layout,
-    qwen35moe_lin_context_layout,
+    qwen35moe_lin_activation_layout,
     qwen35moe_lin_weight_layout,
 )
 from dataflow.tasks.modules.moe.spec import MoESpec, moe_meta_layout
 
-from ..lowering import FamilyLayouts, apply_exact_sizes, initial_values_from_layouts, size_of_factory
+from ..lowering import FamilyLayouts, LayerLayout, apply_exact_sizes, initial_values_from_layouts, size_of_factory
 from .qwen35 import _a_log_init, _dt_bias_init
 from ..shaped_program import BF16, LayerKindSpec, ShapedHardware, build_shaped_program
 
@@ -167,6 +167,9 @@ def dims_of_qwen35moe(cfg: ShapedQwen35MoeConfig) -> Qwen35MoeDims:
         tokens=cfg.tokens, seq_len=cfg.seq_len, rope_base=cfg.rope_base,
         dtypes=getattr(cfg, "dtypes", None) or DTypePolicy(),
         seq_lens=getattr(cfg, "seq_lens", None),
+        kinds=tuple(
+            "full" if (i + 1) % cfg.full_attention_interval == 0 else "lin"
+            for i in range(cfg.n_layers)),
         moe=moe_spec_of(cfg),
     )
 
@@ -220,13 +223,13 @@ def _kind_specs(cfg: ShapedQwen35MoeConfig, hw: ShapedHardware) -> dict[str, Lay
     lin_attn = d * dims.qkvz_dim + d * dims.ba_dim + dims.value_dim * d
     lin_scan_flops = 2.0 * t * dims.lin_v_heads * dims.lin_k_head_dim * dims.lin_v_head_dim * 2
     lin_mem = BF16 * t * (2 * dims.conv_dim + 2 * dims.value_dim)
-    lin = spec("linmoe", qwen35moe_lin_weight_layout(dims), qwen35moe_lin_context_layout(dims),
+    lin = spec("linmoe", qwen35moe_lin_weight_layout(dims), qwen35moe_lin_activation_layout(dims),
                lin_attn, lin_scan_flops, BF16 * t * 2 * dims.value_dim, lin_mem)
 
     full_attn = d * 2 * dims.attn_dim + 2 * d * dims.kv_dim + dims.attn_dim * d
     attn_flops = 2.0 * t * seq * dims.attn_dim
     attn_bytes = BF16 * t * (2 * dims.attn_dim + 2 * dims.kv_dim)
-    full = spec("gattnmoe", qwen35moe_attn_weight_layout(dims), qwen35moe_attn_context_layout(dims),
+    full = spec("gattnmoe", qwen35moe_attn_weight_layout(dims), qwen35moe_attn_activation_layout(dims),
                 full_attn, attn_flops, attn_bytes, 0.0)
 
     return {"lin": lin, "full": full}
@@ -251,14 +254,14 @@ def build_shaped_qwen35moe(
     dims_fp, fl_fp = family_layouts(cfg)
     freeze_plan = derive_freeze_plan(
         dims_fp, cfg.n_layers,
-        lambda i: [f.name for f in fl_fp.block_weight_at(i).fields],
+        lambda i: [f.name for f in fl_fp.layers[i].weights.fields],
         tied_embeddings=bool(getattr(cfg, "tied_embeddings", False)),
     )
     return build_shaped_program(
         cfg, hw=hw, family="qwen35moe-shaped",
         fast_memory_capacity=fast_memory_capacity,
         recompute_levels=recompute_levels, name=label,
-        kinds=_kind_specs(cfg, hw), kind_of=dims.kind_of,
+        kinds=_kind_specs(cfg, hw), layer_kinds=dims.kinds,
         freeze=freeze_plan,
     )
 
@@ -269,17 +272,18 @@ _WEIGHT_BUILDERS = {"lin": qwen35moe_lin_weight_layout, "full": qwen35moe_attn_w
 def family_layouts(cfg: ShapedQwen35MoeConfig) -> tuple[Qwen35MoeDims, FamilyLayouts]:
     dims = dims_of_qwen35moe(cfg)
     ctx = {
-        "lin": qwen35moe_lin_context_layout(dims),
-        "full": qwen35moe_attn_context_layout(dims),
+        "lin": qwen35moe_lin_activation_layout(dims),
+        "full": qwen35moe_attn_activation_layout(dims),
     }
     return dims, FamilyLayouts(
-        n_layers=cfg.n_layers,
-        block_weight_at=lambda i: _WEIGHT_BUILDERS[dims.kind_of(i)](dims, layer=i),
-        block_context_at=lambda i: ctx[dims.kind_of(i)],
+        layers=[LayerLayout(kind=dims.kinds[i],
+                            weights=_WEIGHT_BUILDERS[dims.kinds[i]](dims, layer=i),
+                            activations=ctx[dims.kinds[i]],
+                            aux=moe_meta_layout(dims, dims.moe))
+                for i in range(cfg.n_layers)],
         embed=embed_weight_layout(dims),
         head=head_weight_layout(dims),
         init_specials={"A_log": _a_log_init, "dt_bias": _dt_bias_init},
-        block_meta_at=lambda i: moe_meta_layout(dims, dims.moe),
     )
 
 
