@@ -31,6 +31,10 @@ def main() -> None:
     st.add_argument("--kernels", default=None)
     st.add_argument("--fake", action="store_true",
                     help="CPU-only boot (no CUDA; tests/dev)")
+    st.add_argument("--peer-name", default=None,
+                    help="peer-plane identity (enables the NM)")
+    st.add_argument("--peer-listen", default=None,
+                    help="host:port for the NM's own listener")
 
     for name in ("status", "stop"):
         s = sub.add_parser(name)
@@ -41,7 +45,8 @@ def main() -> None:
         slab = args.slab_gib if args.slab_gib == "auto" else float(args.slab_gib)
         cfg = EngineConfig(socket_path=args.socket, slab_backing_gib=slab,
                            device=args.device, kernel_set=args.kernels,
-                           fake=args.fake)
+                           fake=args.fake, peer_name=args.peer_name,
+                           peer_listen=args.peer_listen)
         print(f"dataflowd: listening on {args.socket} "
               f"(fake={args.fake}, slab={slab})")
         Server(cfg).serve_forever()
