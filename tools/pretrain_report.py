@@ -75,6 +75,54 @@ def build(results_dir=RESULTS) -> str:
         sections.append(f"<section><h2>{pkey} reference-vs-engine parity</h2>"
                         f"<div class='chart'>{svg}</div>{tbl}</section>")
 
+    # ---- distributed DP (two-box fleet) vs the single-box runs ----
+    if "l3_1b_dp" in R:
+        dp = R["l3_1b_dp"]
+        ref = R.get("l3_1b_reference")
+        eng = R.get("l3_1b_engine_14gib")
+        series = []
+        prows = []
+        if ref is not None:
+            series.append(Series(label="reference (pytorch, single box)",
+                                 x=list(range(len(ref.losses))),
+                                 y=ref.losses, color=PALETTE[0],
+                                 dashed=True))
+        if eng is not None:
+            series.append(Series(label="engine @ 14 GiB (single box)",
+                                 x=list(range(len(eng.losses))),
+                                 y=eng.losses, color=PALETTE[1]))
+        rr = dp.meta.get("rank_rounds", ["?", "?"])
+        series.append(Series(
+            label=f"engine DP x2 (5090:{rr[0]} + 3090:{rr[1]} rounds)",
+            x=list(range(len(dp.losses))), y=dp.losses,
+            color=PALETTE[2]))
+        for base, lbl in ((eng, "single-box engine"),
+                          (ref, "reference")):
+            if base is None:
+                continue
+            rep = parity.compare(base.losses, dp.losses, a_label=lbl,
+                                 b_label="fleet DP")
+            prows.append([f"fleet DP vs {lbl}", f"{rep.step0_abs:.4f}",
+                          f"{rep.max_abs:.4f}", f"{rep.final_abs:.4f}",
+                          f"{rep.ema_abs:.4f}",
+                          "ALIGNED" if rep.passed else "DIVERGED"])
+        svg = svg_line_chart(
+            series,
+            title="l3_1b — DATA-PARALLEL across two machines "
+                  "(weighted 6:2 rounds, 25 GbE) vs the single-box runs",
+            xlabel="optimizer step", ylabel="mean CE loss")
+        tbl = _table(prows, ["comparison", "step0 \u0394", "max \u0394",
+                             "final \u0394", "ema \u0394", "verdict"])
+        tokps = f"{dp.steady_tok_per_s:.0f}"
+        note = ("<p>Two daemons (RTX 5090 + RTX 3090, direct 25 GbE), "
+                "hostmem collectives, global-denominator loss; the "
+                "global batch and data order are IDENTICAL to the "
+                f"single-box runs. Steady {tokps} tok/s at "
+                "10.7 s/step (socket-transport collectives, v1).</p>")
+        sections.append("<section><h2>l3_1b distributed data-parallel "
+                        f"parity</h2>{note}<div class='chart'>{svg}"
+                        f"</div>{tbl}</section>")
+
     # ---- scaling ladder ----
     scale_keys = [k for k in R if k.startswith("scaling_")]
     scale_results = {k: R[k] for k in scale_keys}
