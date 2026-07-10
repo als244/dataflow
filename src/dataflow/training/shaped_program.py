@@ -217,6 +217,7 @@ def build_shaped_program(
     recompute_levels: Mapping[str, int] | None = None,
     name: str | None = None,
     aux_shared=None,
+    round_prologue: bool = False,
     freeze=None,  # FreezePlan | None (training/freeze_plan.py)
 ) -> Program:
     """Build the (bare) shaped program for the given recompute levels.
@@ -229,7 +230,10 @@ def build_shaped_program(
     (recompute); missing ids default to 0. This function IS the
     ``build_variant`` for the recompute planner (wrap with
     ``functools.partial``). ``family`` stamps the program metadata and
-    seeds the default name.
+    seeds the default name. ``round_prologue`` opens every round with a
+    ``prologue_round_{s}_{r}`` task producing the object-backed
+    ``current_round_{s}_{r}`` value (emitted only for families that
+    consume the round — dense chains stay byte-stable).
     """
     hw = hw or ShapedHardware()
     levels = dict(recompute_levels or {})
@@ -349,6 +353,13 @@ def build_shaped_program(
         for r in range(cfg.grad_accum_rounds):
             first_round = r == 0
             last_round = r == cfg.grad_accum_rounds - 1
+            # ---- round boundary (families that consume the round) ----
+            if round_prologue:
+                task(f"prologue_round_{s}_{r}", "prologue_round", [],
+                     [OutputSpec(id=f"current_round_{s}_{r}", size_bytes=4,
+                                 role="activation",
+                                 tensor=TensorMeta(dtype="int32", shape=(1,)))],
+                     1.0, group="forward", params={"round": r}, subops=[])
             # ---- forward ----
             task(
                 f"embed_fwd_{s}_{r}", "embed_fwd",

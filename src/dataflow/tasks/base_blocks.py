@@ -31,6 +31,29 @@ from .layouts import (
 
 
 @dataclass(frozen=True)
+class RoundPrologue:
+    """The round-boundary task: publishes the CURRENT ROUND both as an
+    object-backed value (its 4-byte int32 output — tasks that need the
+    round DEPEND on it, so ordering and recompute-safety ride the
+    dataflow) and into the engine's mutable ``run_values`` channel
+    (``ctx.run_values["current_round"]``, the ergonomic read; ``run_args``
+    stays immutable). Round 0 will additionally zero each aux layer's
+    per-step expert counts once the persistent Aux objects land."""
+
+    dims: object = None
+    kernels: object = None
+
+    def launch(self, ctx) -> None:
+        from .interop import torch_view
+
+        r = int(ctx.task.block_params["round"])
+        if ctx.run_values is not None:
+            ctx.run_values["current_round"] = r
+        for buf in ctx.outputs.values():
+            torch_view(buf, (1,), torch.int32).fill_(r)
+
+
+@dataclass(frozen=True)
 class AdamWHyper:
     lr: float = 1e-4
     beta1: float = 0.9

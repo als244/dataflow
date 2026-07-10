@@ -403,6 +403,9 @@ class Engine:
             state.stats = stats
         if run_args and (run_args.get("segments") or run_args.get("seq_lens")):
             run_args = prologue_run_start(run_args, self.backend)
+        # run_args are read-only from here on; run_values is the run's small
+        # MUTABLE shared state (round-boundary tasks publish into it)
+        run_values: dict = {}
         for task_pos, task in enumerate(program.tasks):
             # service boundary-cancel: observed ONLY here, between task
             # dispatches — in-flight work drains normally, the ledger
@@ -538,7 +541,7 @@ class Engine:
                 resolver(task).launch(TaskContext(
                     task=task, stream=compute, inputs=in_buffers, outputs=out_buffers,
                     mutates=mut_buffers, backend=self.backend,
-                    run_args=run_args,
+                    run_args=run_args, run_values=run_values,
                 ))
             finally:
                 annotator.range_pop()
