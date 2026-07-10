@@ -64,6 +64,24 @@ def test_olmoe_engine_vs_reference():
 
 
 @pytest.mark.gpu
+def test_olmoe_engine_vs_reference_lbl_on():
+    """LBL-ON (aux_coef=0.01, per-round default): the engine injects the
+    analytic per-round LBL gradient; the reference autograds the per-round
+    composite CE + alpha*LBL. Same per-round semantics at any ga, so the
+    CE channels (the pinned scalar convention on BOTH sides) must track.
+    The retained-inputs mode has no naive autograd comparator — it is
+    router-only by construction (upstream aux dropped) — and is gated at
+    the gradient level in tests/training/test_lbl_modes.py instead."""
+    if not torch.cuda.is_available():
+        pytest.skip("no CUDA")
+    from dataclasses import replace
+
+    from dataflow.pretrain.presets import olmoe_smoke_preset
+
+    run_family_parity(replace(olmoe_smoke_preset(), aux_coef=0.01))
+
+
+@pytest.mark.gpu
 def test_qwen3moe_engine_vs_reference():
     if not torch.cuda.is_available():
         pytest.skip("no CUDA")

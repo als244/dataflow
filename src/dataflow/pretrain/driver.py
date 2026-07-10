@@ -131,8 +131,14 @@ def run_reference(cfg, recipe: Recipe, stream, steps: int, *, seed: int = 11,
 
     B, T = dims.tokens // dims.seq_len, dims.seq_len
     R = cfg.grad_accum_rounds
+    # LBL-ON configs (MoE aux_coef > 0): train the composite CE + alpha*LBL
+    # per round (the reference's per-round semantics match the engine's
+    # per-round injection) but LOG THE CE CHANNEL — the pinned scalar
+    # convention (the engine's loss_* objects are always pure CE).
+    aux_coef = float(getattr(cfg, "aux_coef", 0.0) or 0.0)
     res = RunResult(backend="reference", budget_gib=None,
                     meta={"seed": seed, "grad_checkpoint": grad_checkpoint,
+                          "aux_coef": aux_coef,
                           "tokens_per_step": tokens_per_step(cfg)})
     for step in range(steps):
         t0 = time.perf_counter()
@@ -142,9 +148,15 @@ def run_reference(cfg, recipe: Recipe, stream, steps: int, *, seed: int = 11,
             tok, tgt = stream(step * R + r)
             tok = tok.to(device, non_blocking=True).view(B, T)
             tgt = tgt.to(device, non_blocking=True).view(B, T)
-            loss_r = model.loss(tok, tgt)
+            if aux_coef > 0:
+                loss_r = model.loss(tok, tgt, aux_coef=aux_coef)
+                ce_r = (float(loss_r.detach())
+                        - aux_coef * float(model.load_balance_loss().detach()))
+            else:
+                loss_r = model.loss(tok, tgt)
+                ce_r = float(loss_r.detach())
             loss_r.backward()
-            step_loss += float(loss_r.detach())
+            step_loss += ce_r
         opt.step(step)
         torch.cuda.synchronize()
         dt = time.perf_counter() - t0

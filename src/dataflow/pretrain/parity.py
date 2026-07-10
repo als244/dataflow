@@ -49,10 +49,14 @@ class ParityReport:
 def compare(a_losses, b_losses, *, band: Band | None = None,
             a_label: str = "reference", b_label: str = "engine",
             ema_alpha: float = 0.2) -> ParityReport:
+    import math
+
     band = band or Band()
     n = min(len(a_losses), len(b_losses))
     if n == 0:
         raise ValueError("empty curves")
+    bad_a = sum(0 if math.isfinite(float(x)) else 1 for x in a_losses[:n])
+    bad_b = sum(0 if math.isfinite(float(x)) else 1 for x in b_losses[:n])
     diffs = [abs(float(a_losses[i]) - float(b_losses[i])) for i in range(n)]
     ema = diffs[0]
     for d in diffs[1:]:
@@ -65,6 +69,10 @@ def compare(a_losses, b_losses, *, band: Band | None = None,
         a_label=a_label, b_label=b_label, passed=True,
     )
     fails = []
+    if bad_a or bad_b:
+        # NaN comparisons are all False — without this gate a non-finite
+        # curve sails through every band check
+        fails.append(f"non-finite losses ({a_label}:{bad_a} {b_label}:{bad_b})")
     if rep.step0_abs > band.step0_abs:
         fails.append(f"step0 {rep.step0_abs:.4f}>{band.step0_abs}")
     if rep.max_abs > band.max_abs:

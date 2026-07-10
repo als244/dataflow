@@ -126,6 +126,25 @@ def close_session(prog_id: str) -> bool:
     return False
 
 
+def close_all_sessions() -> int:
+    """Drain and drop EVERY cached session. Server shutdown must call
+    this BEFORE freeing the store slab: sessions hold BufferPools whose
+    backing transients live in that slab (and free through the store),
+    so a session that outlives its daemon dangles — the next in-process
+    daemon boot re-hashes an identical program to the SAME prog_id and
+    would inherit freed pointers (segfault in the first backing copy).
+    Module state here is single-daemon by design (shared backend and
+    streams), so closing all is exact, not overkill."""
+    n = 0
+    for prog_id in list(_SESSIONS):
+        try:
+            if close_session(prog_id):
+                n += 1
+        except Exception:
+            _SESSIONS.pop(prog_id, None)
+    return n
+
+
 def parse_program(program_dict: dict):
     from dataflow.core.jsonio import program_from_dict
 
