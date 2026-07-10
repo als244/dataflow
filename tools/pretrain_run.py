@@ -119,6 +119,15 @@ def cmd_parity(args) -> int:
     ref = run_reference(cfg, recipe, stream, steps, seed=11,
                         grad_checkpoint=args.grad_checkpoint, log=_log)
     ref.save(RESULTS / f"{args.preset}_reference.json")
+    # the reference and the engine share this process's CUDA context:
+    # release the reference's cached allocations before the daemon
+    # claims its slab/pool (a 1.9B reference otherwise starves it)
+    import gc
+
+    import torch
+
+    gc.collect()
+    torch.cuda.empty_cache()
 
     engs = {}
     with daemon_client(slab_gib=args.slab, log=_log) as client:

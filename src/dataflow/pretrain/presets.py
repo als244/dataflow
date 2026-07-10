@@ -60,10 +60,37 @@ def preset(name: str) -> ShapedLlamaConfig:
 
 def resolve_preset(name: str):
     """Preset name -> config, across families ('qwen35' -> the hybrid preset,
-    otherwise the llama3 ladder)."""
+    'dsv3_2b'/'dsv3_2b_nolbl' -> the MoE study preset, otherwise the
+    llama3 ladder)."""
     if name in ("qwen35", "q35"):
         return qwen35_preset()
+    if name == "dsv3_2b":
+        return dsv3_2b_preset(load_balance=True)
+    if name == "dsv3_2b_nolbl":
+        return dsv3_2b_preset(load_balance=False)
     return preset(name)
+
+
+def dsv3_2b_preset(load_balance: bool = True):
+    """~1.9B-total / ~0.5B-active dsv3 (MLA + grouped noaux MoE): the
+    MoE entry of the 1000-step pretraining study, same token budget as
+    the llama3/qwen35 runs (seq 2048 x batch 4 x ga 8 = 64K/step).
+    ``load_balance=True`` = paper-like (noaux router bias 1e-3 + small
+    seq-wise aux 1e-4); False = balancing fully off."""
+    from dataflow.training.models.dsv3 import ShapedDsv3Config
+
+    balance = (dict(aux_coef=1e-4, bias_update_speed=1e-3)
+               if load_balance else
+               dict(aux_coef=0.0, bias_update_speed=0.0))
+    return ShapedDsv3Config(
+        n_layers=14, d_model=1280, n_heads=20,
+        q_lora_rank=640, kv_lora_rank=320,
+        qk_nope_dim=64, qk_rope_dim=32, v_head_dim=64,
+        d_ff_dense=5120, first_k_dense=2,
+        n_experts=40, top_k=4, d_ff_expert=832,
+        n_group=8, topk_group=4, d_ff_shared=2560,
+        vocab_size=VOCAB_SIZE, seq_len=2048, batch=4,
+        grad_accum_rounds=8, **balance)
 
 
 def smoke_preset() -> ShapedLlamaConfig:
