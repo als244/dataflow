@@ -791,6 +791,11 @@ class BwProbeRdma:
             link.send_frame({"kind": "BWPROBE_RDMA_DONE",
                              "gbps": round(gbps, 2)})
         except Exception as ex:
+            # a failed probe write can leave the QP in ERROR (later
+            # WRs flush with wc status 5): demote the lane so comms
+            # fall back to socket instead of building on a dead QP
+            if link.rdma_qp is not None:
+                link.rdma_qp.ready = False
             nm.state.emit("peer_bw_error", peer_id=link.peer_id,
                           plane="rdma", why=repr(ex))
         finally:
