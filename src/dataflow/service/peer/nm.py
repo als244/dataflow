@@ -275,6 +275,12 @@ class NetworkManager:
             link.conn.sock.close()
         except OSError:
             pass
+        # groups containing the dead peer desync (fail-stop)
+        for rec in self.groups.ready_records():
+            if link.peer_id in rec.members:
+                self.group_error(rec.name,
+                                 f"peer_down {link.peer_id} ({why})",
+                                 fan_out=link.peer_id)
         self.state.emit("peer_down", peer_id=link.peer_id, why=why)
 
     def create_group(self, name: str, members: list, backend: str,
@@ -312,11 +318,41 @@ class NetworkManager:
         self.state.emit("group_created", name=name)
         return {"ok": True, "backend": backend, "world": len(members)}
 
+    def group_handles(self) -> dict:
+        """{name -> GroupHandle} for TaskContext injection: READY,
+        non-errored groups; comm backends built + cached lazily."""
+        out = {}
+        for rec in self.groups.ready_records():
+            if rec.handle is None:
+                from .comm import build_handle
+
+                rec.handle = build_handle(self, rec)
+            out[rec.name] = rec.handle
+        return out
+
+    def comm_of(self, name: str):
+        with self.groups.lock:
+            rec = self.groups.groups.get(name)
+        if rec is None or not rec.ready or rec.error is not None:
+            return None
+        if rec.handle is None:
+            from .comm import build_handle
+
+            rec.handle = build_handle(self, rec)
+        return rec.handle.comm
+
     def group_error(self, name: str, why: str, *,
                     fan_out: str | None) -> None:
         """Spec §7 two-hop fan-out: a member reports to its
         coordinator; the coordinator rebroadcasts over the star."""
         self.groups.mark_error(name, why)
+        with self.groups.lock:
+            rec = self.groups.groups.get(name)
+            handle = rec.handle if rec is not None else None
+        if handle is not None and handle.comm is not None \
+                and handle.comm.dead is None:
+            handle.comm.dead = why
+            handle.comm.flag[0] = 2_000_000_000   # release parked streams
         self.state.emit("group_error", name=name, why=why)
         with self.groups.lock:
             rec = self.groups.groups.get(name)
@@ -426,6 +462,11 @@ class NetworkManager:
             if kind == "GROUP_ERROR":
                 self.group_error(msg["name"], msg.get("why", "?"),
                                  fan_out=getattr(link, "peer_id", None))
+                continue
+            if kind == "COLL":
+                comm = self.comm_of(msg["group"])
+                if comm is not None:
+                    comm.deliver(int(msg["seq"]), payload or b"")
                 continue
             with self.lock:
                 link.core.handle(msg, payload)

@@ -29,6 +29,7 @@ class GroupRecord:
     ready: bool = False
     acks: set = field(default_factory=set)
     error: str | None = None
+    handle: object = None          # cached GroupHandle (NM builds lazily)
 
     def handle_dict(self) -> dict:
         return {"name": self.name, "rank": self.self_rank,
@@ -88,12 +89,10 @@ class GroupTable:
             if rec is not None:
                 rec.error = why
 
-    def handles(self) -> dict:
-        """{name -> handle dict} for TaskContext injection — READY,
-        non-errored groups only (absent => task skip semantics)."""
+    def ready_records(self) -> list:
         with self.lock:
-            return {n: r.handle_dict() for n, r in self.groups.items()
-                    if r.ready and r.error is None}
+            return [r for r in self.groups.values()
+                    if r.ready and r.error is None]
 
     def infos(self) -> list:
         with self.lock:

@@ -247,7 +247,7 @@ def install(server) -> None:
 
             run_args = {**args, "segments": uniform_segments(rf[2], program)}
         nm = getattr(server, "nm", None)
-        group_handles = nm.groups.handles() if nm is not None else None
+        group_handles = nm.group_handles() if nm is not None else None
         result, err_kind, err_msg = bridge.execute_run(
             program, rf[3], values,
             prog_id=entry.prog_id, store=store,

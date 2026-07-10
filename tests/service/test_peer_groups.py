@@ -56,9 +56,11 @@ def test_group_lifecycle_and_error_fanout(tmp_path):
             assert infos[0]["rank"] == want_rank
             assert infos[0]["world"] == 3 and infos[0]["ready"]
 
-        # TaskContext handles: whole table, ready groups only
-        handles = sa.nm.groups.handles()
-        assert handles["dp"]["rank"] == 0 and handles["dp"]["world"] == 3
+        # TaskContext handles: whole table, ready groups only (fake
+        # boot => comm None; rank/world live on the handle object)
+        handles = sa.nm.group_handles()
+        assert handles["dp"].rank == 0 and handles["dp"].world == 3
+        assert handles["dp"].comm is None
 
         # rank 0 required
         try:
@@ -85,7 +87,7 @@ def test_group_lifecycle_and_error_fanout(tmp_path):
         assert wait_for(
             lambda: sa.nm.groups.groups["dp"].error is not None)
         # errored groups vanish from the TaskContext handle table
-        assert "dp" not in sc.nm.groups.handles()
+        assert "dp" not in sc.nm.group_handles()
     finally:
         for _, cli in daemons.values():
             try:
