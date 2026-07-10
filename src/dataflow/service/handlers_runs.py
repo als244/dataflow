@@ -246,11 +246,14 @@ def install(server) -> None:
             from dataflow.runtime.engine import uniform_segments
 
             run_args = {**args, "segments": uniform_segments(rf[2], program)}
+        nm = getattr(server, "nm", None)
+        group_handles = nm.groups.handles() if nm is not None else None
         result, err_kind, err_msg = bridge.execute_run(
             program, rf[3], values,
             prog_id=entry.prog_id, store=store,
             placement=entry.placement, pool_demand=entry.pool_demand,
-            run_args=run_args, cancel_event=active_cancel)
+            run_args=run_args, cancel_event=active_cancel,
+            groups=group_handles)
 
         rec.finished = time.time()
         entry.runs += 1

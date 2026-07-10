@@ -243,7 +243,8 @@ def check_pool_headroom(pool_demand: dict) -> None:
 
 
 def execute_run(program, resolver, values, *, prog_id, store=None,
-                placement, pool_demand, run_args, cancel_event):
+                placement, pool_demand, run_args, cancel_event,
+                groups=None):
     """One engine run over store-backed buffers. Returns (result,
     error_kind, error_msg); the caller owns result.close()."""
     from dataflow.runtime import Engine
@@ -254,7 +255,7 @@ def execute_run(program, resolver, values, *, prog_id, store=None,
                         session=get_session(prog_id, store=store)).execute(
             program, resolver=resolver, initial_buffers=values,
             pool_prewarm=pool_demand, placement=placement,
-            run_args=run_args, cancel_event=cancel_event,
+            run_args=run_args, cancel_event=cancel_event, groups=groups,
         )
         return result, None, None
     except CancelledRun as e:

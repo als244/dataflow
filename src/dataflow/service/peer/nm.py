@@ -134,6 +134,9 @@ class NetworkManager:
             self.rdma.register_slab(self.store.slab.ptr,
                                     self.store.allocator.capacity)
         self.send_src_ptrs: dict[str, int] = {}   # send_id -> slab ptr
+        from .groups import GroupTable
+
+        self.groups = GroupTable()
         self.inflight_quota = inflight_quota
         self.ping_every_s = ping_every_s
         self.peer_down_after_s = peer_down_after_s
@@ -274,6 +277,65 @@ class NetworkManager:
             pass
         self.state.emit("peer_down", peer_id=link.peer_id, why=why)
 
+    def create_group(self, name: str, members: list, backend: str,
+                     *, timeout: float = 20.0) -> dict:
+        """Coordinator side: THIS daemon must be rank 0 of members and
+        hold star links to every other member."""
+        from .groups import GroupRecord
+
+        if members[0] != self.peer_name:
+            raise ServiceError("BAD_REQUEST",
+                               "create_peer_group must land on rank 0")
+        with self.lock:
+            missing = [m for m in members[1:] if m not in self.links]
+            if missing:
+                raise ServiceError("PEER_UNREACHABLE",
+                                   f"star links missing: {missing}")
+        rec = GroupRecord(name=name, members=tuple(members),
+                          backend=backend, self_rank=0,
+                          coordinator=self.peer_name)
+        try:
+            self.groups.create(rec)
+        except ValueError:
+            raise ServiceError("GROUP_EXISTS", name)
+        join = {"kind": "GROUP_JOIN", "name": name,
+                "members": list(members), "backend": backend}
+        with self.lock:
+            for m in members[1:]:
+                self.links[m].send_frame(join)
+        if len(members) > 1 and not self.groups.wait_ready(name, timeout):
+            self.groups.mark_error(name, "join barrier timeout")
+            raise ServiceError("GROUP_DESYNC",
+                               f"{name}: join barrier timeout")
+        if len(members) == 1:
+            self.groups.adopt(rec)
+        self.state.emit("group_created", name=name)
+        return {"ok": True, "backend": backend, "world": len(members)}
+
+    def group_error(self, name: str, why: str, *,
+                    fan_out: str | None) -> None:
+        """Spec §7 two-hop fan-out: a member reports to its
+        coordinator; the coordinator rebroadcasts over the star."""
+        self.groups.mark_error(name, why)
+        self.state.emit("group_error", name=name, why=why)
+        with self.groups.lock:
+            rec = self.groups.groups.get(name)
+        if rec is None:
+            return
+        if rec.self_rank == 0:                 # coordinator: fan out
+            with self.lock:
+                for m in rec.members[1:]:
+                    if m != fan_out and m in self.links:
+                        self.links[m].send_frame(
+                            {"kind": "GROUP_ERROR", "name": name,
+                             "why": why})
+        elif fan_out is None:                  # local failure: tell coord
+            with self.lock:
+                link = self.links.get(rec.coordinator)
+            if link is not None:
+                link.send_frame({"kind": "GROUP_ERROR", "name": name,
+                                 "why": why})
+
     def debug_sever(self, peer_id: str) -> bool:
         """Test hook: kill the socket WITHOUT cleanup — the remote side
         must discover the death itself (EOF/heartbeat)."""
@@ -341,6 +403,29 @@ class NetworkManager:
                     with self.lock:
                         link.core.rdma_writer = RdmaWriterHook(self, link)
                     self.state.emit("peer_rdma_up", peer_id=link.peer_id)
+                continue
+            if kind == "GROUP_JOIN":
+                from .groups import GroupRecord
+
+                members = tuple(msg["members"])
+                rec = GroupRecord(
+                    name=msg["name"], members=members,
+                    backend=msg["backend"],
+                    self_rank=members.index(self.peer_name),
+                    coordinator=link.peer_id)
+                self.groups.adopt(rec)
+                link.send_frame({"kind": "GROUP_ACK", "name": msg["name"],
+                                 "member": self.peer_name})
+                self.state.emit("group_joined", name=msg["name"],
+                                rank=rec.self_rank)
+                continue
+            if kind == "GROUP_ACK":
+                if self.groups.ack(msg["name"], msg["member"]):
+                    self.state.emit("group_created", name=msg["name"])
+                continue
+            if kind == "GROUP_ERROR":
+                self.group_error(msg["name"], msg.get("why", "?"),
+                                 fan_out=getattr(link, "peer_id", None))
                 continue
             with self.lock:
                 link.core.handle(msg, payload)

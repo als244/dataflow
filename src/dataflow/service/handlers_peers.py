@@ -103,7 +103,19 @@ def install(server) -> None:
                                   from_peer=a.get("from_peer"))
         return {"ok": True, "oid": rec.id, "version": rec.version}
 
+    def create_peer_group(call):
+        a = call.args
+        return require_nm().create_group(a["name"], list(a["members"]),
+                                         a.get("backend", "auto"))
+
+    def destroy_peer_group(call):
+        a = call.args
+        require_nm().groups.drop(a["name"])
+        return {"ok": True}
+
     server.dispatcher.handlers.update({
+        "create_peer_group": create_peer_group,
+        "destroy_peer_group": destroy_peer_group,
         "peer_connect": peer_connect,
         "peer_disconnect": peer_disconnect,
         "send_object": send_object,
@@ -135,7 +147,11 @@ def install(server) -> None:
     def transfer_status(conn, args):
         return require_nm().transfer_status(args["send_id"])
 
+    def list_peer_groups(conn, args):
+        return [] if nm is None else nm.groups.infos()
+
     server.fast_handlers.update({
+        "list_peer_groups": list_peer_groups,
         "list_peers": list_peers,
         "peer_status": peer_status,
         "transfer_status": transfer_status,

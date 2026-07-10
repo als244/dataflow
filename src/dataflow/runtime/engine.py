@@ -249,6 +249,7 @@ class Engine:
         record_placement=None,    # runtime.placement.PlacementRecorder: dry runs
         vmm: bool = False,        # fast buffers from a VMM arena (device/vmm.py)
         run_args: Mapping[str, object] | None = None,   # -> TaskContext.run_args
+        groups: Mapping[str, dict] | None = None,       # -> TaskContext.groups
         cancel_event=None,        # threading.Event: boundary-cancel (service)
         annotate_rename=None,     # Callable[[str], str]: NVTX display names only
                                   # (a replayed 1-step plan bakes step 0 into every
@@ -542,6 +543,7 @@ class Engine:
                     task=task, stream=compute, inputs=in_buffers, outputs=out_buffers,
                     mutates=mut_buffers, backend=self.backend,
                     run_args=run_args, run_values=run_values,
+                    groups=groups,
                 ))
             finally:
                 annotator.range_pop()

@@ -39,6 +39,10 @@ class TaskContext:
     # current_round_{s}_{r} outputs carry the ORDERING; this dict is the
     # ergonomic read.
     run_values: dict | None = None
+    # live peer-group handles ({name -> {rank, world, backend, ...}}),
+    # the WHOLE daemon table per run; absent name => task skips comm
+    # (valid only for rank-complete lowerings — spec)
+    groups: dict | None = None
 
 
 class Executable(Protocol):
