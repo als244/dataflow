@@ -144,27 +144,39 @@ def run_reference(cfg, recipe: Recipe, stream, steps: int, *, seed: int = 11,
         t0 = time.perf_counter()
         opt.zero_grad()
         step_loss = 0.0
+        # GLOBAL-DENOMINATOR convention: every round's CE normalizes by
+        # the STEP's valid-token total (rounds are a memory optimization,
+        # not a semantics knob) — the engine side receives the same
+        # denominator via run_args valid_rows. The per-round LBL term is
+        # per-round BY DESIGN and is not rescaled.
+        rounds = []
+        step_valid = 0
         for r in range(R):
             tok, tgt = stream(step * R + r)
+            rounds.append((tok, tgt))
+            step_valid += int((tgt >= 0).sum())
+        for tok, tgt in rounds:
+            valid_r = int((tgt >= 0).sum())
+            scale = valid_r / step_valid
             tok = tok.to(device, non_blocking=True).view(B, T)
             tgt = tgt.to(device, non_blocking=True).view(B, T)
             if aux_coef > 0:
                 loss_r = model.loss(tok, tgt, aux_coef=aux_coef)
-                ce_r = (float(loss_r.detach())
-                        - aux_coef * float(model.load_balance_loss().detach()))
+                lbl_r = model.load_balance_loss()
+                ce_r = loss_r - aux_coef * lbl_r
+                (ce_r * scale + aux_coef * lbl_r).backward()
             else:
-                loss_r = model.loss(tok, tgt)
-                ce_r = float(loss_r.detach())
-            loss_r.backward()
-            step_loss += ce_r
+                ce_r = model.loss(tok, tgt)
+                (ce_r * scale).backward()
+            step_loss += float(ce_r.detach()) * scale
         opt.step(step)
         torch.cuda.synchronize()
         dt = time.perf_counter() - t0
-        res.losses.append(step_loss / R)
+        res.losses.append(step_loss)
         res.step_wall_s.append(dt)
         res.tok_per_s.append(tokens_per_step(cfg) / dt)
         if step % log_every == 0 or step == steps - 1:
-            log(f"[reference] step {step:4d}/{steps}  loss {step_loss / R:.4f}"
+            log(f"[reference] step {step:4d}/{steps}  loss {step_loss:.4f}"
                 f"  lr {recipe.lr_at(step):.2e}  {tokens_per_step(cfg) / dt:.0f} tok/s")
     del model, opt
     torch.cuda.empty_cache()
@@ -253,9 +265,11 @@ def run_engine(client, cfg, recipe: Recipe, stream, steps: int, *,
     client.materialize_group({"kind": "family_init_all", "family": fam,
                               "cfg": cd, "seed": seed})
     R = cfg.grad_accum_rounds
+    valid_by_step: dict[int, int] = {}
 
     def put_round(step: int, r: int) -> None:
         tok, tgt = stream(step * R + r)
+        valid_by_step[step] = valid_by_step.get(step, 0) + int((tgt >= 0).sum())
         client.put_object(f"tokens_0_{r}", tok.numpy().tobytes())
         client.put_object(f"targets_0_{r}", tgt.numpy().tobytes())
 
@@ -278,11 +292,17 @@ def run_engine(client, cfg, recipe: Recipe, stream, steps: int, *,
             for r in range(R):
                 put_round(step, r)
         t0 = time.perf_counter()
-        out = client.run(prog_id, args={"step": step}, fetch=fetch)
+        # GLOBAL-DENOMINATOR convention: one denominator for every round
+        # of the step (scalar valid_rows); per-round loss objects then
+        # hold Sum(nll_r)/valid_step, so the STEP loss is their plain sum
+        out = client.run(prog_id,
+                         args={"step": step,
+                               "valid_rows": valid_by_step.pop(step)},
+                         fetch=fetch)
         dt = time.perf_counter() - t0
         if out.get("state") != "done":
             raise RuntimeError(f"run step {step} state={out.get('state')}: {out}")
-        step_loss = sum(out["fetched"][k] for k in fetch) / R
+        step_loss = sum(out["fetched"][k] for k in fetch)
         res.losses.append(step_loss)
         res.step_wall_s.append(dt)
         res.tok_per_s.append(tokens_per_step(cfg) / dt)

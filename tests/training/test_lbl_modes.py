@@ -13,10 +13,14 @@ DIFFERENT where math says different (the silent-no-op guards):
     through h2; any deferred scheme necessarily cannot).
 GA-INVARIANCE, isolated: under SGD (linear), the aux-induced router delta
   W(alpha) - W(0) equals -lr * g_aux exactly, with the CE part cancelling —
-  retained's delta is ga-invariant, per-round's demonstrably is not. (The
-  naive full-weight engine(ga4)==engine(ga1) comparison is ill-posed: the
-  engine SUMS per-round mean losses, so the CE gradient itself scales
-  with the round count, and AdamW is nonlinear on top.)
+  retained's delta is ga-invariant, per-round's demonstrably is not.
+  (Historical note: the naive full-weight engine(ga4)==engine(ga1)
+  comparison used to be ill-posed because per-round MEAN losses summed;
+  the global-denominator convention fixed that — run_args valid_rows
+  carries the step total — and test_ga_invariance.py now pins the naive
+  form directly. These runs pass no valid_rows, so they exercise the
+  legacy per-round normalization; the SGD-delta isolation is
+  denominator-robust either way.)
 And: expert_counts_overall is monotone across steps; a recompute-everything
   plan produces the SAME counts as save-all (recompute has no Aux edge —
   the double-count negative test).
