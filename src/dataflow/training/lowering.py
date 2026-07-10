@@ -99,11 +99,11 @@ def size_of_factory(dims, fl: FamilyLayouts):
             return m_i[int(oid.rsplit("_", 1)[1])]
         if oid.startswith("Aux_"):          # Aux_{i} (persistent counts)
             return aux_i[int(oid.split("_")[1])]
-        if oid.startswith("dW_embed"):
+        if oid.startswith(("dW_embed", "dWg_embed")):
             return dw_e
         if oid == "W_embed":
             return fl.embed.total_bytes
-        if oid.startswith("dW_head"):
+        if oid.startswith(("dW_head", "dWg_head")):
             return dw_h
         if oid == "W_head":
             return fl.head.total_bytes  # head packs [table | final_norm_w]
@@ -113,7 +113,7 @@ def size_of_factory(dims, fl: FamilyLayouts):
             return o_h
         if oid.startswith("O_"):            # O_{i}
             return o_i[int(oid.split("_")[1])]
-        if oid.startswith("dW_"):           # dW_{s}_{i}
+        if oid.startswith(("dW_", "dWg_")):  # dW_{s}_{i} / dWg_{s}_{i}
             return dw_i[int(oid.rsplit("_", 1)[1])]
         if oid.startswith("W_"):            # W_{i}
             return wl_i[int(oid.split("_")[1])].total_bytes
@@ -145,10 +145,15 @@ def apply_exact_sizes(
         return replace(t, outputs=tuple(fix_out(o) for o in t.outputs), block_params=params)
 
     def step_of(task_id: str) -> int:
-        # optimizer ids: optimizer_embed_{s} / optimizer_{s}_{i} / optimizer_head_{s}
+        # optimizer ids: optimizer_embed_{s} / optimizer_{s}_{i} /
+        # optimizer_head_{s}; grad_reduce ids (also group="optimizer"):
+        # grad_reduce_{s}_{i} / grad_reduce_embed_{s} / grad_reduce_head_{s}
         parts = task_id.split("_")
-        if task_id.startswith(("optimizer_embed", "optimizer_head")):
+        if task_id.startswith(("optimizer_embed", "optimizer_head",
+                               "grad_reduce_embed", "grad_reduce_head")):
             return int(parts[-1])
+        if task_id.startswith("grad_reduce_"):
+            return int(parts[2])
         return int(parts[1])
 
     new_rewrites = tuple(

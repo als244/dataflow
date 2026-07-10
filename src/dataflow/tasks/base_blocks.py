@@ -393,6 +393,86 @@ class EmbedBwd(_Base):
 
 
 @dataclass(frozen=True)
+class GradReduceStep(_Base):
+    """Data-parallel gradient exchange as its OWN task: reads the
+    local dW input, lands the group SUM in the dWg output. The
+    exchange is enqueue-only on the GROUP stream, so it overlaps the
+    remaining backward; the compute stream stalls ONLY until the
+    staging read of dW completes (keeping dW's lifetime stream-ordered
+    while the wire flies). The tail optimizer consumes dWg and merely
+    waits. Absent group (sim dry-runs / standalone engines) it
+    degrades to a plain copy — the correct world-1 semantics."""
+
+    hyper: object = None       # ctor parity with optimizer kinds; unused
+    kind: str = "block"
+
+    def grad_layout_of(self, task):
+        d = self.dims
+        layer = self.layer_of(task)
+        if self.kind == "embed":
+            wl_, ns = embed_weight_layout(d), "embed"
+        elif self.kind == "head":
+            wl_, ns = head_weight_layout(d), "head"
+        else:
+            wl_, ns = weight_layout(d, layer=layer), None
+        return grad_layout(wl_, d.dtypes, ns=ns, layer=layer,
+                           opt_policy=getattr(d, "opt_policy", None))
+
+    def launch(self, ctx: TaskContext) -> None:
+        es, kctx = self._stream_ctx(ctx)
+        with torch.cuda.stream(es):
+            g_local = self._in(ctx, 0)
+            g_global = self._out(ctx, 0)
+            gl_ = self.grad_layout_of(ctx.task)
+            if gl_.total_bytes != g_local.size_bytes:
+                raise ValueError(
+                    f"grad_reduce layout mismatch for {ctx.task.id!r}: "
+                    f"layout {gl_.total_bytes} bytes vs dW buffer "
+                    f"{g_local.size_bytes} bytes")
+            views = []
+            dtypes = {f.dtype for f in gl_.fields}
+            if len(dtypes) == 1:
+                total = 0
+                for f in gl_.fields:
+                    n = 1
+                    for s in f.shape:
+                        n *= s
+                    dt_f = TORCH_DTYPE_BY_NAME[f.dtype]
+                    end = f.offset_bytes + n * dt_f.itemsize
+                    if end > total:
+                        total = end
+                dt_all = TORCH_DTYPE_BY_NAME[gl_.fields[0].dtype]
+                count = total // dt_all.itemsize
+                views.append((torch_view(g_local, (count,), dt_all),
+                              torch_view(g_global, (count,), dt_all)))
+            else:
+                for f in gl_.fields:
+                    dt_f = TORCH_DTYPE_BY_NAME[f.dtype]
+                    views.append(
+                        (torch_view(g_local, f.shape, dt_f,
+                                    offset_bytes=f.offset_bytes),
+                         torch_view(g_global, f.shape, dt_f,
+                                    offset_bytes=f.offset_bytes)))
+            dp_name = ctx.task.block_params.get("dp_group")
+            gh = (getattr(ctx, "groups", None) or {}).get(dp_name) \
+                if dp_name else None
+            if gh is None:
+                for lv, gv in views:
+                    gv.copy_(lv)
+                return
+            produced = torch.cuda.Event()
+            produced.record(es)
+            gh.stream.wait_event(produced)      # producer edge es->gh
+            staged = None
+            for lv, gv in views:
+                staged = gh.allreduce(lv, out=gv)
+            if staged is not None:
+                es.wait_event(staged)   # es resumes once dW's bytes
+                                        # are STAGED (input reusable);
+                                        # the exchange itself overlaps
+
+
+@dataclass(frozen=True)
 class AdamWStep(_Base):  # name kept for resolver back-compat; see OptimizerStep alias
     """Per-FIELD optimizer step over one packed weight object —
     dispatches each field's rule (adamw/sgd/sgdm/muon/custom) and
@@ -496,6 +576,17 @@ class AdamWStep(_Base):  # name kept for resolver back-compat; see OptimizerStep
                         gh.allreduce(gview)
                 summed = torch.cuda.Event()
                 summed.record(gh.stream)
+                es.wait_event(summed)
+            wait_name = ctx.task.block_params.get("dp_wait_group")
+            gw = (getattr(ctx, "groups", None) or {}).get(wait_name) \
+                if wait_name else None
+            if gw is not None:
+                # overlap lowering: grads arrive PRE-REDUCED in the
+                # dWg input, summed on the GROUP stream by an earlier
+                # grad_reduce task — order es behind its current tail
+                # (FIFO stream => covers this layer's sum)
+                summed = torch.cuda.Event()
+                summed.record(gw.stream)
                 es.wait_event(summed)
             ra = getattr(ctx, "run_args", None) or {}
             # service runs bind the global step per run (run_args);

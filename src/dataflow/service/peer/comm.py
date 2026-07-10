@@ -354,7 +354,8 @@ class HostmemComm:
                 target = tensor if out is None else out
                 with torch.cuda.stream(self.stream):
                     self.enqueue_recv(target, stage, nbytes, lane)
-        return seq
+        return ev   # staging-ready: safe to reuse/free the INPUT once
+                    # this fires; the SUM lands via the group stream
 
     def enqueue_recv(self, target, stage, nbytes: int, lane: str):
         """Stream ops that run AFTER the flag releases. Socket lane:
@@ -504,8 +505,11 @@ class HostmemComm:
 
     # ---------------------------------------------------- GroupHandle ops
 
-    def allreduce(self, tensor) -> None:
-        self.enqueue(tensor, "allreduce")
+    def allreduce(self, tensor, out=None):
+        """Returns the staging-ready event (input readable/reusable
+        once it fires). With ``out``, the SUM lands in ``out`` instead
+        of overwriting ``tensor`` — both stream-ordered on gh.stream."""
+        return self.enqueue(tensor, "allreduce", out=out)
 
     def broadcast(self, tensor, root: int) -> None:
         self.enqueue(tensor, "broadcast", send_stage=self.rank == root,

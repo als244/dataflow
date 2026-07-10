@@ -51,12 +51,14 @@ from .recipe import Recipe
 from .topology import load_topology
 
 
-def lower_with_group(cfg, dp_group: str, recompute_levels=None):
+def lower_with_group(cfg, dp_group: str, recompute_levels=None,
+                     dp_overlap: bool = False):
     hw = ShapedHardware()
     shaped = build_shaped_program(
         cfg, hw=hw, family="llama3-shaped",
         kinds={"block": roofline_block_kind_spec(cfg, hw)},
-        dp_group=dp_group, recompute_levels=recompute_levels)
+        dp_group=dp_group, recompute_levels=recompute_levels,
+        dp_overlap=dp_overlap)
     from dataflow.training.lowering import apply_exact_sizes, size_of_factory
 
     dims, fl = family_layouts(cfg)
@@ -67,13 +69,15 @@ def lower_with_group(cfg, dp_group: str, recompute_levels=None):
 class GroupedBuildVariant:
     """plan_program's recompute rebuilder for dp_group lowerings."""
 
-    def __init__(self, cfg, dp_group: str):
+    def __init__(self, cfg, dp_group: str, dp_overlap: bool = False):
         self.cfg = cfg
         self.dp_group = dp_group
+        self.dp_overlap = dp_overlap
 
     def __call__(self, levels):
         return lower_with_group(self.cfg, self.dp_group,
-                                recompute_levels=levels)
+                                recompute_levels=levels,
+                                dp_overlap=self.dp_overlap)
 
 
 class RankState:
@@ -160,7 +164,7 @@ def run_fleet_dp(global_cfg, recipe: Recipe, stream, steps: int, *,
                  rank_rounds=(6, 2), budgets=None, slabs=None,
                  topology=None, group: str = "dp", attach=None,
                  seed: int = 11, log=print, log_every: int = 10,
-                 profile: dict | None = None,
+                 profile: dict | None = None, dp_overlap: bool = False,
                  prof_dir: str = "results/pretrain/logs") -> RunResult:
     """Train ``global_cfg``'s step batch across the group's hosts;
     returns the conductor's RunResult (losses = GLOBAL step means).
@@ -251,7 +255,8 @@ def run_fleet_dp(global_cfg, recipe: Recipe, stream, steps: int, *,
                           budgets=budgets, seed=seed, log=log,
                           log_every=log_every,
                           tokens_step=tokens_per_step(global_cfg),
-                          r_global=r_global, profile=profile)
+                          r_global=r_global, profile=profile,
+                          dp_overlap=dp_overlap)
     finally:
         for rig in rigs:
             if rig.client is None:
@@ -286,16 +291,18 @@ def run_fleet_dp(global_cfg, recipe: Recipe, stream, steps: int, *,
 
 def fleet_loop(ranks, gspec, recipe, stream, steps, *, budgets, seed,
                log, log_every, tokens_step, r_global,
-               profile: dict | None = None) -> RunResult:
+               profile: dict | None = None,
+               dp_overlap: bool = False) -> RunResult:
     world = len(ranks)
 
     # ---- per-rank register + warm-up ----------------------------------
     for i, rank in enumerate(ranks):
         planned = plan_program(
-            lower_with_group(rank.cfg, gspec.name),
+            lower_with_group(rank.cfg, gspec.name, dp_overlap=dp_overlap),
             fast_memory_capacity=int(budgets[i] * 1024 ** 3),
             recompute=True,
-            build_variant=GroupedBuildVariant(rank.cfg, gspec.name))
+            build_variant=GroupedBuildVariant(rank.cfg, gspec.name,
+                                              dp_overlap=dp_overlap))
         prog_dict = program_to_dict(planned.program)
         resolver = {"family": "llama3", "cfg": cfg_dict(rank.cfg),
                     "hyper": recipe.hyper_spec()}

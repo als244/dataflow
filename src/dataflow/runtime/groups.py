@@ -37,10 +37,13 @@ class GroupHandle:
                 f"(backend={self.backend!r}) — collectives unavailable")
         return self.comm
 
-    def allreduce(self, tensor) -> None:
-        """In-place SUM across the group (rank-ordered fp32
-        accumulation; result bitwise-identical on every member)."""
-        self.require_comm().allreduce(tensor)
+    def allreduce(self, tensor, out=None):
+        """SUM across the group (native-dtype single add by default;
+        result bitwise-identical on every member). In place unless
+        ``out`` is given (the sum lands there; ``tensor`` untouched).
+        Returns the staging-ready event: the INPUT is reusable once it
+        fires; the sum itself is ordered on this handle's stream."""
+        return self.require_comm().allreduce(tensor, out=out)
 
     def broadcast(self, tensor, root: int) -> None:
         self.require_comm().broadcast(tensor, root)

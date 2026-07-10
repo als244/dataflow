@@ -58,6 +58,11 @@ def main() -> None:
     tr.add_argument("--peak-lr", type=float, default=3e-4)
     tr.add_argument("--seed", type=int, default=11)
     tr.add_argument("--out", required=True)
+    tr.add_argument("--dp-overlap", action="store_true",
+                    help="tail-placed optimizers consuming PRE-REDUCED "
+                         "grads: grad_reduce tasks fire after each "
+                         "final-round bwd so the exchange overlaps the "
+                         "remaining backward (experimental)")
     tr.add_argument("--profile", action="store_true",
                     help="bracket steps with the vendor capture API; "
                          "launched daemons are wrapped in the canonical "
@@ -72,6 +77,10 @@ def main() -> None:
 
     if args.cmd == "train":
         cfg = preset(args.preset)
+        if args.dp_overlap:
+            from dataclasses import replace as dc_replace
+
+            cfg = dc_replace(cfg, optimizer_placement="tail")
         recipe = Recipe(peak_lr=args.peak_lr, min_lr=args.peak_lr / 10,
                         warmup_steps=max(1, args.steps // 10),
                         total_steps=args.steps)
@@ -93,7 +102,8 @@ def main() -> None:
                            slabs=floats_or_none(args.slabs),
                            topology=load_topology(args.topology),
                            group=args.group, attach=attach,
-                           seed=args.seed, profile=profile)
+                           seed=args.seed, profile=profile,
+                           dp_overlap=args.dp_overlap)
         res.save(args.out)
         print(f"saved {args.out} (final loss {res.losses[-1]:.4f}, "
               f"steady {res.steady_tok_per_s:.0f} tok/s)")
