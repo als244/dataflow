@@ -35,6 +35,8 @@ def main() -> None:
                     help="peer-plane identity (enables the NM)")
     st.add_argument("--peer-listen", default=None,
                     help="host:port for the NM's own listener")
+    st.add_argument("--peer-rdma-device", default=None,
+                    help="HCA for the rdma-host transport (e.g. mlx5_1)")
 
     for name in ("status", "stop"):
         s = sub.add_parser(name)
@@ -46,7 +48,8 @@ def main() -> None:
         cfg = EngineConfig(socket_path=args.socket, slab_backing_gib=slab,
                            device=args.device, kernel_set=args.kernels,
                            fake=args.fake, peer_name=args.peer_name,
-                           peer_listen=args.peer_listen)
+                           peer_listen=args.peer_listen,
+                           peer_rdma_device=args.peer_rdma_device)
         print(f"dataflowd: listening on {args.socket} "
               f"(fake={args.fake}, slab={slab})")
         Server(cfg).serve_forever()

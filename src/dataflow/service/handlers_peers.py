@@ -29,7 +29,9 @@ def install(server) -> None:
         nm = NetworkManager(server, peer_name=cfg.peer_name,
                             listen=getattr(cfg, "peer_listen", None),
                             chunk_bytes=getattr(cfg, "peer_chunk_bytes",
-                                                128 << 20))
+                                                128 << 20),
+                            rdma_device=getattr(cfg, "peer_rdma_device",
+                                                None))
         server.nm = nm
         nm.start()
 
@@ -67,11 +69,13 @@ def install(server) -> None:
                                "release second-writer audit")
         dest = a.get("as_id") or oid
         store.acquire_leases([oid])
+        src_ptr = store.ptr_of(rec) if store.slab is not None else None
         try:
             send_id = m.start_send(
                 a["peer_id"], dest, store.view(rec),
                 overwrite=bool(a.get("overwrite")),
-                meta=dict(rec.meta), on_finish=SendCompletion(store, oid))
+                meta=dict(rec.meta), on_finish=SendCompletion(store, oid),
+                src_ptr=src_ptr)
         except Exception:
             store.release_leases([oid])
             raise

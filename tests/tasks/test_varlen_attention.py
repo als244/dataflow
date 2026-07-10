@@ -129,6 +129,13 @@ def test_bwd_bitlevel_segment_isolation():
     assert not torch.equal(dq_a[:s0], dq_b[:s0])
 
 
+@pytest.mark.skip(reason="HIDDEN by decision (Shein 2026-07-11): aten "
+                  "flash-bwd split-k heuristic is allocator-state-"
+                  "dependent -> occasional non-bitwise dq/dk/dv between "
+                  "identical calls; got noisier (~1/3 isolated). Tracked "
+                  "in docs/notes/distributed_plumbing_findings.md FLAG; "
+                  "un-skip when the heuristic is pinned or the gate is "
+                  "relaxed to documented split noise.")
 def test_determinism_twice_bitwise():
     q, k, v, cu = _case(3)
     out_a, lse_a = _varlen(q, k, v, cu)

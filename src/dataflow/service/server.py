@@ -57,6 +57,7 @@ class EngineConfig:
     peer_name: str | None = None
     peer_listen: str | None = None
     peer_chunk_bytes: int = 128 * 1024 * 1024
+    peer_rdma_device: str | None = None      # e.g. "mlx5_1" => rdma-host
 
     def public(self) -> dict:
         return {

@@ -63,7 +63,13 @@ class StoreReceiverEnv(ReceiverEnv):
                 self.nm.inflight_bytes[self.peer_id] -= nbytes
             return None, code
         view = self.nm.store.view_extent(ext, nbytes)
-        return Reservation(dest_id=dest_id, buffer=view, extent=ext), None
+        res = Reservation(dest_id=dest_id, buffer=view, extent=ext)
+        link = self.nm.links.get(self.peer_id)
+        qp = getattr(link, "rdma_qp", None) if link else None
+        if self.nm.rdma is not None and qp is not None and qp.ready:
+            res.raddr = self.nm.rdma.slab_base + ext.offset
+            res.rkey = self.nm.rdma.rkey()
+        return res, None
 
     def commit(self, res, meta, send_id):
         self.nm.queue_commit(self.peer_id, res, meta, send_id)
@@ -112,13 +118,22 @@ class NetworkManager:
                  chunk_bytes: int = P.CHUNK_BYTES_DEFAULT,
                  inflight_quota: int = 4 << 30,
                  ping_every_s: float = PING_EVERY_S,
-                 peer_down_after_s: float = PEER_DOWN_AFTER_S):
+                 peer_down_after_s: float = PEER_DOWN_AFTER_S,
+                 rdma_device: str | None = None):
         self.server = server
         self.store = server.store
         self.state = server.state
         self.peer_name = peer_name
         self.listen_addr = listen
         self.chunk_bytes = chunk_bytes
+        self.rdma = None
+        if rdma_device and self.store.slab is not None:
+            from .rdma import RdmaEngine
+
+            self.rdma = RdmaEngine(rdma_device)
+            self.rdma.register_slab(self.store.slab.ptr,
+                                    self.store.allocator.capacity)
+        self.send_src_ptrs: dict[str, int] = {}   # send_id -> slab ptr
         self.inflight_quota = inflight_quota
         self.ping_every_s = ping_every_s
         self.peer_down_after_s = peer_down_after_s
@@ -185,8 +200,10 @@ class NetworkManager:
                     continue
                 peer_id = msg["peer_id"]
                 conn.send({"kind": "HELLO", "schema": HELLO_SCHEMA,
-                           "peer_id": self.peer_name})
-                self.adopt_link(peer_id, conn)
+                           "peer_id": self.peer_name,
+                           "rdma": self.rdma is not None})
+                self.adopt_link(peer_id, conn,
+                                peer_rdma=bool(msg.get("rdma")))
             except OSError:
                 continue
 
@@ -198,17 +215,20 @@ class NetworkManager:
         sock = socket.create_connection((host, int(port)), timeout=10)
         conn = Conn(sock)
         conn.send({"kind": "HELLO", "schema": HELLO_SCHEMA,
-                   "peer_id": self.peer_name})
+                   "peer_id": self.peer_name,
+                   "rdma": self.rdma is not None})
         frame = conn.recv()
         msg = frame.msg if frame else None
         if not msg or msg.get("kind") != "HELLO":
             sock.close()
             raise ServiceError("PEER_UNREACHABLE",
                                f"bad hello from {addr}")
-        self.adopt_link(msg.get("peer_id", peer_id), conn)
+        self.adopt_link(msg.get("peer_id", peer_id), conn,
+                        peer_rdma=bool(msg.get("rdma")))
         return {"peer_id": msg.get("peer_id", peer_id)}
 
-    def adopt_link(self, peer_id: str, conn: Conn) -> None:
+    def adopt_link(self, peer_id: str, conn: Conn, *,
+                   peer_rdma: bool = False) -> None:
         with self.lock:
             old = self.links.get(peer_id)
             if old is not None:
@@ -223,6 +243,8 @@ class NetworkManager:
                             chunk_bytes=self.chunk_bytes)
             link.core = core
             self.links[peer_id] = link
+            if self.rdma is not None and peer_rdma:
+                link.rdma_qp = self.rdma.make_link_qp()
             reader = threading.Thread(target=self.reader_loop,
                                       args=(link,),
                                       name=f"nm-link-{peer_id}",
@@ -230,6 +252,9 @@ class NetworkManager:
             link.reader = reader
         self.state.emit("peer_up", peer_id=peer_id)
         reader.start()
+        if getattr(link, "rdma_qp", None) is not None:
+            link.send_frame({"kind": "RDMA_INFO",
+                             **link.rdma_qp.local_info()})
 
     def drop_link(self, link: PeerLink, *, why: str) -> None:
         with self.lock:
@@ -308,6 +333,14 @@ class NetworkManager:
                 link.send_frame({"kind": "PONG"})
                 continue
             if kind == "PONG":
+                continue
+            if kind == "RDMA_INFO":
+                qp = getattr(link, "rdma_qp", None)
+                if qp is not None and not qp.ready:
+                    qp.connect(msg)
+                    with self.lock:
+                        link.core.rdma_writer = RdmaWriterHook(self, link)
+                    self.state.emit("peer_rdma_up", peer_id=link.peer_id)
                 continue
             with self.lock:
                 link.core.handle(msg, payload)
@@ -394,7 +427,8 @@ class NetworkManager:
     # ------------------------------------------------ outbound + status
 
     def start_send(self, peer_id: str, dest_id: str, payload_view, *,
-                   overwrite: bool, meta: dict, on_finish) -> str:
+                   overwrite: bool, meta: dict, on_finish,
+                   src_ptr: int | None = None) -> str:
         with self.lock:
             link = self.links.get(peer_id)
             if link is None or not link.alive:
@@ -402,6 +436,8 @@ class NetworkManager:
             ticket = link.core.start_send(
                 dest_id, payload_view, overwrite=overwrite, meta=meta,
                 on_finish=SendFinishRelay(self, peer_id, on_finish))
+            if src_ptr is not None:
+                self.send_src_ptrs[ticket.send_id] = src_ptr
             self.transfers[ticket.send_id] = {
                 "send_id": ticket.send_id, "peer_id": peer_id,
                 "dest_id": dest_id, "state": ticket.state.value,
@@ -476,6 +512,50 @@ class NetworkManager:
         self.state.emit("object_received", oid=res.dest_id,
                         from_peer=peer_id, bytes=len(res.buffer),
                         zero_copy=res.landed_zero_copy)
+
+
+class RdmaWriterHook:
+    """core.rdma_writer: spawns the writer thread for one transfer —
+    the reader thread must never block on multi-second CQ polls."""
+
+    def __init__(self, nm: NetworkManager, link: PeerLink):
+        self.nm = nm
+        self.link = link
+
+    def __call__(self, machine, raddr: int, rkey: int) -> None:
+        t = threading.Thread(
+            target=self.run, args=(machine, raddr, rkey),
+            name=f"nm-rdma-write-{machine.ticket.send_id}", daemon=True)
+        t.start()
+
+    def run(self, machine, raddr: int, rkey: int) -> None:
+        nm, link = self.nm, self.link
+        send_id = machine.ticket.send_id
+        src_ptr = nm.send_src_ptrs.pop(send_id, None)
+        try:
+            if src_ptr is None:
+                raise RuntimeError("rdma send without a slab src_ptr")
+            link.rdma_qp.write(src_ptr, raddr, rkey,
+                               machine.ticket.bytes_total,
+                               on_progress=TicketProgress(machine.ticket))
+        except Exception as ex:                # fail-stop: kill the link
+            with nm.lock:
+                link.core.finish_sender(
+                    machine, P.TransferState.ERROR,
+                    f"TRANSFER_ABORTED rdma: {ex}")
+            nm.drop_link(link, why=f"rdma write failed: {ex}")
+            return
+        with nm.lock:
+            link.core.rdma_write_finished(machine)
+        nm.after_core_step(link)
+
+
+class TicketProgress:
+    def __init__(self, ticket):
+        self.ticket = ticket
+
+    def __call__(self, done: int) -> None:
+        self.ticket.bytes_done = done
 
 
 class SendFinishRelay:

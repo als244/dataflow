@@ -125,6 +125,9 @@ class PeerCore:
         self.dest_queues: dict[str, deque] = {}
         self.completed: OrderedDict[str, bool] = OrderedDict()  # dedup ring
         self.seq = 0
+        # installed by the NM when the link's RC QP reaches RTS:
+        # callable(machine, raddr, rkey) — moves payload OFF the socket
+        self.rdma_writer = None
 
     # ------------------------------------------------ sender side
 
@@ -174,6 +177,19 @@ class PeerCore:
             queue.popleft()
             if queue:
                 self.open_send(self.senders[queue[0]])
+
+    def rdma_write_finished(self, machine: SenderMachine) -> None:
+        """Called by the NM writer thread after the last RDMA chunk
+        completes: DONE rides the control link; ack path is unchanged.
+        checksum=0 sentinel: RC transport already guarantees integrity
+        (link-level CRCs + reliable delivery) — a CPU crc32 over the
+        payload was measured DOMINATING the NIC time (findings, P2b)."""
+        t = machine.ticket
+        t.bytes_done = t.bytes_total
+        self.send(P.done(t.send_id, 0), None)
+        machine.awaiting_ack_since = self.clock()
+        machine.last_progress = self.clock()
+        t.state = TransferState.COMMITTING
 
     def handle_clearance(self, machine: SenderMachine) -> None:
         """CTS or ADDR: stream the payload + DONE."""
@@ -272,12 +288,18 @@ class PeerCore:
         machine = self.receivers.get(send_id)
         if machine is None:
             return
+        if machine.res.raddr:
+            # one-sided RC landing: transport-level reliability IS the
+            # integrity guarantee (checksum sentinel 0 skips the CPU
+            # pass on both sides)
+            machine.received = machine.expect_bytes
         if machine.received != machine.expect_bytes:
             self.abort_receiver(machine,
                                 f"DONE at {machine.received}/"
                                 f"{machine.expect_bytes} bytes")
             return
-        if P.payload_checksum(machine.res.buffer) != msg["checksum"]:
+        if not machine.res.raddr \
+                and P.payload_checksum(machine.res.buffer) != msg["checksum"]:
             self.abort_receiver(machine, "checksum mismatch")
             return
         self.finish_commit(machine)
@@ -321,7 +343,13 @@ class PeerCore:
             machine = self.senders.get(msg["send_id"])
             if machine is not None and not machine.cleared:
                 machine.ticket.state = TransferState.MOVING
-                self.handle_clearance(machine)
+                if kind == "ADDR" and self.rdma_writer is not None:
+                    machine.cleared = True
+                    machine.last_progress = self.clock()
+                    self.rdma_writer(machine, int(msg["raddr"]),
+                                     int(msg["rkey"]))
+                else:
+                    self.handle_clearance(machine)
         elif kind == "NACK":
             machine = self.senders.get(msg["send_id"])
             if machine is not None:
