@@ -40,7 +40,7 @@ from ..layouts import (
     dsv32_dense_weight_layout,
     dsv32_moe_activation_layout,
     dsv32_moe_weight_layout,
-    dsv32_meta_layout,
+    dsv32_aux_temp_layout,
 )
 from ..base_blocks import AdamWHyper, AdamWStep, EmbedBwd, EmbedFwd, HeadLoss
 from .llama3_blocks import BlockRecompute
@@ -117,38 +117,38 @@ class Dsv32MetaState:
     """Metadata-object plumbing (one implementation for fwd/rc/bwd): the
     layer's M object packs ALL its never-recompute artifacts — the dsa
     selection ("dsa_idx") and the routing pack (moe kinds) — in one
-    layout. Exposed to stages as st["meta"] (views dict); recompute sets
-    meta_ready so the runner skips meta-marked stages and the moe stages
+    layout. Exposed to stages as st["aux_temp"] (views dict); recompute sets
+    aux_temp_ready so the runner skips aux_temp-marked stages and the moe stages
     consume the decision verbatim — METADATA IS NEVER RECOMPUTED."""
 
-    META_KIND = "dense"  # overridden by moe classes
+    AUX_TEMP_KIND = "dense"  # overridden by moe classes
 
-    def _meta_layout(self):
+    def _aux_temp_layout(self):
         # hook: glm52 overrides with its per-kind layouts
-        return dsv32_meta_layout(self.dims, self.META_KIND)
+        return dsv32_aux_temp_layout(self.dims, self.AUX_TEMP_KIND)
 
-    def _meta_state(self, ctx):
-        layout = self._meta_layout()
+    def _aux_temp_state(self, ctx):
+        layout = self._aux_temp_layout()
         if not layout.fields:
             return None
         key = ctx.task.compute_block_key
         if key.endswith(("_recompute", "_bwd")):
             for j, oid in enumerate(ctx.task.inputs):
-                if oid.startswith("M_"):
-                    st = {"meta": layout.views(self._in(ctx, j))}
+                if oid.startswith("AuxTemp_"):
+                    st = {"aux_temp": layout.views(self._in(ctx, j))}
                     if key.endswith("_recompute"):
-                        st["meta_ready"] = True
+                        st["aux_temp_ready"] = True
                     return st
             raise RuntimeError(f"no M_ input on {ctx.task.id}")
         for j, o in enumerate(ctx.task.outputs):
-            if o.id.startswith("M_"):
-                return {"meta": layout.views(self._out(ctx, j))}
+            if o.id.startswith("AuxTemp_"):
+                return {"aux_temp": layout.views(self._out(ctx, j))}
         raise RuntimeError(f"no M_ output on {ctx.task.id}")
 
 
 class Dsv32ProfileFill(MoEProfileFill):
-    def _meta_layout(self):
-        return dsv32_meta_layout(self.dims, self.META_KIND)
+    def _aux_temp_layout(self):
+        return dsv32_aux_temp_layout(self.dims, self.AUX_TEMP_KIND)
 
     """Profiling fill: float inputs seeded deterministically (skipping the
     int-heavy M_ metadata inputs), then every M_ INPUT seeded validly per
@@ -164,7 +164,7 @@ class Dsv32ProfileFill(MoEProfileFill):
         gen = torch.Generator(device="cuda")
         gen.manual_seed(seed)
         for oid in ctx.task.inputs:
-            if oid.startswith("M_"):
+            if oid.startswith("AuxTemp_"):
                 continue
             b = ctx.inputs[oid]
             n = b.size_bytes // 2
@@ -173,9 +173,9 @@ class Dsv32ProfileFill(MoEProfileFill):
                 torch.rand(n, generator=gen, dtype=torch.bfloat16,
                            device="cuda").sub_(0.5).mul_(0.05)
             )
-        layout = self._meta_layout()
+        layout = self._aux_temp_layout()
         for oid in ctx.task.inputs:
-            if not oid.startswith("M_"):
+            if not oid.startswith("AuxTemp_"):
                 continue
             m = layout.views(ctx.inputs[oid])
             if "dsa_idx" in m:
@@ -221,7 +221,7 @@ class Dsv32DenseBlockFwd(Dsv32MetaState, Dsv32ProfileFill, Dsv3DenseBlockFwd):
     @staticmethod
     def _stage_mla_q(kctx, K, d, st):
         Dsv3DenseBlockFwd._stage_mla_q(kctx, K, d, st)
-        if st.get("meta_ready"):
+        if st.get("aux_temp_ready"):
             return  # selection supplied — the indexer tap is dead weight
         # the indexer taps the post-norm q_lora: recompute it here from
         # the ctx/local q_a (cheap (t, q_lora) norm) and stash for select
@@ -248,7 +248,7 @@ class Dsv32DenseBlockFwd(Dsv32MetaState, Dsv32ProfileFill, Dsv3DenseBlockFwd):
 
     @staticmethod
     def _stage_mla_kv(kctx, K, d, st):
-        if st.get("meta_ready"):
+        if st.get("aux_temp_ready"):
             Dsv3DenseBlockFwd._stage_mla_kv(kctx, K, d, st)
             return
         # indexer inputs need h1 — compute BEFORE the base stage pops it
@@ -261,10 +261,10 @@ class Dsv32DenseBlockFwd(Dsv32MetaState, Dsv32ProfileFill, Dsv3DenseBlockFwd):
 
     @staticmethod
     def _stage_dsa_select(kctx, K, d, st):
-        # writes the M object's dsa_idx field; marked "meta" in STAGES so
+        # writes the AuxTemp object's dsa_idx field; marked "aux_temp" in STAGES so
         # the runner SKIPS it whenever the metadata is supplied
         # (recompute) — metadata is never recomputed
-        idx = st["meta"]["dsa_idx"]
+        idx = st["aux_temp"]["dsa_idx"]
         q_idx, k_idx, wts = st.pop("q_idx"), st.pop("k_idx"), st.pop("idx_wts")
         for lo, hi in _seq_bounds(st["seg"]):
             length = hi - lo
@@ -293,7 +293,7 @@ class Dsv32DenseBlockFwd(Dsv32MetaState, Dsv32ProfileFill, Dsv3DenseBlockFwd):
         K.dsa_sparse_attn_fwd(
             kctx, st.pop("q_full"), st.pop("k_full"), vals,
             st.get("shared_idx", None) if "shared_idx" in st
-            else st["meta"]["dsa_idx"], attn_out, lse,
+            else st["aux_temp"]["dsa_idx"], attn_out, lse,
             n_heads=h, head_dim=qk, seq_bounds=_seq_bounds(st["seg"]), v_head_dim=v,
         )
         del vals
@@ -306,7 +306,7 @@ class Dsv32DenseBlockFwd(Dsv32MetaState, Dsv32ProfileFill, Dsv3DenseBlockFwd):
         Dsv3DenseBlockFwd.MLA_STAGES[0],                    # attn_norm
         ("mla_q", _stage_mla_q.__func__, ("q_a", "rstd_qa")),
         ("mla_kv", _stage_mla_kv.__func__, ("kv_a", "rstd_kva")),
-        ("dsa_select", _stage_dsa_select.__func__, (), "meta"),
+        ("dsa_select", _stage_dsa_select.__func__, (), "aux_temp"),
         ("dsa_attn", _stage_dsa_attn.__func__, ("lse", "attn_out")),
         Dsv3DenseBlockFwd.MLA_STAGES[4],                    # resid1_norm2
     ) + Dsv3DenseBlockFwd.STAGES[5:]                        # dense FFN tail
@@ -330,12 +330,12 @@ class Dsv32DenseBlockBwd(Dsv32MetaState, Dsv32ProfileFill, Dsv3DenseBlockBwd):
     def cl(self) -> PackedLayout:
         return dsv32_dense_activation_layout(self.dims)
 
-    def _backward(self, kctx, dy, a, x, w, dx_out, dw, accum, meta=None):
+    def _backward(self, kctx, dy, a, x, w, dx_out, dw, accum, aux_temp=None):
         # merge the M views into the saved-state dict: downstream reads
         # (a["dsa_idx"], a["route_*"]) work unchanged — `a` is "the saved
         # state", now composed from the ctx + metadata objects
-        if meta:
-            a = {**a, **meta["meta"]}
+        if aux_temp:
+            a = {**a, **aux_temp["aux_temp"]}
         super()._backward(kctx, dy, a, x, w, dx_out, dw, accum)
 
     def _indexer_kl_bwd(self, kctx, d, a, x, w, acc, h1, q_lora_n,
@@ -539,7 +539,7 @@ class Dsv32DenseBlockBwd(Dsv32MetaState, Dsv32ProfileFill, Dsv3DenseBlockBwd):
 
 @dataclass(frozen=True)
 class Dsv32MoeBlockFwd(Dsv32DenseBlockFwd):
-    META_KIND = "moe"
+    AUX_TEMP_KIND = "moe"
     def _weight_layout(self, layer: int | None = None) -> PackedLayout:
         return dsv32_moe_weight_layout(self.dims, layer=layer)
 
@@ -557,7 +557,7 @@ class Dsv32MoeBlockRecompute(Dsv32MoeBlockFwd, BlockRecompute):
 
 @dataclass(frozen=True)
 class Dsv32MoeBlockBwd(Dsv32DenseBlockBwd):
-    META_KIND = "moe"
+    AUX_TEMP_KIND = "moe"
     def _weight_layout(self, layer: int | None = None) -> PackedLayout:
         return dsv32_moe_weight_layout(self.dims, layer=layer)
 
@@ -604,7 +604,7 @@ class _WarmupKLMixin:
                 for j, o in enumerate(ctx.task.outputs):
                     if o.id.startswith("dW_"):
                         dw = self.gl_for(ctx.task).views(self._out(ctx, j))
-            meta = self._meta_state(ctx) or {}
+            aux_temp = self._aux_temp_state(ctx) or {}
             lv, lcreate = None, False
             for j, o in enumerate(ctx.task.outputs):
                 if o.id.startswith("loss_"):
@@ -613,18 +613,19 @@ class _WarmupKLMixin:
             for m in ctx.task.mutates:
                 if m.startswith("loss_"):
                     lv = torch_view(ctx.mutates[m], (1,), torch.float32)
-            meta["_loss_view"] = lv
-            meta["_loss_create"] = lcreate
+            aux_temp["_loss_view"] = lv
+            aux_temp["_loss_create"] = lcreate
             a = {**a, "_seg": self._attn_meta(ctx)}
-            self._backward(kctx, None, a, x, w, None, dw, accum, meta=meta)
+            self._backward(kctx, None, a, x, w, None, dw, accum,
+                           aux_temp=aux_temp)
 
-    def _backward(self, kctx, dy, a, x, w, dx_out, dw, accum, meta=None):
-        if meta:
-            a = {**a, **meta.get("meta", {})}
+    def _backward(self, kctx, dy, a, x, w, dx_out, dw, accum, aux_temp=None):
+        if aux_temp:
+            a = {**a, **aux_temp.get("aux_temp", {})}
             for k in ("_dm_view", "_dm_create", "_kl_n",
                       "_loss_view", "_loss_create"):
-                if k in meta:
-                    a[k] = meta[k]
+                if k in aux_temp:
+                    a[k] = aux_temp[k]
         d = self.dims
         K = self.kernels
         # frozen fields have NO dW storage (policy-filtered grad layout);
@@ -684,7 +685,7 @@ class Dsv32WarmupDenseBlockBwd(Dsv32MetaState, _WarmupKLMixin, Dsv3DenseBlockBwd
 
 @dataclass(frozen=True)
 class Dsv32WarmupMoeBlockFwd(Dsv32MetaState, Dsv32ProfileFill, Dsv3MoeBlockFwd):
-    META_KIND = "moe"
+    AUX_TEMP_KIND = "moe"
     dims: Dsv32Dims = None  # type: ignore[assignment]
 
     def _weight_layout(self, layer: int | None = None) -> PackedLayout:
@@ -702,7 +703,7 @@ class Dsv32WarmupMoeBlockRecompute(Dsv32WarmupMoeBlockFwd, BlockRecompute):
 
 @dataclass(frozen=True)
 class Dsv32WarmupMoeBlockBwd(Dsv32MetaState, Dsv32ProfileFill, _WarmupKLMixin, Dsv3MoeBlockBwd):
-    META_KIND = "moe"
+    AUX_TEMP_KIND = "moe"
     dims: Dsv32Dims = None  # type: ignore[assignment]
     _indexer_kl_bwd = Dsv32DenseBlockBwd._indexer_kl_bwd
 

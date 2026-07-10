@@ -36,9 +36,15 @@ class LayerLayout:
     kind: str                        # the chain kind key ("block", "moe", "lin"/"full", ...)
     weights: PackedLayout            # W_{i}
     activations: PackedLayout        # A_{s}_{r}_{i} (saved-for-backward activations)
-    # M_{s}_{r}_{i} layout (metadata objects: never-recompute forward
-    # artifacts — routing packs, selections). None = no metadata object.
+    # AuxTemp_{s}_{r}_{i}: per-round never-recompute forward artifacts
+    # (routing packs, DSA selections) — consume-pinned on recompute.
+    aux_temp: PackedLayout | None = None
+    # Aux_{i}: PERSISTENT per-layer state (host-backed resident like W/O) —
+    # the per-step + all-of-training expert-assignment counts.
     aux: PackedLayout | None = None
+    # dAuxTemp_{s}_{r}_{leader}: per-round backward companion (IndexShare KL
+    # gradient) — sized by the emitting grammar, listed here for symmetry.
+    daux_temp: PackedLayout | None = None
 
 
 @dataclass(frozen=True)
@@ -72,8 +78,10 @@ def size_of_factory(dims, fl: FamilyLayouts):
     op = getattr(dims, "opt_policy", None)
     dw_i = [grad_layout(wl_i[i], p, layer=i, opt_policy=op).total_bytes
             for i in range(n)]
-    m_i = ([ll.aux.total_bytes for ll in fl.layers]
-           if all(ll.aux is not None for ll in fl.layers) else None)
+    m_i = ([ll.aux_temp.total_bytes for ll in fl.layers]
+           if all(ll.aux_temp is not None for ll in fl.layers) else None)
+    aux_i = [ll.aux.total_bytes if ll.aux is not None else None
+             for ll in fl.layers]
     op = getattr(dims, "opt_policy", None)
     o_i = [opt_state_layout(wl_i[i], p, layer=i, opt_policy=op).total_bytes
            for i in range(n)]
@@ -87,8 +95,10 @@ def size_of_factory(dims, fl: FamilyLayouts):
     def size_of(oid: str) -> int | None:
         if oid.startswith("A_"):            # A_{s}_{r}_{i}
             return a_i[int(oid.rsplit("_", 1)[1])]
-        if oid.startswith("M_") and m_i is not None:  # M_{s}_{r}_{i}
+        if oid.startswith("AuxTemp_") and m_i is not None:  # AuxTemp_{s}_{r}_{i}
             return m_i[int(oid.rsplit("_", 1)[1])]
+        if oid.startswith("Aux_"):          # Aux_{i} (persistent counts)
+            return aux_i[int(oid.split("_")[1])]
         if oid.startswith("dW_embed"):
             return dw_e
         if oid == "W_embed":

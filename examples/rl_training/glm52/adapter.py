@@ -6,7 +6,7 @@ from dataclasses import replace
 import torch
 
 from dataflow.tasks.modules.dsa_reference import dsa_mask_from_idx
-from dataflow.tasks.layouts import glm52_meta_layout
+from dataflow.tasks.layouts import glm52_aux_temp_layout
 from dataflow.training.models.glm52 import ShapedGlm52Config
 
 from pinned_golden import RlGlm52
@@ -41,7 +41,7 @@ def capture(golden, tokens):
 
 
 def meta_layout(dims, i):
-    return glm52_meta_layout(dims, dims.kinds[i])
+    return glm52_aux_temp_layout(dims, dims.kinds[i])
 
 
 def meta_fields(dims, i, captured):

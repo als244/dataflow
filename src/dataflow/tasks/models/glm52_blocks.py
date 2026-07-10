@@ -43,7 +43,7 @@ from ..layouts import (
     dsv3_moe_weight_layout,
     dsv32_dense_weight_layout,
     dsv32_moe_weight_layout,
-    glm52_meta_layout,
+    glm52_aux_temp_layout,
 )
 from ..base_blocks import AdamWHyper, AdamWStep, EmbedBwd, EmbedFwd, HeadLoss
 from .llama3_blocks import BlockRecompute
@@ -72,7 +72,7 @@ def _glm52_moe_activation_layout(dims: Glm52Dims) -> PackedLayout:
     from ..modules.moe.spec import moe_context_specs
 
     return PackedLayout.build(_warmup_ctx_filter(
-        _dsv3_attn_ctx_specs(dims) + moe_context_specs(dims, dims.moe, meta=True),
+        _dsv3_attn_ctx_specs(dims) + moe_context_specs(dims, dims.moe, aux_temp=True),
         dims))
 
 
@@ -85,48 +85,48 @@ def _dm_cols(d) -> int:
 class Glm52MetaState:
     """Own M + (followers) producer's M + (grouped bwds) dM."""
 
-    META_KIND = "gdl"
+    AUX_TEMP_KIND = "gdl"
 
-    def _meta_layout(self):
-        return glm52_meta_layout(self.dims, self.META_KIND)
+    def _aux_temp_layout(self):
+        return glm52_aux_temp_layout(self.dims, self.AUX_TEMP_KIND)
 
-    def _meta_state(self, ctx):
+    def _aux_temp_state(self, ctx):
         d = self.dims
         layer = ctx.task.block_params["layer"]
-        layout = self._meta_layout()
+        layout = self._aux_temp_layout()
         key = ctx.task.compute_block_key
         consuming = key.endswith(("_recompute", "_bwd"))
         st: dict = {}
         buf_of = {}
         if consuming:
             for j, oid in enumerate(ctx.task.inputs):
-                if oid.startswith("M_"):
+                if oid.startswith("AuxTemp_"):
                     buf_of[int(oid.rsplit("_", 1)[1])] = self._in(ctx, j)
-                elif oid.startswith("dM_"):
+                elif oid.startswith("dAuxTemp_"):
                     st["_dm_view"] = torch_view(
                         self._in(ctx, j), (d.tokens, _dm_cols(d)), torch.float32)
             for oid in ctx.task.mutates:
-                if oid.startswith("dM_"):
+                if oid.startswith("dAuxTemp_"):
                     st["_dm_view"] = torch_view(
                         ctx.mutates[oid], (d.tokens, _dm_cols(d)), torch.float32)
             if key.endswith("_bwd"):
                 for j, o in enumerate(ctx.task.outputs):
-                    if o.id.startswith("dM_"):
+                    if o.id.startswith("dAuxTemp_"):
                         st["_dm_view"] = torch_view(
                             self._out(ctx, j), (d.tokens, _dm_cols(d)),
                             torch.float32)
                         st["_dm_create"] = True
             if key.endswith("_recompute"):
-                st["meta_ready"] = True
+                st["aux_temp_ready"] = True
         else:
             for j, o in enumerate(ctx.task.outputs):
-                if o.id.startswith("M_"):
+                if o.id.startswith("AuxTemp_"):
                     buf_of[layer] = self._out(ctx, j)
             for j, oid in enumerate(ctx.task.inputs):
-                if oid.startswith("M_"):
+                if oid.startswith("AuxTemp_"):
                     buf_of[int(oid.rsplit("_", 1)[1])] = self._in(ctx, j)
         if layout.fields and layer in buf_of:
-            st["meta"] = layout.views(buf_of[layer])
+            st["aux_temp"] = layout.views(buf_of[layer])
         producer = d.leader_of(layer)
         if (getattr(d, "sparse_mode", True)
                 and producer != layer and producer in buf_of):
@@ -153,20 +153,20 @@ class Glm52ProfileFill(Dsv32ProfileFill):
         gen = torch.Generator(device="cuda")
         gen.manual_seed(seed)
         for oid in ctx.task.inputs:
-            if oid.startswith(("M_", "dM_")):
+            if oid.startswith(("AuxTemp_", "dAuxTemp_")):
                 continue
             b = ctx.inputs[oid]
             n = b.size_bytes // 2
             v = torch_view(b, (n,), torch.bfloat16)
             v.copy_(torch.rand(n, generator=gen, dtype=torch.bfloat16,
                                device="cuda").sub_(0.5).mul_(0.05))
-        layout = self._meta_layout()
+        layout = self._aux_temp_layout()
         for oid in ctx.task.inputs:
-            if oid.startswith("dM_"):
+            if oid.startswith("dAuxTemp_"):
                 torch_view(ctx.inputs[oid], (d.tokens, _dm_cols(d)),
                            torch.float32).zero_()
                 continue
-            if not oid.startswith("M_"):
+            if not oid.startswith("AuxTemp_"):
                 continue
             own = int(oid.rsplit("_", 1)[1]) == layer
             if own and layout.fields:
@@ -208,12 +208,12 @@ class _Glm52LeaderKL:
     """Leader backward KL: dI = sigma - (p_own + dM)/N when followers
     exist (dM consumed), else dsv32's per-layer rule via super()."""
 
-    def _backward(self, kctx, dy, a, x, w, dx_out, dw, accum, meta=None):
-        if meta:
-            a = {**a, **meta.get("meta", {})}
+    def _backward(self, kctx, dy, a, x, w, dx_out, dw, accum, aux_temp=None):
+        if aux_temp:
+            a = {**a, **aux_temp.get("aux_temp", {})}
             for k in ("_dm_view", "_dm_create", "_kl_n"):
-                if k in meta:
-                    a[k] = meta[k]
+                if k in aux_temp:
+                    a[k] = aux_temp[k]
         super(Dsv32DenseBlockBwd, self)._backward(
             kctx, dy, a, x, w, dx_out, dw, accum)
 
@@ -319,7 +319,7 @@ class _Glm52LeaderKL:
 @dataclass(frozen=True)
 class Glm52DlBlockFwd(Glm52MetaState, Glm52ProfileFill, Dsv32DenseBlockFwd):
     dims: Glm52Dims = None  # type: ignore[assignment]
-    META_KIND = "gdl"
+    AUX_TEMP_KIND = "gdl"
 
     def _weight_layout(self, layer: int | None = None) -> PackedLayout:
         return dsv32_dense_weight_layout(self.dims, layer=layer)
@@ -338,7 +338,7 @@ class Glm52DlBlockRecompute(Glm52DlBlockFwd, BlockRecompute):
 class Glm52DlBlockBwd(_Glm52LeaderKL, Glm52MetaState, Glm52ProfileFill,
                       Dsv32DenseBlockBwd):
     dims: Glm52Dims = None  # type: ignore[assignment]
-    META_KIND = "gdl"
+    AUX_TEMP_KIND = "gdl"
 
     def _weight_layout(self, layer: int | None = None) -> PackedLayout:
         return dsv32_dense_weight_layout(self.dims, layer=layer)
@@ -351,7 +351,7 @@ class Glm52DlBlockBwd(_Glm52LeaderKL, Glm52MetaState, Glm52ProfileFill,
 @dataclass(frozen=True)
 class Glm52MlBlockFwd(Glm52MetaState, Glm52ProfileFill, Dsv32MoeBlockFwd):
     dims: Glm52Dims = None  # type: ignore[assignment]
-    META_KIND = "gml"
+    AUX_TEMP_KIND = "gml"
 
     def _weight_layout(self, layer: int | None = None) -> PackedLayout:
         return dsv32_moe_weight_layout(self.dims, layer=layer)
@@ -370,7 +370,7 @@ class Glm52MlBlockRecompute(Glm52MlBlockFwd, BlockRecompute):
 class Glm52MlBlockBwd(_Glm52LeaderKL, Glm52MetaState, Glm52ProfileFill,
                       Dsv32MoeBlockBwd):
     dims: Glm52Dims = None  # type: ignore[assignment]
-    META_KIND = "gml"
+    AUX_TEMP_KIND = "gml"
 
     def _weight_layout(self, layer: int | None = None) -> PackedLayout:
         return dsv32_moe_weight_layout(self.dims, layer=layer)
@@ -389,7 +389,7 @@ class Glm52MfBlockFwd(Glm52MetaState, Glm52ProfileFill, Dsv32MoeBlockFwd):
     select) + the sparse core on the producer's selection + MoE tail."""
 
     dims: Glm52Dims = None  # type: ignore[assignment]
-    META_KIND = "gmf"
+    AUX_TEMP_KIND = "gmf"
 
     def _weight_layout(self, layer: int | None = None) -> PackedLayout:
         return dsv3_moe_weight_layout(self.dims, layer=layer)
@@ -419,7 +419,7 @@ class Glm52MfBlockBwd(Glm52MetaState, Glm52ProfileFill, Dsv32MoeBlockBwd):
     has no indexer weights)."""
 
     dims: Glm52Dims = None  # type: ignore[assignment]
-    META_KIND = "gmf"
+    AUX_TEMP_KIND = "gmf"
 
     def _weight_layout(self, layer: int | None = None) -> PackedLayout:
         return dsv3_moe_weight_layout(self.dims, layer=layer)
@@ -428,14 +428,14 @@ class Glm52MfBlockBwd(Glm52MetaState, Glm52ProfileFill, Dsv32MoeBlockBwd):
     def cl(self) -> PackedLayout:
         return _glm52_moe_activation_layout(self.dims)
 
-    def _backward(self, kctx, dy, a, x, w, dx_out, dw, accum, meta=None):
-        if meta:
-            a = {**a, **meta.get("meta", {})}
-            if "shared_idx" in meta:
-                a["dsa_idx"] = meta["shared_idx"]
+    def _backward(self, kctx, dy, a, x, w, dx_out, dw, accum, aux_temp=None):
+        if aux_temp:
+            a = {**a, **aux_temp.get("aux_temp", {})}
+            if "shared_idx" in aux_temp:
+                a["dsa_idx"] = aux_temp["shared_idx"]
             for k in ("_dm_view", "_dm_create", "_kl_n"):
-                if k in meta:
-                    a[k] = meta[k]
+                if k in aux_temp:
+                    a[k] = aux_temp[k]
         super(Dsv32DenseBlockBwd, self)._backward(
             kctx, dy, a, x, w, dx_out, dw, accum)
 
@@ -570,7 +570,7 @@ class _Glm52WarmupFollowerKL:
 @dataclass(frozen=True)
 class Glm52WarmupDlBlockFwd(Glm52MetaState, Dsv32WarmupDenseBlockFwd):
     dims: Glm52Dims = None  # type: ignore[assignment]
-    META_KIND = "gdl"
+    AUX_TEMP_KIND = "gdl"
 
     @property
     def cl(self) -> PackedLayout:
@@ -586,7 +586,7 @@ class Glm52WarmupDlBlockRecompute(Glm52WarmupDlBlockFwd, BlockRecompute):
 class Glm52WarmupDlBlockBwd(Glm52MetaState, _Glm52WarmupLeaderKL,
                             Dsv32WarmupDenseBlockBwd):
     dims: Glm52Dims = None  # type: ignore[assignment]
-    META_KIND = "gdl"
+    AUX_TEMP_KIND = "gdl"
 
     @property
     def cl(self) -> PackedLayout:
@@ -597,7 +597,7 @@ class Glm52WarmupDlBlockBwd(Glm52MetaState, _Glm52WarmupLeaderKL,
 class Glm52WarmupMlBlockFwd(Glm52MetaState, Glm52ProfileFill,
                             Dsv32WarmupMoeBlockFwd):
     dims: Glm52Dims = None  # type: ignore[assignment]
-    META_KIND = "gml"
+    AUX_TEMP_KIND = "gml"
 
     @property
     def cl(self) -> PackedLayout:
@@ -613,7 +613,7 @@ class Glm52WarmupMlBlockRecompute(Glm52WarmupMlBlockFwd, BlockRecompute):
 class Glm52WarmupMlBlockBwd(Glm52MetaState, Glm52ProfileFill,
                             _Glm52WarmupLeaderKL, Dsv32WarmupMoeBlockBwd):
     dims: Glm52Dims = None  # type: ignore[assignment]
-    META_KIND = "gml"
+    AUX_TEMP_KIND = "gml"
 
     @property
     def cl(self) -> PackedLayout:
@@ -624,7 +624,7 @@ class Glm52WarmupMlBlockBwd(Glm52MetaState, Glm52ProfileFill,
 class Glm52WarmupMfBlockFwd(Glm52MetaState, Glm52ProfileFill,
                             Dsv32WarmupMoeBlockFwd):
     dims: Glm52Dims = None  # type: ignore[assignment]
-    META_KIND = "gmf"
+    AUX_TEMP_KIND = "gmf"
 
     def _weight_layout(self, layer: int | None = None) -> PackedLayout:
         return dsv3_moe_weight_layout(self.dims, layer=layer)
@@ -643,7 +643,7 @@ class Glm52WarmupMfBlockRecompute(Glm52WarmupMfBlockFwd, BlockRecompute):
 class Glm52WarmupMfBlockBwd(Glm52MetaState, Glm52ProfileFill,
                             _Glm52WarmupFollowerKL, Dsv32WarmupMoeBlockBwd):
     dims: Glm52Dims = None  # type: ignore[assignment]
-    META_KIND = "gmf"
+    AUX_TEMP_KIND = "gmf"
 
     def _weight_layout(self, layer: int | None = None) -> PackedLayout:
         return dsv3_moe_weight_layout(self.dims, layer=layer)

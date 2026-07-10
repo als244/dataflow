@@ -52,7 +52,7 @@ BIAS_ATOL = {"w_router_bias": 2.5e-3,  # noaux bias: sign(count) race
              "dt_bias": 2.5e-4}       # sub-noise grads: AdamW step-1 = ±lr coin flip
 
 
-def _meta_bytes(layout, fields: dict) -> torch.Tensor:
+def _aux_temp_bytes(layout, fields: dict) -> torch.Tensor:
     buf = torch.zeros(layout.total_bytes, dtype=torch.uint8)
     for f in layout.fields:
         if f.name not in fields:
@@ -121,7 +121,7 @@ def make_artifacts(adapter, out_path: Path, *, seed=11, reward_seed=100):
     for i in range(cfg.n_layers):
         fields = adapter.meta_fields(dims, i, captured)
         if fields:
-            m_bytes[i] = _meta_bytes(adapter.meta_layout(dims, i), fields)
+            m_bytes[i] = _aux_temp_bytes(adapter.meta_layout(dims, i), fields)
 
     art = {
         "tokens": tokens.to(torch.int32).cpu(),
@@ -167,7 +167,7 @@ def build_values(prog, fam, cfg, artifacts, backend, steps):
         for oid, tens in zip(ids, ckpts):
             load(oid, tens)
         for i, mb in artifacts["m_bytes"].items():
-            load(f"M_{s}_0_{i}", mb)
+            load(f"AuxTemp_{s}_0_{i}", mb)
     return values
 
 

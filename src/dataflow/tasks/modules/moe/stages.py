@@ -61,10 +61,10 @@ def stage_moe_route(kctx, K, d, st):
     moe, a, w = _spec(d), st["a"], st["w"]
     h2 = st["h2"]
     # metadata families write the discrete decision into the M views
-    # (st["meta"]); ctx families keep the historical a-destination.
+    # (st["aux_temp"]); ctx families keep the historical a-destination.
     # router_logits is NOT a decision — it stays in the ctx either way.
-    meta = st.get("meta")
-    dst = meta if meta is not None else a
+    aux_temp = st.get("aux_temp")
+    dst = aux_temp if aux_temp is not None else a
     if a is not None and "router_logits" in a:
         logits = a["router_logits"]
         torch.matmul(h2, w["w_router"], out=logits)
@@ -79,7 +79,7 @@ def stage_moe_route(kctx, K, d, st):
         route_ids = torch.empty(
             (d.tokens, moe.top_k), dtype=torch.int32, device=h2.device
         )
-    if st.get("meta_ready"):
+    if st.get("aux_temp_ready"):
         # recompute with the decision supplied: NEVER re-select
         st.update(logits=logits, route_w=route_w, route_ids=route_ids)
         return
@@ -100,8 +100,8 @@ def stage_moe_dispatch(kctx, K, d, st):
     moe, a = _spec(d), st["a"]
     h2 = st["h2"]
     rows = moe_local_rows(moe, d.tokens)
-    meta = st.get("meta")
-    dst = meta if meta is not None else a
+    aux_temp = st.get("aux_temp")
+    dst = aux_temp if aux_temp is not None else a
     if dst is not None:
         order, offsets = dst["route_order"], dst["route_offsets"]
     else:
@@ -109,7 +109,7 @@ def stage_moe_dispatch(kctx, K, d, st):
         offsets = torch.empty(
             moe.n_local_experts + 1, dtype=torch.int32, device=h2.device
         )
-    if not st.get("meta_ready"):
+    if not st.get("aux_temp_ready"):
         K.moe_sort(kctx, st["route_ids"], order, offsets, n_experts=moe.n_experts)
     xp = torch.empty((rows, d.d_model), dtype=torch.bfloat16, device=h2.device)
     K.moe_dispatch_fwd(kctx, h2, order, xp, top_k=moe.top_k)
@@ -399,33 +399,33 @@ def moe_bias_update(kctx, kernels, w_view, g_view, *, speed: float) -> None:
 
 class MoEMetaState:
     """Metadata-object plumbing for pure-MoE families: the layer's M
-    holds the discrete routing pack (moe_meta_specs). Exposed to stages
-    as st["meta"]; recompute sets meta_ready (the moe stages then skip
+    holds the discrete routing pack (moe_aux_temp_specs). Exposed to stages
+    as st["aux_temp"]; recompute sets aux_temp_ready (the moe stages then skip
     topk + sort and consume the decision verbatim — METADATA IS NEVER
     RECOMPUTED). Backward merges the M views into `a` so every
     downstream read (a["route_*"]) is unchanged."""
 
-    def _meta_state(self, ctx):
-        from .spec import moe_meta_layout
+    def _aux_temp_state(self, ctx):
+        from .spec import moe_aux_temp_layout
 
-        layout = moe_meta_layout(self.dims, _spec(self.dims))
+        layout = moe_aux_temp_layout(self.dims, _spec(self.dims))
         key = ctx.task.compute_block_key
         if key.endswith(("_recompute", "_bwd")):
             for j, oid in enumerate(ctx.task.inputs):
-                if oid.startswith("M_"):
-                    st = {"meta": layout.views(self._in(ctx, j))}
+                if oid.startswith("AuxTemp_"):
+                    st = {"aux_temp": layout.views(self._in(ctx, j))}
                     if key.endswith("_recompute"):
-                        st["meta_ready"] = True
+                        st["aux_temp_ready"] = True
                     return st
             raise RuntimeError(f"no M_ input on {ctx.task.id}")
         for j, o in enumerate(ctx.task.outputs):
-            if o.id.startswith("M_"):
-                return {"meta": layout.views(self._out(ctx, j))}
+            if o.id.startswith("AuxTemp_"):
+                return {"aux_temp": layout.views(self._out(ctx, j))}
         raise RuntimeError(f"no M_ output on {ctx.task.id}")
 
-    def _backward(self, kctx, dy, a, x, w, dx_out, dw, accum, meta=None):
-        if meta:
-            a = {**a, **meta["meta"]}
+    def _backward(self, kctx, dy, a, x, w, dx_out, dw, accum, aux_temp=None):
+        if aux_temp:
+            a = {**a, **aux_temp["aux_temp"]}
         super()._backward(kctx, dy, a, x, w, dx_out, dw, accum)
 
 
@@ -441,7 +441,7 @@ class MoEProfileFill:
 
     def profile_fill(self, ctx) -> None:
         from ...interop import torch_view
-        from .spec import moe_meta_layout
+        from .spec import moe_aux_temp_layout
 
         key = ctx.task.compute_block_key
         seed = int.from_bytes(hashlib.sha256(key.encode()).digest()[:4], "little")
@@ -449,7 +449,7 @@ class MoEProfileFill:
         gen.manual_seed(seed)
 
         for oid in ctx.task.inputs:
-            if oid.startswith("M_"):
+            if oid.startswith("AuxTemp_"):
                 continue
             b = ctx.inputs[oid]
             n = b.size_bytes // 2
@@ -460,10 +460,10 @@ class MoEProfileFill:
             )
 
         moe = _spec(self.dims)
-        layout = moe_meta_layout(self.dims, moe)
+        layout = moe_aux_temp_layout(self.dims, moe)
         t, topk = self.dims.tokens, moe.top_k
         for oid in ctx.task.inputs:
-            if not oid.startswith("M_"):
+            if not oid.startswith("AuxTemp_"):
                 continue
             m = layout.views(ctx.inputs[oid])
             rows = m["route_order"].shape[0]

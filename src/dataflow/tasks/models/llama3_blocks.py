@@ -79,7 +79,7 @@ class BlockFwd(_Base):
                     if o.id.startswith("A_"):
                         a = self.cl.views(self._out(ctx, j))
                         break
-            extras = self._meta_state(ctx) or {}
+            extras = self._aux_temp_state(ctx) or {}
             extras["seg"] = self._attn_meta(ctx)
             self._forward(kctx, x, w, y, a, extras=extras)
 
@@ -196,7 +196,7 @@ class BlockFwd(_Base):
     def recompute_stage_count(cls) -> int:
         """Derived recompute boundary: stages up to the LAST one that emits
         a context field. Everything after it exists only to produce y.
-        Stage entries may carry an optional 4th element "meta" marking a
+        Stage entries may carry an optional 4th element "aux_temp" marking a
         METADATA-producing stage — skipped entirely when the M object is
         supplied (recompute repopulates ONLY the A objects)."""
         last = 0
@@ -227,10 +227,10 @@ class BlockFwd(_Base):
         st = {"x": x, "w": w, "a": a, "y": y}
         if extras:
             st.update(extras)
-        skip_meta = bool(st.get("meta_ready"))
+        skip_aux_temp = bool(st.get("aux_temp_ready"))
         for entry in self.STAGES[:count]:
-            if skip_meta and len(entry) > 3 and entry[3] == "meta":
-                continue  # metadata is supplied, never recomputed
+            if skip_aux_temp and len(entry) > 3 and entry[3] == "aux_temp":
+                continue  # the aux pack is supplied, never recomputed
             entry[1](kctx, self.kernels, self.dims, st)
 
     def _forward(self, kctx, x, w, y, a, extras=None) -> None:
@@ -249,7 +249,7 @@ class BlockRecompute(BlockFwd):
             x = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
             w = self.wl_for(ctx.task).views(self._in(ctx, 1))
             a = self.cl.views(self._out(ctx, 0))
-            extras = self._meta_state(ctx) or {}
+            extras = self._aux_temp_state(ctx) or {}
             extras["seg"] = self._attn_meta(ctx)
             self._forward_context(kctx, x, w, a, extras=extras)
 
@@ -334,14 +334,14 @@ class BlockBwd(_Base):
                         break
                 dx = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
             a = {**a, "_seg": self._attn_meta(ctx)}
-            meta = self._meta_state(ctx)
-            if meta is None:
+            aux_temp = self._aux_temp_state(ctx)
+            if aux_temp is None:
                 self._backward(kctx, dy, a, x, w, dx, dw, accum)
             else:
-                self._backward(kctx, dy, a, x, w, dx, dw, accum, meta=meta)
+                self._backward(kctx, dy, a, x, w, dx, dw, accum, aux_temp=aux_temp)
 
     def _backward(self, kctx, dy, a, x, w, dx_out, dw, accum,
-                  meta=None) -> None:
+                  aux_temp=None) -> None:
         """Template: MLP tail then the family's attention part. Attention
         reads the run_args prologue metadata (cu/pos/max) that the LAUNCH
         merged into ``a`` under _pk_* keys (symmetric with the forward's

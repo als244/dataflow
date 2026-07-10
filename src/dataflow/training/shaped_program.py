@@ -92,14 +92,14 @@ class LayerKindSpec:
     bwd_subops: list
     recompute_subops: list
     optimizer_subops: list
-    # per-layer METADATA object (M_{s}_{r}_{i}) bytes. M holds forward
+    # per-layer AuxTemp object (AuxTemp_{s}_{r}_{i}) bytes: forward
     # artifacts that are expensive or fragile to re-derive — discrete
     # decisions like expert-routing packs and top-k selections — packed
     # in one layout. Emitted by fwd, consumed VERBATIM by recompute and
     # bwd; never a recompute candidate (recompute repopulates ONLY the
-    # A objects). 0 = the kind has no metadata. A normal dataflow object
+    # A objects). 0 = the kind has no AuxTemp. A normal dataflow object
     # in every other respect (placement/offload/transfers).
-    meta_bytes: int = 0
+    aux_temp_bytes: int = 0
 
 
 class LooseCosts:
@@ -191,12 +191,12 @@ def roofline_block_kind_spec(cfg, hw: ShapedHardware, *,
 
 
 @dataclass(frozen=True)
-class MetaShare:
-    """Cross-layer metadata sharing: every layer in ``consumers`` also
-    consumes the PRODUCER layer's M object (fwd, recompute and bwd) —
-    e.g. GLM-5.2 IndexShare, where shared layers reuse the nearest full
+class AuxShare:
+    """Cross-layer AuxTemp sharing: every layer in ``consumers`` also
+    consumes the PRODUCER layer's AuxTemp object (fwd, recompute and bwd)
+    — e.g. GLM-5.2 IndexShare, where shared layers reuse the nearest full
     layer's selection. ``grad_bytes`` > 0 threads the backward companion
-    ``dM_{s}_{r}_{producer}`` through the group's bwds in reverse layer
+    ``dAuxTemp_{s}_{r}_{producer}`` through the group's bwds in reverse layer
     order (created by the last consumer, mutated by the middles, consumed
     by the producer) — the generic shape of a cross-layer reduction
     target, accumulated exactly like dW under grad accumulation."""
@@ -216,15 +216,15 @@ def build_shaped_program(
     fast_memory_capacity: int | None = None,
     recompute_levels: Mapping[str, int] | None = None,
     name: str | None = None,
-    meta_shared=None,
+    aux_shared=None,
     freeze=None,  # FreezePlan | None (training/freeze_plan.py)
 ) -> Program:
     """Build the (bare) shaped program for the given recompute levels.
 
     ``kinds`` is REQUIRED — every family declares its layer kinds
-    explicitly (uniform families pass one). ``meta_shared`` is a list of
-    ``MetaShare`` for cross-layer metadata consumption (each layer's own
-    M object comes from its kind's ``meta_bytes``). ``recompute_levels`` maps
+    explicitly (uniform families pass one). ``aux_shared`` is a list of
+    ``AuxShare`` for cross-layer AuxTemp consumption (each layer's own
+    AuxTemp comes from its kind's ``aux_temp_bytes``). ``recompute_levels`` maps
     saved-context object id (``A_{s}_{r}_{i}``) to level 0 (save) or 1
     (recompute); missing ids default to 0. This function IS the
     ``build_variant`` for the recompute planner (wrap with
@@ -233,15 +233,15 @@ def build_shaped_program(
     """
     hw = hw or ShapedHardware()
     levels = dict(recompute_levels or {})
-    meta_producer_of: dict[int, int] = {}
-    meta_group_of: dict[int, tuple[int, ...]] = {}
-    meta_grad_of: dict[int, int] = {}
-    for share in (meta_shared or ()):
+    aux_producer_of: dict[int, int] = {}
+    aux_group_of: dict[int, tuple[int, ...]] = {}
+    aux_grad_of: dict[int, int] = {}
+    for share in (aux_shared or ()):
         mem = (share.producer,) + tuple(share.consumers)
-        meta_group_of[share.producer] = mem
-        meta_grad_of[share.producer] = share.grad_bytes
+        aux_group_of[share.producer] = mem
+        aux_grad_of[share.producer] = share.grad_bytes
         for m in share.consumers:
-            meta_producer_of[m] = share.producer
+            aux_producer_of[m] = share.producer
     loose = LooseCosts(cfg, hw)
     t, d = cfg.tokens, cfg.d_model
 
@@ -367,12 +367,12 @@ def build_shaped_program(
                                    tensor=TensorMeta(dtype="bf16", shape=(t, d)))]
                 if level == 0:
                     outs.append(OutputSpec(id=a_id, size_bytes=sp.a_bytes, role="activation"))
-                if sp.meta_bytes:
-                    outs.append(OutputSpec(id=f"M_{s}_{r}_{i}",
-                                           size_bytes=sp.meta_bytes,
+                if sp.aux_temp_bytes:
+                    outs.append(OutputSpec(id=f"AuxTemp_{s}_{r}_{i}",
+                                           size_bytes=sp.aux_temp_bytes,
                                            role="activation"))
-                if i in meta_producer_of:
-                    fwd_ins.append(f"M_{s}_{r}_{meta_producer_of[i]}")
+                if i in aux_producer_of:
+                    fwd_ins.append(f"AuxTemp_{s}_{r}_{aux_producer_of[i]}")
                 task(f"block_fwd_{s}_{r}_{i}", f"{sp.key_prefix}_fwd", fwd_ins, outs,
                      sp.fwd_us, group="forward", params={"layer": i},
                      subops=sp.fwd_subops)
@@ -421,18 +421,18 @@ def build_shaped_program(
                 a_id = f"A_{s}_{r}_{i}"
                 x_id = f"y_embed_{s}_{r}" if i == 0 else f"y_{s}_{r}_{i - 1}"
                 sp = layer_specs[i]
-                meta_ins = []
-                if sp.meta_bytes:
-                    meta_ins.append(f"M_{s}_{r}_{i}")
-                if i in meta_producer_of:
-                    meta_ins.append(f"M_{s}_{r}_{meta_producer_of[i]}")
+                aux_ins = []
+                if sp.aux_temp_bytes:
+                    aux_ins.append(f"AuxTemp_{s}_{r}_{i}")
+                if i in aux_producer_of:
+                    aux_ins.append(f"AuxTemp_{s}_{r}_{aux_producer_of[i]}")
                 if levels.get(a_id, 0) == 1:
                     task(f"block_recompute_{s}_{r}_{i}", f"{sp.key_prefix}_recompute",
-                         [x_id, f"W_{i}"] + meta_ins,
+                         [x_id, f"W_{i}"] + aux_ins,
                          [OutputSpec(id=a_id, size_bytes=sp.a_bytes, role="activation")],
                          sp.recompute_us, group="recompute", params={"layer": i},
                          subops=sp.recompute_subops)
-                bwd_inputs = [f"dy_{s}_{r}_{i}", a_id, x_id, f"W_{i}"] + meta_ins
+                bwd_inputs = [f"dy_{s}_{r}_{i}", a_id, x_id, f"W_{i}"] + aux_ins
                 outs = [OutputSpec(id=(f"dy_embed_{s}_{r}" if i == 0 else f"dy_{s}_{r}_{i - 1}"),
                                    size_bytes=y_bytes, role="gradient",
                                    tensor=TensorMeta(dtype="bf16", shape=(t, d)))]
@@ -442,13 +442,13 @@ def build_shaped_program(
                 else:
                     bwd_inputs.append(f"dW_{s}_{i}")
                     mutates = (f"dW_{s}_{i}",)
-                ld_grp = meta_producer_of.get(i, i)
-                if ld_grp in meta_group_of and meta_grad_of.get(ld_grp, 0):
-                    mem = meta_group_of[ld_grp]
-                    gid = f"dM_{s}_{r}_{ld_grp}"
+                ld_grp = aux_producer_of.get(i, i)
+                if ld_grp in aux_group_of and aux_grad_of.get(ld_grp, 0):
+                    mem = aux_group_of[ld_grp]
+                    gid = f"dAuxTemp_{s}_{r}_{ld_grp}"
                     if i == mem[-1]:
                         outs.append(OutputSpec(id=gid,
-                                               size_bytes=meta_grad_of[ld_grp],
+                                               size_bytes=aux_grad_of[ld_grp],
                                                role="gradient"))
                     elif i == ld_grp:
                         bwd_inputs.append(gid)

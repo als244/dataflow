@@ -217,7 +217,7 @@ def moe_weight_specs(dims, moe: MoESpec) -> list[tuple[str, tuple[int, ...]]]:
     return specs
 
 
-def moe_meta_specs(dims, moe: MoESpec) -> list[tuple[str, tuple[int, ...], str]]:
+def moe_aux_temp_specs(dims, moe: MoESpec) -> list[tuple[str, tuple[int, ...], str]]:
     """The routing METADATA pack: the discrete top-k decision (weights +
     ids + sort order + local segment offsets). Metadata families store
     these in the layer's M object — emitted by fwd, consumed by
@@ -235,14 +235,28 @@ def moe_meta_specs(dims, moe: MoESpec) -> list[tuple[str, tuple[int, ...], str]]
     ]
 
 
-def moe_meta_layout(dims, moe: MoESpec):
-    """The layer's M object for pure-MoE families: the routing pack."""
+def moe_aux_temp_layout(dims, moe: MoESpec):
+    """The layer's AuxTemp object for pure-MoE families: the routing pack
+    (per-round device scratch, consume-pinned on recompute)."""
     from ...layouts import PackedLayout
 
-    return PackedLayout.build(moe_meta_specs(dims, moe))
+    return PackedLayout.build(moe_aux_temp_specs(dims, moe))
 
 
-def moe_context_specs(dims, moe: MoESpec, *, meta: bool = False,
+def moe_aux_layout(dims, moe: MoESpec):
+    """The layer's PERSISTENT Aux object (host-backed resident, like W/O):
+    the per-step expert-assignment histogram (zeroed at round 0, accumulated
+    across the grad-accum rounds) plus the all-of-training aggregate for
+    observation. Tiny — 12 bytes per expert."""
+    from ...layouts import PackedLayout
+
+    return PackedLayout.build([
+        ("expert_counts_current_step", (moe.n_experts,), "int32"),
+        ("expert_counts_overall", (moe.n_experts,), "int64"),
+    ])
+
+
+def moe_context_specs(dims, moe: MoESpec, *, aux_temp: bool = False,
                       ) -> list[tuple[str, tuple[int, ...], str]]:
     """(name, shape, dtype) triples for the MoE tail's saved-context fields.
 
@@ -252,7 +266,7 @@ def moe_context_specs(dims, moe: MoESpec, *, meta: bool = False,
     slot_of (the inverse permutation), dprob.
 
     ``meta=True`` (metadata families): the discrete routing pack moves
-    OUT of the ctx into the layer's M object (moe_meta_specs); only
+    OUT of the ctx into the layer's M object (moe_aux_temp_specs); only
     router_logits + pre-activations remain here.
     """
     t = dims.tokens
@@ -260,8 +274,8 @@ def moe_context_specs(dims, moe: MoESpec, *, meta: bool = False,
     specs: list[tuple[str, tuple[int, ...], str]] = [
         ("router_logits", (t, moe.n_experts), "bf16"),
     ]
-    if not meta:
-        specs += moe_meta_specs(dims, moe)
+    if not aux_temp:
+        specs += moe_aux_temp_specs(dims, moe)
     specs.append(("h13", (rows, 2 * moe.d_ff_expert), moe.dispatch_dtype))
     if moe.n_shared_experts:
         if moe.shared_gate:

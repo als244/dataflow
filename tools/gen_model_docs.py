@@ -65,27 +65,27 @@ def shape_tag(batch: int, seq_len: int) -> str:
 
 # ---------------------------------------------------------------- helpers
 
-def _meta_layout(family: str, dims, layer: int):
+def _aux_temp_layout(family: str, dims, layer: int):
     """Family -> per-layer M layout (None where the kind has no M).
     The one hand-maintained dispatch in this generator: metadata
     layouts are family vocabulary (docs/extending.md §2)."""
     try:
         if family in ("dsv32",):
-            from dataflow.tasks.layouts import dsv32_meta_layout
+            from dataflow.tasks.layouts import dsv32_aux_temp_layout
 
-            return dsv32_meta_layout(dims, dims.kinds[layer])
+            return dsv32_aux_temp_layout(dims, dims.kinds[layer])
         if family in ("glm52",):
-            from dataflow.tasks.layouts import glm52_meta_layout
+            from dataflow.tasks.layouts import glm52_aux_temp_layout
 
-            return glm52_meta_layout(dims, dims.kinds[layer])
+            return glm52_aux_temp_layout(dims, dims.kinds[layer])
         if family in ("olmoe", "qwen3moe", "qwen35moe", "dsv3"):
-            from dataflow.tasks.modules.moe.spec import moe_meta_layout
+            from dataflow.tasks.modules.moe.spec import moe_aux_temp_layout
 
             layer_kinds = getattr(dims, "kinds", ())
             kind = layer_kinds[layer] if layer_kinds else "moe"
             if "dense" in str(kind) or str(kind) in ("lin", "full"):
                 return None
-            return moe_meta_layout(dims, dims.moe)
+            return moe_aux_temp_layout(dims, dims.moe)
     except Exception:
         return None
     return None
@@ -390,7 +390,7 @@ def gen_page(name: str, preset: str, record: bool,
         cl = getattr(ex, "cl", None)
         detail += field_table(cl, f"`A_.._{layer}` saved context",
                               "per (step, round)", per_token=dims.tokens)
-        ml = _meta_layout(name, dims, layer)
+        ml = _aux_temp_layout(name, dims, layer)
         detail += field_table(ml, f"`M_.._{layer}` metadata",
                               "never recomputed", per_token=dims.tokens)
         if wl is not None:
@@ -442,7 +442,7 @@ def gen_page(name: str, preset: str, record: bool,
         agg[g] = (n + 1, tot + b)
 
     for oid, b in sizes.items():
-        if oid.startswith(("dW_", "dM_")):
+        if oid.startswith(("dW_", "dAuxTemp_")):
             add("dW", b)
         elif oid.startswith("W_"):
             add("W", b)
@@ -450,7 +450,7 @@ def gen_page(name: str, preset: str, record: bool,
             add("O", b)
         elif oid.startswith("A_"):
             add("A", b)
-        elif oid.startswith("M_"):
+        elif oid.startswith("AuxTemp_"):
             add("M", b)
     out += ["### Aggregate totals (all layers, this run shape)", "",
             "| type | objects | total size |", "|---|---|---|"]

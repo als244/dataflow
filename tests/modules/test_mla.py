@@ -251,7 +251,7 @@ def test_dsv3_block_ladder2(kind):
         for f in cl.fields
     }
     y = torch.empty_like(x)
-    from dataflow.tasks.modules.moe.spec import moe_meta_layout
+    from dataflow.tasks.modules.moe.spec import moe_aux_temp_layout
     from dataflow.tasks.ops import Segments
 
     # ONE materialized Segments handed to fwd/recompute (extras) and bwd
@@ -261,10 +261,10 @@ def test_dsv3_block_ladder2(kind):
     meta_views = None
     extras = {"seg": seg}
     if kind == "moe":
-        m_l = moe_meta_layout(dims, dims.moe)
+        m_l = moe_aux_temp_layout(dims, dims.moe)
         meta_views = {f.name: torch.empty(f.shape, dtype=TORCH_DTYPE_BY_NAME[f.dtype],
                                           device="cuda") for f in m_l.fields}
-        extras = {"meta": dict(meta_views), "seg": seg}
+        extras = {"aux_temp": dict(meta_views), "seg": seg}
     fwd._forward(kctx, x, w, y, a, extras=extras)
 
     a2 = {
@@ -272,7 +272,7 @@ def test_dsv3_block_ladder2(kind):
         for f in cl.fields
     }
     rc._run_stages(kctx, x, w, a2, count=rc.recompute_stage_count(),
-                   extras={**extras, "meta_ready": True})
+                   extras={**extras, "aux_temp_ready": True})
     torch.cuda.synchronize()
     errors = {}
     for name in a:
@@ -288,11 +288,11 @@ def test_dsv3_block_ladder2(kind):
     }
     dx = torch.empty_like(x)
     a["_seg"] = seg
-    bwd_meta = None if meta_views is None else {"meta": meta_views}
+    bwd_meta = None if meta_views is None else {"aux_temp": meta_views}
     if bwd_meta is None:
         bwd._backward(kctx, dy, a, x, w, dx, dwv, accum=False)
     else:
-        bwd._backward(kctx, dy, a, x, w, dx, dwv, accum=False, meta=bwd_meta)
+        bwd._backward(kctx, dy, a, x, w, dx, dwv, accum=False, aux_temp=bwd_meta)
 
     leaves = {n: t_.detach().clone().requires_grad_() for n, t_ in w.items()
               if n != "w_router_bias"}
@@ -320,7 +320,7 @@ def test_dsv3_block_ladder2(kind):
     if bwd_meta is None:
         bwd._backward(kctx, dy, a, x, w, dx, dwv, accum=True)
     else:
-        bwd._backward(kctx, dy, a, x, w, dx, dwv, accum=True, meta=bwd_meta)
+        bwd._backward(kctx, dy, a, x, w, dx, dwv, accum=True, aux_temp=bwd_meta)
     for name in dwv:
         if name == "w_router_bias":
             continue

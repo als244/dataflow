@@ -30,7 +30,7 @@ from dataflow.tasks.optim import OptPolicy
 from dataflow.core import Program
 from dataflow.tasks.layouts import (
     Dsv32Dims,
-    dsv32_meta_layout,
+    dsv32_aux_temp_layout,
     DTypePolicy,
     ParamDTypes,
     dsv32_dense_activation_layout,
@@ -308,7 +308,7 @@ def _kind_specs(cfg: ShapedDsv32Config, hw: ShapedHardware) -> dict[str, LayerKi
     attn_bytes = BF16 * t * 4 * h * qk + (
         4.0 * t * cfg.index_topk if cfg.sparse_mode else 0.0)
 
-    def spec(prefix, wl, cl, ffn_active, extra_traffic, meta_bytes=0):
+    def spec(prefix, wl, cl, ffn_active, extra_traffic, aux_temp_bytes=0):
         total_params = sum(int(math.prod(fl.shape)) for fl in wl.fields)
         mm_flops = 2.0 * t * (mla_active + ffn_active)
         mm_bytes = BF16 * (total_params + 4 * t * d) + extra_traffic
@@ -332,7 +332,7 @@ def _kind_specs(cfg: ShapedDsv32Config, hw: ShapedHardware) -> dict[str, LayerKi
             key_prefix=prefix,
             w_bytes=wl.total_bytes,
             a_bytes=cl.total_bytes,
-            meta_bytes=meta_bytes,
+            aux_temp_bytes=aux_temp_bytes,
             fwd_us=fwd, bwd_us=bwd, recompute_us=fwd,
             optimizer_us=hw.mem_us(BF16 * 7.0 * total_params),
             fwd_subops=sub_fwd, bwd_subops=sub_bwd, recompute_subops=list(sub_fwd),
@@ -344,7 +344,7 @@ def _kind_specs(cfg: ShapedDsv32Config, hw: ShapedHardware) -> dict[str, LayerKi
     dense = spec(
         "dsadense", dsv32_dense_weight_layout(dims), dsv32_dense_activation_layout(dims),
         3 * cfg.d_ff_dense * d, 0.0,
-        meta_bytes=dsv32_meta_layout(dims, "dense").total_bytes,
+        aux_temp_bytes=dsv32_aux_temp_layout(dims, "dense").total_bytes,
     )
     f, fs, k = cfg.d_ff_expert, cfg.d_ff_shared, cfg.top_k
     moe_active = (
@@ -355,7 +355,7 @@ def _kind_specs(cfg: ShapedDsv32Config, hw: ShapedHardware) -> dict[str, LayerKi
     moe = spec(
         "dsamoe", dsv32_moe_weight_layout(dims), dsv32_moe_activation_layout(dims),
         moe_active, moe_traffic,
-        meta_bytes=dsv32_meta_layout(dims, "moe").total_bytes,
+        aux_temp_bytes=dsv32_aux_temp_layout(dims, "moe").total_bytes,
     )
     return {"dense": dense, "moe": moe}
 
@@ -399,7 +399,7 @@ def build_shaped_dsv32(
     hw = hw or ShapedHardware()
     dims = dims_of_dsv32(cfg)
     # each layer's metadata is self-contained (its own M object); no
-    # cross-layer sharing — glm52 is the family that passes meta_shared
+    # cross-layer sharing — glm52 is the family that passes aux_shared
     return build_shaped_program(
         cfg, hw=hw, family="dsv32-shaped",
         kinds=_kind_specs(cfg, hw), layer_kinds=dims.kinds,
@@ -423,7 +423,7 @@ def family_layouts(cfg: ShapedDsv32Config) -> tuple[Dsv32Dims, FamilyLayouts]:
         layers=[LayerLayout(kind=dims.kinds[i],
                             weights=_WEIGHT_BUILDERS[dims.kinds[i]](dims, layer=i),
                             activations=ctx[dims.kinds[i]],
-                            aux=dsv32_meta_layout(dims, dims.kinds[i]))
+                            aux_temp=dsv32_aux_temp_layout(dims, dims.kinds[i]))
                 for i in range(cfg.n_layers)],
         embed=embed_weight_layout(dims),
         head=head_weight_layout(dims),

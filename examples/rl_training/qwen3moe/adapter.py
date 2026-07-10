@@ -6,7 +6,7 @@ from unittest.mock import patch
 import torch
 
 from dataflow.models.qwen3moe_reference import GoldenQwen3Moe
-from dataflow.tasks.modules.moe.spec import moe_meta_layout
+from dataflow.tasks.modules.moe.spec import moe_aux_temp_layout
 from dataflow.training.models.qwen3moe import ShapedQwen3MoeConfig
 
 name = "qwen3moe"
@@ -47,7 +47,7 @@ def capture(golden, tokens):
 
 
 def meta_layout(dims, i):
-    return moe_meta_layout(dims, dims.moe)
+    return moe_aux_temp_layout(dims, dims.moe)
 
 
 def meta_fields(dims, i, captured):

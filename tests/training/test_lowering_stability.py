@@ -18,29 +18,30 @@ from dataflow.training.models.dsv3 import ShapedDsv3Config, lower_dsv3
 from dataflow.training.models.dsv32 import ShapedDsv32Config, lower_dsv32
 from dataflow.training.models.glm52 import ShapedGlm52Config, lower_glm52
 
-# Constants last updated DELIBERATELY for the fused head_loss lowering
-# (head_fwd/loss_bwd/head_bwd -> ONE token-chunked task; logits/dlogits
-# objects removed from the grammar). olmoe rows ADDED with the MoE family
-# (existing constants verified unchanged in the same commit).
+# Constants last updated DELIBERATELY for the aux-object grammar (the
+# per-round metadata objects renamed M_{s}_{r}_{i} -> AuxTemp_{s}_{r}_{i}
+# and dM_{s}_{r}_{lead} -> dAuxTemp_{s}_{r}_{lead}; structure otherwise
+# unchanged). The five DENSE-family constants are UNTOUCHED — verified
+# byte-identical in the same commit (no aux objects in those chains).
 EXPECTED = {
     "llama3-tiny-ga2-s2": "28cb016ba2779a5c",
     "llama3-tiny-tail": "e06f9a28c9665f46",
     "qwen3-tiny-ga3": "fd8e2305dd04e271",
     "qwen35-tiny-ga2": "3a76b7ddade100eb",
     "qwen35-tiny-tied": "f6dd20935fc2ad10",
-    "olmoe-tiny": "6e122f9e55566eb1",
-    "olmoe-tiny-ga2": "cace8430b38656c8",
-    "qwen35moe-tiny-ga2": "dd63fb7554d28ac5",
-    "qwen3moe-tiny": "b0cae7b2f6845f8e",
-    "qwen3moe-tiny-ga2": "37be833884048665",
-    "dsv3-tiny": "887016aeea7a406d",
-    "dsv3-tiny-ga2": "0235b4af1dcd1378",
-    "dsv32-tiny": "c8fff3a4b6125f42",
-    "dsv32-tiny-ga2": "fc88bcbcd5b922f2",
-    "dsv32-tiny-dense": "341958dfae44599e",
-    "glm52-tiny": "02de39829135fecd",
-    "glm52-tiny-ga2": "97d566e41cfd5a02",
-    "glm52-tiny-warmup": "a90b9a61fcd51ef8",
+    "olmoe-tiny": "213c075480eb6eb4",
+    "olmoe-tiny-ga2": "5bd614146a4c76bc",
+    "qwen35moe-tiny-ga2": "c158717e023a55b0",
+    "qwen3moe-tiny": "38a3f61397a4d91d",
+    "qwen3moe-tiny-ga2": "90e08015ff3c8379",
+    "dsv3-tiny": "fb3ee48042e5906c",
+    "dsv3-tiny-ga2": "5a0f399e32e62be1",
+    "dsv32-tiny": "f63908c078f99531",
+    "dsv32-tiny-ga2": "de894d6c97f359ae",
+    "dsv32-tiny-dense": "3744001828e42a4b",
+    "glm52-tiny": "225ea494965c06d0",
+    "glm52-tiny-ga2": "9fe67fd5aaf485c0",
+    "glm52-tiny-warmup": "6583684c8b8d9993",
 }
 
 

@@ -48,7 +48,7 @@ from dataflow.core import Program
 from dataflow.tasks.layouts import (
     DTypePolicy,
     Glm52Dims,
-    glm52_meta_layout,
+    glm52_aux_temp_layout,
     ParamDTypes,
     dsv3_dense_activation_layout,
     dsv3_moe_activation_layout,
@@ -64,7 +64,7 @@ from ..lowering import FamilyLayouts, LayerLayout, apply_exact_sizes, initial_va
 from ..shaped_program import (
     BF16,
     LayerKindSpec,
-    MetaShare,
+    AuxShare,
     ShapedHardware,
     build_shaped_program,
 )
@@ -340,7 +340,7 @@ def _activation_layout_for(dims: Glm52Dims, kind: str):
     if kind == "gdl":
         return dsv3_dense_activation_layout(dims)
     return PackedLayout.build(_warmup_ctx_filter(
-        _dsv3_attn_ctx_specs(dims) + moe_context_specs(dims, dims.moe, meta=True),
+        _dsv3_attn_ctx_specs(dims) + moe_context_specs(dims, dims.moe, aux_temp=True),
         dims))
 
 
@@ -365,7 +365,7 @@ def _kind_specs(cfg: ShapedGlm52Config, hw: ShapedHardware) -> dict[str, LayerKi
     s_bytes = 4.0 * t * cfg.index_topk if cfg.sparse_mode else 0.0
 
     def spec(prefix, leader, wl, cl, ffn_active, extra_traffic,
-             meta_bytes=0):
+             aux_temp_bytes=0):
         total_params = sum(int(math.prod(fl.shape)) for fl in wl.fields)
         attn_flops = core_flops + (idx_flops if leader else 0.0)
         attn_bytes = BF16 * t * 4 * h * qk + s_bytes
@@ -394,7 +394,7 @@ def _kind_specs(cfg: ShapedGlm52Config, hw: ShapedHardware) -> dict[str, LayerKi
             key_prefix=prefix,
             w_bytes=wl.total_bytes,
             a_bytes=cl.total_bytes,
-            meta_bytes=meta_bytes,
+            aux_temp_bytes=aux_temp_bytes,
             fwd_us=fwd, bwd_us=bwd, recompute_us=fwd,
             optimizer_us=hw.mem_us(BF16 * 7.0 * total_params),
             fwd_subops=sub_fwd, bwd_subops=sub_bwd, recompute_subops=list(sub_fwd),
@@ -411,13 +411,13 @@ def _kind_specs(cfg: ShapedGlm52Config, hw: ShapedHardware) -> dict[str, LayerKi
     return {
         "gdl": spec("gdl", True, _weight_layout_for(dims, "gdl"),
                     _activation_layout_for(dims, "gdl"), 3 * cfg.d_ff_dense * d, 0.0,
-                    meta_bytes=glm52_meta_layout(dims, "gdl").total_bytes),
+                    aux_temp_bytes=glm52_aux_temp_layout(dims, "gdl").total_bytes),
         "gml": spec("gml", True, _weight_layout_for(dims, "gml"),
                     _activation_layout_for(dims, "gml"), moe_active, moe_traffic,
-                    meta_bytes=glm52_meta_layout(dims, "gml").total_bytes),
+                    aux_temp_bytes=glm52_aux_temp_layout(dims, "gml").total_bytes),
         "gmf": spec("gmf", False, _weight_layout_for(dims, "gmf"),
                     _activation_layout_for(dims, "gmf"), moe_active, moe_traffic,
-                    meta_bytes=glm52_meta_layout(dims, "gmf").total_bytes),
+                    aux_temp_bytes=glm52_aux_temp_layout(dims, "gmf").total_bytes),
     }
 
 
@@ -460,7 +460,7 @@ def build_shaped_glm52(
     hw = hw or ShapedHardware()
     dims = dims_of_glm52(cfg)
     shares = [
-        MetaShare(producer=ld, consumers=dims.group_members(ld)[1:],
+        AuxShare(producer=ld, consumers=dims.group_members(ld)[1:],
                   # frozen indexer => no KL anywhere => no dM chain
                   grad_bytes=(0 if not dims.train_indexer
                               else 4 * dims.tokens * (
@@ -474,7 +474,7 @@ def build_shaped_glm52(
         kinds=_kind_specs(cfg, hw), layer_kinds=dims.kinds,
         fast_memory_capacity=fast_memory_capacity,
         recompute_levels=recompute_levels, name=name,
-        meta_shared=shares,
+        aux_shared=shares,
         freeze=(_ce_plan(cfg) if cfg.sparse_mode
                 else _warmup_plan(dims, cfg.n_layers)),
     )
@@ -486,7 +486,7 @@ def family_layouts(cfg: ShapedGlm52Config) -> tuple[Glm52Dims, FamilyLayouts]:
         layers=[LayerLayout(kind=dims.kinds[i],
                             weights=_weight_layout_for(dims, dims.kinds[i]),
                             activations=_activation_layout_for(dims, dims.kinds[i]),
-                            aux=glm52_meta_layout(dims, dims.kinds[i]))
+                            aux_temp=glm52_aux_temp_layout(dims, dims.kinds[i]))
                 for i in range(cfg.n_layers)],
         embed=embed_weight_layout(dims),
         head=head_weight_layout(dims),
@@ -519,7 +519,7 @@ def lower_glm52(
     dm_cols = dims.index_topk if dims.sparse_mode else cfg.seq_len
 
     def size_of(oid: str):
-        if oid.startswith("dM_"):
+        if oid.startswith("dAuxTemp_"):
             return 4 * t_tokens * dm_cols
         return base_size(oid)
 

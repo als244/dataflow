@@ -384,7 +384,7 @@ def olmoe_activation_layout(dims: OlmoeDims) -> PackedLayout:
         ("attn_out", (t, q), "bf16"),
         ("h_mid", (t, d), "bf16"),
         ("rstd_ffn", (t,), "fp32"),
-    ] + moe_context_specs(dims, dims.moe, meta=True))
+    ] + moe_context_specs(dims, dims.moe, aux_temp=True))
 
 
 def qwen3_activation_layout(dims: Qwen3Dims) -> PackedLayout:
@@ -459,7 +459,7 @@ def qwen3moe_activation_layout(dims: Qwen3MoeDims) -> PackedLayout:
         ("attn_out", (t, q), "bf16"),
         ("h_mid", (t, d), "bf16"),
         ("rstd_ffn", (t,), "fp32"),
-    ] + moe_context_specs(dims, dims.moe, meta=True))
+    ] + moe_context_specs(dims, dims.moe, aux_temp=True))
 
 
 @dataclass(frozen=True)
@@ -604,7 +604,7 @@ def dsv3_moe_activation_layout(dims: Dsv3Dims) -> PackedLayout:
     from .modules.moe.spec import moe_context_specs
 
     return PackedLayout.build(
-        _dsv3_attn_ctx_specs(dims) + moe_context_specs(dims, dims.moe, meta=True)
+        _dsv3_attn_ctx_specs(dims) + moe_context_specs(dims, dims.moe, aux_temp=True)
     )
 
 
@@ -726,34 +726,34 @@ def dsv32_moe_activation_layout(dims: Dsv32Dims) -> PackedLayout:
 
     return PackedLayout.build(_warmup_ctx_filter(
         _dsv32_attn_ctx_specs(dims)
-        + moe_context_specs(dims, dims.moe, meta=True), dims))
+        + moe_context_specs(dims, dims.moe, aux_temp=True), dims))
 
 
-def glm52_meta_layout(dims: "Glm52Dims", kind: str) -> PackedLayout:
+def glm52_aux_temp_layout(dims: "Glm52Dims", kind: str) -> PackedLayout:
     """glm52 M objects: leaders (gdl/gml) carry the dsa selection their
     group shares; moe kinds (gml/gmf) carry their own routing pack.
     Followers never carry a selection — they consume the producer's M."""
-    from .modules.moe.spec import moe_meta_specs
+    from .modules.moe.spec import moe_aux_temp_specs
 
     specs: list[tuple[str, tuple[int, ...], str]] = []
     if kind in ("gdl", "gml") and getattr(dims, "sparse_mode", True):
         specs.append(("dsa_idx", (dims.tokens, dims.index_topk), "int32"))
     if kind in ("gml", "gmf"):
-        specs += moe_meta_specs(dims, dims.moe)
+        specs += moe_aux_temp_specs(dims, dims.moe)
     return PackedLayout.build(specs)
 
 
-def dsv32_meta_layout(dims: Dsv32Dims, kind: str) -> PackedLayout:
+def dsv32_aux_temp_layout(dims: Dsv32Dims, kind: str) -> PackedLayout:
     """The layer's M object: ALL its never-recompute metadata in one
     packed layout — the dsa selection (sparse mode) and the discrete
     routing pack (moe kinds)."""
-    from .modules.moe.spec import moe_meta_specs
+    from .modules.moe.spec import moe_aux_temp_specs
 
     specs: list[tuple[str, tuple[int, ...], str]] = []
     if dims.sparse_mode:
         specs.append(("dsa_idx", (dims.tokens, dims.index_topk), "int32"))
     if kind == "moe":
-        specs += moe_meta_specs(dims, dims.moe)
+        specs += moe_aux_temp_specs(dims, dims.moe)
     return PackedLayout.build(specs)
 
 
@@ -969,7 +969,7 @@ def qwen35moe_lin_activation_layout(dims: Qwen35MoeDims) -> PackedLayout:
     from .modules.moe.spec import moe_context_specs
 
     return PackedLayout.build(
-        _qwen35_lin_attn_ctx(dims) + moe_context_specs(dims, dims.moe, meta=True))
+        _qwen35_lin_attn_ctx(dims) + moe_context_specs(dims, dims.moe, aux_temp=True))
 
 
 def qwen35moe_attn_weight_layout(dims: Qwen35MoeDims, layer: int | None = None) -> PackedLayout:
@@ -985,7 +985,7 @@ def qwen35moe_attn_activation_layout(dims: Qwen35MoeDims) -> PackedLayout:
     from .modules.moe.spec import moe_context_specs
 
     return PackedLayout.build(
-        _qwen35_attn_attn_ctx(dims) + moe_context_specs(dims, dims.moe, meta=True))
+        _qwen35_attn_attn_ctx(dims) + moe_context_specs(dims, dims.moe, aux_temp=True))
 
 
 def embed_weight_layout(dims) -> PackedLayout:

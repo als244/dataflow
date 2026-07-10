@@ -149,11 +149,11 @@ class _Base:
                 f"derives run_args['segments'] = {{round: Segments}})")
         return segs[r]
 
-    def _meta_state(self, ctx) -> dict | None:
+    def _aux_temp_state(self, ctx) -> dict | None:
         """Family hook: st entries for METADATA objects (M_{s}_{r}_{i} —
         never-recompute forward artifacts: routing packs, selections).
-        None = family has no metadata. Implementations inspect
-        ctx.task.compute_block_key to set meta_ready for recompute."""
+        None = family has no aux pack. Implementations inspect
+        ctx.task.compute_block_key to set aux_temp_ready for recompute."""
         return None
 
     def _norm_bwd_fn(self, kctx):

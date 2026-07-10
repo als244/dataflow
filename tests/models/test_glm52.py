@@ -431,7 +431,7 @@ def test_glm52_leader_follower_pair_ladder():
     )
     from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME
     from dataflow.tasks.kernels import KernelCtx, resolve_kernels
-    from dataflow.tasks.layouts import glm52_meta_layout, grad_layout
+    from dataflow.tasks.layouts import glm52_aux_temp_layout, grad_layout
 
     # pattern chosen so the gml leader at layer 1 serves EXACTLY one
     # follower (group {1, 2}, N=2) — the chain below is the whole group
@@ -475,7 +475,7 @@ def test_glm52_leader_follower_pair_ladder():
                                     device="cuda") for f in cl.fields}
 
     def mk_meta(kind):
-        m_l = glm52_meta_layout(dims, kind)
+        m_l = glm52_aux_temp_layout(dims, kind)
         return {f.name: torch.empty(f.shape, dtype=TORCH_DTYPE_BY_NAME[f.dtype],
                                     device="cuda") for f in m_l.fields}
 
@@ -484,9 +484,9 @@ def test_glm52_leader_follower_pair_ladder():
     a1, a2 = mk_ctx(ld_fwd.cl), mk_ctx(f_fwd.cl)
     y1 = torch.empty_like(x)
     y2 = torch.empty_like(x)
-    ld_fwd._forward(kctx, x, w_ld, y1, a1, extras={"meta": dict(meta_ld), "seg": seg})
+    ld_fwd._forward(kctx, x, w_ld, y1, a1, extras={"aux_temp": dict(meta_ld), "seg": seg})
     f_fwd._forward(kctx, y1, w_f, y2, a2,
-                   extras={"meta": dict(meta_f), "seg": seg,
+                   extras={"aux_temp": dict(meta_f), "seg": seg,
                            "shared_idx": meta_ld["dsa_idx"]})
 
     gl_ld = grad_layout(ld_fwd.wl, dims.dtypes)
@@ -502,10 +502,10 @@ def test_glm52_leader_follower_pair_ladder():
     a2["_seg"] = seg
     # reverse order: follower bwd creates dM, leader bwd consumes it
     f_bwd._backward(kctx, dy2, a2, y1, w_f, dx1, dw_f, accum=False,
-                    meta={"meta": meta_f, "shared_idx": meta_ld["dsa_idx"],
+                    aux_temp={"aux_temp": meta_f, "shared_idx": meta_ld["dsa_idx"],
                           "_dm_view": dm, "_dm_create": True, "_kl_n": 2})
     ld_bwd._backward(kctx, dx1, a1, x, w_ld, dx0, dw_ld, accum=False,
-                     meta={"meta": meta_ld, "_dm_view": dm, "_kl_n": 2})
+                     aux_temp={"aux_temp": meta_ld, "_dm_view": dm, "_kl_n": 2})
 
     # ---- golden compose ----
     leaves_ld = {n: (t_.detach().clone().requires_grad_()
@@ -611,10 +611,10 @@ def test_glm52_frozen_indexer_ablation():
     cfg = _tiny_cfg(train_indexer=False)
     fam = resolve_family(cfg)
     prog = fam.lower(cfg)
-    assert not [o for o in prog.initial_objects if o.id.startswith("dM_")]
+    assert not [o for o in prog.initial_objects if o.id.startswith("dAuxTemp_")]
     assert not [oid for task in prog.task_by_id().values()
                 for oid in (task.outputs and [o.id for o in task.outputs] or [])
-                if str(oid).startswith("dM_")]
+                if str(oid).startswith("dAuxTemp_")]
     check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
                      field_atol=_BIAS_ATOL).assert_ok()
 

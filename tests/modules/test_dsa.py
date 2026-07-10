@@ -498,7 +498,7 @@ def test_dsv32_block_ladder2(kind):
     x = (torch.randn(dims.tokens, dims.d_model, generator=gen, device="cuda") * 0.5).to(torch.bfloat16)
     dy = (torch.randn(dims.tokens, dims.d_model, generator=gen, device="cuda") * 0.5).to(torch.bfloat16)
 
-    from dataflow.tasks.layouts import dsv32_meta_layout
+    from dataflow.tasks.layouts import dsv32_aux_temp_layout
     from dataflow.tasks.ops import Segments
 
     a = {f.name: torch.empty(f.shape, dtype=TORCH_DTYPE_BY_NAME[f.dtype], device="cuda")
@@ -508,19 +508,19 @@ def test_dsv32_block_ladder2(kind):
     # (a["_seg"]) — the engine run-prologue that normally sets it
     seg = Segments.of_dims(dims).on("cuda")
     # the layer's M object: ALL never-recompute metadata in one layout
-    m_l = dsv32_meta_layout(dims, kind)
+    m_l = dsv32_aux_temp_layout(dims, kind)
     meta_views = {f.name: torch.empty(f.shape, dtype=TORCH_DTYPE_BY_NAME[f.dtype],
                                       device="cuda") for f in m_l.fields}
     s_buf = meta_views["dsa_idx"]
-    extras = {"meta": meta_views, "seg": seg}
+    extras = {"aux_temp": meta_views, "seg": seg}
     fwd._forward(kctx, x, w, y, a, extras=dict(extras))
 
     a2 = {f.name: torch.empty(f.shape, dtype=TORCH_DTYPE_BY_NAME[f.dtype], device="cuda")
           for f in cl.fields}
-    # recompute consumes the metadata verbatim (meta_ready) — the runner
+    # recompute consumes the metadata verbatim (aux_temp_ready) — the runner
     # SKIPS the meta-marked select stage and moe stages skip topk/sort
     rc._run_stages(kctx, x, w, a2, count=rc.recompute_stage_count(),
-                   extras={**extras, "meta_ready": True})
+                   extras={**extras, "aux_temp_ready": True})
     torch.cuda.synchronize()
     errors = {}
     for name in a:
@@ -532,7 +532,7 @@ def test_dsv32_block_ladder2(kind):
     dx = torch.empty_like(x)
     a["_seg"] = seg
     bwd._backward(kctx, dy, a, x, w, dx, dwv, accum=False,
-                  meta={"meta": meta_views})
+                  aux_temp={"aux_temp": meta_views})
 
     leaves = {n: (t_.detach().clone().requires_grad_()
                   if n != "w_router_bias" else t_)

@@ -65,7 +65,7 @@ def build_rl_program(fam, cfg, *, steps: int = 1):
             _, _, s, r, i = tid.split("_")
             fwd = dropped_fwd[f"block_fwd_{s}_{r}_{i}"]
             own_m = [o["id"] for o in fwd.get("outputs", [])
-                     if o["id"].startswith("M_")]
+                     if o["id"].startswith("AuxTemp_")]
             a_out = next(o for o in fwd["outputs"]
                          if o["id"].startswith("A_"))
             chain.append({

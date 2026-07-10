@@ -8,7 +8,7 @@ from unittest.mock import patch
 import torch
 
 from dataflow.models.dsv32_reference import GoldenDsv32
-from dataflow.tasks.layouts import dsv32_meta_layout
+from dataflow.tasks.layouts import dsv32_aux_temp_layout
 from dataflow.training.models.dsv32 import ShapedDsv32Config
 
 name = "dsv32"
@@ -62,7 +62,7 @@ def capture(golden, tokens):
 
 
 def meta_layout(dims, i):
-    return dsv32_meta_layout(dims, dims.kinds[i])
+    return dsv32_aux_temp_layout(dims, dims.kinds[i])
 
 
 def meta_fields(dims, i, captured):

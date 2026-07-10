@@ -158,15 +158,15 @@ def _ladder2(kind: str, tol: float = 4e-2):
         for f in cl.fields
     }
     y = torch.empty_like(x)
-    from dataflow.tasks.modules.moe.spec import moe_meta_layout
+    from dataflow.tasks.modules.moe.spec import moe_aux_temp_layout
 
-    m_l = moe_meta_layout(dims, dims.moe)
+    m_l = moe_aux_temp_layout(dims, dims.moe)
     meta_views = {f.name: torch.empty(f.shape, dtype=TORCH_DTYPE_BY_NAME[f.dtype],
                                       device="cuda") for f in m_l.fields}
     from dataflow.tasks.ops import Segments
 
     seg = Segments.of_dims(dims).on("cuda")
-    fwd._forward(kctx, x, w, y, a, extras={"meta": dict(meta_views), "seg": seg})
+    fwd._forward(kctx, x, w, y, a, extras={"aux_temp": dict(meta_views), "seg": seg})
 
     a2 = {
         f.name: torch.empty(f.shape, dtype=TORCH_DTYPE_BY_NAME[f.dtype], device="cuda")
@@ -174,7 +174,7 @@ def _ladder2(kind: str, tol: float = 4e-2):
     }
     rc_cls(dims, kernels)._run_stages(
         kctx, x, w, a2, count=rc_cls.recompute_stage_count(),
-        extras={"meta": dict(meta_views), "meta_ready": True, "seg": seg},
+        extras={"aux_temp": dict(meta_views), "aux_temp_ready": True, "seg": seg},
     )
     torch.cuda.synchronize()
     errors = {}
@@ -192,7 +192,7 @@ def _ladder2(kind: str, tol: float = 4e-2):
     dx = torch.empty_like(x)
     a["_seg"] = seg
     bwd._backward(kctx, dy, a, x, w, dx, dwv, accum=False,
-                  meta={"meta": meta_views})
+                  aux_temp={"aux_temp": meta_views})
 
     golden = GoldenQwen35Moe(dims=dims)
     leaves = {n: t.detach().clone().requires_grad_() for n, t in w.items()}
@@ -210,7 +210,7 @@ def _ladder2(kind: str, tol: float = 4e-2):
         errors[f"bwd:d{name}"] = rel_l2(dwv[name], leaves[name].grad)
 
     bwd._backward(kctx, dy, a, x, w, dx, dwv, accum=True,
-                  meta={"meta": meta_views})
+                  aux_temp={"aux_temp": meta_views})
     for name in dwv:
         errors[f"accum:2x:{name}"] = rel_l2(dwv[name], 2.0 * leaves[name].grad)
 
