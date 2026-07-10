@@ -158,7 +158,7 @@ def run_fleet_dp(global_cfg, recipe: Recipe, stream, steps: int, *,
     kill_remote_daemon()
     time.sleep(1.0)
     ssh_fire_and_forget(
-        f"cd {TUB_REPO} && setsid nohup {TUB_PY} tools/dataflowd.py start "
+        f"cd {TUB_REPO} && setsid nohup {TUB_PY} -u tools/dataflowd.py start "
         f"--socket {TUB_SOCK} --slab-gib {slabs[1]} --peer-name tubingen "
         f"--peer-listen {TUB_PEER_ADDR} "
         f"> /tmp/dataflowd-fleet.log 2>&1 < /dev/null & exit")

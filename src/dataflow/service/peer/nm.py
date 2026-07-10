@@ -423,16 +423,29 @@ class NetworkManager:
                     return
                 continue
             if n:
-                while len(buf) < n:
+                # O(n) assembly (a bytes-concat loop here was O(n^2):
+                # one 206 MB COLL frame stalled the reader for seconds,
+                # heartbeats starved, and the peer dropped the link —
+                # the 1B flagship's first failure; findings, P4)
+                body = bytearray(n)
+                take = min(len(buf), n)
+                if take:
+                    body[:take] = buf[:take]
+                    buf = buf[take:]
+                got_total = take
+                view = memoryview(body)
+                while got_total < n:
                     try:
-                        got = sock.recv(min(1 << 20, n - len(buf) + 65536))
+                        got = sock.recv_into(view[got_total:],
+                                             min(1 << 22, n - got_total))
                     except OSError:
-                        got = b""
+                        got = 0
                     if not got:
                         self.drop_link(link, why="eof mid-payload")
                         return
-                    buf += got
-                payload, buf = buf[:n], buf[n:]
+                    got_total += got
+                    link.last_seen = time.monotonic()
+                payload = bytes(body)
             kind = msg.get("kind")
             if kind == "PING":
                 link.send_frame({"kind": "PONG"})
@@ -509,6 +522,7 @@ class NetworkManager:
                     self.drop_link(link, why="eof mid-chunk")
                     return None
                 got_total += got
+                link.last_seen = time.monotonic()
             msg["landed"] = n
             with self.lock:
                 link.core.handle(msg, None)
