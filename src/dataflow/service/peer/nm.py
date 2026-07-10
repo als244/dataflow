@@ -790,8 +790,9 @@ class BwProbeRdma:
             nm.record_bw(link, "rdma", gbps)
             link.send_frame({"kind": "BWPROBE_RDMA_DONE",
                              "gbps": round(gbps, 2)})
-        except Exception:
-            pass
+        except Exception as ex:
+            nm.state.emit("peer_bw_error", peer_id=link.peer_id,
+                          plane="rdma", why=repr(ex))
         finally:
             if src is not None:
                 nm.store.release_scratch(src)

@@ -161,8 +161,10 @@ def install(server) -> None:
             base = before.get(key, 0)
             delta[key] = round(val - base, 6) if isinstance(val, float) \
                 else val - base
-        return {"walls_s": walls, "stats": delta,
-                "bytes_per_rep": sum(sizes),
+        total = sum(sizes)
+        gbps = [round(total * 8 / w / 1e9, 2) for w in walls]
+        return {"walls_s": walls, "gbps_per_rep": gbps,
+                "stats": delta, "bytes_per_rep": total,
                 "rdma_lane": gh.comm.rdma_qp() is not None}
 
     server.dispatcher.handlers.update({
