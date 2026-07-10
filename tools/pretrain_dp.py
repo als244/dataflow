@@ -59,10 +59,12 @@ def main() -> None:
     tr.add_argument("--seed", type=int, default=11)
     tr.add_argument("--out", required=True)
     tr.add_argument("--dp-overlap", action="store_true",
-                    help="tail-placed optimizers consuming PRE-REDUCED "
-                         "grads: grad_reduce tasks fire after each "
-                         "final-round bwd so the exchange overlaps the "
-                         "remaining backward (experimental)")
+                    help="EXPERIMENTAL, known-broken at scale: tail "
+                         "optimizers on PRE-REDUCED grads (grad_reduce "
+                         "tasks overlap the exchange with backward). "
+                         "Bitwise-correct at one step; NaNs under memory "
+                         "pressure — needs the completion-stream engine "
+                         "extension (findings) before real use")
     tr.add_argument("--profile", action="store_true",
                     help="bracket steps with the vendor capture API; "
                          "launched daemons are wrapped in the canonical "
