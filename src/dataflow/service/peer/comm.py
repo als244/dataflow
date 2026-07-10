@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import queue
 import threading
+from collections import deque
 
 import numpy as np
 import torch
@@ -55,12 +56,22 @@ from cuda.bindings import driver as cudriver
 from ...runtime.groups import GroupHandle
 
 FLAG_WAIT_GEQ = None  # resolved at probe time
+WAIT_VALUE_PROBED = None  # cached probe verdict (one Stream, ever)
 
 TORCH_BY_REDUCE = {"f32": torch.float32}
 
 
 def stream_wait_value_supported() -> bool:
-    """Boot probe: enqueue a GEQ wait on an already-satisfied flag."""
+    """Boot probe: enqueue a GEQ wait on an already-satisfied flag.
+    Probed once per process — comms reuse the verdict."""
+    global FLAG_WAIT_GEQ, WAIT_VALUE_PROBED
+    if WAIT_VALUE_PROBED is not None:
+        return WAIT_VALUE_PROBED
+    WAIT_VALUE_PROBED = run_wait_value_probe()
+    return WAIT_VALUE_PROBED
+
+
+def run_wait_value_probe() -> bool:
     global FLAG_WAIT_GEQ
     try:
         FLAG_WAIT_GEQ = cudriver.CUstreamWaitValue_flags.CU_STREAM_WAIT_VALUE_GEQ
@@ -124,6 +135,10 @@ class HostmemComm:
         self.stream = torch.cuda.Stream()
         self.seq = 0
         self.jobs: queue.SimpleQueue = queue.SimpleQueue()
+        # recycled ready-events (one live per in-flight op; a fresh
+        # Event is minted only when the pool runs dry) — steady-state
+        # training reuses the same handful every step
+        self.event_pool: deque = deque()
         self.inbox: dict[tuple, object] = {}   # (seq, op) -> msg|bytes
         self.inbox_cv = threading.Condition()
         # Staging = TWO slab extents (out: D2H target + reduce accum +
@@ -233,7 +248,12 @@ class HostmemComm:
         nbytes = tensor.numel() * tensor.element_size()
         self.ensure_scratch(nbytes)
         stage = self.out.t[:nbytes]
-        ev = torch.cuda.Event()
+        ev = self.event_pool.popleft() if self.event_pool \
+            else torch.cuda.Event()
+        # order after the PRODUCER: the caller's tensor may still be
+        # mid-write on its own stream; the D2H below runs on the comm
+        # stream and must not race it
+        self.stream.wait_stream(torch.cuda.current_stream())
         with torch.cuda.stream(self.stream):
             if send_stage:
                 stage.view(tensor.dtype)[:tensor.numel()].copy_(
@@ -276,6 +296,9 @@ class HostmemComm:
             try:
                 self.run_job(job)
                 self.flag[0] = job.seq          # releases the stream
+                self.event_pool.append(job.ready_event)  # recycle: the
+                # worker just synchronized it; nothing records it again
+                # until a later enqueue pops it back out
             except Exception as ex:
                 self.fail(f"collective failed: {ex}")
                 return
@@ -393,7 +416,9 @@ class HostmemComm:
         half = nbytes // 2
         self.ensure_scratch(nbytes)
         stage = self.out.t[:nbytes]
-        ev = torch.cuda.Event()
+        ev = self.event_pool.popleft() if self.event_pool \
+            else torch.cuda.Event()
+        self.stream.wait_stream(torch.cuda.current_stream())
         with torch.cuda.stream(self.stream):
             stage.view(full.dtype)[:full.numel()].copy_(
                 full.reshape(-1), non_blocking=True)
@@ -424,7 +449,9 @@ class HostmemComm:
         own_lo = 0 if self.rank == 0 else half
         self.ensure_scratch(nbytes)
         stage = self.out.t[:nbytes]
-        ev = torch.cuda.Event()
+        ev = self.event_pool.popleft() if self.event_pool \
+            else torch.cuda.Event()
+        self.stream.wait_stream(torch.cuda.current_stream())
         with torch.cuda.stream(self.stream):
             stage[own_lo:own_lo + half].view(own_slice.dtype)[
                 :own_slice.numel()].copy_(own_slice.reshape(-1),

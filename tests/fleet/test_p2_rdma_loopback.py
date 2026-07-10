@@ -84,7 +84,23 @@ def test_rdma_round_trip_byte_identity(rig):
     # not the reader's recv_into (zero_copy flags the SOCKET fast path)
 
 
-def test_rdma_throughput_report(rig):
+def probed_gbps(server, peer: str, plane: str, timeout=15.0):
+    """The connect-time bandwidth probe's measurement for a plane —
+    the reference every transfer-time gate derives its bound from
+    (no hardcoded link speeds)."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        link = server.nm.links.get(peer)
+        if link is not None and plane in link.peak_gbps:
+            return link.peak_gbps[plane]
+        time.sleep(0.1)
+    raise AssertionError(f"bw probe never measured {plane} to {peer}")
+
+
+def test_rdma_throughput_matches_probed_bw(rig):
+    """ZERO-COPY time gate: a large send must complete in about
+    size/peak_bw — any hidden staging copy shows up as a miss."""
+    peak = probed_gbps(rig["sa"], "rd-beta", "rdma")
     data = bytes(256 << 20)
     rig["ca"].put_object("rdma_big", data)
     t0 = time.monotonic()
@@ -93,6 +109,10 @@ def test_rdma_throughput_report(rig):
     dt = time.monotonic() - t0
     assert row["state"] == "done", row
     gbps = len(data) * 8 / dt / 1e9
+    expected = len(data) * 8 / (peak * 1e9)
+    assert dt <= expected * 1.35 + 0.30, (
+        f"256 MiB took {dt:.3f}s vs {expected:.3f}s at the probed "
+        f"{peak} Gbit/s — a copy crept into the path")
     print(f"\n[P2b] rdma-host LOOPBACK: 256 MiB in {dt:.3f}s "
           f"= {gbps:.1f} Gbit/s")
     rig["ca"].release_object("rdma_big")

@@ -149,7 +149,8 @@ def install(server) -> None:
                         and r["state"] in ("negotiating", "moving",
                                            "committing")]
             return {"peer_id": link.peer_id, "state": "up",
-                    "transfers": len(inflight)}
+                    "transfers": len(inflight),
+                    "peak_gbps": dict(link.peak_gbps)}
 
     def transfer_status(conn, args):
         return require_nm().transfer_status(args["send_id"])

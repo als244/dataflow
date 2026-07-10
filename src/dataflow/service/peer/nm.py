@@ -93,6 +93,17 @@ class PeerLink:
         self.last_ping = 0.0
         self.alive = True
         self.reader: threading.Thread | None = None
+        self.dialer = False
+        # measured peak goodput per data plane ({"socket": g, "rdma": g}
+        # in Gbit/s), probed at connect time — transfer-time gates and
+        # observability read this instead of hardcoding link speeds
+        self.peak_gbps: dict = {}
+        self.bwprobe_t0 = None
+        self.bwprobe_bytes = 0
+        self.bwprobe_ext = None
+        self.bw_ack = threading.Event()
+        self.bw_rdy = threading.Event()
+        self.bw_rdy_msg: dict | None = None
 
     def send_frame(self, msg, payload=None):
         try:
@@ -231,12 +242,17 @@ class NetworkManager:
             sock.close()
             raise ServiceError("PEER_UNREACHABLE",
                                f"bad hello from {addr}")
-        self.adopt_link(msg.get("peer_id", peer_id), conn,
-                        peer_rdma=bool(msg.get("rdma")))
-        return {"peer_id": msg.get("peer_id", peer_id)}
+        actual = msg.get("peer_id", peer_id)
+        self.adopt_link(actual, conn, peer_rdma=bool(msg.get("rdma")),
+                        dialer=True)
+        with self.lock:
+            link = self.links.get(actual)
+        if link is not None and link.dialer:
+            self.bw_probe_socket(link)
+        return {"peer_id": actual}
 
     def adopt_link(self, peer_id: str, conn: Conn, *,
-                   peer_rdma: bool = False) -> None:
+                   peer_rdma: bool = False, dialer: bool = False) -> None:
         with self.lock:
             old = self.links.get(peer_id)
             if old is not None:
@@ -247,6 +263,7 @@ class NetworkManager:
                 self.drop_link(old, why="glare-replaced")
             env = StoreReceiverEnv(self, peer_id)
             link = PeerLink(peer_id, conn, core=None)
+            link.dialer = dialer
             core = PeerCore(env, LinkSender(link), time.monotonic,
                             chunk_bytes=self.chunk_bytes)
             link.core = core
@@ -287,6 +304,32 @@ class NetworkManager:
                                  f"peer_down {link.peer_id} ({why})",
                                  fan_out=link.peer_id)
         self.state.emit("peer_down", peer_id=link.peer_id, why=why)
+
+    def record_bw(self, link: PeerLink, plane: str, gbps: float) -> None:
+        link.peak_gbps[plane] = round(gbps, 2)
+        self.state.emit("peer_bw", peer_id=link.peer_id, plane=plane,
+                        gbps=round(gbps, 2))
+
+    def bw_probe_socket(self, link: PeerLink) -> None:
+        """Measure the socket data plane at connect time: blast
+        peer_bw_probe_mib through the normal frame path, the receiver
+        times first-chunk to END and ACKs its goodput back. Failure
+        never harms the link (peak_gbps just stays unset)."""
+        mib = getattr(self.server.config, "peer_bw_probe_mib", 128)
+        if mib <= 0:
+            return
+        chunk = memoryview(bytes(4 << 20))
+        total = mib << 20
+        link.bw_ack.clear()
+        try:
+            sent = 0
+            while sent < total:
+                link.send_frame({"kind": "BWPROBE"}, chunk)
+                sent += len(chunk)
+            link.send_frame({"kind": "BWPROBE_END", "bytes": total})
+            link.bw_ack.wait(15.0)
+        except Exception:
+            pass
 
     def create_group(self, name: str, members: list, backend: str,
                      *, reduce_dtype: str = "native",
@@ -460,6 +503,11 @@ class NetworkManager:
                     with self.lock:
                         link.core.rdma_writer = RdmaWriterHook(self, link)
                     self.state.emit("peer_rdma_up", peer_id=link.peer_id)
+                    if link.dialer:
+                        threading.Thread(
+                            target=BwProbeRdma(self, link),
+                            name=f"nm-bwprobe-{link.peer_id}",
+                            daemon=True).start()
                 continue
             if kind == "GROUP_JOIN":
                 from .groups import GroupRecord
@@ -484,6 +532,52 @@ class NetworkManager:
             if kind == "GROUP_ERROR":
                 self.group_error(msg["name"], msg.get("why", "?"),
                                  fan_out=getattr(link, "peer_id", None))
+                continue
+            if kind == "BWPROBE":
+                now = time.monotonic()
+                if link.bwprobe_t0 is None:
+                    link.bwprobe_t0 = now
+                link.bwprobe_bytes += len(payload or b"")
+                continue
+            if kind == "BWPROBE_END":
+                dt = max(time.monotonic()
+                         - (link.bwprobe_t0 or time.monotonic()), 1e-6)
+                gbps = link.bwprobe_bytes * 8 / dt / 1e9
+                link.bwprobe_t0 = None
+                link.bwprobe_bytes = 0
+                self.record_bw(link, "socket", gbps)
+                link.send_frame({"kind": "BWPROBE_ACK",
+                                 "plane": "socket",
+                                 "gbps": round(gbps, 2)})
+                continue
+            if kind == "BWPROBE_ACK":
+                self.record_bw(link, msg.get("plane", "socket"),
+                               float(msg["gbps"]))
+                link.bw_ack.set()
+                continue
+            if kind == "BWPROBE_RDMA_REQ":
+                n = int(msg["bytes"])
+                try:
+                    ext = self.store.alloc_scratch(n)
+                    link.bwprobe_ext = ext
+                    link.send_frame({"kind": "BWPROBE_RDMA_RDY",
+                                     "raddr": self.rdma.slab_base
+                                     + ext.offset,
+                                     "rkey": self.rdma.rkey(),
+                                     "bytes": n})
+                except Exception as ex:
+                    link.send_frame({"kind": "BWPROBE_RDMA_RDY",
+                                     "error": str(ex)})
+                continue
+            if kind == "BWPROBE_RDMA_RDY":
+                link.bw_rdy_msg = msg
+                link.bw_rdy.set()
+                continue
+            if kind == "BWPROBE_RDMA_DONE":
+                if link.bwprobe_ext is not None:
+                    self.store.release_scratch(link.bwprobe_ext)
+                    link.bwprobe_ext = None
+                self.record_bw(link, "rdma", float(msg["gbps"]))
                 continue
             if kind == "COLL":
                 comm = self.comm_of(msg["group"])
@@ -661,6 +755,46 @@ class NetworkManager:
         self.state.emit("object_received", oid=res.dest_id,
                         from_peer=peer_id, bytes=len(res.buffer),
                         zero_copy=res.landed_zero_copy)
+
+
+class BwProbeRdma:
+    """Dialer-side rdma-plane probe (own short thread — never the
+    reader's): REQ a landing extent, one-sided RDMA_WRITE of the probe
+    size from slab scratch, report the measured goodput both ways."""
+
+    def __init__(self, nm: "NetworkManager", link: PeerLink):
+        self.nm = nm
+        self.link = link
+
+    def __call__(self) -> None:
+        nm, link = self.nm, self.link
+        mib = getattr(nm.server.config, "peer_bw_probe_mib", 128)
+        if mib <= 0 or nm.rdma is None:
+            return
+        n = mib << 20
+        src = None
+        try:
+            link.bw_rdy.clear()
+            link.send_frame({"kind": "BWPROBE_RDMA_REQ", "bytes": n})
+            if not link.bw_rdy.wait(15.0):
+                return
+            rdy = link.bw_rdy_msg or {}
+            if rdy.get("error") or link.rdma_qp is None:
+                return
+            src = nm.store.alloc_scratch(n)
+            t0 = time.monotonic()
+            link.rdma_qp.write(nm.store.slab.ptr + src.offset,
+                               int(rdy["raddr"]), int(rdy["rkey"]), n)
+            dt = max(time.monotonic() - t0, 1e-6)
+            gbps = n * 8 / dt / 1e9
+            nm.record_bw(link, "rdma", gbps)
+            link.send_frame({"kind": "BWPROBE_RDMA_DONE",
+                             "gbps": round(gbps, 2)})
+        except Exception:
+            pass
+        finally:
+            if src is not None:
+                nm.store.release_scratch(src)
 
 
 class RdmaWriterHook:

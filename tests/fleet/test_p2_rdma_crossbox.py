@@ -124,7 +124,18 @@ def test_rdma_crossbox_reverse(rig):
     assert bytes(rig["server"].store.view(rec)) == bytes(range(251)) * 65536
 
 
-def test_rdma_crossbox_throughput_report(rig):
+def test_rdma_crossbox_throughput_matches_probed_bw(rig):
+    """ZERO-COPY time gate against the probe's rdma-plane measurement
+    (sender slab MR -> receiver slab extent; no staging copies)."""
+    deadline = time.time() + 15
+    peak = None
+    while time.time() < deadline:
+        link = rig["server"].nm.links.get(REMOTE.name)
+        if link is not None and "rdma" in link.peak_gbps:
+            peak = link.peak_gbps["rdma"]
+            break
+        time.sleep(0.1)
+    assert peak is not None, "rdma bw probe never completed"
     data = bytes(256 << 20)
     rig["client"].put_object("xr_big", data)
     t0 = time.monotonic()
@@ -133,6 +144,9 @@ def test_rdma_crossbox_throughput_report(rig):
     dt = time.monotonic() - t0
     assert row["state"] == "done", row
     gbps = len(data) * 8 / dt / 1e9
-    print(f"\n[P2b] rdma-host CROSS-BOX: 256 MiB in {dt:.3f}s "
-          f"= {gbps:.1f} Gbit/s")
-    assert gbps > 10.0, f"rdma path implausibly slow: {gbps}"
+    expected = len(data) * 8 / (peak * 1e9)
+    print(f"\n[P2b] rdma cross-box: 256 MiB in {dt:.3f}s "
+          f"= {gbps:.1f} Gbit/s (probe {peak})")
+    assert dt <= expected * 1.35 + 0.30, (
+        f"256 MiB took {dt:.3f}s vs {expected:.3f}s at the probed "
+        f"{peak} Gbit/s")

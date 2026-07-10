@@ -234,6 +234,17 @@ def run_fleet_dp(global_cfg, recipe: Recipe, stream, steps: int, *,
         for other in rigs[1:]:
             coordinator.peer_connect(other.host.name,
                                      other.host.peer_listen)
+            deadline = time.time() + 5.0
+            peak = {}
+            while time.time() < deadline:
+                status = coordinator._call(
+                    "peer_status", {"peer_id": other.host.name})
+                peak = status.get("peak_gbps", {})
+                if "rdma" in peak or other.host.ib_dev is None:
+                    break
+                time.sleep(0.25)
+            log(f"[fleet] link {rigs[0].host.name}<->{other.host.name}"
+                f" peak Gbit/s: {peak or 'unmeasured'}")
         return fleet_loop(ranks, gspec, recipe, stream, steps,
                           budgets=budgets, seed=seed, log=log,
                           log_every=log_every,

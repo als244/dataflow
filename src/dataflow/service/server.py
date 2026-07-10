@@ -59,6 +59,7 @@ class EngineConfig:
     peer_chunk_bytes: int = 128 * 1024 * 1024
     peer_rdma_device: str | None = None      # e.g. "mlx5_1" => rdma-host
     peer_coll_scratch_mib: int = 512         # per-group pinned comm scratch
+    peer_bw_probe_mib: int = 128             # connect-time bw probe (0=off)
 
     def public(self) -> dict:
         return {

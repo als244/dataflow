@@ -121,9 +121,14 @@ def test_crossbox_reverse_direction(rig):
     assert rec.last_write["by"] == f"peer:{REMOTE.name}"
 
 
-def test_crossbox_throughput_report(rig):
-    """MEASURE + REPORT (no hard gate): socket-transport goodput over
-    the direct link, 256 MiB payload."""
+def test_crossbox_throughput_matches_probed_bw(rig):
+    """ZERO-COPY time gate: 256 MiB must move in about size/peak_bw,
+    where peak_bw was measured by the connect-time probe on THIS
+    link — no hardcoded speeds, and hidden copies show up as a miss."""
+    link = rig["server"].nm.links.get(REMOTE.name)
+    assert link is not None and "socket" in link.peak_gbps, \
+        "connect-time bw probe missing"
+    peak = link.peak_gbps["socket"]
     data = bytes(256 << 20)
     rig["client"].put_object("xbox_big", data)
     t0 = time.monotonic()
@@ -132,9 +137,12 @@ def test_crossbox_throughput_report(rig):
     dt = time.monotonic() - t0
     assert row["state"] == "done", row
     gbps = len(data) * 8 / dt / 1e9
-    print(f"\n[P2a] socket transport cross-box: 256 MiB in {dt:.2f}s "
-          f"= {gbps:.1f} Gbit/s")
-    assert gbps > 2.0, f"implausibly slow for a direct link: {gbps}"
+    expected = len(data) * 8 / (peak * 1e9)
+    print(f"\n[P2a] socket cross-box: 256 MiB in {dt:.2f}s "
+          f"= {gbps:.1f} Gbit/s (probe {peak})")
+    assert dt <= expected * 1.35 + 0.30, (
+        f"256 MiB took {dt:.2f}s vs {expected:.2f}s at the probed "
+        f"{peak} Gbit/s")
 
 
 def test_crossbox_capacity_backpressure(rig):
