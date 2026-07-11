@@ -215,6 +215,12 @@ LADDER_STAGES = [
      "one-sided RDMA_WRITE, ONE 121.6 MB exchange per layer"),
     ("stage4_device_reduce", "device-side reduce",
      "peer bytes H2D'd and summed on-GPU; zero CPU passes"),
+    ("stage5_nccl_backend", "NCCL group backend (tuned multi-socket)",
+     "device-direct collectives, zero PCIe staging; ties the "
+     "hostmem lane at this scale"),
+    ("stage6_nccl_zero1", "+ ZeRO-1 optimizer sharding",
+     "region reduce -> owned update -> W broadcast; per-rank "
+     "optimizer state halves (2.01/2.38 GiB) for ~6% step cost"),
 ]
 
 # coll_bench pattern measurements (cross-box, probed link 23.09 Gbit/s;
@@ -289,7 +295,11 @@ def distperf_sections(R: dict) -> list:
             "<p>Same model, data, and 3:1 round split; only the "
             "collective plane changes. 10.9 s/step to 3.6 s/step in "
             "three landings (3.1x), each verified loss-banded against "
-            "the recorded curves.</p>"
+            "the recorded curves. The NCCL backend then ties the "
+            "hostmem lane (its wire deficit on this fabric is bought "
+            "back by zero PCIe staging), and ZeRO-1 sharding trades "
+            "~6% step time for halved per-rank optimizer state — "
+            "proven bitwise-equal to plain DP on the hostmem lane.</p>"
             f"<div class='chart'>{svg}</div>"
             + table_html(rows, ["stage", "what changed", "step wall",
                                 "tok/s", "vs single GPU"])
