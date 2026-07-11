@@ -59,30 +59,36 @@ def daemon_paths(host: HostSpec, lane: str = "fleet") -> dict:
             "pid": f"{base}.pid"}
 
 
-def daemon_env(host: HostSpec) -> str:
+# NCCL transport defaults. NCCL's own RoCE path errors on this fabric
+# out of the box (WR_FLUSH + local access violation at the warm-up
+# collective — findings, N1); the N2 bench picks the winner and these
+# defaults record it.
+NCCL_DEFAULT_ENV = {"NCCL_IB_DISABLE": "1"}
+
+
+def daemon_env(host: HostSpec, extra: dict | None = None) -> str:
     """Env prefix for a daemon launch: NCCL wiring derived from the
-    topology (socket iface + HCA), extendable per host."""
-    # NCCL_IB_DISABLE=1: NCCL's own RoCE path errors on this fabric
-    # (WR_FLUSH + local access violation at the warm-up collective —
-    # findings, N1); socket transport on the 25G iface is the default
-    # until the N2 bench tunes IB (GID index / relaxed ordering).
-    parts = ["NCCL_IB_DISABLE=1"]
+    topology (socket iface + HCA) + tuned defaults; ``extra`` (bench
+    overrides) wins over everything."""
+    env = dict(NCCL_DEFAULT_ENV)
     if host.iface:
-        parts.append(f"NCCL_SOCKET_IFNAME={host.iface}")
+        env["NCCL_SOCKET_IFNAME"] = host.iface
     if host.ib_dev:
-        parts.append(f"NCCL_IB_HCA={host.ib_dev}")
-    return " ".join(parts)
+        env["NCCL_IB_HCA"] = host.ib_dev
+    env.update(extra or {})
+    return " ".join(f"{k}={v}" for k, v in env.items())
 
 
 def launch_daemon(host: HostSpec, *, lane: str = "fleet",
                   slab_gib: float, peer_port: int | None = None,
-                  extra_flags: str = "", wrap: str = "") -> dict:
+                  extra_flags: str = "", wrap: str = "",
+                  extra_env: dict | None = None) -> dict:
     """Start the host's dataflowd detached (tools/daemonize.py). The
     optional ``wrap`` prefix (e.g. nsys_command(...)) runs INSIDE the
     daemonized session, so profiler helpers can never hold the
     launching ssh session open. Returns the daemon's runtime paths."""
     paths = daemon_paths(host, lane)
-    env = daemon_env(host)
+    env = daemon_env(host, extra_env)
     env_prefix = f"env {env} " if env else ""
     # env(1) rather than shell VAR=... syntax: the daemonizer execs
     # argv directly, so assignments would be taken as the program
