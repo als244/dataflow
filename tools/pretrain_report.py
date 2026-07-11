@@ -206,6 +206,198 @@ def throughput_section(R: dict, prefixes: tuple = ()) -> str | None:
             + "</section>")
 
 
+LADDER_STAGES = [
+    ("stage1_socket_perfield", "v1: socket lane, per-field exchange",
+     "TCP frames, 9 posts/layer, CPU fp32 rank-ordered reduce"),
+    ("stage2_zerocopy_native", "zero-copy staging + native-dtype reduce",
+     "slab-extent staging (registered MR), one-pass bf16 CPU add"),
+    ("stage3_rdma_fused", "rdma lane + fused per-layer exchange",
+     "one-sided RDMA_WRITE, ONE 121.6 MB exchange per layer"),
+    ("stage4_device_reduce", "device-side reduce",
+     "peer bytes H2D'd and summed on-GPU; zero CPU passes"),
+]
+
+# coll_bench pattern measurements (cross-box, probed link 23.09 Gbit/s;
+# recorded in the findings ledger the day they were run)
+MICRO_ROWS = [
+    ["one layer, 9 fields (socket, per-field)", "299 ms", "—",
+     "profiled training gap: 200-300 ms"],
+    ["one layer, 9 fields (rdma, CPU reduce)", "99 ms", "64 ms",
+     "per-op tax ~4 ms x 8 extra ops"],
+    ["one layer fused 121.6 MB (rdma, CPU reduce)", "67 ms", "64 ms",
+     "wire 42 + CPU reduce 14 + PCIe 6"],
+    ["one layer fused (rdma, DEVICE reduce)", "54 ms", "~48 ms",
+     "wire 42 + PCIe 6; reduce off the wall"],
+    ["one layer, 9 fields (rdma, device reduce)", "58 ms", "~48 ms",
+     "per-op tax collapses to ~0.5 ms"],
+    ["head+embed 412 MB (socket, per-field)", "761 ms", "—",
+     "profiled training gap: ~800 ms"],
+    ["head+embed 412 MB (rdma, device reduce)", "183 ms", "~164 ms",
+     "wire 143 + PCIe 21"],
+]
+
+
+def distperf_sections(R: dict) -> list:
+    from dataflow.pretrain.driver import load_result
+
+    sections = []
+    prov = ("<section><h2>Measured floors, not guesses</h2><p>Every "
+            "bound in this report composes from PROBED lanes: the "
+            "connect-time link probe (rdma 23.09 Gbit/s — equal to the "
+            "ib_write_bw ceiling — and socket ~14.3), the boot "
+            "host-bandwidth probe (bf16 add 17.7 GB/s payload = 53 GB/s "
+            "traffic = 79% of the dual-channel DDR5-4200 theoretical "
+            "67.2), and PCIe H2D/D2H (35/44 GB/s). A layer's gradient "
+            "is 121.6 MB bf16 (9 fields, contiguous); embed and head "
+            "are untied 206 MB each.</p></section>")
+    sections.append(prov)
+
+    # ---- optimization ladder over the SAME 4-step 64K-token run ----
+    rows = []
+    series = []
+    single64 = None
+    sweep_dir = RESULTS / "sweeps" / "l3_1b_batch"
+    if (sweep_dir / "single_64K.json").exists():
+        single64 = load_result(sweep_dir / "single_64K.json")
+    for i, (key, label, detail) in enumerate(LADDER_STAGES):
+        path = RESULTS / "perf_ladder" / f"{key}.json"
+        if not path.exists():
+            continue
+        r = load_result(path)
+        walls = r.step_wall_s[1:] or r.step_wall_s
+        wall = sum(walls) / len(walls)
+        speed = ""
+        if single64 is not None:
+            speed = f"{r.steady_tok_per_s / single64.steady_tok_per_s:.2f}x"
+        rows.append([label, detail, f"{wall:.2f} s",
+                     f"{r.steady_tok_per_s:,.0f}", speed])
+        series.append(Series(label=label,
+                             x=list(range(len(r.step_wall_s))),
+                             y=r.step_wall_s,
+                             color=PALETTE[i % len(PALETTE)]))
+    if rows:
+        if single64 is not None:
+            rows.append(["single GPU (RTX 5090), same 64K step", "",
+                         f"{sum(single64.step_wall_s[1:]) / max(1, len(single64.step_wall_s) - 1):.2f} s",
+                         f"{single64.steady_tok_per_s:,.0f}", "1.00x"])
+        svg = svg_line_chart(series,
+                             title="per-step wall by comm-plane stage "
+                                   "(l3_1b, 64K tokens/step, 6:2 rounds)",
+                             xlabel="step", ylabel="seconds")
+        sections.append(
+            "<section><h2>The optimization ladder</h2>"
+            "<p>Same model, data, and 3:1 round split; only the "
+            "collective plane changes. 10.9 s/step to 3.6 s/step in "
+            "three landings (3.1x), each verified loss-banded against "
+            "the recorded curves.</p>"
+            f"<div class='chart'>{svg}</div>"
+            + table_html(rows, ["stage", "what changed", "step wall",
+                                "tok/s", "vs single GPU"])
+            + "</section>")
+
+    # ---- microbenches vs composed floors ----
+    sections.append(
+        "<section><h2>Exchange microbenches vs composed floors</h2>"
+        "<p>coll_bench replays the exact per-layer / head+embed "
+        "patterns through the real collective path (both ranks "
+        "posting concurrently). The bench reproduced the profiled "
+        "training gaps before the fixes and sits at the composed "
+        "floor after them.</p>"
+        + table_html(MICRO_ROWS, ["pattern", "measured", "composed floor",
+                                  "notes"]) + "</section>")
+
+    # ---- single vs distributed sweep ----
+    sweep_rows = []
+    s_single, s_dist = [], []
+    for tag, tokens in (("32K", 32768), ("64K", 65536), ("128K", 131072),
+                        ("256K", 262144), ("512K", 524288)):
+        sp = sweep_dir / f"single_{tag}.json"
+        dp = sweep_dir / f"dist_{tag}.json"
+        if not (sp.exists() and dp.exists()):
+            continue
+        s = load_result(sp)
+        d = load_result(dp)
+        sweep_rows.append([tag, f"{s.steady_tok_per_s:,.0f}",
+                           f"{d.steady_tok_per_s:,.0f}",
+                           f"{d.steady_tok_per_s / s.steady_tok_per_s:.2f}x",
+                           f"{sum(s.step_wall_s):.1f} s",
+                           f"{sum(d.step_wall_s):.1f} s"])
+        s_single.append((tokens, s.steady_tok_per_s))
+        s_dist.append((tokens, d.steady_tok_per_s))
+    if sweep_rows:
+        series = [Series(label="single GPU (5090)",
+                         x=[t for t, _ in s_single],
+                         y=[v for _, v in s_single], color=PALETTE[0],
+                         markers=True),
+                  Series(label="distributed 3:1 (5090+3090)",
+                         x=[t for t, _ in s_dist],
+                         y=[v for _, v in s_dist], color=PALETTE[2],
+                         markers=True)]
+        svg = svg_line_chart(series,
+                             title="throughput vs global batch "
+                                   "(10 steps, budgets 16/16 GiB, "
+                                   "T_round 8192)",
+                             xlabel="global tokens per step",
+                             ylabel="tok/s", xlog=True)
+        sections.append(
+            "<section><h2>Single GPU vs distributed: the batch sweep"
+            "</h2><p>The exchange tail is FIXED per step (gradient "
+            "bytes do not grow with batch), so distributed wins only "
+            "once compute amortizes it: crossover lands between 128K "
+            "and 256K global tokens, reaching 1.10x at 512K — 91% of "
+            "this pair's measured ceiling (1.21x: the 3090 "
+            "contributes ~7.3K tok/s against the 5090's ~22.9K "
+            "in-fleet).</p>"
+            f"<div class='chart'>{svg}</div>"
+            + table_html(sweep_rows,
+                         ["global batch", "single tok/s", "dist tok/s",
+                          "speedup", "single wall (10 steps)",
+                          "dist wall"]) + "</section>")
+
+    # ---- split calibration + T_round ----
+    cal_rows = []
+    for fname, label in (("dist_512K.json", "48:16 (the 3:1 mandate)"),
+                         ("dist_512K_45_19.json", "45:19"),
+                         ("dist_512K_50_14.json", "50:14"),
+                         ("dist_512K_T32K.json",
+                          "48:16 at T_round=32K (12:4 rounds)")):
+        path = sweep_dir / fname
+        if not path.exists():
+            continue
+        r = load_result(path)
+        walls = r.step_wall_s[1:] or r.step_wall_s
+        cal_rows.append([label, f"{sum(walls) / len(walls):.2f} s",
+                         f"{r.steady_tok_per_s:,.0f}"])
+    if cal_rows:
+        sections.append(
+            "<section><h2>Round-split calibration & T_round</h2>"
+            "<p>Three splits at 512K pin the per-round walls: 5090 "
+            "~0.36 s in-fleet (0.33 solo + ~9% rank-0 overhead), 3090 "
+            "~1.11 s — a 3.1:1 ratio, so the original 3:1 split was "
+            "already optimal (45:19 puts the 3090 on the critical "
+            "path; 50:14 just flips the 5090 onto it at the same "
+            "height). T_round=32K is throughput-neutral: per-round "
+            "overheads were already negligible, and the 4x activation "
+            "footprint (11.1 to 15.8 GiB peak) only spends budget "
+            "headroom.</p>"
+            + table_html(cal_rows, ["configuration", "step wall",
+                                    "tok/s"]) + "</section>")
+
+    sections.append(
+        "<section><h2>What remains on the table</h2><ul>"
+        "<li><b>Exchange/backward overlap</b> (grad_reduce tasks + "
+        "tail optimizers): implemented opt-in and bitwise-correct at "
+        "one step, parked pending an engine completion-contract "
+        "extension; projected ~2.9-3.1 s/step at 64K.</li>"
+        "<li><b>Pipelined comm worker</b>: deterministic landing ring "
+        "kills the RDY round-trip and the last ~0.5 ms/op tax for "
+        "non-contiguous patterns.</li>"
+        "<li><b>NCCL group backend</b> (in build): device-direct "
+        "collectives, no PCIe staging at all — the production lane; "
+        "hostmem remains the reference/fallback.</li></ul></section>")
+    return sections
+
+
 HTML_SHELL = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -225,7 +417,8 @@ th:first-child, td:first-child {{ text-align: left; }}
 nav a {{ margin-right: 1rem; }}
 </style></head><body>
 <nav><a href="index.html">index</a><a href="llama3.html">llama3</a>
-<a href="qwen35.html">qwen35</a><a href="dsv3_2b.html">dsv3_2b</a></nav>
+<a href="qwen35.html">qwen35</a><a href="dsv3_2b.html">dsv3_2b</a>
+<a href="l3_1b_distperf.html">distributed perf</a></nav>
 <h1>{title}</h1>
 <p class="sub">{subtitle}</p>
 {body}
@@ -286,6 +479,15 @@ def main() -> int:
          throughput_section(R, ("dsv3_2b",))])
 
     write_report(
+        "l3_1b_distperf",
+        "llama3-1B distributed training: the performance story",
+        "RTX 5090 + RTX 3090 over direct 25 GbE, data-parallel with "
+        "weighted rounds (3:1), global-denominator loss. Every number "
+        "measured on this pair; correctness pinned by the 1000-step "
+        "ALIGNED parity runs.",
+        distperf_sections(R))
+
+    write_report(
         "index", "Pretraining studies",
         "One report per study; combined throughput below.",
         ["<section><h2>Studies</h2><ul>"
@@ -293,7 +495,10 @@ def main() -> int:
          "scaling ladder</a></li>"
          "<li><a href='qwen35.html'>qwen3.5 — parity</a></li>"
          "<li><a href='dsv3_2b.html'>dsv3 (MoE, 1.89B) — parity + "
-         "load balancing</a></li></ul></section>",
+         "load balancing</a></li>"
+         "<li><a href='l3_1b_distperf.html'>llama3-1B distributed "
+         "performance — ladder, sweep, calibration</a></li>"
+         "</ul></section>",
          throughput_section(R)])
     return 0
 
