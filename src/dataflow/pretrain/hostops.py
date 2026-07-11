@@ -78,7 +78,11 @@ def launch_daemon(host: HostSpec, *, lane: str = "fleet",
     daemonized session, so profiler helpers can never hold the
     launching ssh session open. Returns the daemon's runtime paths."""
     paths = daemon_paths(host, lane)
-    inner = (f"{daemon_env(host)} {wrap} {host.python} -u "
+    env = daemon_env(host)
+    env_prefix = f"env {env} " if env else ""
+    # env(1) rather than shell VAR=... syntax: the daemonizer execs
+    # argv directly, so assignments would be taken as the program
+    inner = (f"{env_prefix}{wrap} {host.python} -u "
              f"{host.repo}/tools/dataflowd.py "
              f"start --socket {paths['sock']} --slab-gib {slab_gib} "
              f"--peer-name {host.name} "
