@@ -332,7 +332,12 @@ def zero1_halves(fields_by_root: dict, group: str, world: int,
             target = total / world if world else total
             rank, acc = 0, 0
             for f in big:                 # layout order => contiguity
-                if rank < world - 1 and acc >= target * (rank + 1):
+                # advance when this field's CENTER crosses the bucket
+                # boundary — plain `acc >= boundary` only fires after
+                # the bucket overshot, silently skewing every root
+                # toward rank 0 (observed 63/37 on real layouts)
+                while (rank < world - 1
+                       and acc + f.nbytes / 2 >= target * (rank + 1)):
                     rank += 1
                 assignments.append(Assignment(Region(root, f.name),
                                               rank))

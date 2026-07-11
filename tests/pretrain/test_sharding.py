@@ -136,10 +136,16 @@ def test_real_llama3_layouts_shard():
     plan = zero1_halves(fbr, "dp", 2)
     plan.validate(opt_policy=None)
     plan.v1_consumable()
+    agg = [0, 0]
     for root in plan.roots():
         o0 = sum(hi - lo for lo, hi in plan.owned_ranges(0, root))
         o1 = sum(hi - lo for lo, hi in plan.owned_ranges(1, root))
         total = sum(f.nbytes for f in fbr[root])
         assert o0 + o1 <= total
         if o0 + o1 > 0:
-            assert min(o0, o1) / max(o0, o1) > 0.25, (root, o0, o1)
+            # within one field of even (the 63/37 greedy-overshoot
+            # regression tripwire)
+            assert min(o0, o1) / max(o0, o1) > 0.6, (root, o0, o1)
+        agg[0] += o0
+        agg[1] += o1
+    assert min(agg) / max(agg) > 0.85, agg

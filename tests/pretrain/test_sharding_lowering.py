@@ -47,8 +47,9 @@ def test_zero1_o_shrinks_w_and_dw_do_not():
     assert set(full) == set(s0) == set(s1)
     tot_full = sum(full.values())
     for tot in (sum(s0.values()), sum(s1.values())):
-        # half the sharded bytes + the replicated (ALL_RANKS) slack
-        assert tot < 0.65 * tot_full, (tot, tot_full)
+        # half the sharded bytes + the replicated (ALL_RANKS) slack;
+        # a balanced builder keeps both ranks near 0.5
+        assert tot < 0.57 * tot_full, (tot, tot_full)
     assert sum(s0.values()) + sum(s1.values()) >= tot_full
     # weights identical everywhere
     w_plain = {s.id: s.size_bytes for s in plain.initial_objects
