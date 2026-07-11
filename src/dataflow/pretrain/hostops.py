@@ -62,7 +62,11 @@ def daemon_paths(host: HostSpec, lane: str = "fleet") -> dict:
 def daemon_env(host: HostSpec) -> str:
     """Env prefix for a daemon launch: NCCL wiring derived from the
     topology (socket iface + HCA), extendable per host."""
-    parts = []
+    # NCCL_IB_DISABLE=1: NCCL's own RoCE path errors on this fabric
+    # (WR_FLUSH + local access violation at the warm-up collective —
+    # findings, N1); socket transport on the 25G iface is the default
+    # until the N2 bench tunes IB (GID index / relaxed ordering).
+    parts = ["NCCL_IB_DISABLE=1"]
     if host.iface:
         parts.append(f"NCCL_SOCKET_IFNAME={host.iface}")
     if host.ib_dev:
