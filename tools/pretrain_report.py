@@ -422,6 +422,89 @@ nav a {{ margin-right: 1rem; }}
 <h1>{title}</h1>
 <p class="sub">{subtitle}</p>
 {body}
+<p class="sub">charts: click a legend entry to hide/show its series;
+drag a box (or scroll) on the plot to zoom; double-click resets.</p>
+<script>
+document.querySelectorAll("svg.ichart").forEach(function (svg) {{
+  var fr = svg.dataset.frame.split(",").map(Number);
+  var ml = fr[0], mt = fr[1], pw = fr[2], ph = fr[3];
+  var plot = svg.querySelector("g.plot");
+  var t = {{x: 0, y: 0, kx: 1, ky: 1}};
+  function apply() {{
+    plot.setAttribute("transform",
+      "translate(" + t.x + "," + t.y + ") scale(" + t.kx + "," + t.ky + ")");
+    var zoomed = t.kx !== 1 || t.ky !== 1;
+    svg.querySelectorAll("text.tick").forEach(function (e) {{
+      e.setAttribute("fill-opacity", zoomed ? "0.15" : "0.7");
+    }});
+  }}
+  svg.querySelectorAll("g.lg").forEach(function (lg) {{
+    lg.addEventListener("click", function () {{
+      var s = svg.querySelector('g.s[data-i="' + lg.dataset.i + '"]');
+      if (!s) return;
+      var hidden = s.style.display === "none";
+      s.style.display = hidden ? "" : "none";
+      lg.setAttribute("opacity", hidden ? "1" : "0.3");
+    }});
+  }});
+  function toUser(ev) {{
+    var r = svg.getBoundingClientRect();
+    var vb = svg.viewBox.baseVal;
+    return {{x: (ev.clientX - r.left) * vb.width / r.width,
+             y: (ev.clientY - r.top) * vb.height / r.height}};
+  }}
+  var drag = null, band = null;
+  svg.addEventListener("mousedown", function (ev) {{
+    var p = toUser(ev);
+    if (p.x < ml || p.x > ml + pw || p.y < mt || p.y > mt + ph) return;
+    drag = p;
+    band = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    band.setAttribute("fill", "currentColor");
+    band.setAttribute("fill-opacity", "0.08");
+    band.setAttribute("stroke", "currentColor");
+    band.setAttribute("stroke-dasharray", "4 3");
+    svg.appendChild(band);
+    ev.preventDefault();
+  }});
+  svg.addEventListener("mousemove", function (ev) {{
+    if (!drag || !band) return;
+    var p = toUser(ev);
+    band.setAttribute("x", Math.min(drag.x, p.x));
+    band.setAttribute("y", Math.min(drag.y, p.y));
+    band.setAttribute("width", Math.abs(p.x - drag.x));
+    band.setAttribute("height", Math.abs(p.y - drag.y));
+  }});
+  window.addEventListener("mouseup", function (ev) {{
+    if (!drag) return;
+    var p = toUser(ev);
+    var x0 = Math.min(drag.x, p.x), x1 = Math.max(drag.x, p.x);
+    var y0 = Math.min(drag.y, p.y), y1 = Math.max(drag.y, p.y);
+    if (band) {{ band.remove(); band = null; }}
+    drag = null;
+    if (x1 - x0 < 8 || y1 - y0 < 8) return;
+    var zx = pw / (x1 - x0), zy = ph / (y1 - y0);
+    t = {{kx: t.kx * zx, ky: t.ky * zy,
+         x: ml - zx * (x0 - t.x), y: mt - zy * (y0 - t.y)}};
+    apply();
+  }});
+  svg.addEventListener("wheel", function (ev) {{
+    var p = toUser(ev);
+    if (p.x < ml || p.x > ml + pw || p.y < mt || p.y > mt + ph) return;
+    ev.preventDefault();
+    var z = ev.deltaY < 0 ? 1.25 : 0.8;
+    var nk = Math.min(Math.max(t.kx * z, 1), 400);
+    z = nk / t.kx;
+    t = {{kx: t.kx * z, ky: t.ky * z,
+         x: p.x - z * (p.x - t.x), y: p.y - z * (p.y - t.y)}};
+    if (t.kx === 1) {{ t = {{x: 0, y: 0, kx: 1, ky: 1}}; }}
+    apply();
+  }}, {{passive: false}});
+  svg.addEventListener("dblclick", function () {{
+    t = {{x: 0, y: 0, kx: 1, ky: 1}};
+    apply();
+  }});
+}});
+</script>
 </body></html>
 """
 

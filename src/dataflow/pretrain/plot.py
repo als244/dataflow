@@ -51,6 +51,9 @@ def _nice_ticks(lo, hi, n=5):
     return ticks
 
 
+_CHART_SEQ = 0
+
+
 def svg_line_chart(series: list[Series], *, width=760, height=430,
                    title="", xlabel="", ylabel="", xlog=False,
                    ymin=None, ymax=None, xmin=None, xmax=None) -> str:
@@ -78,22 +81,31 @@ def svg_line_chart(series: list[Series], *, width=760, height=430,
     def py(v):
         return mt + (1 - (v - y0) / (y1 - y0)) * ph
 
+    global _CHART_SEQ
+    _CHART_SEQ += 1
+    uid = f"ch{_CHART_SEQ}"
+    # data-frame lets the report's tiny JS runtime add legend toggling
+    # + drag/wheel zoom without re-deriving the geometry
     out = [f'<svg viewBox="0 0 {width} {height}" width="{width}" height="{height}" '
            f'font-family="ui-sans-serif,system-ui,sans-serif" font-size="12" '
-           f'fill="currentColor">']
+           f'fill="currentColor" class="ichart" '
+           f'data-frame="{ml},{mt},{pw},{ph}">']
     if title:
         out.append(f'<text x="{ml}" y="20" font-size="14" font-weight="600">{title}</text>')
+    out.append(f'<defs><clipPath id="{uid}"><rect x="{ml}" y="{mt}" '
+               f'width="{pw}" height="{ph}"/></clipPath></defs>')
     # frame
-    out.append(f'<rect x="{ml}" y="{mt}" width="{pw}" height="{ph}" fill="none" '
+    out.append(f'<rect class="frame" x="{ml}" y="{mt}" width="{pw}" height="{ph}" fill="none" '
                f'stroke="currentColor" stroke-opacity="0.25"/>')
-    # y ticks + gridlines
+    # y ticks + gridlines (labels get class=tick so zoom can fade them)
+    grid = []
     for t in _nice_ticks(y0, y1):
         yy = py(t)
         if yy < mt - 1 or yy > mt + ph + 1:
             continue
-        out.append(f'<line x1="{ml}" y1="{yy:.1f}" x2="{ml + pw}" y2="{yy:.1f}" '
-                   f'stroke="currentColor" stroke-opacity="0.08"/>')
-        out.append(f'<text x="{ml - 8}" y="{yy + 4:.1f}" text-anchor="end" '
+        grid.append(f'<line x1="{ml}" y1="{yy:.1f}" x2="{ml + pw}" y2="{yy:.1f}" '
+                    f'stroke="currentColor" stroke-opacity="0.08"/>')
+        out.append(f'<text class="tick" x="{ml - 8}" y="{yy + 4:.1f}" text-anchor="end" '
                    f'fill-opacity="0.7">{t:g}</text>')
     # x ticks
     if xlog:
@@ -105,10 +117,10 @@ def svg_line_chart(series: list[Series], *, width=760, height=430,
         xx = px(t)
         if xx < ml - 1 or xx > ml + pw + 1:
             continue
-        out.append(f'<line x1="{xx:.1f}" y1="{mt}" x2="{xx:.1f}" y2="{mt + ph}" '
-                   f'stroke="currentColor" stroke-opacity="0.08"/>')
+        grid.append(f'<line x1="{xx:.1f}" y1="{mt}" x2="{xx:.1f}" y2="{mt + ph}" '
+                    f'stroke="currentColor" stroke-opacity="0.08"/>')
         lab = f"{t:g}"
-        out.append(f'<text x="{xx:.1f}" y="{mt + ph + 18}" text-anchor="middle" '
+        out.append(f'<text class="tick" x="{xx:.1f}" y="{mt + ph + 18}" text-anchor="middle" '
                    f'fill-opacity="0.7">{lab}</text>')
     if xlabel:
         out.append(f'<text x="{ml + pw / 2:.0f}" y="{height - 8}" text-anchor="middle" '
@@ -116,20 +128,35 @@ def svg_line_chart(series: list[Series], *, width=760, height=430,
     if ylabel:
         out.append(f'<text transform="translate(16,{mt + ph / 2:.0f}) rotate(-90)" '
                    f'text-anchor="middle" fill-opacity="0.8">{ylabel}</text>')
-    # series
+    # plot group: gridlines + every series, clipped to the frame; the
+    # JS zoom applies a transform to THIS group only (legend/labels
+    # stay put; strokes are non-scaling)
+    out.append(f'<g clip-path="url(#{uid})"><g class="plot">')
+    out.extend(grid)
     for i, s in enumerate(series):
         color = s.color or PALETTE[i % len(PALETTE)]
         xs, ys = _downsample(s.x, s.y)
         pts = " ".join(f"{px(x):.1f},{py(y):.1f}" for x, y in zip(xs, ys))
         dash = ' stroke-dasharray="6 4"' if s.dashed else ""
+        out.append(f'<g class="s" data-i="{i}">')
         out.append(f'<polyline points="{pts}" fill="none" stroke="{color}" '
-                   f'stroke-width="2"{dash}/>')
+                   f'stroke-width="2" vector-effect="non-scaling-stroke"{dash}/>')
         if s.markers:
             for x, y in zip(xs, ys):
                 out.append(f'<circle cx="{px(x):.1f}" cy="{py(y):.1f}" r="3.5" fill="{color}"/>')
+        out.append('</g>')
+    out.append('</g></g>')
+    # legend (clickable groups; JS toggles the matching series)
+    for i, s in enumerate(series):
+        color = s.color or PALETTE[i % len(PALETTE)]
+        dash = ' stroke-dasharray="6 4"' if s.dashed else ""
         ly = mt + 6 + i * 20
+        out.append(f'<g class="lg" data-i="{i}" style="cursor:pointer">')
+        out.append(f'<rect x="{ml + pw + 8}" y="{ly - 9}" width="{mr - 12}" height="18" '
+                   f'fill="currentColor" fill-opacity="0"/>')
         out.append(f'<line x1="{ml + pw + 12}" y1="{ly}" x2="{ml + pw + 34}" y2="{ly}" '
                    f'stroke="{color}" stroke-width="2"{dash}/>')
         out.append(f'<text x="{ml + pw + 40}" y="{ly + 4}" fill-opacity="0.85">{s.label}</text>')
+        out.append('</g>')
     out.append("</svg>")
     return "".join(out)
