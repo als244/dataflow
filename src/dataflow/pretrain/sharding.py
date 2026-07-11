@@ -263,6 +263,47 @@ class ParallelConfig:
     plan: ShardPlan | None = None
 
 
+def update_regions(plan: ShardPlan, rank: int) -> dict:
+    """{object_root -> {field -> None | (lo, hi)}}: the regions RANK
+    updates (its own plus every ALL_RANKS assignment) — the exact map
+    ``opt_state_layout(update_regions=...)`` sizes O slots from."""
+    out: dict = {}
+    for a in plan.assignments:
+        if a.updater != rank and a.updater != ALL_RANKS:
+            continue
+        per = out.setdefault(a.region.object_root, {})
+        if a.region.field in per:
+            raise ValueError(
+                f"{a.region.object_root}.{a.region.field}: rank {rank} "
+                f"assigned twice — one region per (rank, field)")
+        per[a.region.field] = a.region.rows
+    return out
+
+
+def shard_block_params(plan: ShardPlan, rank: int) -> dict:
+    """{object_root -> the JSON-able ``shard`` dict baked into that
+    root's optimizer task block_params}:
+
+      {"update": {field: None | [lo, hi]},     # what RANK updates
+       "comm":   [{"field", "rows", "updater"}, ...]}  # sharded regions
+
+    ``comm`` is identical on every rank and in plan order — the
+    collective sequences must match across the group. Replicated
+    (ALL_RANKS) fields appear only in ``update``: they keep the plain
+    redundant-update allreduce."""
+    upd = update_regions(plan, rank)
+    out: dict = {}
+    for root in plan.roots():
+        comm = [{"field": a.region.field,
+                 "rows": list(a.region.rows) if a.region.rows else None,
+                 "updater": a.updater}
+                for a in plan.sharded_assignments(root)]
+        update = {name: (list(rows) if rows else None)
+                  for name, rows in upd.get(root, {}).items()}
+        out[root] = {"update": update, "comm": comm}
+    return out
+
+
 def zero1_halves(fields_by_root: dict, group: str, world: int,
                  replicate_below_bytes: int = 1 << 16) -> ShardPlan:
     """The v1 builder: per root, greedy field-snapped byte buckets —

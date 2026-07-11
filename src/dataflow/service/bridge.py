@@ -13,7 +13,13 @@ def fill_family_objects(store, fill: dict, *, writer: str) -> dict:
     """materialize_group {"kind": "family_init_all"}: allocate + fill
     every initial object of a family config, in place, via the
     family's own seeded init (the refill-identity property makes this
-    byte-equivalent to initial_values)."""
+    byte-equivalent to initial_values).
+
+    ``object_sizes`` ({object_id: bytes}, optional) overrides spec
+    sizes before allocation — sharded-optimizer runs send the
+    registered program's own (shrunken) O sizes so the store objects
+    bind the program exactly. Safe because O init is a bulk zero fill
+    bounded by the spec size, never per-slot offset writes."""
     if store.slab is None:
         raise ServiceError("BAD_REQUEST",
                            "family_init requires a real (pinned) boot")
@@ -23,13 +29,26 @@ def fill_family_objects(store, fill: dict, *, writer: str) -> dict:
             "family_init_all pattern= is deferred: the fill consumes one "
             "sequential RNG stream over ALL initial objects")
 
+    from dataclasses import replace as dc_replace
+
     from dataflow.runtime.device.cuda import Buffer
     from dataflow.training.families import family as _family
 
     fam = _family(fill["family"])
     cfg_obj = fam.config_type(**fill["cfg"])
     prog = fam.lower(cfg_obj)
-    specs = list(prog.initial_objects)
+    overrides = fill.get("object_sizes") or {}
+    bad = [oid for oid in overrides
+           if not oid.startswith("O_")]
+    if bad:
+        raise ServiceError(
+            "BAD_REQUEST",
+            f"object_sizes may only override optimizer-state objects "
+            f"(bulk-zero fills); got {bad}")
+    specs = [dc_replace(s, size_bytes=int(overrides[s.id]))
+             if s.id in overrides else s
+             for s in prog.initial_objects]
+    prog = dc_replace(prog, initial_objects=tuple(specs))
     into = {}
     for s in specs:
         rec = store.put(s.id, None, size_bytes=s.size_bytes, writer=writer)

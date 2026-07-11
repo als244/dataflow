@@ -48,36 +48,55 @@ from .hostops import (
 )
 from .presets import cfg_dict, tokens_per_step
 from .recipe import Recipe
+from .sharding import (
+    ParallelConfig,
+    layer_fields_by_root,
+    shard_block_params,
+    update_regions,
+    zero1_halves,
+)
 from .topology import load_topology
 
 
 def lower_with_group(cfg, dp_group: str, recompute_levels=None,
-                     dp_overlap: bool = False):
+                     dp_overlap: bool = False, parallel=None):
+    """``parallel`` (sharding.ParallelConfig with a plan) makes this a
+    PER-RANK lowering: optimizer tasks gain shard block_params and the
+    rank's O objects shrink to owned slots at exact-size time."""
     hw = ShapedHardware()
+    shard_params = None
+    opt_regions = None
+    if parallel is not None and parallel.plan is not None:
+        shard_params = shard_block_params(parallel.plan, parallel.rank)
+        opt_regions = update_regions(parallel.plan, parallel.rank)
     shaped = build_shaped_program(
         cfg, hw=hw, family="llama3-shaped",
         kinds={"block": roofline_block_kind_spec(cfg, hw)},
         dp_group=dp_group, recompute_levels=recompute_levels,
-        dp_overlap=dp_overlap)
+        dp_overlap=dp_overlap, shard_params=shard_params)
     from dataflow.training.lowering import apply_exact_sizes, size_of_factory
 
     dims, fl = family_layouts(cfg)
-    return apply_exact_sizes(shaped, "llama3-exact",
-                             size_of=size_of_factory(dims, fl))
+    return apply_exact_sizes(
+        shaped, "llama3-exact",
+        size_of=size_of_factory(dims, fl, opt_update_regions=opt_regions))
 
 
 class GroupedBuildVariant:
     """plan_program's recompute rebuilder for dp_group lowerings."""
 
-    def __init__(self, cfg, dp_group: str, dp_overlap: bool = False):
+    def __init__(self, cfg, dp_group: str, dp_overlap: bool = False,
+                 parallel=None):
         self.cfg = cfg
         self.dp_group = dp_group
         self.dp_overlap = dp_overlap
+        self.parallel = parallel
 
     def __call__(self, levels):
         return lower_with_group(self.cfg, self.dp_group,
                                 recompute_levels=levels,
-                                dp_overlap=self.dp_overlap)
+                                dp_overlap=self.dp_overlap,
+                                parallel=self.parallel)
 
 
 class RankState:
@@ -165,7 +184,7 @@ def run_fleet_dp(global_cfg, recipe: Recipe, stream, steps: int, *,
                  topology=None, group: str = "dp", attach=None,
                  seed: int = 11, log=print, log_every: int = 10,
                  profile: dict | None = None, dp_overlap: bool = False,
-                 backend: str | None = None,
+                 backend: str | None = None, opt_shard: str | None = None,
                  prof_dir: str = "results/pretrain/logs") -> RunResult:
     """Train ``global_cfg``'s step batch across the group's hosts;
     returns the conductor's RunResult (losses = GLOBAL step means).
@@ -201,6 +220,18 @@ def run_fleet_dp(global_cfg, recipe: Recipe, stream, steps: int, *,
     for k in rank_rounds:
         round_map.append(tuple(range(start, start + k)))
         start += k
+
+    parallels = [None] * world
+    if opt_shard is not None:
+        if opt_shard != "zero1":
+            raise ValueError(f"opt_shard {opt_shard!r}: only 'zero1' "
+                             f"(field-snapped equal halves) exists")
+        plan = zero1_halves(layer_fields_by_root(global_cfg),
+                            gspec.name, world)
+        plan.validate(getattr(global_cfg, "opt_policy", None))
+        plan.v1_consumable()
+        parallels = [ParallelConfig(group=gspec.name, rank=i, world=world,
+                                    plan=plan) for i in range(world)]
 
     attach = dict(attach or {})
     rigs = [HostRig(h, slabs[i], budgets[i])
@@ -262,7 +293,7 @@ def run_fleet_dp(global_cfg, recipe: Recipe, stream, steps: int, *,
                           log_every=log_every,
                           tokens_step=tokens_per_step(global_cfg),
                           r_global=r_global, profile=profile,
-                          dp_overlap=dp_overlap)
+                          dp_overlap=dp_overlap, parallels=parallels)
     finally:
         for rig in rigs:
             if rig.client is None:
@@ -298,24 +329,36 @@ def run_fleet_dp(global_cfg, recipe: Recipe, stream, steps: int, *,
 def fleet_loop(ranks, gspec, recipe, stream, steps, *, budgets, seed,
                log, log_every, tokens_step, r_global,
                profile: dict | None = None,
-               dp_overlap: bool = False) -> RunResult:
+               dp_overlap: bool = False, parallels=None) -> RunResult:
     world = len(ranks)
 
     # ---- per-rank register + warm-up ----------------------------------
     for i, rank in enumerate(ranks):
+        par = parallels[i] if parallels else None
         planned = plan_program(
-            lower_with_group(rank.cfg, gspec.name, dp_overlap=dp_overlap),
+            lower_with_group(rank.cfg, gspec.name, dp_overlap=dp_overlap,
+                             parallel=par),
             fast_memory_capacity=int(budgets[i] * 1024 ** 3),
             recompute=True,
             build_variant=GroupedBuildVariant(rank.cfg, gspec.name,
-                                              dp_overlap=dp_overlap))
+                                              dp_overlap=dp_overlap,
+                                              parallel=par))
         prog_dict = program_to_dict(planned.program)
         resolver = {"family": "llama3", "cfg": cfg_dict(rank.cfg),
                     "hyper": recipe.hyper_spec()}
-        rank.client.materialize_group({"kind": "family_init_all",
-                                       "family": "llama3",
-                                       "cfg": cfg_dict(rank.cfg),
-                                       "seed": seed})
+        fill = {"kind": "family_init_all", "family": "llama3",
+                "cfg": cfg_dict(rank.cfg), "seed": seed}
+        if par is not None and par.plan is not None:
+            # sharded O: the daemon must allocate THIS RANK's shrunken
+            # O objects — send the registered program's own sizes
+            fill["object_sizes"] = {
+                s.id: s.size_bytes
+                for s in planned.program.initial_objects
+                if s.id.startswith("O_")}
+            o_bytes = sum(fill["object_sizes"].values())
+            log(f"[fleet] {rank.name}: sharded optimizer state "
+                f"{o_bytes / 1024 ** 3:.2f} GiB")
+        rank.client.materialize_group(fill)
         put_rank_rounds(rank, stream, 0, r_global)
         reg = rank.client.register_program(prog_dict, resolver=resolver)
         missing = reg["bindings"]["missing_inputs"]
@@ -331,10 +374,7 @@ def fleet_loop(ranks, gspec, recipe, stream, steps, *, budgets, seed,
                                args={"step": 0, "valid_rows": tokens_step})
         if warm.get("state") != "done":
             raise RuntimeError(f"{rank.name} warm-up: {warm}")
-        rank.client.materialize_group({"kind": "family_init_all",
-                                       "family": "llama3",
-                                       "cfg": cfg_dict(rank.cfg),
-                                       "seed": seed})
+        rank.client.materialize_group(fill)
         put_rank_rounds(rank, stream, 0, r_global)
         log(f"[fleet] {rank.name}: warm-up done, re-seeded")
 

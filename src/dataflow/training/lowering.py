@@ -66,13 +66,19 @@ class FamilyLayouts:
         return len(self.layers)
 
 
-def size_of_factory(dims, fl: FamilyLayouts):
+def size_of_factory(dims, fl: FamilyLayouts, opt_update_regions=None):
     """Exact bytes for every object id the shaped builder emits. dW and O
     are sized from their OWN layouts (field-mirrored at grad/opt dtypes);
     block sizes are PER LAYER. Under a uniform all-bf16 policy every layer
-    coincides with the historical uniform sizes."""
+    coincides with the historical uniform sizes.
+
+    ``opt_update_regions`` (sharded optimizer state): {object_root ->
+    {field -> None | (lo, hi)}} of the regions THIS RANK updates; O
+    objects for listed roots shrink to owned-slot bytes. dW/W sizes
+    never change — gradients and weights stay full on every rank."""
     p = dims.dtypes
     n = fl.n_layers
+    our = opt_update_regions or {}
     wl_i = [ll.weights for ll in fl.layers]
     a_i = [ll.activations.total_bytes for ll in fl.layers]
     op = getattr(dims, "opt_policy", None)
@@ -83,14 +89,15 @@ def size_of_factory(dims, fl: FamilyLayouts):
     aux_i = [ll.aux.total_bytes if ll.aux is not None else None
              for ll in fl.layers]
     op = getattr(dims, "opt_policy", None)
-    o_i = [opt_state_layout(wl_i[i], p, layer=i, opt_policy=op).total_bytes
+    o_i = [opt_state_layout(wl_i[i], p, layer=i, opt_policy=op,
+                            update_regions=our.get(f"W_{i}")).total_bytes
            for i in range(n)]
     dw_e = grad_layout(fl.embed, p, ns=fl.embed_ns, opt_policy=op).total_bytes
     dw_h = grad_layout(fl.head, p, ns="head", opt_policy=op).total_bytes
-    o_e = opt_state_layout(fl.embed, p, ns=fl.embed_ns,
-                           opt_policy=op).total_bytes
-    o_h = opt_state_layout(fl.head, p, ns="head",
-                           opt_policy=op).total_bytes
+    o_e = opt_state_layout(fl.embed, p, ns=fl.embed_ns, opt_policy=op,
+                           update_regions=our.get("W_embed")).total_bytes
+    o_h = opt_state_layout(fl.head, p, ns="head", opt_policy=op,
+                           update_regions=our.get("W_head")).total_bytes
 
     def size_of(oid: str) -> int | None:
         if oid.startswith("A_"):            # A_{s}_{r}_{i}

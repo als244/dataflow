@@ -266,22 +266,36 @@ def grad_layout(weight: PackedLayout, policy: DTypePolicy,
 
 def opt_state_layout(weight: PackedLayout, policy: DTypePolicy,
                      ns: str | None = None, layer: int | None = None,
-                     opt_policy=None) -> PackedLayout:
+                     opt_policy=None, update_regions=None) -> PackedLayout:
     """Optimizer state for one weight object: per-field slots at the
     dtype policy's opt dtype, with the SLOT SET per field decided by the
     optimizer policy (tasks/optim.py): adamw [m_f | v_f] (the default —
     byte-identical to the historical layout), sgdm/muon [m_f], sgd
-    nothing. Interior mapping is per-field, never covering padding."""
+    nothing. Interior mapping is per-field, never covering padding.
+
+    ``update_regions`` (sharded optimizer state): {field_name ->
+    None | (lo, hi)} of the regions THIS RANK updates. Fields absent
+    from the map get NO slots; a (lo, hi) dim-0 row range shrinks the
+    slot to (hi - lo, *rest). Must match the region map baked into the
+    task's block_params — the lowering sizes O with this same call."""
     from .optim import OPTIMIZERS, resolve_opt_policy
 
     op = resolve_opt_policy(opt_policy)
     key = (lambda n: f"{ns}.{n}") if ns else (lambda n: n)
     specs: list[tuple[str, tuple[int, ...], str]] = []
     for f in weight.fields:
+        shape = f.shape
+        if update_regions is not None:
+            if f.name not in update_regions:
+                continue
+            rows = update_regions[f.name]
+            if rows is not None:
+                lo, hi = int(rows[0]), int(rows[1])
+                shape = (hi - lo,) + tuple(f.shape[1:])
         o = policy.for_field(key(f.name), layer).opt
         for slot in OPTIMIZERS[op.for_field(key(f.name), layer,
                                             f.shape)].slots:
-            specs.append((f"{slot}_{f.name}", f.shape, o))
+            specs.append((f"{slot}_{f.name}", shape, o))
     return PackedLayout.build(specs)
 
 

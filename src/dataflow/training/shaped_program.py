@@ -235,6 +235,14 @@ def build_shaped_program(
                                    # tasks after each final-round bwd so the
                                    # exchange overlaps the remaining backward;
                                    # optimizers consume the PRE-REDUCED dWg
+    shard_params=None,             # {object_root -> "shard" dict} from
+                                   # sharding.shard_block_params: optimizer
+                                   # tasks for listed roots execute region
+                                   # reduce -> owned-only update -> W
+                                   # broadcast instead of the replicated
+                                   # allreduce+update (ZeRO-1 style); O
+                                   # sizes shrink at exact-size time via
+                                   # size_of_factory's opt_update_regions
     bias_update_in_bwd: bool = False,
     retained_lbl: bool = False,
     freeze=None,  # FreezePlan | None (training/freeze_plan.py)
@@ -348,6 +356,14 @@ def build_shaped_program(
             "dp_overlap requires dp_group and optimizer_placement='tail' "
             "(the exchange overlaps backward; interleaved placement "
             "already interleaves by construction)")
+    if shard_params:
+        if dp_group is None:
+            raise ValueError("shard_params requires dp_group — the shard "
+                             "collectives ride the same group handle")
+        if dp_overlap:
+            raise ValueError("shard_params is incompatible with dp_overlap "
+                             "(grad_reduce tasks assume the replicated "
+                             "allreduce+update shape)")
 
     for s in range(cfg.num_steps):
         # Optimizer emitters: one per parameter family; ids/inputs identical
@@ -361,32 +377,43 @@ def build_shaped_program(
             # optimizers only wait on the group stream's tail
             opt_params = {"dp_wait_group": dp_group}
 
+        shards = shard_params or {}
+
         def opt_embed(s: int = s) -> None:
             g_embed = f"dWg_embed_{s}" if dp_overlap else f"dW_embed_{s}"
+            extra = ({"shard": shards["W_embed"]}
+                     if "W_embed" in shards else {})
+            params = {**opt_params, **extra}
             task(f"optimizer_embed_{s}", "optimizer_embed",
                  ["W_embed", g_embed, "O_embed"], [],
                  loose.optimizer_us["embed"], mutates=("W_embed", "O_embed"),
                  group="optimizer",
-                 params=dict(opt_params) if opt_params else None)
+                 params=params or None)
 
         def opt_block(i: int, s: int = s) -> None:
             sp = layer_specs[i]
             g_blk = f"dWg_{s}_{i}" if dp_overlap else f"dW_{s}_{i}"
+            extra = ({"shard": shards[f"W_{i}"]}
+                     if f"W_{i}" in shards else {})
             task(f"optimizer_{s}_{i}", "optimizer_block",
                  [f"W_{i}", g_blk, f"O_{i}"], [],
                  sp.optimizer_us, mutates=(f"W_{i}", f"O_{i}"),
-                 group="optimizer", params={"layer": i, **opt_params},
+                 group="optimizer",
+                 params={"layer": i, **opt_params, **extra},
                  subops=sp.optimizer_subops)
 
         def opt_head(s: int = s) -> None:
             if tied:
                 return  # optimizer_embed covers the shared W_embed/O_embed
             g_head = f"dWg_head_{s}" if dp_overlap else f"dW_head_{s}"
+            extra = ({"shard": shards["W_head"]}
+                     if "W_head" in shards else {})
+            params = {**opt_params, **extra}
             task(f"optimizer_head_{s}", "optimizer_head",
                  ["W_head", g_head, "O_head"], [],
                  loose.optimizer_us["head"], mutates=("W_head", "O_head"),
                  group="optimizer",
-                 params=dict(opt_params) if opt_params else None)
+                 params=params or None)
 
         for r in range(cfg.grad_accum_rounds):
             first_round = r == 0

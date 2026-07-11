@@ -518,8 +518,18 @@ class AdamWStep(_Base):  # name kept for resolver back-compat; see OptimizerStep
             )
         p = d.dtypes
         op = getattr(d, "opt_policy", None)
+        # sharded optimizer state: the task's shard block_param narrows
+        # O to the regions THIS RANK updates — the same update_regions
+        # call the lowering sized the O object with (exact match by
+        # construction, so the buffer/layout equality below still holds)
+        sh = task.block_params.get("shard")
+        regions = None
+        if sh is not None:
+            regions = {name: (tuple(rows) if rows else None)
+                       for name, rows in sh["update"].items()}
         return (wl_, grad_layout(wl_, p, ns=ns, layer=layer, opt_policy=op),
-                opt_state_layout(wl_, p, ns=ns, layer=layer, opt_policy=op),
+                opt_state_layout(wl_, p, ns=ns, layer=layer, opt_policy=op,
+                                 update_regions=regions),
                 ns)
 
     def launch(self, ctx: TaskContext) -> None:
@@ -545,7 +555,13 @@ class AdamWStep(_Base):  # name kept for resolver back-compat; see OptimizerStep
             dp_name = ctx.task.block_params.get("dp_group")
             gh = (getattr(ctx, "groups", None) or {}).get(dp_name) \
                 if dp_name else None
-            if gh is not None:
+            sh = ctx.task.block_params.get("shard")
+            if sh is not None and self.update_specials:
+                raise NotImplementedError(
+                    f"{ctx.task.id}: sharded optimizer + update_specials "
+                    f"— the special's inputs are rank-local (MoE counts) "
+                    f"and would diverge across replicas")
+            if gh is not None and sh is None:
                 grads_ready = torch.cuda.Event()
                 grads_ready.record(es)
                 gh.stream.wait_event(grads_ready)
@@ -577,6 +593,29 @@ class AdamWStep(_Base):  # name kept for resolver back-compat; see OptimizerStep
                 summed = torch.cuda.Event()
                 summed.record(gh.stream)
                 es.wait_event(summed)
+            elif gh is not None:
+                # sharded grads-in: each sharded region reduces to its
+                # updater (everyone contributes, only the owner lands the
+                # sum); replicated fields keep the redundant-update
+                # allreduce. Same op sequence on every rank: plan-order
+                # comm entries, then grad-layout-order replicated fields.
+                grads_ready = torch.cuda.Event()
+                grads_ready.record(es)
+                gh.stream.wait_event(grads_ready)
+                sharded_names = {e["field"] for e in sh["comm"]}
+                for e in sh["comm"]:
+                    gview = gl_.view(g_buf, e["field"])
+                    if e["rows"] is not None:
+                        lo, hi = int(e["rows"][0]), int(e["rows"][1])
+                        gview = gview[lo:hi]
+                    gh.reduce(gview, root=int(e["updater"]))
+                for f in gl_.fields:
+                    if f.name in sharded_names:
+                        continue
+                    gh.allreduce(gl_.view(g_buf, f.name))
+                summed = torch.cuda.Event()
+                summed.record(gh.stream)
+                es.wait_event(summed)
             wait_name = ctx.task.block_params.get("dp_wait_group")
             gw = (getattr(ctx, "groups", None) or {}).get(wait_name) \
                 if wait_name else None
@@ -599,6 +638,10 @@ class AdamWStep(_Base):  # name kept for resolver back-compat; see OptimizerStep
             # AND muon_lr, applied AFTER per-field hyper overrides
             sched = self.hyper.schedule
             sched_scale = sched.scale(step) if sched is not None else 1.0
+            upd = None
+            if sh is not None:
+                upd = {name: (tuple(rows) if rows else None)
+                       for name, rows in sh["update"].items()}
             for f in wl_.fields:
                 if self.update_specials is not None and f.name in self.update_specials:
                     # highest-priority per-field override (noaux bias
@@ -609,6 +652,10 @@ class AdamWStep(_Base):  # name kept for resolver back-compat; see OptimizerStep
                         gl_.view(g_buf, f.name).view(-1),
                     )
                     continue
+                if upd is not None and f.name not in upd:
+                    continue        # another rank's region: no state
+                                    # here; its bytes arrive by broadcast
+                rows = upd.get(f.name) if upd is not None else None
                 opt = OPTIMIZERS[op.for_field(key(f.name), layer, f.shape)]
                 if opt.name == "frozen":
                     continue        # frozen: no grad storage, no update
@@ -624,10 +671,35 @@ class AdamWStep(_Base):  # name kept for resolver back-compat; see OptimizerStep
                         f"{opt.name!r} state but the task has no O object")
                 states = {slot: ol_.view(o_buf, f"{slot}_{f.name}").view(-1)
                           for slot in opt.slots}
+                w_v = wl_.view(w_buf, f.name)
+                g_v = gl_.view(g_buf, f.name)
+                shape = f.shape
+                if rows is not None:
+                    lo, hi = rows
+                    w_v = w_v[lo:hi]        # dim-0 slice of a packed
+                    g_v = g_v[lo:hi]        # field view: contiguous
+                    shape = (hi - lo,) + tuple(f.shape[1:])
                 opt.step(kctx, self.kernels, hp, step,
-                         wl_.view(w_buf, f.name).view(-1),
-                         gl_.view(g_buf, f.name).view(-1),
-                         states, f.shape)
+                         w_v.reshape(-1), g_v.reshape(-1),
+                         states, shape)
+            if gh is not None and sh is not None and sh["comm"]:
+                # propagate updated params: each sharded region
+                # broadcasts from its updater. The final es wait keeps
+                # the W mutation inside THIS task's stream order — the
+                # planner is free to move/offload W right after the
+                # task completes (the dp_overlap lesson).
+                w_ready = torch.cuda.Event()
+                w_ready.record(es)
+                gh.stream.wait_event(w_ready)
+                for e in sh["comm"]:
+                    wview = wl_.view(w_buf, e["field"])
+                    if e["rows"] is not None:
+                        lo, hi = int(e["rows"][0]), int(e["rows"][1])
+                        wview = wview[lo:hi]
+                    gh.broadcast(wview, root=int(e["updater"]))
+                propagated = torch.cuda.Event()
+                propagated.record(gh.stream)
+                es.wait_event(propagated)
 
 
 
