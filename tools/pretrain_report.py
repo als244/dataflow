@@ -422,14 +422,17 @@ nav a {{ margin-right: 1rem; }}
 <h1>{title}</h1>
 <p class="sub">{subtitle}</p>
 {body}
-<p class="sub">charts: click a legend entry to hide/show its series;
-drag a box (or scroll) on the plot to zoom; double-click resets.</p>
+<p class="sub">charts: tap/click a legend entry to hide/show its series; drag a
+box, scroll, or pinch on the plot to zoom; double-tap/-click resets.
+(If charts are inert, the viewer stripped scripts — open the file
+in a browser.)</p>
 <script>
 document.querySelectorAll("svg.ichart").forEach(function (svg) {{
   var fr = svg.dataset.frame.split(",").map(Number);
   var ml = fr[0], mt = fr[1], pw = fr[2], ph = fr[3];
   var plot = svg.querySelector("g.plot");
   var t = {{x: 0, y: 0, kx: 1, ky: 1}};
+  svg.style.touchAction = "none";
   function apply() {{
     plot.setAttribute("transform",
       "translate(" + t.x + "," + t.y + ") scale(" + t.kx + "," + t.ky + ")");
@@ -438,8 +441,10 @@ document.querySelectorAll("svg.ichart").forEach(function (svg) {{
       e.setAttribute("fill-opacity", zoomed ? "0.15" : "0.7");
     }});
   }}
+  function reset() {{ t = {{x: 0, y: 0, kx: 1, ky: 1}}; apply(); }}
   svg.querySelectorAll("g.lg").forEach(function (lg) {{
-    lg.addEventListener("click", function () {{
+    lg.addEventListener("click", function (ev) {{
+      ev.stopPropagation();
       var s = svg.querySelector('g.s[data-i="' + lg.dataset.i + '"]');
       if (!s) return;
       var hidden = s.style.display === "none";
@@ -453,43 +458,85 @@ document.querySelectorAll("svg.ichart").forEach(function (svg) {{
     return {{x: (ev.clientX - r.left) * vb.width / r.width,
              y: (ev.clientY - r.top) * vb.height / r.height}};
   }}
-  var drag = null, band = null;
-  svg.addEventListener("mousedown", function (ev) {{
+  function inFrame(p) {{
+    return p.x >= ml && p.x <= ml + pw && p.y >= mt && p.y <= mt + ph;
+  }}
+  var pointers = new Map(), band = null, dragStart = null;
+  var pinchStart = null, lastTap = 0;
+  svg.addEventListener("pointerdown", function (ev) {{
     var p = toUser(ev);
-    if (p.x < ml || p.x > ml + pw || p.y < mt || p.y > mt + ph) return;
-    drag = p;
-    band = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-    band.setAttribute("fill", "currentColor");
-    band.setAttribute("fill-opacity", "0.08");
-    band.setAttribute("stroke", "currentColor");
-    band.setAttribute("stroke-dasharray", "4 3");
-    svg.appendChild(band);
+    if (ev.target.closest && ev.target.closest("g.lg")) return;
+    if (!inFrame(p) && pointers.size === 0) return;
+    pointers.set(ev.pointerId, p);
+    svg.setPointerCapture(ev.pointerId);
+    if (pointers.size === 1) {{
+      var now = Date.now();               // double-tap reset (touch)
+      if (now - lastTap < 350) {{ reset(); lastTap = 0; return; }}
+      lastTap = now;
+      dragStart = p;
+      band = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      band.setAttribute("fill", "currentColor");
+      band.setAttribute("fill-opacity", "0.08");
+      band.setAttribute("stroke", "currentColor");
+      band.setAttribute("stroke-dasharray", "4 3");
+      svg.appendChild(band);
+    }} else if (pointers.size === 2) {{   // pinch begins: drop the band
+      if (band) {{ band.remove(); band = null; }}
+      dragStart = null;
+      var ps = Array.from(pointers.values());
+      pinchStart = {{d: Math.hypot(ps[0].x - ps[1].x, ps[0].y - ps[1].y),
+                    cx: (ps[0].x + ps[1].x) / 2,
+                    cy: (ps[0].y + ps[1].y) / 2, t0: t}};
+    }}
     ev.preventDefault();
   }});
-  svg.addEventListener("mousemove", function (ev) {{
-    if (!drag || !band) return;
+  svg.addEventListener("pointermove", function (ev) {{
+    if (!pointers.has(ev.pointerId)) return;
     var p = toUser(ev);
-    band.setAttribute("x", Math.min(drag.x, p.x));
-    band.setAttribute("y", Math.min(drag.y, p.y));
-    band.setAttribute("width", Math.abs(p.x - drag.x));
-    band.setAttribute("height", Math.abs(p.y - drag.y));
+    pointers.set(ev.pointerId, p);
+    if (pointers.size === 1 && dragStart && band) {{
+      band.setAttribute("x", Math.min(dragStart.x, p.x));
+      band.setAttribute("y", Math.min(dragStart.y, p.y));
+      band.setAttribute("width", Math.abs(p.x - dragStart.x));
+      band.setAttribute("height", Math.abs(p.y - dragStart.y));
+    }} else if (pointers.size === 2 && pinchStart) {{
+      var ps = Array.from(pointers.values());
+      var d = Math.hypot(ps[0].x - ps[1].x, ps[0].y - ps[1].y);
+      var z = Math.min(Math.max(d / Math.max(pinchStart.d, 1), 0.05), 50);
+      var t0 = pinchStart.t0;
+      var nk = Math.min(Math.max(t0.kx * z, 1), 400);
+      z = nk / t0.kx;
+      t = {{kx: t0.kx * z, ky: t0.ky * z,
+           x: pinchStart.cx - z * (pinchStart.cx - t0.x),
+           y: pinchStart.cy - z * (pinchStart.cy - t0.y)}};
+      if (t.kx === 1) {{ t = {{x: 0, y: 0, kx: 1, ky: 1}}; }}
+      apply();
+    }}
   }});
-  window.addEventListener("mouseup", function (ev) {{
-    if (!drag) return;
+  function endPointer(ev) {{
+    if (!pointers.has(ev.pointerId)) return;
     var p = toUser(ev);
-    var x0 = Math.min(drag.x, p.x), x1 = Math.max(drag.x, p.x);
-    var y0 = Math.min(drag.y, p.y), y1 = Math.max(drag.y, p.y);
-    if (band) {{ band.remove(); band = null; }}
-    drag = null;
-    if (x1 - x0 < 8 || y1 - y0 < 8) return;
-    var zx = pw / (x1 - x0), zy = ph / (y1 - y0);
-    t = {{kx: t.kx * zx, ky: t.ky * zy,
-         x: ml - zx * (x0 - t.x), y: mt - zy * (y0 - t.y)}};
-    apply();
-  }});
+    pointers.delete(ev.pointerId);
+    if (pinchStart && pointers.size < 2) {{ pinchStart = null; }}
+    if (dragStart && pointers.size === 0) {{
+      var x0 = Math.min(dragStart.x, p.x), x1 = Math.max(dragStart.x, p.x);
+      var y0 = Math.min(dragStart.y, p.y), y1 = Math.max(dragStart.y, p.y);
+      if (band) {{ band.remove(); band = null; }}
+      dragStart = null;
+      if (x1 - x0 >= 8 && y1 - y0 >= 8) {{
+        var zx = pw / (x1 - x0), zy = ph / (y1 - y0);
+        t = {{kx: t.kx * zx, ky: t.ky * zy,
+             x: ml - zx * (x0 - t.x), y: mt - zy * (y0 - t.y)}};
+        apply();
+      }}
+    }}
+    if (band && pointers.size === 0) {{ band.remove(); band = null; }}
+  }}
+  svg.addEventListener("pointerup", endPointer);
+  svg.addEventListener("pointercancel", endPointer);
   svg.addEventListener("wheel", function (ev) {{
     var p = toUser(ev);
-    if (p.x < ml || p.x > ml + pw || p.y < mt || p.y > mt + ph) return;
+    if (!inFrame(p)) return;
     ev.preventDefault();
     var z = ev.deltaY < 0 ? 1.25 : 0.8;
     var nk = Math.min(Math.max(t.kx * z, 1), 400);
@@ -499,10 +546,7 @@ document.querySelectorAll("svg.ichart").forEach(function (svg) {{
     if (t.kx === 1) {{ t = {{x: 0, y: 0, kx: 1, ky: 1}}; }}
     apply();
   }}, {{passive: false}});
-  svg.addEventListener("dblclick", function () {{
-    t = {{x: 0, y: 0, kx: 1, ky: 1}};
-    apply();
-  }});
+  svg.addEventListener("dblclick", reset);
 }});
 </script>
 </body></html>
