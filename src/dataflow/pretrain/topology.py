@@ -28,6 +28,7 @@ class HostSpec:
     repo: str = ""
     nsys: str = "nsys"
     ib_dev: str | None = None
+    iface: str | None = None       # fast-link netdev (NCCL_SOCKET_IFNAME)
     slab_gib: float = 8.0
     budget_gib: float = 8.0
 
@@ -108,6 +109,7 @@ def build_host(name: str, entry: dict) -> HostSpec:
         repo=entry.get("repo", str(repo_root())),
         nsys=entry.get("nsys", "nsys"),
         ib_dev=entry.get("ib_dev"),
+        iface=entry.get("iface"),
         slab_gib=float(entry.get("slab_gib", 8.0)),
         budget_gib=float(entry.get("budget_gib", 8.0)))
 

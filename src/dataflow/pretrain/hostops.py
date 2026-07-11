@@ -59,6 +59,17 @@ def daemon_paths(host: HostSpec, lane: str = "fleet") -> dict:
             "pid": f"{base}.pid"}
 
 
+def daemon_env(host: HostSpec) -> str:
+    """Env prefix for a daemon launch: NCCL wiring derived from the
+    topology (socket iface + HCA), extendable per host."""
+    parts = []
+    if host.iface:
+        parts.append(f"NCCL_SOCKET_IFNAME={host.iface}")
+    if host.ib_dev:
+        parts.append(f"NCCL_IB_HCA={host.ib_dev}")
+    return " ".join(parts)
+
+
 def launch_daemon(host: HostSpec, *, lane: str = "fleet",
                   slab_gib: float, peer_port: int | None = None,
                   extra_flags: str = "", wrap: str = "") -> dict:
@@ -67,7 +78,8 @@ def launch_daemon(host: HostSpec, *, lane: str = "fleet",
     daemonized session, so profiler helpers can never hold the
     launching ssh session open. Returns the daemon's runtime paths."""
     paths = daemon_paths(host, lane)
-    inner = (f"{wrap} {host.python} -u {host.repo}/tools/dataflowd.py "
+    inner = (f"{daemon_env(host)} {wrap} {host.python} -u "
+             f"{host.repo}/tools/dataflowd.py "
              f"start --socket {paths['sock']} --slab-gib {slab_gib} "
              f"--peer-name {host.name} "
              f"--peer-listen {host.peer_addr(peer_port)} "
