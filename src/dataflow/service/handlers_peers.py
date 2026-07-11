@@ -106,8 +106,7 @@ def install(server) -> None:
     def create_peer_group(call):
         a = call.args
         return require_nm().create_group(
-            a["name"], list(a["members"]), a.get("backend", "auto"),
-            reduce_dtype=a.get("reduce_dtype", "native"))
+            a["name"], list(a["members"]), a.get("backend", "auto"))
 
     def destroy_peer_group(call):
         a = call.args

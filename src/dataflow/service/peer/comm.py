@@ -31,12 +31,11 @@ stream's own dependencies):
                                      flag store = seq  ==> stream
                                      resumes, H2D drains
 
-Reduction dtype: ``reduce_dtype="native"`` (default) sums in the
-tensor's own dtype — one in-place pass, no conversions, and at world 2
-a single add is commutative, so replicas stay BITWISE identical.
-``reduce_dtype="f32"`` keeps the legacy rank-ordered fp32 accumulate
-(rank0 + rank1 always) for exactness experiments. Configure per group
-via create_peer_group.
+Reduction is ALWAYS native dtype: the sum runs in the tensor's own
+dtype — one in-place pass, no conversions; at world 2 a single add is
+commutative, so replicas stay BITWISE identical (and torch/CUDA bf16
+adds compute via fp32 internally, matching an fp32 reference for a
+pairwise sum exactly).
 
 World 2 only in v1 (pairwise exchange-and-add; ring topologies arrive
 when a world > 2 exists to test them). broadcast / reduce_scatter /
@@ -61,8 +60,6 @@ from ...runtime.groups import GroupHandle
 
 FLAG_WAIT_GEQ = None  # resolved at probe time
 WAIT_VALUE_PROBED = None  # cached probe verdict (one Stream, ever)
-
-TORCH_BY_REDUCE = {"f32": torch.float32}
 
 
 def stream_wait_value_supported() -> bool:
@@ -122,21 +119,17 @@ class HostmemComm:
     link (the coordinator star IS the pairwise link at world 2)."""
 
     def __init__(self, nm, group_name: str, rank: int, world: int,
-                 peer_name: str, scratch_bytes: int = 512 << 20,
-                 reduce_dtype: str = "native"):
+                 peer_name: str, scratch_bytes: int = 512 << 20):
         if world != 2:
             raise RuntimeError(
                 f"hostmem v1 is pairwise (world 2); group "
                 f"{group_name!r} has world {world} — ring topologies "
                 f"arrive with a real >2 fleet")
-        if reduce_dtype not in ("native", *TORCH_BY_REDUCE):
-            raise RuntimeError(f"unknown reduce_dtype {reduce_dtype!r}")
         self.nm = nm
         self.group = group_name
         self.rank = rank
         self.world = world
         self.peer_name = peer_name
-        self.reduce_dtype = reduce_dtype
         self.stream = torch.cuda.Stream()
         self.seq = 0
         self.jobs: queue.SimpleQueue = queue.SimpleQueue()
@@ -378,13 +371,7 @@ class HostmemComm:
         theirs_host = self.land.t[:nbytes].view(target.dtype)[:tn]
         theirs = self.dev_land[:nbytes].view(target.dtype)[:tn]
         theirs.copy_(theirs_host, non_blocking=True)
-        if self.reduce_dtype == "native":
-            flat.add_(theirs)
-            return
-        acc = TORCH_BY_REDUCE[self.reduce_dtype]
-        first, second = ((flat, theirs) if self.rank == 0
-                         else (theirs, flat))
-        flat.copy_((first.to(acc) + second.to(acc)).to(target.dtype))
+        flat.add_(theirs)
 
     def dead_check(self) -> bool:
         return self.dead is not None
@@ -444,18 +431,9 @@ class HostmemComm:
 
     def reduce_into_stage(self, stage_bytes, theirs_bytes, dtype,
                           lo: int = 0) -> None:
-        """stage[lo:] += theirs, honoring reduce_dtype. Native mode is
-        ONE in-place pass (world-2 add commutes => replicas bitwise
-        identical). f32 mode keeps the legacy rank-ordered accumulate."""
-        mine = stage_bytes.view(dtype)
-        theirs = theirs_bytes.view(dtype)
-        if self.reduce_dtype == "native":
-            mine.add_(theirs)
-            return
-        acc = TORCH_BY_REDUCE[self.reduce_dtype]
-        first, second = ((mine, theirs) if self.rank == 0
-                         else (theirs, mine))
-        mine.copy_((first.to(acc) + second.to(acc)).to(dtype))
+        """stage += theirs, native dtype: ONE in-place pass (world-2
+        add commutes => replicas bitwise identical)."""
+        stage_bytes.view(dtype).add_(theirs_bytes.view(dtype))
 
     def run_job(self, job: CollJob) -> None:
         action, dtype, nbytes, root = job.action
@@ -631,9 +609,7 @@ def build_comm(nm, rec) -> HostmemComm | None:
     peers = [m for i, m in enumerate(rec.members) if i != rec.self_rank]
     scratch = getattr(nm.server.config, "peer_coll_scratch_mib", 512) << 20
     return HostmemComm(nm, rec.name, rec.self_rank, len(rec.members),
-                       peers[0], scratch_bytes=scratch,
-                       reduce_dtype=getattr(rec, "reduce_dtype",
-                                            "native"))
+                       peers[0], scratch_bytes=scratch)
 
 
 def build_handle(nm, rec) -> GroupHandle:

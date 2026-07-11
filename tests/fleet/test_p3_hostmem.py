@@ -197,27 +197,3 @@ def test_stream_parks_until_worker_releases(rig):
     synced(ha, hb)
     assert float(t_a[0]) == 2.0 == float(t_b[0])
 
-
-def test_reduce_dtype_f32_group_plumbing(rig):
-    """The legacy rank-ordered fp32 accumulate stays available per
-    group: create_peer_group(reduce_dtype="f32") propagates through the
-    JOIN to every member's comm, and the sum still matches (a single
-    world-2 add rounds identically in both modes)."""
-    ca, sa, sb = rig["ca"], rig["sa"], rig["sb"]
-    ca._call("create_peer_group",
-             {"name": "dpf32", "members": ["hm-a", "hm-b"],
-              "backend": "hostmem", "reduce_dtype": "f32"})
-    ha = sa.nm.group_handles()["dpf32"]
-    hb = sb.nm.group_handles()["dpf32"]
-    assert ha.comm.reduce_dtype == "f32"
-    assert hb.comm.reduce_dtype == "f32"       # rode the JOIN frame
-    g = torch.Generator(device="cuda").manual_seed(3)
-    a = torch.randn(1 << 16, device="cuda", generator=g,
-                    dtype=torch.float32).to(torch.bfloat16)
-    b = torch.randn(1 << 16, device="cuda", generator=g,
-                    dtype=torch.float32).to(torch.bfloat16)
-    want = (a.float() + b.float()).to(torch.bfloat16)
-    ta, tb = a.clone(), b.clone()
-    both(AllreduceCall(ha, ta), AllreduceCall(hb, tb))
-    synced(ha, hb)
-    assert torch.equal(ta, want) and torch.equal(tb, want)

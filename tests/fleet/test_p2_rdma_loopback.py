@@ -140,7 +140,7 @@ def test_rdma_allreduce_zero_copy_from_registered_slab(rig):
     hb = sb.nm.group_handles()["rdp"]
     for server, h in ((sa, ha), (sb, hb)):
         comm = h.comm
-        assert comm is not None and comm.reduce_dtype == "native"
+        assert comm is not None
         assert comm.rdma_qp() is not None, "rdma lane not up for COLL"
         slab = server.store.slab
         cap = server.store.allocator.capacity

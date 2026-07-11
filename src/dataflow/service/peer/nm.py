@@ -333,8 +333,7 @@ class NetworkManager:
             pass
 
     def create_group(self, name: str, members: list, backend: str,
-                     *, reduce_dtype: str = "native",
-                     timeout: float = 20.0) -> dict:
+                     *, timeout: float = 20.0) -> dict:
         """Coordinator side: THIS daemon must be rank 0 of members and
         hold star links to every other member."""
         from .groups import GroupRecord
@@ -349,15 +348,13 @@ class NetworkManager:
                                    f"star links missing: {missing}")
         rec = GroupRecord(name=name, members=tuple(members),
                           backend=backend, self_rank=0,
-                          coordinator=self.peer_name,
-                          reduce_dtype=reduce_dtype)
+                          coordinator=self.peer_name)
         try:
             self.groups.create(rec)
         except ValueError:
             raise ServiceError("GROUP_EXISTS", name)
         join = {"kind": "GROUP_JOIN", "name": name,
-                "members": list(members), "backend": backend,
-                "reduce_dtype": reduce_dtype}
+                "members": list(members), "backend": backend}
         with self.lock:
             for m in members[1:]:
                 self.links[m].send_frame(join)
@@ -527,8 +524,7 @@ class NetworkManager:
                     name=msg["name"], members=members,
                     backend=msg["backend"],
                     self_rank=members.index(self.peer_name),
-                    coordinator=link.peer_id,
-                    reduce_dtype=msg.get("reduce_dtype", "native"))
+                    coordinator=link.peer_id)
                 self.groups.adopt(rec)
                 link.send_frame({"kind": "GROUP_ACK", "name": msg["name"],
                                  "member": self.peer_name})
