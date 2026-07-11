@@ -41,4 +41,4 @@ budget_gib = 12.0
 # Rank = position in this list; the first member is the group
 # coordinator (its daemon holds the control star).
 members = ["alpha", "beta"]
-backend = "hostmem"
+backend = "auto"
