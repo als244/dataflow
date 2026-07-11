@@ -30,6 +30,8 @@ class GroupRecord:
     acks: set = field(default_factory=set)
     error: str | None = None
     handle: object = None          # cached GroupHandle (NM builds lazily)
+    comm_obj: object = None        # nccl: comm built at BOOTSTRAP (init
+                                   # is collective — never lazy)
 
     def handle_dict(self) -> dict:
         return {"name": self.name, "rank": self.self_rank,

@@ -187,6 +187,12 @@ class NetworkManager:
         self.stop_flag.set()
         for rec in self.groups.ready_records():
             handle = rec.handle
+            if handle is None and rec.comm_obj is not None:
+                try:
+                    rec.comm_obj.close()
+                except Exception:
+                    pass
+                continue
             if handle is not None and handle.comm is not None:
                 handle.comm.close()            # releases parked streams,
                                                # worker, slab scratch
@@ -332,12 +338,35 @@ class NetworkManager:
         except Exception:
             pass
 
+    def resolve_backend(self, backend: str) -> str:
+        """auto => nccl when this daemon can actually run it: a REAL
+        store (fake boots have no device plane) + CUDA + the library.
+        Loopback rigs (several daemons sharing one GPU) must ask for
+        hostmem EXPLICITLY — nccl refuses duplicate devices in one
+        communicator, which is exactly right for them."""
+        if backend != "auto":
+            return backend
+        if self.store.slab is None:
+            return "hostmem"
+        from . import nccl
+
+        import torch
+
+        if torch.cuda.is_available() and nccl.available():
+            return "nccl"
+        return "hostmem"
+
     def create_group(self, name: str, members: list, backend: str,
-                     *, timeout: float = 20.0) -> dict:
+                     *, timeout: float = 60.0) -> dict:
         """Coordinator side: THIS daemon must be rank 0 of members and
-        hold star links to every other member."""
+        hold star links to every other member. nccl bootstrap (the
+        blocking collective CommInitRank + warm-up) happens HERE, on
+        every rank concurrently — the coordinator inits on this verb
+        thread while members init on bring-up threads; GROUP_ACK is
+        sent only after a member's comm is proven."""
         from .groups import GroupRecord
 
+        backend = self.resolve_backend(backend)
         if members[0] != self.peer_name:
             raise ServiceError("BAD_REQUEST",
                                "create_peer_group must land on rank 0")
@@ -355,9 +384,23 @@ class NetworkManager:
             raise ServiceError("GROUP_EXISTS", name)
         join = {"kind": "GROUP_JOIN", "name": name,
                 "members": list(members), "backend": backend}
+        if backend == "nccl":
+            from . import nccl
+
+            join["nccl_uid"] = nccl.get_lib().unique_id().hex()
         with self.lock:
             for m in members[1:]:
                 self.links[m].send_frame(join)
+        if backend == "nccl":
+            from .ncclcomm import NcclComm
+
+            try:
+                rec.comm_obj = NcclComm(name, 0, len(members),
+                                        bytes.fromhex(join["nccl_uid"]))
+            except Exception as ex:
+                self.groups.mark_error(name, f"nccl bootstrap: {ex}")
+                raise ServiceError("GROUP_DESYNC",
+                                   f"{name}: nccl bootstrap failed: {ex}")
         if len(members) > 1 and not self.groups.wait_ready(name, timeout):
             self.groups.mark_error(name, "join barrier timeout")
             raise ServiceError("GROUP_DESYNC",
@@ -390,6 +433,16 @@ class NetworkManager:
             rec.handle = build_handle(self, rec)
         return rec.handle.comm
 
+    def abort_group_comm(self, name: str) -> None:
+        with self.groups.lock:
+            rec = self.groups.groups.get(name)
+        comm = getattr(rec, "comm_obj", None) if rec is not None else None
+        if comm is not None:
+            try:
+                comm.fail("group_error")
+            except Exception:
+                pass
+
     def group_error(self, name: str, why: str, *,
                     fan_out: str | None) -> None:
         """Spec §7 two-hop fan-out: a member reports to its
@@ -401,7 +454,10 @@ class NetworkManager:
         if handle is not None and handle.comm is not None \
                 and handle.comm.dead is None:
             handle.comm.dead = why
-            handle.comm.flag[0] = 2_000_000_000   # release parked streams
+            flag = getattr(handle.comm, "flag", None)
+            if flag is not None:                 # hostmem: release
+                flag[0] = 2_000_000_000          # parked streams
+        self.abort_group_comm(name)
         self.state.emit("group_error", name=name, why=why)
         with self.groups.lock:
             rec = self.groups.groups.get(name)
@@ -526,6 +582,13 @@ class NetworkManager:
                     self_rank=members.index(self.peer_name),
                     coordinator=link.peer_id)
                 self.groups.adopt(rec)
+                if msg.get("nccl_uid"):
+                    threading.Thread(
+                        target=NcclJoin(self, link, rec,
+                                        msg["nccl_uid"]),
+                        name=f"nm-nccl-join-{rec.name}",
+                        daemon=True).start()
+                    continue
                 link.send_frame({"kind": "GROUP_ACK", "name": msg["name"],
                                  "member": self.peer_name})
                 self.state.emit("group_joined", name=msg["name"],
@@ -768,6 +831,37 @@ class NetworkManager:
         self.state.emit("object_received", oid=res.dest_id,
                         from_peer=peer_id, bytes=len(res.buffer),
                         zero_copy=res.landed_zero_copy)
+
+
+class NcclJoin:
+    """Member-side nccl bootstrap: the blocking collective init +
+    warm-up run OFF the reader thread; the join ACK goes out only
+    after the communicator is proven (the barrier then means 'ready
+    to collect', not just 'record adopted')."""
+
+    def __init__(self, nm: "NetworkManager", link: PeerLink, rec,
+                 uid_hex: str):
+        self.nm = nm
+        self.link = link
+        self.rec = rec
+        self.uid_hex = uid_hex
+
+    def __call__(self) -> None:
+        from .ncclcomm import NcclComm
+
+        try:
+            self.rec.comm_obj = NcclComm(
+                self.rec.name, self.rec.self_rank,
+                len(self.rec.members), bytes.fromhex(self.uid_hex))
+        except Exception as ex:
+            self.nm.groups.mark_error(self.rec.name,
+                                      f"nccl bootstrap: {ex}")
+            self.nm.state.emit("group_error", name=self.rec.name,
+                               why=f"nccl bootstrap: {ex}")
+            return
+        self.link.send_frame({"kind": "GROUP_ACK",
+                              "name": self.rec.name,
+                              "member": self.nm.peer_name})
 
 
 class BwProbeRdma:

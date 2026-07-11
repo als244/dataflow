@@ -617,7 +617,15 @@ def build_handle(nm, rec) -> GroupHandle:
     stream = None
     backend = rec.backend if rec.backend != "auto" else "hostmem"
     try:
-        if backend == "hostmem":
+        if backend == "nccl":
+            # built at BOOTSTRAP (collective init cannot be lazy);
+            # missing here means the join-time bring-up failed
+            comm = rec.comm_obj
+            if comm is None:
+                raise RuntimeError("nccl comm missing — group "
+                                   "bootstrap did not complete")
+            stream = comm.stream
+        elif backend == "hostmem":
             comm = build_comm(nm, rec)
             stream = comm.stream if comm is not None else None
     except Exception as ex:

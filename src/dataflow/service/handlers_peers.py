@@ -141,20 +141,55 @@ def install(server) -> None:
         dt = TORCH_DTYPE_BY_NAME[a.get("dtype", "bf16")]
         sizes = [int(s) for s in a["sizes"]]
         reps = int(a.get("reps", 3))
+        verify = bool(a.get("verify"))
+        fill = float(gh.rank + 1)
+        want = float(gh.world * (gh.world + 1) / 2)
         tensors = []
         for nb in sizes:
-            t = torch.ones(nb // dt.itemsize, dtype=dt, device="cuda")
+            t = torch.full((nb // dt.itemsize,), fill, dtype=dt,
+                           device="cuda")
             tensors.append(t)
-        before = dict(gh.comm.stats)
+        before = dict(getattr(gh.comm, "stats", {}))
         walls = []
         for rep in range(reps):
+            if verify:
+                for t in tensors:
+                    t.fill_(fill)
             torch.cuda.synchronize()
             t0 = time_mod.monotonic()
             for t in tensors:
                 gh.allreduce(t)
             gh.stream.synchronize()
             walls.append(round(time_mod.monotonic() - t0, 6))
-        after = gh.comm.stats
+            if verify:
+                for t in tensors:
+                    if (float(t[0]) != want or float(t[-1]) != want
+                            or float(t[t.numel() // 2]) != want):
+                        raise ServiceError(
+                            "INTERNAL",
+                            f"coll_bench verify failed: got "
+                            f"{float(t[0])}/{float(t[t.numel()//2])}/"
+                            f"{float(t[-1])}, want {want}")
+        rs_ag_ok = None
+        if a.get("rs_ag_identity"):
+            # the ZeRO identity, backend-blind: rs into my slice then
+            # ag back must equal the allreduce of the same fill
+            n = int(a["rs_ag_identity"]) // dt.itemsize
+            n -= n % gh.world
+            full = torch.full((n,), fill, dtype=dt, device="cuda")
+            own = torch.empty(n // gh.world, dtype=dt, device="cuda")
+            gh.reduce_scatter(full, own)
+            gathered = torch.empty(n, dtype=dt, device="cuda")
+            gh.all_gather(own, gathered)
+            gh.stream.synchronize()
+            rs_ag_ok = (float(gathered[0]) == want
+                        and float(gathered[-1]) == want)
+            if not rs_ag_ok:
+                raise ServiceError(
+                    "INTERNAL",
+                    f"rs+ag identity failed: {float(gathered[0])}/"
+                    f"{float(gathered[-1])} want {want}")
+        after = getattr(gh.comm, "stats", {})
         delta = {}
         for key, val in after.items():
             base = before.get(key, 0)
@@ -162,9 +197,14 @@ def install(server) -> None:
                 else val - base
         total = sum(sizes)
         gbps = [round(total * 8 / w / 1e9, 2) for w in walls]
+        lane = ("nccl" if type(gh.comm).__name__ == "NcclComm"
+                else ("rdma" if gh.comm.rdma_qp() is not None
+                      else "socket"))
         return {"walls_s": walls, "gbps_per_rep": gbps,
                 "stats": delta, "bytes_per_rep": total,
-                "rdma_lane": gh.comm.rdma_qp() is not None}
+                "lane": lane, "verified": verify,
+                "rs_ag_ok": rs_ag_ok,
+                "rdma_lane": lane == "rdma"}
 
     server.dispatcher.handlers.update({
         "coll_bench": coll_bench,
