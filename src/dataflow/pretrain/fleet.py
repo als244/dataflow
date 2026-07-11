@@ -165,6 +165,7 @@ def run_fleet_dp(global_cfg, recipe: Recipe, stream, steps: int, *,
                  topology=None, group: str = "dp", attach=None,
                  seed: int = 11, log=print, log_every: int = 10,
                  profile: dict | None = None, dp_overlap: bool = False,
+                 backend: str | None = None,
                  prof_dir: str = "results/pretrain/logs") -> RunResult:
     """Train ``global_cfg``'s step batch across the group's hosts;
     returns the conductor's RunResult (losses = GLOBAL step means).
@@ -175,6 +176,11 @@ def run_fleet_dp(global_cfg, recipe: Recipe, stream, steps: int, *,
     nsys command and fetch remote reports into ``prof_dir``."""
     topo = topology if topology is not None else load_topology()
     gspec = topo.group(group)
+    if backend is not None:
+        from .topology import GroupSpec
+
+        gspec = GroupSpec(name=gspec.name, members=gspec.members,
+                          backend=backend)
     hosts = topo.group_hosts(group)
     world = len(hosts)
     if world != 2:

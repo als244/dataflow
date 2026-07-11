@@ -59,11 +59,14 @@ def daemon_paths(host: HostSpec, lane: str = "fleet") -> dict:
             "pid": f"{base}.pid"}
 
 
-# NCCL transport defaults. NCCL's own RoCE path errors on this fabric
-# out of the box (WR_FLUSH + local access violation at the warm-up
-# collective — findings, N1); the N2 bench picks the winner and these
-# defaults record it.
-NCCL_DEFAULT_ENV = {"NCCL_IB_DISABLE": "1"}
+# NCCL transport defaults — the N2 bench's winner. NCCL's own
+# RoCE/IB path errors on this fabric even with GID_INDEX=3 (WR_FLUSH
+# + local access violation; our pyverbs lane works because we control
+# every QP knob). Tuned multi-socket transport: 16 Gbit/s on the 25G
+# link vs 11.4 untuned.
+NCCL_DEFAULT_ENV = {"NCCL_IB_DISABLE": "1",
+                    "NCCL_SOCKET_NTHREADS": "4",
+                    "NCCL_NSOCKS_PERTHREAD": "4"}
 
 
 def daemon_env(host: HostSpec, extra: dict | None = None) -> str:

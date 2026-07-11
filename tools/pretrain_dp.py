@@ -58,6 +58,9 @@ def main() -> None:
     tr.add_argument("--peak-lr", type=float, default=3e-4)
     tr.add_argument("--seed", type=int, default=11)
     tr.add_argument("--out", required=True)
+    tr.add_argument("--backend", default=None,
+                    help="group backend override: hostmem | nccl | "
+                         "auto (default: the topology group's)")
     tr.add_argument("--dp-overlap", action="store_true",
                     help="EXPERIMENTAL, known-broken at scale: tail "
                          "optimizers on PRE-REDUCED grads (grad_reduce "
@@ -105,7 +108,8 @@ def main() -> None:
                            topology=load_topology(args.topology),
                            group=args.group, attach=attach,
                            seed=args.seed, profile=profile,
-                           dp_overlap=args.dp_overlap)
+                           dp_overlap=args.dp_overlap,
+                           backend=args.backend)
         res.save(args.out)
         print(f"saved {args.out} (final loss {res.losses[-1]:.4f}, "
               f"steady {res.steady_tok_per_s:.0f} tok/s)")
