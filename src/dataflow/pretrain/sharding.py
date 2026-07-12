@@ -407,6 +407,40 @@ def tp_view(plan: ShardPlan, rank: int) -> dict:
     return out
 
 
+def tp_opt_block_params(plan: ShardPlan, rank: int) -> dict:
+    """Per-root optimizer shard dicts for a TENSOR-PARALLEL run.
+    Grads are REPLICAS (tp splits compute, not data), so the dicts
+    carry grads="replica": comm entries skip the reduce and only
+    broadcast after the owner's update. Resident-narrowed fields are
+    fully local — whole shard-shaped fields of the PER-RANK layout,
+    update-only, no comm. Replicated fields keep the standard
+    owner+broadcast configuration."""
+    out: dict = {}
+    for root in plan.roots():
+        update: dict = {}
+        comm = []
+        for a in plan.assignments:
+            if a.region.object_root != root:
+                continue
+            if a.resident != ALL_RANKS:
+                if a.resident == rank:
+                    # this rank's physical shard: a whole field in the
+                    # per-rank layout; grads and update fully local
+                    update[a.region.field] = None
+                continue
+            rows = (list(a.region.rows) if a.region.rows else None)
+            if a.owner == ALL_RANKS:
+                update[a.region.field] = rows
+                continue
+            comm.append({"field": a.region.field, "rows": rows,
+                         "owner": a.owner})
+            if a.owner == rank:
+                update[a.region.field] = rows
+        out[root] = {"update": update, "comm": comm,
+                     "grads": "replica"}
+    return out
+
+
 def tp_mlp_shards(fields_by_root: dict, group: str, world: int, *,
                   col_fields: tuple = ("w1", "w3"),
                   row_fields: tuple = ("w2",),

@@ -108,6 +108,49 @@ def test_programs_json_serializable_and_plain_unchanged():
     assert program_to_dict(again) == program_to_dict(plain)
 
 
+def test_tp_lowering_params_sizes_and_serialization():
+    from dataflow.pretrain.sharding import tp_mlp_shards
+
+    plan = tp_mlp_shards(layer_fields_by_root(CFG), "dp", 2)
+    plan.consumable("tp")
+    plain = build()
+    r0 = build(ParallelConfig("dp", 0, 2, plan))
+    json.dumps(program_to_dict(r0))
+    layer_w = {s.id: s.size_bytes for s in plain.initial_objects
+               if s.id.startswith("W_")
+               and s.id not in ("W_embed", "W_head")}
+    for s in r0.initial_objects:
+        if s.id in layer_w:
+            # mlp halves; attention/norms replicated
+            assert s.size_bytes < layer_w[s.id], s.id
+    tp_fwd = tp_bwd = tp_opt = 0
+    for t in r0.tasks:
+        bp = t.block_params or {}
+        if t.id.startswith("block_fwd_"):
+            assert "tp" in bp, t.id
+            assert bp["tp"]["group"] == "dp"
+            assert set(bp["tp"]["slices"]) == {"w1", "w3", "w2"}
+            tp_fwd += 1
+        if t.id.startswith("block_bwd_"):
+            assert "tp" in bp, t.id
+            tp_bwd += 1
+        if t.id.startswith("optimizer_") and "layer" in bp:
+            assert bp["shard"]["grads"] == "replica", t.id
+            assert "tp" in bp, t.id
+            # tp shard fields are local: no comm entries for them
+            comm_fields = {e["field"] for e in bp["shard"]["comm"]}
+            assert not comm_fields & {"w1", "w3", "w2"}, t.id
+            assert bp["shard"]["update"].get("w1", "absent") is None
+            tp_opt += 1
+    assert tp_fwd and tp_bwd and tp_opt
+    # embed/head replicated roots: standard owner+broadcast, replica
+    for t in r0.tasks:
+        if t.id.startswith("optimizer_embed"):
+            sh = t.block_params["shard"]
+            assert sh["grads"] == "replica"
+            assert sh["comm"], "embed should broadcast owner slices"
+
+
 def test_runtime_o_layout_matches_lowered_size():
     """The AdamW block sizes its O layout from the SAME update_regions
     the lowering used — assert the contract holds field by field."""

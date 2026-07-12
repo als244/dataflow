@@ -58,11 +58,50 @@ from dataflow.tasks.base_blocks import (
 )
 
 
+def tp_group_handle(ctx, task):
+    """The task's tensor-parallel GroupHandle, or None (standalone /
+    warm-up run before the group exists — rank-local semantics, like
+    a dp_group artifact run standalone)."""
+    tp = task.block_params.get("tp")
+    if tp is None:
+        return None
+    return (getattr(ctx, "groups", None) or {}).get(tp["group"])
+
+
+def tp_allreduce_inplace(gh, es, tensor) -> None:
+    """Producer-contract in-place allreduce on the group stream:
+    es -> gh edge, sum over the tp group, gh -> es edge. gh None
+    leaves the PARTIAL in place (standalone semantics)."""
+    if gh is None:
+        return
+    produced = torch.cuda.Event()
+    produced.record(es)
+    gh.stream.wait_event(produced)
+    gh.allreduce(tensor)
+    summed = torch.cuda.Event()
+    summed.record(gh.stream)
+    es.wait_event(summed)
+
+
+def tp_stage_down_resid(kctx, K, d, st):
+    """Tensor-parallel down-projection: the shard's PARTIAL product
+    allreduces over the tp group BEFORE the (replicated) residual
+    joins — adding h_mid first would double it across ranks."""
+    partial = st.pop("s") @ st["w"]["w2"]
+    tp_allreduce_inplace(st["tp_gh"], st["tp_es"], partial)
+    torch.add(st.pop("h_mid"), partial, out=st["y"])
+
+
 @dataclass(frozen=True)
 class BlockFwd(_Base):
     """Transformer-block forward: runs the STAGES list, writing saved
     context (and metadata) fields through to the ctx buffers."""
     emit_context: bool = True
+
+    # stage implementations swapped in under a tensor-parallel block
+    # param (everything else is shard-transparent: up_proj gemms take
+    # their width from the SLICED weight views, swiglu is elementwise)
+    TP_STAGE_OVERRIDES = {"down_resid": tp_stage_down_resid}
 
     def launch(self, ctx: TaskContext) -> None:
         d = self.dims
@@ -78,13 +117,16 @@ class BlockFwd(_Base):
                 # planning while keeping the metadata)
                 for j, o in enumerate(ctx.task.outputs[1:], start=1):
                     if o.id.startswith("A_"):
-                        a = self.cl.views(self._out(ctx, j))
+                        a = self.cl_for(ctx.task).views(self._out(ctx, j))
                         break
             extras = self._aux_temp_state(ctx) or {}
             extras["seg"] = self._attn_meta(ctx)
             aux_counts = self._aux_counts_state(ctx)
             if aux_counts is not None:
                 extras["aux_counts"] = aux_counts
+            if ctx.task.block_params.get("tp") is not None:
+                extras["tp_gh"] = tp_group_handle(ctx, ctx.task)
+                extras["tp_es"] = es
             self._forward(kctx, x, w, y, a, extras=extras)
 
     # --- staged forward -------------------------------------------------------
@@ -226,13 +268,28 @@ class BlockFwd(_Base):
     def context_fields_emitted(cls) -> set:
         return {f for entry in cls.STAGES for f in entry[2]}
 
+    def stage_impls(self, st) -> tuple:
+        """The stage list for this invocation: tensor-parallel runs
+        (st carries tp_gh/tp_es) swap in the TP_STAGE_OVERRIDES
+        entries by name; everything else is the plain STAGES list."""
+        if "tp_es" not in st:
+            return self.STAGES
+        out = []
+        for entry in self.STAGES:
+            override = self.TP_STAGE_OVERRIDES.get(entry[0])
+            if override is None:
+                out.append(entry)
+            else:
+                out.append((entry[0], override) + tuple(entry[2:]))
+        return tuple(out)
+
     def _run_stages(self, kctx, x, w, a, *, count: int, y=None,
                     extras=None) -> None:
         st = {"x": x, "w": w, "a": a, "y": y}
         if extras:
             st.update(extras)
         skip_aux_temp = bool(st.get("aux_temp_ready"))
-        for entry in self.STAGES[:count]:
+        for entry in self.stage_impls(st)[:count]:
             if skip_aux_temp and len(entry) > 3 and entry[3] == "aux_temp":
                 continue  # the aux pack is supplied, never recomputed
             entry[1](kctx, self.kernels, self.dims, st)
@@ -252,9 +309,12 @@ class BlockRecompute(BlockFwd):
         with torch.cuda.stream(es):
             x = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
             w = self.wl_for(ctx.task).views(self._in(ctx, 1))
-            a = self.cl.views(self._out(ctx, 0))
+            a = self.cl_for(ctx.task).views(self._out(ctx, 0))
             extras = self._aux_temp_state(ctx) or {}
             extras["seg"] = self._attn_meta(ctx)
+            # no tp extras: recompute stops at the last context-emitting
+            # stage (up_proj), which is shard-transparent — the sliced
+            # weight/context views carry the width; no collective runs
             self._forward_context(kctx, x, w, a, extras=extras)
 
     def _forward_context(self, kctx, x, w, a, extras=None) -> None:
@@ -310,6 +370,44 @@ def dense_mlp_tail_bwd(kctx, K, dy, h_mid, rstd_ffn, x1, x3, w, acc, norm_bwd):
     return dh_mid
 
 
+def tp_mlp_tail_bwd(kctx, K, dy, h_mid, rstd_ffn, x1, x3, w, acc,
+                    norm_bwd, gh, es):
+    """Tensor-parallel twin of dense_mlp_tail_bwd: identical math on
+    the SHARD-width views (x1/x3 and the w1/w3/w2 views arrive
+    sliced), with ONE collective — the residual-stream gradient dh2
+    is a partial sum over d_ff shards and allreduces before the
+    (replicated, full-width) norm backward. dW writes are the local
+    shard grads; the ffn_norm grad comes from the summed dh2, so it
+    is a REPLICA on every rank (the optimizer's replica mode owns
+    re-syncing replicated fields)."""
+    h2 = torch.empty_like(h_mid)
+    K.rmsnorm_apply(kctx, h_mid, rstd_ffn, w["ffn_norm_w"], h2)
+    s = torch.empty_like(x1)
+    K.swiglu_fwd_out(kctx, x1, x3, s)
+    ds = dy @ w["w2"].T
+    if acc.wanted("w2"):
+        acc("w2", s.T @ dy)
+    del s
+    dx1 = torch.empty_like(x1)
+    dx3 = torch.empty_like(x3)
+    K.swiglu_bwd(kctx, ds, x1, x3, dx1, dx3)
+    del ds
+    if acc.wanted("w1"):
+        acc("w1", h2.T @ dx1)
+    if acc.wanted("w3"):
+        acc("w3", h2.T @ dx3)
+    del h2
+    dh2 = dx1 @ w["w1"].T
+    dh2.addmm_(dx3, w["w3"].T)
+    del dx1, dx3
+    tp_allreduce_inplace(gh, es, dh2)   # partial over shards -> full
+    dh_mid, dffn_norm = norm_bwd(dh2, h_mid, rstd_ffn, w["ffn_norm_w"])
+    del dh2
+    acc("ffn_norm_w", dffn_norm)
+    dh_mid.add_(dy)
+    return dh_mid
+
+
 @dataclass(frozen=True)
 class BlockBwd(_Base):
     """Transformer-block backward: MLP-tail then attention backward, per
@@ -323,7 +421,7 @@ class BlockBwd(_Base):
         es, kctx = self._stream_ctx(ctx)
         with torch.cuda.stream(es):
             dy = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
-            a = self.cl.views(self._in(ctx, 1))
+            a = self.cl_for(ctx.task).views(self._in(ctx, 1))
             x = torch_view(self._in(ctx, 2), (d.tokens, d.d_model), torch.bfloat16)
             w = self.wl_for(ctx.task).views(self._in(ctx, 3))
             accum = bool(ctx.task.mutates) and ctx.task.mutates[0].startswith("dW_")
@@ -341,6 +439,9 @@ class BlockBwd(_Base):
             aux_counts = self._aux_counts_state(ctx)
             if aux_counts is not None:
                 a["aux_counts"] = aux_counts
+            if ctx.task.block_params.get("tp") is not None:
+                a["tp_gh"] = tp_group_handle(ctx, ctx.task)
+                a["tp_es"] = es
             aux_temp = self._aux_temp_state(ctx)
             if aux_temp is None:
                 self._backward(kctx, dy, a, x, w, dx, dw, accum)
@@ -360,6 +461,12 @@ class BlockBwd(_Base):
         self._attn_bwd(kctx, dh_mid, a, x, w, acc, norm_bwd, dx_out)
 
     def _mlp_bwd(self, kctx, dy, a, w, dw, accum, acc, norm_bwd):
+        if "tp_es" in a:
+            return tp_mlp_tail_bwd(
+                kctx, self.kernels, dy, a[self.MLP_RESID_FIELD],
+                a["rstd_ffn"], a["x1"], a["x3"], w, acc, norm_bwd,
+                gh=a["tp_gh"], es=a["tp_es"],
+            )
         return dense_mlp_tail_bwd(
             kctx, self.kernels, dy, a[self.MLP_RESID_FIELD], a["rstd_ffn"],
             a["x1"], a["x3"], w, acc, norm_bwd,

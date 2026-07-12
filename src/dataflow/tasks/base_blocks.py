@@ -25,6 +25,7 @@ from .layouts import (
     grad_layout,
     head_weight_layout,
     opt_state_layout,
+    sliced_layout,
     weight_layout,
 )
 
@@ -106,18 +107,49 @@ class _Base:
                 return int(oid.split("_")[1])
         return None
 
+    # saved activations tied to a tensor-parallel weight slice: the
+    # dense-MLP convention (x1/x3 are the w1/w3 up-projections and
+    # share their d_ff column range)
+    TP_ACT_OF_WEIGHT = {"w1": "x1", "w3": "x3"}
+
+    @staticmethod
+    def tp_slices(task) -> dict | None:
+        """Weight-field shard slices from the task's tensor-parallel
+        block param: {field: (dim, lo, hi)}, or None when the task is
+        not tensor-parallel."""
+        tp = task.block_params.get("tp")
+        if tp is None:
+            return None
+        return {name: tuple(int(x) for x in sl)
+                for name, sl in tp["slices"].items()}
+
     def wl_for(self, task) -> PackedLayout:
-        return self._weight_layout(self.layer_of(task))
+        wl = self._weight_layout(self.layer_of(task))
+        slices = self.tp_slices(task)
+        return sliced_layout(wl, slices) if slices else wl
 
     def gl_for(self, task) -> PackedLayout:
         layer = self.layer_of(task)
-        return grad_layout(self._weight_layout(layer), self.dims.dtypes,
+        return grad_layout(self.wl_for(task), self.dims.dtypes,
                            layer=layer,
                            opt_policy=getattr(self.dims, "opt_policy", None))
 
     @property
     def cl(self) -> PackedLayout:
         return activation_layout(self.dims)
+
+    def cl_for(self, task) -> PackedLayout:
+        """The task's saved-context layout: under a tensor-parallel
+        block param the activations tied to sharded weights narrow to
+        the same slice."""
+        slices = self.tp_slices(task)
+        if not slices:
+            return self.cl
+        act = {}
+        for weight_field, act_field in self.TP_ACT_OF_WEIGHT.items():
+            if weight_field in slices:
+                act[act_field] = slices[weight_field]
+        return sliced_layout(self.cl, act) if act else self.cl
 
     def _stream_ctx(self, ctx: TaskContext):
         es = external_stream(ctx.stream)
@@ -511,6 +543,9 @@ class AdamWStep(_Base):  # name kept for resolver back-compat; see OptimizerStep
             wl_, ns = head_weight_layout(d), "head"
         else:
             wl_, ns = weight_layout(d, layer=layer), None
+        slices = self.tp_slices(task)
+        if slices:
+            wl_ = sliced_layout(wl_, slices)   # per-rank shard shapes
         if wl_.total_bytes != w_size:
             raise ValueError(
                 f"optimizer layout mismatch for {task.id!r}: layout "
@@ -593,12 +628,13 @@ class AdamWStep(_Base):  # name kept for resolver back-compat; see OptimizerStep
                 summed = torch.cuda.Event()
                 summed.record(gh.stream)
                 es.wait_event(summed)
-            elif gh is not None:
-                # sharded grads-in: each sharded region reduces to its
-                # owner (everyone contributes, only the owner lands the
-                # sum); replicated fields keep the redundant-update
-                # allreduce. Same op sequence on every rank: plan-order
-                # comm entries, then grad-layout-order replicated fields.
+            elif gh is not None and sh.get("grads", "partial") == "partial":
+                # sharded PARTIAL grads (a data split ran): each sharded
+                # region reduces to its owner (everyone contributes, only
+                # the owner lands the sum); replicated fields keep the
+                # redundant-update allreduce. Same op sequence on every
+                # rank: plan-order comm entries, then grad-layout-order
+                # replicated fields.
                 grads_ready = torch.cuda.Event()
                 grads_ready.record(es)
                 gh.stream.wait_event(grads_ready)
@@ -616,6 +652,13 @@ class AdamWStep(_Base):  # name kept for resolver back-compat; see OptimizerStep
                 summed = torch.cuda.Event()
                 summed.record(gh.stream)
                 es.wait_event(summed)
+            # sh["grads"] == "replica" (tensor parallelism: no data
+            # split): every rank's grad for a replicated field is
+            # already the complete gradient — a sum-reduce would double
+            # it. NO pre-update comm; owners update from their local
+            # copy and the post-update broadcast (below) re-pins the
+            # replicas. Resident-narrowed (tp) fields have no comm
+            # entries at all — their grads and updates are fully local.
             wait_name = ctx.task.block_params.get("dp_wait_group")
             gw = (getattr(ctx, "groups", None) or {}).get(wait_name) \
                 if wait_name else None

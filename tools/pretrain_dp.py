@@ -61,6 +61,12 @@ def main() -> None:
     tr.add_argument("--backend", default=None,
                     help="group backend override: hostmem | nccl | "
                          "auto (default: the topology group's)")
+    tr.add_argument("--tp-mlp", action="store_true",
+                    help="tensor-parallel MLPs through the sharding "
+                         "API: every rank runs the FULL batch with "
+                         "w1/w3/w2 sharded over d_ff (rank_rounds "
+                         "does not apply); correctness track, not a "
+                         "throughput one on this pair")
     tr.add_argument("--opt-shard", default=None,
                     help="optimizer-state sharding: 'zero1' halves each "
                          "rank's O bytes (field-snapped shards; sharded "
@@ -115,7 +121,8 @@ def main() -> None:
                            seed=args.seed, profile=profile,
                            dp_overlap=args.dp_overlap,
                            backend=args.backend,
-                           opt_shard=args.opt_shard)
+                           opt_shard=args.opt_shard,
+                           tp_mlp=args.tp_mlp)
         res.save(args.out)
         print(f"saved {args.out} (final loss {res.losses[-1]:.4f}, "
               f"steady {res.steady_tok_per_s:.0f} tok/s)")

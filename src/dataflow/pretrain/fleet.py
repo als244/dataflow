@@ -49,9 +49,12 @@ from .hostops import (
 from .presets import cfg_dict, tokens_per_step
 from .recipe import Recipe
 from .sharding import (
+    ALL_RANKS,
     ParallelConfig,
     layer_fields_by_root,
     shard_block_params,
+    tp_opt_block_params,
+    tp_view,
     update_regions,
     zero1_halves,
 )
@@ -61,22 +64,44 @@ from .topology import load_topology
 def lower_with_group(cfg, dp_group: str, recompute_levels=None,
                      dp_overlap: bool = False, parallel=None):
     """``parallel`` (sharding.ParallelConfig with a plan) makes this a
-    PER-RANK lowering: optimizer tasks gain shard block_params and the
-    rank's O objects shrink to owned slots at exact-size time."""
+    PER-RANK lowering. An optimizer-consumable plan (zero1): optimizer
+    tasks gain shard block_params and the rank's O objects shrink to
+    owned slots. A resident-narrowed plan (tensor parallelism):
+    fwd/recompute/bwd tasks additionally gain tp block_params, W/dW/
+    A/O objects take their sizes from the per-rank sliced layouts,
+    and the optimizer runs in replica-grads mode (no reduce; local
+    update; owner broadcast)."""
     hw = ShapedHardware()
     shard_params = None
+    tp_params = None
     opt_regions = None
+    rank_view = None
     if parallel is not None and parallel.plan is not None:
-        shard_params = shard_block_params(parallel.plan, parallel.rank)
-        opt_regions = update_regions(parallel.plan, parallel.rank)
+        plan = parallel.plan
+        narrowed = any(a.resident != ALL_RANKS for a in plan.assignments)
+        if narrowed:
+            plan.consumable("tp")
+            rank_view = tp_view(plan, parallel.rank)
+            tp_params = {
+                root: {"group": parallel.group,
+                       "slices": {name: list(sl)
+                                  for name, sl in slices.items()}}
+                for root, slices in rank_view.items()}
+            shard_params = tp_opt_block_params(plan, parallel.rank)
+            opt_regions = {root: dict(sh["update"])
+                           for root, sh in shard_params.items()}
+        else:
+            shard_params = shard_block_params(plan, parallel.rank)
+            opt_regions = update_regions(plan, parallel.rank)
     shaped = build_shaped_program(
         cfg, hw=hw, family="llama3-shaped",
         kinds={"block": roofline_block_kind_spec(cfg, hw)},
         dp_group=dp_group, recompute_levels=recompute_levels,
-        dp_overlap=dp_overlap, shard_params=shard_params)
+        dp_overlap=dp_overlap, shard_params=shard_params,
+        tp_params=tp_params)
     from dataflow.training.lowering import apply_exact_sizes, size_of_factory
 
-    dims, fl = family_layouts(cfg)
+    dims, fl = family_layouts(cfg, tp_view=rank_view)
     return apply_exact_sizes(
         shaped, "llama3-exact",
         size_of=size_of_factory(dims, fl, opt_update_regions=opt_regions))
@@ -185,6 +210,7 @@ def run_fleet_dp(global_cfg, recipe: Recipe, stream, steps: int, *,
                  seed: int = 11, log=print, log_every: int = 10,
                  profile: dict | None = None, dp_overlap: bool = False,
                  backend: str | None = None, opt_shard: str | None = None,
+                 tp_mlp: bool = False,
                  prof_dir: str = "results/pretrain/logs") -> RunResult:
     """Train ``global_cfg``'s step batch across the group's hosts;
     returns the conductor's RunResult (losses = GLOBAL step means).
@@ -208,21 +234,38 @@ def run_fleet_dp(global_cfg, recipe: Recipe, stream, steps: int, *,
     if len(rank_rounds) != world:
         raise ValueError(f"rank_rounds {rank_rounds} vs {world} members")
     r_global = global_cfg.grad_accum_rounds
-    if sum(rank_rounds) != r_global:
-        raise ValueError(f"rank_rounds {rank_rounds} must sum to the "
-                         f"global grad_accum_rounds {r_global}")
+    if tp_mlp and opt_shard is not None:
+        raise ValueError("tp_mlp and opt_shard are separate "
+                         "parallelism configurations — pick one")
+    if tp_mlp:
+        # tensor parallelism splits COMPUTE, not data: every rank runs
+        # the full step batch (rank_rounds does not apply)
+        cfgs = [global_cfg for _ in range(world)]
+        round_map = [tuple(range(r_global)) for _ in range(world)]
+    else:
+        if sum(rank_rounds) != r_global:
+            raise ValueError(f"rank_rounds {rank_rounds} must sum to "
+                             f"the global grad_accum_rounds {r_global}")
+        cfgs = [replace(global_cfg, grad_accum_rounds=k)
+                for k in rank_rounds]
+        round_map = []
+        start = 0
+        for k in rank_rounds:
+            round_map.append(tuple(range(start, start + k)))
+            start += k
     budgets = tuple(budgets) if budgets else tuple(h.budget_gib
                                                    for h in hosts)
     slabs = tuple(slabs) if slabs else tuple(h.slab_gib for h in hosts)
-    cfgs = [replace(global_cfg, grad_accum_rounds=k) for k in rank_rounds]
-    round_map = []
-    start = 0
-    for k in rank_rounds:
-        round_map.append(tuple(range(start, start + k)))
-        start += k
 
     parallels = [None] * world
-    if opt_shard is not None:
+    if tp_mlp:
+        plan = tp_mlp_shards(layer_fields_by_root(global_cfg),
+                             gspec.name, world)
+        plan.validate(getattr(global_cfg, "opt_policy", None))
+        plan.consumable("tp")
+        parallels = [ParallelConfig(group=gspec.name, rank=i, world=world,
+                                    plan=plan) for i in range(world)]
+    elif opt_shard is not None:
         if opt_shard != "zero1":
             raise ValueError(f"opt_shard {opt_shard!r}: only 'zero1' "
                              f"(field-snapped equal halves) exists")
@@ -293,7 +336,8 @@ def run_fleet_dp(global_cfg, recipe: Recipe, stream, steps: int, *,
                           log_every=log_every,
                           tokens_step=tokens_per_step(global_cfg),
                           r_global=r_global, profile=profile,
-                          dp_overlap=dp_overlap, parallels=parallels)
+                          dp_overlap=dp_overlap, parallels=parallels,
+                          tp_mode=tp_mlp)
     finally:
         for rig in rigs:
             if rig.client is None:
@@ -329,7 +373,8 @@ def run_fleet_dp(global_cfg, recipe: Recipe, stream, steps: int, *,
 def fleet_loop(ranks, gspec, recipe, stream, steps, *, budgets, seed,
                log, log_every, tokens_step, r_global,
                profile: dict | None = None,
-               dp_overlap: bool = False, parallels=None) -> RunResult:
+               dp_overlap: bool = False, parallels=None,
+               tp_mode: bool = False) -> RunResult:
     world = len(ranks)
 
     # ---- per-rank register + warm-up ----------------------------------
@@ -349,15 +394,25 @@ def fleet_loop(ranks, gspec, recipe, stream, steps, *, budgets, seed,
         fill = {"kind": "family_init_all", "family": "llama3",
                 "cfg": cfg_dict(rank.cfg), "seed": seed}
         if par is not None and par.plan is not None:
-            # sharded O: the daemon must allocate THIS RANK's shrunken
-            # O objects — send the registered program's own sizes
+            narrowed = any(a.resident != ALL_RANKS
+                           for a in par.plan.assignments)
+            prefixes = ("O_", "W_") if narrowed else ("O_",)
+            if narrowed:
+                view = tp_view(par.plan, par.rank)
+                fill["tp_view"] = {
+                    root: {f: list(sl) for f, sl in per.items()}
+                    for root, per in view.items()}
+            # the daemon must allocate THIS RANK's shrunken objects —
+            # send the registered program's own sizes
             fill["object_sizes"] = {
                 s.id: s.size_bytes
                 for s in planned.program.initial_objects
-                if s.id.startswith("O_")}
-            o_bytes = sum(fill["object_sizes"].values())
+                if s.id.startswith(prefixes)}
+            o_bytes = sum(b for oid, b in fill["object_sizes"].items()
+                          if oid.startswith("O_"))
             log(f"[fleet] {rank.name}: sharded optimizer state "
-                f"{o_bytes / 1024 ** 3:.2f} GiB")
+                f"{o_bytes / 1024 ** 3:.2f} GiB"
+                + (" (tp: sharded weights too)" if narrowed else ""))
         rank.client.materialize_group(fill)
         put_rank_rounds(rank, stream, 0, r_global)
         reg = rank.client.register_program(prog_dict, resolver=resolver)
@@ -385,7 +440,8 @@ def fleet_loop(ranks, gspec, recipe, stream, steps, *, budgets, seed,
     log(f"[fleet] {gspec.name} group up ({gspec.backend}, "
         f"world {world})")
 
-    res = RunResult(backend="fleet-dp", budget_gib=budgets[0],
+    res = RunResult(backend="fleet-tp" if tp_mode else "fleet-dp",
+                    budget_gib=budgets[0],
                     meta={"seed": seed, "world": world,
                           "hosts": [r.name for r in ranks],
                           "rank_rounds": [len(r.rounds) for r in ranks],
@@ -405,8 +461,10 @@ def fleet_loop(ranks, gspec, recipe, stream, steps, *, budgets, seed,
         t0 = time.perf_counter()
         if step > 0:
             valid = 0
-            for rank in ranks:
-                valid += put_rank_rounds(rank, stream, step, r_global)
+            for k, rank in enumerate(ranks):
+                v = put_rank_rounds(rank, stream, step, r_global)
+                if k == 0 or not tp_mode:
+                    valid += v   # tp replicas share ONE batch: count once
         else:
             valid = tokens_step        # step-0 rounds already resident
         jobs = [StepRun(rank, step, valid) for rank in ranks]
@@ -418,7 +476,19 @@ def fleet_loop(ranks, gspec, recipe, stream, steps, *, budgets, seed,
         for j in jobs:
             if j.error is not None:
                 raise RuntimeError(f"step {step} {j.rank.name}: {j.error}")
-        step_loss = sum(sum(j.fetched.values()) for j in jobs)
+        if tp_mode:
+            # replicas compute the SAME loss (allreduced activations);
+            # take rank 0's and demand the others agree — divergence
+            # here means the tp group plane broke
+            per_rank = [sum(j.fetched.values()) for j in jobs]
+            step_loss = per_rank[0]
+            for k, other in enumerate(per_rank[1:], start=1):
+                if abs(other - step_loss) > 1e-3:
+                    raise RuntimeError(
+                        f"step {step}: tp replicas disagree — rank 0 "
+                        f"{step_loss} vs rank {k} {other}")
+        else:
+            step_loss = sum(sum(j.fetched.values()) for j in jobs)
         for j in jobs:
             for key in ("peak_fast_bytes", "torch_reserved_peak",
                         "torch_allocated_peak", "placement_extent_bytes"):

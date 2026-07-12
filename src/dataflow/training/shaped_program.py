@@ -243,6 +243,14 @@ def build_shaped_program(
                                    # allreduce+update (ZeRO-1 style); O
                                    # sizes shrink at exact-size time via
                                    # size_of_factory's opt_update_regions
+    tp_params=None,                # {object_root -> {"group", "slices"}}
+                                   # (sharding.tp_view derived): fwd/
+                                   # recompute/bwd tasks of listed layers
+                                   # gain a "tp" block param — blocks view
+                                   # sharded weights/activations at shard
+                                   # shape and run the partial+allreduce
+                                   # MLP variants; per-rank object sizes
+                                   # come from family_layouts(tp_view=...)
     bias_update_in_bwd: bool = False,
     retained_lbl: bool = False,
     freeze=None,  # FreezePlan | None (training/freeze_plan.py)
@@ -364,6 +372,12 @@ def build_shaped_program(
             raise ValueError("shard_params is incompatible with dp_overlap "
                              "(grad_reduce tasks assume the replicated "
                              "allreduce+update shape)")
+    if tp_params:
+        if dp_group is None:
+            raise ValueError("tp_params requires dp_group — the tp "
+                             "collectives ride the same group handle")
+        if dp_overlap:
+            raise ValueError("tp_params is incompatible with dp_overlap")
 
     for s in range(cfg.num_steps):
         # Optimizer emitters: one per parameter family; ids/inputs identical
@@ -378,11 +392,14 @@ def build_shaped_program(
             opt_params = {"dp_wait_group": dp_group}
 
         shards = shard_params or {}
+        tps = tp_params or {}
 
         def opt_embed(s: int = s) -> None:
             g_embed = f"dWg_embed_{s}" if dp_overlap else f"dW_embed_{s}"
             extra = ({"shard": shards["W_embed"]}
                      if "W_embed" in shards else {})
+            if "W_embed" in tps:
+                extra["tp"] = tps["W_embed"]
             params = {**opt_params, **extra}
             task(f"optimizer_embed_{s}", "optimizer_embed",
                  ["W_embed", g_embed, "O_embed"], [],
@@ -395,6 +412,8 @@ def build_shaped_program(
             g_blk = f"dWg_{s}_{i}" if dp_overlap else f"dW_{s}_{i}"
             extra = ({"shard": shards[f"W_{i}"]}
                      if f"W_{i}" in shards else {})
+            if f"W_{i}" in tps:
+                extra["tp"] = tps[f"W_{i}"]
             task(f"optimizer_{s}_{i}", "optimizer_block",
                  [f"W_{i}", g_blk, f"O_{i}"], [],
                  sp.optimizer_us, mutates=(f"W_{i}", f"O_{i}"),
@@ -408,6 +427,8 @@ def build_shaped_program(
             g_head = f"dWg_head_{s}" if dp_overlap else f"dW_head_{s}"
             extra = ({"shard": shards["W_head"]}
                      if "W_head" in shards else {})
+            if "W_head" in tps:
+                extra["tp"] = tps["W_head"]
             params = {**opt_params, **extra}
             task(f"optimizer_head_{s}", "optimizer_head",
                  ["W_head", g_head, "O_head"], [],
@@ -458,8 +479,11 @@ def build_shaped_program(
                     fwd_ins.append(f"current_round_{s}_{r}")
                     fwd_ins.append(f"Aux_{i}")
                     fwd_mut = (f"Aux_{i}",)   # counts accumulate; recompute never has this edge
+                tp_extra = ({"tp": tp_params[f"W_{i}"]}
+                            if tp_params and f"W_{i}" in tp_params else {})
                 task(f"block_fwd_{s}_{r}_{i}", f"{sp.key_prefix}_fwd", fwd_ins, outs,
-                     sp.fwd_us, group="forward", params={"layer": i},
+                     sp.fwd_us, group="forward",
+                     params={"layer": i, **tp_extra},
                      mutates=fwd_mut, subops=sp.fwd_subops)
                 rewrites.append(RecomputeRewrite(
                     object_id=a_id,
@@ -518,11 +542,14 @@ def build_shaped_program(
                     aux_ins.append(f"AuxTemp_{s}_{r}_{i}")
                 if i in aux_producer_of:
                     aux_ins.append(f"AuxTemp_{s}_{r}_{aux_producer_of[i]}")
+                tp_extra = ({"tp": tp_params[f"W_{i}"]}
+                            if tp_params and f"W_{i}" in tp_params else {})
                 if levels.get(a_id, 0) == 1:
                     task(f"block_recompute_{s}_{r}_{i}", f"{sp.key_prefix}_recompute",
                          [x_id, f"W_{i}"] + aux_ins,
                          [OutputSpec(id=a_id, size_bytes=sp.a_bytes, role="activation")],
-                         sp.recompute_us, group="recompute", params={"layer": i},
+                         sp.recompute_us, group="recompute",
+                         params={"layer": i, **tp_extra},
                          subops=sp.recompute_subops)
                 bwd_inputs = [f"dy_{s}_{r}_{i}", a_id, x_id, f"W_{i}"] + aux_ins
                 outs = [OutputSpec(id=(f"dy_embed_{s}_{r}" if i == 0 else f"dy_{s}_{r}_{i - 1}"),
@@ -561,7 +588,8 @@ def build_shaped_program(
                         bwd_inputs.extend(f"AuxTemp_{s}_{rr}_{i}"
                                           for rr in range(r))
                 task(f"block_bwd_{s}_{r}_{i}", f"{sp.key_prefix}_bwd", bwd_inputs, outs,
-                     sp.bwd_us, mutates=mutates, group="backward", params={"layer": i},
+                     sp.bwd_us, mutates=mutates, group="backward",
+                     params={"layer": i, **tp_extra},
                      subops=sp.bwd_subops)
                 if dp_overlap and last_round:
                     task(f"grad_reduce_{s}_{i}", "grad_reduce_block",
