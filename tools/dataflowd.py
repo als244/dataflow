@@ -37,6 +37,10 @@ def main() -> None:
                     help="host:port for the NM's own listener")
     st.add_argument("--peer-rdma-device", default=None,
                     help="HCA for the rdma-host transport (e.g. mlx5_1)")
+    st.add_argument("--plugin", action="append", default=[],
+                    help="module to import before boot (self-registers "
+                         "families via register_family; repeatable — "
+                         "the daemon twin of the tools' --plugin)")
 
     for name in ("status", "stop"):
         s = sub.add_parser(name)
@@ -44,6 +48,10 @@ def main() -> None:
 
     args = p.parse_args()
     if args.cmd == "start":
+        if args.plugin:
+            from dataflow.training.families import load_plugins
+
+            load_plugins(explicit=args.plugin)
         slab = args.slab_gib if args.slab_gib == "auto" else float(args.slab_gib)
         cfg = EngineConfig(socket_path=args.socket, slab_backing_gib=slab,
                            device=args.device, kernel_set=args.kernels,
