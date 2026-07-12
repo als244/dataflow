@@ -159,8 +159,7 @@ def run_steps(clients, prog_ids, cfg) -> list:
 
 def test_tp_llama3_two_daemons_vs_plain(tmp_path):
     cfg = make_cfg()
-    plan = tp_mlp_shards(layer_fields_by_root(cfg), "dp", 2,
-                         replicate_below_bytes=256)
+    plan = tp_mlp_shards(layer_fields_by_root(cfg), "dp", 2)
     plan.validate()
     plan.consumable("tp")
 

@@ -27,8 +27,7 @@ SEED = 7
 
 
 def build_plan():
-    plan = tp_mlp_shards(layer_fields_by_root(CFG), "tp", 2,
-                         replicate_below_bytes=256)
+    plan = tp_mlp_shards(layer_fields_by_root(CFG), "tp", 2)
     plan.validate()
     plan.consumable("tp")
     return plan

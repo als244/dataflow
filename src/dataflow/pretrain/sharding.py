@@ -443,14 +443,24 @@ def tp_opt_block_params(plan: ShardPlan, rank: int) -> dict:
 
 def tp_mlp_shards(fields_by_root: dict, group: str, world: int, *,
                   col_fields: tuple = ("w1", "w3"),
-                  row_fields: tuple = ("w2",),
-                  replicate_below_bytes: int = 1 << 16) -> ShardPlan:
+                  row_fields: tuple = ("w2",)) -> ShardPlan:
     """The tensor-parallel MLP plan: the named MLP fields shard over
     their d_ff axis with resident == owner == rank (``col_fields``
     slice dim 1, ``row_fields`` dim 0; equal slices, so the extent
     must divide by world). Every OTHER field stays replicated and
     rides the standard sharded-optimizer configuration (zero1
-    bucketing) — what matters there is replication, not TP."""
+    bucketing) — what matters there is replication, not TP.
+
+    EVERY replicated field gets an owner (no ALL_RANKS redundant
+    updates): under tp the grads are per-rank REPLICAS, and on a
+    heterogeneous pair they differ by gemm ulps — redundantly-updated
+    replicas drift apart one bf16 quantum at a time with nothing to
+    re-pin them, silently corrupting training (each rank's shard
+    learns against its own drifted norms while the allreduced
+    activations keep per-rank losses identical — found the hard way
+    at 1B x 300 steps). Owner+broadcast re-pins every replicated
+    field every step; the extra wire for norm-sized fields is
+    negligible."""
     assignments = []
     replicated_by_root: dict = {}
     for root, infos in fields_by_root.items():
@@ -475,7 +485,7 @@ def tp_mlp_shards(fields_by_root: dict, group: str, world: int, *,
             replicated_by_root[root] = rest
     if replicated_by_root:
         sub = zero1_halves(replicated_by_root, group, world,
-                           replicate_below_bytes=replicate_below_bytes)
+                           small_field_owners=True)
         assignments.extend(sub.assignments)
     return ShardPlan(group=group, world=world,
                      assignments=tuple(assignments),
@@ -483,12 +493,16 @@ def tp_mlp_shards(fields_by_root: dict, group: str, world: int, *,
 
 
 def zero1_halves(fields_by_root: dict, group: str, world: int,
-                 replicate_below_bytes: int = 1 << 16) -> ShardPlan:
+                 replicate_below_bytes: int = 1 << 16,
+                 small_field_owners: bool = False) -> ShardPlan:
     """The v1 builder: per root, greedy field-snapped byte buckets —
     approximately equal 1/world shards, whole fields only. Fields
     smaller than ``replicate_below_bytes`` (norms, biases) go
     owner=ALL_RANKS: redundant update is cheaper than propagating
-    them."""
+    them — SOUND ONLY when grads are identical across ranks (the DP
+    allreduce guarantees it). ``small_field_owners`` assigns them
+    round-robin owners instead (tp/replica-grads runs, where
+    redundant updates drift across an arch boundary)."""
     assignments = []
     for root, infos in fields_by_root.items():
         big = [f for f in infos if f.nbytes >= replicate_below_bytes]
@@ -520,9 +534,9 @@ def zero1_halves(fields_by_root: dict, group: str, world: int,
                 assignments.append(Assignment(Region(root, f.name),
                                               rank))
                 acc += f.nbytes
-        for f in small:
-            assignments.append(Assignment(Region(root, f.name),
-                                          ALL_RANKS))
+        for k, f in enumerate(small):
+            owner = (k % world) if small_field_owners else ALL_RANKS
+            assignments.append(Assignment(Region(root, f.name), owner))
     return ShardPlan(group=group, world=world,
                      assignments=tuple(assignments),
                      fields_by_root=fields_by_root)

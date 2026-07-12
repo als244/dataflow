@@ -132,8 +132,7 @@ def test_tp_mlp_shards_plan_and_views():
         update_regions,
     )
 
-    plan = tp_mlp_shards(tp_toy_fields(), "tp", 2,
-                         replicate_below_bytes=256)
+    plan = tp_mlp_shards(tp_toy_fields(), "tp", 2)
     plan.validate()
     plan.consumable("tp")
     # the optimizer (zero1) consumer refuses narrowed residency
@@ -147,9 +146,13 @@ def test_tp_mlp_shards_plan_and_views():
     assert v1["W_0"]["w1"] == (1, 64, 128)
     assert v0["W_0"]["w2"] == (0, 0, 64)
     assert v1["W_0"]["w2"] == (0, 64, 128)
-    # replicated fields ride the standard optimizer configuration
+    # replicated fields ride the standard optimizer configuration —
+    # and under tp EVERY one has an owner: redundant (ALL_RANKS)
+    # updates from replica grads drift across an arch boundary with
+    # nothing to re-pin them (the 1B norm-drift incident)
     assert plan.field_owner("W_0", "wq") in (0, 1)
-    assert plan.field_owner("W_0", "attn_norm_w") == ALL_RANKS
+    assert plan.field_owner("W_0", "attn_norm_w") in (0, 1)
+    assert not plan.redundant(), [r.field for r in plan.redundant()]
     # the zero1 O-sizing map refuses tp plans (per-rank layouts own it)
     with pytest.raises(ValueError, match="tp_view"):
         update_regions(plan, 0)
@@ -183,7 +186,7 @@ def test_tp_serialization_roundtrip():
     from dataflow.pretrain.sharding import tp_mlp_shards
 
     fbr = tp_toy_fields()
-    plan = tp_mlp_shards(fbr, "tp", 2, replicate_below_bytes=256)
+    plan = tp_mlp_shards(fbr, "tp", 2)
     back = ShardPlan.from_dict(plan.to_dict(), fbr)
     assert [a.region.key() for a in back.assignments] == \
            [a.region.key() for a in plan.assignments]
