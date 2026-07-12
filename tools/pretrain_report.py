@@ -300,11 +300,12 @@ def distperf_sections(R: dict) -> list:
             "back by zero PCIe staging), and ZeRO-1 sharding trades "
             "~6% step time for halved per-rank optimizer state — "
             "proven bitwise-equal to plain DP on the hostmem lane, "
-            "and certified at full horizon: a 1000-step fineweb run "
-            "with NCCL + ZeRO-1 tracks the recorded DP flagship at "
-            "max EMA |&Delta;| 0.0016 with final loss 4.9283 vs "
-            "4.9284 — tighter than the flagship sits to the single "
-            "engine (0.0037).</p>"
+            "and certified at full horizon by two 1000-step fineweb "
+            "runs: NCCL + ZeRO-1 tracks the recorded DP flagship at "
+            "max EMA |&Delta;| 0.0016 (final 4.9283 vs 4.9284) and "
+            "the pure default path (auto&rarr;nccl, replicated "
+            "optimizer) at 0.0022 (final 4.9289) — both tighter than "
+            "the flagship sits to the single engine (0.0037).</p>"
             f"<div class='chart'>{svg}</div>"
             + table_html(rows, ["stage", "what changed", "step wall",
                                 "tok/s", "vs single GPU"])

@@ -21,7 +21,11 @@ Every non-allreduced quantity is BITWISE equal to the corresponding
 slice of the full-width computation (column slices of independent
 dot products); the allreduced y/dx equal a split-order full-width
 reference bitwise too (world-2 bf16 add commutes). The gates in
-tests/fleet/test_tp_mlp.py assert exactly that.
+tests/fleet/test_tp_mlp.py assert exactly that — bitwise on the
+reference's own GPU architecture; across architectures gemm
+accumulation order may break rounding ties differently (measured on
+the 3090/5090 pair: 1 element in 8192 at |d| 1.8e-12), so
+cross-arch ranks get an ulp-dust budget instead.
 
 The family registers itself on import (``register_family``); remote
 daemons load it with ``dataflowd start --plugin

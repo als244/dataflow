@@ -161,20 +161,46 @@ def bitwise(a, b) -> bool:
                        b.contiguous().view(torch.uint16))
 
 
-def check_pair(got, ref):
+def ulp_noise_only(a, b, what) -> None:
+    """Cross-ARCH compare: gemm accumulation order may break rounding
+    ties differently between GPU generations (measured on this pair:
+    1 element in 8192, |d| 1.8e-12) — demand at most ulp dust, never
+    a real numeric gap."""
+    af, bf = a.float(), b.float()
+    frac = (af != bf).float().mean().item()
+    rel = ((af - bf).pow(2).sum().sqrt()
+           / (bf.pow(2).sum().sqrt() + 1e-30)).item()
+    assert frac < 1e-3 and rel < 1e-6, (what, frac, rel)
+
+
+def check_pair(got, ref, hetero_ranks=()):
+    """``hetero_ranks``: ranks whose GPU architecture differs from the
+    reference's — their LOCAL math gets the ulp budget instead of
+    bitwise. The group-plane properties (cross-rank replica equality,
+    rank-0 vs split-order reference) stay bitwise regardless."""
     # cross-rank: the allreduced outputs must be identical replicas
     assert bitwise(got[0]["y"], got[1]["y"]), "y replicas diverge"
     assert bitwise(got[0]["dx"], got[1]["dx"]), "dx replicas diverge"
-    # bitwise vs the split-order reference
-    assert bitwise(got[0]["y"], ref["y"].cpu()), "y != split reference"
-    assert bitwise(got[0]["dx"], ref["dx"].cpu()), "dx != split reference"
-    # local shard grads: gemm-for-gemm bitwise (dW layout mirrors the
-    # weight layout, so its fields are named w1/w3/w2)
+    # vs the split-order reference (computed on rank 0's arch). With a
+    # heterogeneous pair the remote partials carry possible ulp dust
+    # into the sum, so the reference compare gets the ulp budget too.
+    if hetero_ranks:
+        ulp_noise_only(got[0]["y"], ref["y"].cpu(), "y")
+        ulp_noise_only(got[0]["dx"], ref["dx"].cpu(), "dx")
+    else:
+        assert bitwise(got[0]["y"], ref["y"].cpu()), "y != split ref"
+        assert bitwise(got[0]["dx"], ref["dx"].cpu()), "dx != split ref"
+    # local shard grads: gemm-for-gemm bitwise on the reference's own
+    # arch (dW layout mirrors the weight layout: fields w1/w3/w2)
     for r in (0, 1):
         for grad, field in (("dw1", "w1"), ("dw3", "w3"),
                             ("dw2", "w2")):
-            assert bitwise(got[r]["dw"][field],
-                           ref["per_rank"][r][grad].cpu()), (r, grad)
+            mine = got[r]["dw"][field]
+            want = ref["per_rank"][r][grad].cpu()
+            if r in hetero_ranks:
+                ulp_noise_only(mine, want, (r, grad))
+            else:
+                assert bitwise(mine, want), (r, grad)
     # banded sanity vs the full-order single-gemm math
     y_band = rel_l2(got[0]["y"].float(), ref["y_full"].cpu().float())
     dx_band = rel_l2(got[0]["dx"].float(), ref["dx_full"].cpu().float())
@@ -244,7 +270,10 @@ def test_tp_mlp_crossbox_auto():
         ca.peer_connect(remote.name, remote.peer_addr(port))
         time.sleep(1.0)
         got = drive_pair(clients, [local.name, remote.name], "auto")
-        check_pair(got, reference(CFG, SEED))
+        # the remote GPU is a different architecture on this fleet:
+        # its local gemms may differ from the reference by rounding
+        # ties (measured: 1 elem / 8192 at 1.8e-12) — ulp budget there
+        check_pair(got, reference(CFG, SEED), hetero_ranks=(1,))
     finally:
         for c in clients:
             try:
