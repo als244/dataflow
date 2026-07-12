@@ -193,7 +193,7 @@ def test_zero1_bitwise_equals_plain_dp(tmp_path):
                         replicate_below_bytes=256)
     plan.validate()
     plan.v1_consumable()
-    assert any(a.updater != "all" for a in plan.assignments), \
+    assert any(a.owner != "all" for a in plan.assignments), \
         "plan degenerated to fully replicated — gate is vacuous"
 
     plain = run_config(tmp_path, "plain", [None, None])

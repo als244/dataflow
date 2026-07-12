@@ -114,6 +114,84 @@ def test_expert_shards_views_and_ep_rejection():
         ep.v1_consumable()
 
 
+def tp_toy_fields():
+    # llama3-ish layer: attention + norms replicated, mlp sharded
+    return {"W_0": [
+        FieldInfo("attn_norm_w", (64,), "bf16", 0, 128),
+        FieldInfo("wq", (64, 64), "bf16", 128, 8192),
+        FieldInfo("w1", (64, 128), "bf16", 8320, 16384),
+        FieldInfo("w3", (64, 128), "bf16", 24704, 16384),
+        FieldInfo("w2", (128, 64), "bf16", 41088, 16384),
+    ]}
+
+
+def test_tp_mlp_shards_plan_and_views():
+    from dataflow.pretrain.sharding import (
+        tp_mlp_shards,
+        tp_view,
+        update_regions,
+    )
+
+    plan = tp_mlp_shards(tp_toy_fields(), "tp", 2,
+                         replicate_below_bytes=256)
+    plan.validate()
+    plan.consumable("tp")
+    # the optimizer (zero1) consumer refuses narrowed residency
+    with pytest.raises(ValueError, match="residency"):
+        plan.consumable("optimizer")
+    with pytest.raises(ValueError, match="residency"):
+        plan.v1_consumable()
+    # per-rank layout transforms: w1/w3 column halves, w2 row halves
+    v0, v1 = tp_view(plan, 0), tp_view(plan, 1)
+    assert v0["W_0"]["w1"] == (1, 0, 64)
+    assert v1["W_0"]["w1"] == (1, 64, 128)
+    assert v0["W_0"]["w2"] == (0, 0, 64)
+    assert v1["W_0"]["w2"] == (0, 64, 128)
+    # replicated fields ride the standard optimizer configuration
+    assert plan.field_owner("W_0", "wq") in (0, 1)
+    assert plan.field_owner("W_0", "attn_norm_w") == ALL_RANKS
+    # the zero1 O-sizing map refuses tp plans (per-rank layouts own it)
+    with pytest.raises(ValueError, match="tp_view"):
+        update_regions(plan, 0)
+    # byte-range machinery refuses column shards
+    with pytest.raises(ValueError, match="dim-0 only"):
+        plan.owned_ranges(0, "W_0")
+
+
+def test_tp_axis_validation():
+    from dataflow.pretrain.sharding import tp_mlp_shards
+
+    fbr = {"W_0": [FieldInfo("m", (8, 4), "bf16", 0, 64)]}
+    with pytest.raises(ValueError, match="mixed shard axes"):
+        ShardPlan("tp", 2, (
+            Assignment(Region("W_0", "m", rows=(0, 4), dim=0), 0),
+            Assignment(Region("W_0", "m", rows=(0, 2), dim=1), 1),
+        ), fbr).validate()
+    with pytest.raises(ValueError, match="gap"):
+        ShardPlan("tp", 2, (
+            Assignment(Region("W_0", "m", rows=(0, 1), dim=1), 0,
+                       resident=0),
+            Assignment(Region("W_0", "m", rows=(2, 4), dim=1), 1,
+                       resident=1),
+        ), fbr).validate()
+    with pytest.raises(ValueError, match="does not divide"):
+        tp_mlp_shards({"W_0": [FieldInfo("w1", (8, 6), "bf16", 0, 96)]},
+                      "tp", 4)
+
+
+def test_tp_serialization_roundtrip():
+    from dataflow.pretrain.sharding import tp_mlp_shards
+
+    fbr = tp_toy_fields()
+    plan = tp_mlp_shards(fbr, "tp", 2, replicate_below_bytes=256)
+    back = ShardPlan.from_dict(plan.to_dict(), fbr)
+    assert [a.region.key() for a in back.assignments] == \
+           [a.region.key() for a in plan.assignments]
+    assert [a.resident for a in back.assignments] == \
+           [a.resident for a in plan.assignments]
+    back.consumable("tp")
+
+
 def test_serialization_roundtrip_and_required_groups():
     fbr = toy_fields()
     plan = zero1_halves(fbr, "dp", 2,

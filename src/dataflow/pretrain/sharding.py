@@ -1,20 +1,26 @@
 """The sharding API: conductor-owned ownership algebra over packed
 layouts, group-scoped by construction.
 
-Vocabulary (plan doc, Z0/Z0a): a ShardPlan assigns REGIONS —
-(object_root, field, optional dim-0 row range) — to an UPDATER (a
-rank of the plan's group, or ALL_RANKS = every rank updates
-redundantly). ``resident`` is fixed at ALL_RANKS in v1 (weights live
-everywhere; true expert parallelism narrows it later — the v1
-consumer REJECTS such plans loudly).
+Vocabulary (plan doc, Z0/Z0a/T0): a ShardPlan assigns REGIONS —
+(object_root, field, optional (lo, hi) slice along ``dim``) — with
+two independent axes per assignment:
 
-Ownership is the vocabulary; consumers decide meaning. The v1
-consumer is the optimizer configuration: updater=r means rank r holds
-the region's optimizer state and computes its update; everyone else
-holds ZERO optimizer bytes for it and receives the updated params via
-the propagation collective. updater=ALL_RANKS means redundant updates
-with full state everywhere and no propagation traffic (the cheap
-choice for tiny fields).
+- ``owner``: the rank that RUNS THE OPTIMIZER for the region — it
+  holds the region's optimizer state (nobody else has those bytes),
+  computes the new params each step, and propagates them. ALL_RANKS
+  = every rank updates redundantly from full state (the cheap choice
+  for tiny fields; no propagation traffic).
+- ``resident``: which ranks hold the PARAMETER BYTES at all.
+  ALL_RANKS = replicated weights (the zero1 configuration). A single
+  rank = the shard physically lives only there (tensor parallelism;
+  the per-rank layouts materialize it at shard shape via
+  ``tp_view``). dim-1 (column) slices exist ONLY as such layout
+  transforms — the byte-range machinery is dim-0.
+
+Ownership is the vocabulary; consumers decide meaning
+(``consumable(mode)``): the ``optimizer`` consumer (zero1) requires
+resident=ALL_RANKS everywhere; the ``tp`` consumer additionally
+accepts owner == resident == one rank.
 
 Collective realizability: reduce_scatter/all_gather need EQUAL
 per-rank counts; field-snapped shards are unequal by up to one field,
@@ -33,18 +39,26 @@ ALL_RANKS = "all"
 class Region:
     object_root: str               # e.g. "W_{i}" instantiated per layer
     field: str
-    rows: tuple | None = None      # (lo, hi) dim-0 slice; None = whole
+    rows: tuple | None = None      # (lo, hi) slice along ``dim``
+    dim: int = 0                   # shard axis: 0 = rows (byte-
+                                   # contiguous), 1 = columns (a layout
+                                   # TRANSFORM — resident-narrowed
+                                   # consumers only; the zero1 byte-
+                                   # range machinery requires dim == 0)
 
     def key(self) -> tuple:
         return (self.object_root, self.field,
-                self.rows if self.rows else None)
+                self.rows if self.rows else None, self.dim)
 
 
 @dataclass(frozen=True)
 class Assignment:
     region: Region
-    updater: object                # rank int | ALL_RANKS
-    resident: object = ALL_RANKS   # v1: always ALL_RANKS
+    owner: object                  # rank int | ALL_RANKS: who runs
+                                   # the optimizer for this region
+    resident: object = ALL_RANKS   # who holds the param bytes:
+                                   # ALL_RANKS (replicated) | rank int
+                                   # (a physical shard, tp consumer)
 
 
 @dataclass(frozen=True)
@@ -87,11 +101,11 @@ class ShardPlan:
 
     # ---------------------------------------------------- queries
     def owned(self, rank: int) -> list:
-        return [a.region for a in self.assignments if a.updater == rank]
+        return [a.region for a in self.assignments if a.owner == rank]
 
     def redundant(self) -> list:
         return [a.region for a in self.assignments
-                if a.updater == ALL_RANKS]
+                if a.owner == ALL_RANKS]
 
     def resident(self, rank: int) -> list:
         return [a.region for a in self.assignments
@@ -99,11 +113,11 @@ class ShardPlan:
                 or (isinstance(a.resident, (set, frozenset, tuple))
                     and rank in a.resident)]
 
-    def updater_of(self, root: str, field_name: str):
+    def field_owner(self, root: str, field_name: str):
         for a in self.assignments:
             if (a.region.object_root == root
                     and a.region.field == field_name):
-                return a.updater
+                return a.owner
         return None
 
     def roots(self) -> list:
@@ -117,21 +131,52 @@ class ShardPlan:
         """Field names of root fully or partially owned by rank."""
         return [a.region.field for a in self.assignments
                 if a.region.object_root == root
-                and (a.updater == rank or a.updater == ALL_RANKS)]
+                and (a.owner == rank or a.owner == ALL_RANKS)]
 
     def sharded_assignments(self, root: str) -> list:
         return [a for a in self.assignments
                 if a.region.object_root == root
-                and a.updater != ALL_RANKS]
+                and a.owner != ALL_RANKS]
 
     def v1_consumable(self) -> None:
+        self.consumable("optimizer")
+
+    def consumable(self, mode: str) -> None:
+        """Consumer contracts. ``optimizer`` (the zero1 configuration):
+        everything resident everywhere, dim-0 regions only.  ``tp``
+        (tensor parallelism): a region may narrow residency iff its
+        owner IS its (single-rank) resident — the shard physically
+        lives only there; replicated fields follow the optimizer
+        contract unchanged."""
         for a in self.assignments:
-            if a.resident != ALL_RANKS:
+            if a.resident == ALL_RANKS:
+                if a.region.dim != 0:
+                    raise ValueError(
+                        f"plan region {a.region.key()}: dim-"
+                        f"{a.region.dim} sharding of a REPLICATED "
+                        f"field — column shards exist only as "
+                        f"resident-narrowed layout transforms")
+                continue
+            if mode == "optimizer":
                 raise ValueError(
                     f"plan region {a.region.key()} narrows residency "
-                    f"({a.resident!r}) — true parameter placement "
-                    f"(expert parallelism) is not executable by the "
-                    f"v1 optimizer-sharding consumer")
+                    f"({a.resident!r}) — parameter placement is not "
+                    f"executable by the optimizer-sharding consumer")
+            if mode == "tp":
+                if a.owner != a.resident or not isinstance(
+                        a.resident, int):
+                    raise ValueError(
+                        f"plan region {a.region.key()}: tp consumer "
+                        f"needs owner == resident == one rank, got "
+                        f"owner={a.owner!r} "
+                        f"resident={a.resident!r}")
+                if a.region.rows is None:
+                    raise ValueError(
+                        f"plan region {a.region.key()}: resident-"
+                        f"narrowed fields carry an explicit (lo, hi) "
+                        f"slice per rank")
+                continue
+            raise ValueError(f"unknown consumer mode {mode!r}")
 
     # ------------------------------------------------ realizability
     def owned_ranges(self, rank: int, root: str) -> list:
@@ -140,8 +185,13 @@ class ShardPlan:
         infos = {f.name: f for f in self.fields_by_root[root]}
         ranges = []
         for a in self.sharded_assignments(root):
-            if a.updater != rank:
+            if a.owner != rank:
                 continue
+            if a.region.dim != 0:
+                raise ValueError(
+                    f"{root}.{a.region.field}: byte-range queries are "
+                    f"dim-0 only; dim-{a.region.dim} shards are layout "
+                    f"transforms (tp_view)")
             fi = infos[a.region.field]
             if a.region.rows is None:
                 ranges.append((fi.offset_bytes,
@@ -181,45 +231,63 @@ class ShardPlan:
         op = resolve_opt_policy(opt_policy) if opt_policy is not None \
             else None
         for root, infos in self.fields_by_root.items():
-            cover: dict = {f.name: [] for f in infos}
+            known = {f.name for f in infos}
             for a in self.assignments:
-                if a.region.object_root != root:
-                    continue
-                fi = next((f for f in infos
-                           if f.name == a.region.field), None)
-                if fi is None:
+                if (a.region.object_root == root
+                        and a.region.field not in known):
                     raise ValueError(f"{root}: unknown field "
                                      f"{a.region.field!r}")
-                if a.region.rows is None:
-                    cover[fi.name].append((0, fi.rows_total()))
-                else:
-                    lo, hi = a.region.rows
-                    if not (0 <= lo < hi <= fi.rows_total()):
-                        raise ValueError(
-                            f"{root}.{fi.name}: rows {a.region.rows} "
-                            f"out of bounds (0, {fi.rows_total()})")
-                    if op is not None and a.updater != ALL_RANKS:
-                        rule = op.for_field(fi.name, None, fi.shape)
-                        if rule == "muon":
-                            raise ValueError(
-                                f"{root}.{fi.name}: muon-ruled fields "
-                                f"are whole-matrix units — row splits "
-                                f"break Newton-Schulz")
-                    cover[fi.name].append((lo, hi))
-            for name, spans in cover.items():
-                spans.sort()
-                pos = 0
-                for lo, hi in spans:
-                    if lo != pos:
-                        raise ValueError(
-                            f"{root}.{name}: cover gap/overlap at row "
-                            f"{pos} (next span starts {lo})")
-                    pos = hi
-                total = next(f.rows_total() for f in infos
-                             if f.name == name)
-                if pos != total:
-                    raise ValueError(f"{root}.{name}: covered to row "
-                                     f"{pos} of {total}")
+            for fi in infos:
+                self.validate_field(root, fi, op)
+
+    def validate_field(self, root: str, fi, op) -> None:
+        """One field's assignments, checked in plain order: a single
+        shard axis, in-bounds spans, the muon whole-matrix rule, then
+        gap/overlap-free cover of that axis."""
+        assigns = [a for a in self.assignments
+                   if a.region.object_root == root
+                   and a.region.field == fi.name]
+        dims = sorted({a.region.dim for a in assigns})
+        if len(dims) > 1:
+            raise ValueError(f"{root}.{fi.name}: mixed shard axes "
+                             f"{dims} — one axis per field")
+        dim = dims[0] if dims else 0
+        if dim >= max(len(fi.shape), 1):
+            raise ValueError(f"{root}.{fi.name}: dim {dim} out of "
+                             f"range for shape {fi.shape}")
+        extent = fi.shape[dim] if fi.shape else 1
+        spans = []
+        for a in assigns:
+            if a.region.rows is None:
+                if dim != 0:
+                    raise ValueError(f"{root}.{fi.name}: whole-field "
+                                     f"regions use dim 0")
+                spans.append((0, extent))
+                continue
+            lo, hi = a.region.rows
+            if not (0 <= lo < hi <= extent):
+                raise ValueError(
+                    f"{root}.{fi.name}: slice {a.region.rows} out of "
+                    f"bounds (0, {extent}) on dim {dim}")
+            if (op is not None and a.owner != ALL_RANKS
+                    and op.for_field(fi.name, None, fi.shape)
+                    == "muon"):
+                raise ValueError(
+                    f"{root}.{fi.name}: muon-ruled fields are "
+                    f"whole-matrix units — splits break "
+                    f"Newton-Schulz")
+            spans.append((lo, hi))
+        spans.sort()
+        pos = 0
+        for lo, hi in spans:
+            if lo != pos:
+                raise ValueError(f"{root}.{fi.name}: cover "
+                                 f"gap/overlap at {pos} (next span "
+                                 f"starts {lo})")
+            pos = hi
+        if pos != extent:
+            raise ValueError(f"{root}.{fi.name}: covered to {pos} "
+                             f"of {extent}")
 
     # --------------------------------------------- group derivation
     def required_groups(self) -> list:
@@ -236,15 +304,19 @@ class ShardPlan:
                      "field": a.region.field,
                      "rows": list(a.region.rows) if a.region.rows
                      else None,
-                     "updater": a.updater}
+                     "dim": a.region.dim,
+                     "owner": a.owner,
+                     "resident": a.resident}
                     for a in self.assignments]}
 
     @staticmethod
     def from_dict(d: dict, fields_by_root: dict) -> "ShardPlan":
         assigns = tuple(
             Assignment(Region(x["root"], x["field"],
-                              tuple(x["rows"]) if x["rows"] else None),
-                       x["updater"])
+                              tuple(x["rows"]) if x["rows"] else None,
+                              dim=int(x.get("dim", 0))),
+                       x["owner"],
+                       resident=x.get("resident", ALL_RANKS))
             for x in d["assignments"])
         return ShardPlan(group=d["group"], world=d["world"],
                          assignments=assigns,
@@ -266,10 +338,19 @@ class ParallelConfig:
 def update_regions(plan: ShardPlan, rank: int) -> dict:
     """{object_root -> {field -> None | (lo, hi)}}: the regions RANK
     updates (its own plus every ALL_RANKS assignment) — the exact map
-    ``opt_state_layout(update_regions=...)`` sizes O slots from."""
+    ``opt_state_layout(update_regions=...)`` sizes O slots from.
+    Optimizer-consumer semantics: replicated params, dim-0 regions
+    against the FULL layouts; resident-narrowed (tp) fields are
+    handled through per-rank layouts instead and are rejected here."""
     out: dict = {}
     for a in plan.assignments:
-        if a.updater != rank and a.updater != ALL_RANKS:
+        if a.resident != ALL_RANKS:
+            raise ValueError(
+                f"{a.region.object_root}.{a.region.field}: resident-"
+                f"narrowed region in the optimizer-consumer map — tp "
+                f"fields size their O through the per-rank layouts "
+                f"(tp_view), not update_regions")
+        if a.owner != rank and a.owner != ALL_RANKS:
             continue
         per = out.setdefault(a.region.object_root, {})
         if a.region.field in per:
@@ -285,7 +366,7 @@ def shard_block_params(plan: ShardPlan, rank: int) -> dict:
     root's optimizer task block_params}:
 
       {"update": {field: None | [lo, hi]},     # what RANK updates
-       "comm":   [{"field", "rows", "updater"}, ...]}  # sharded regions
+       "comm":   [{"field", "rows", "owner"}, ...]}  # sharded regions
 
     ``comm`` is identical on every rank and in plan order — the
     collective sequences must match across the group. Replicated
@@ -296,7 +377,7 @@ def shard_block_params(plan: ShardPlan, rank: int) -> dict:
     for root in plan.roots():
         comm = [{"field": a.region.field,
                  "rows": list(a.region.rows) if a.region.rows else None,
-                 "updater": a.updater}
+                 "owner": a.owner}
                 for a in plan.sharded_assignments(root)]
         update = {name: (list(rows) if rows else None)
                   for name, rows in upd.get(root, {}).items()}
@@ -304,12 +385,75 @@ def shard_block_params(plan: ShardPlan, rank: int) -> dict:
     return out
 
 
+def tp_view(plan: ShardPlan, rank: int) -> dict:
+    """{object_root -> {field -> (dim, lo, hi)}}: the resident-
+    narrowed layout transform for RANK. Per-rank family layouts
+    materialize these fields at shard shape; a field resident
+    entirely on OTHER ranks is absent from this rank's view (and so
+    from its layouts)."""
+    out: dict = {}
+    for a in plan.assignments:
+        if a.resident == ALL_RANKS or a.resident != rank:
+            continue
+        root = a.region.object_root
+        if root not in out:
+            out[root] = {}
+        if a.region.field in out[root]:
+            raise ValueError(
+                f"{root}.{a.region.field}: rank {rank} holds two "
+                f"resident slices — one shard per (rank, field)")
+        lo, hi = a.region.rows
+        out[root][a.region.field] = (a.region.dim, int(lo), int(hi))
+    return out
+
+
+def tp_mlp_shards(fields_by_root: dict, group: str, world: int, *,
+                  col_fields: tuple = ("w1", "w3"),
+                  row_fields: tuple = ("w2",),
+                  replicate_below_bytes: int = 1 << 16) -> ShardPlan:
+    """The tensor-parallel MLP plan: the named MLP fields shard over
+    their d_ff axis with resident == owner == rank (``col_fields``
+    slice dim 1, ``row_fields`` dim 0; equal slices, so the extent
+    must divide by world). Every OTHER field stays replicated and
+    rides the standard sharded-optimizer configuration (zero1
+    bucketing) — what matters there is replication, not TP."""
+    assignments = []
+    replicated_by_root: dict = {}
+    for root, infos in fields_by_root.items():
+        rest = []
+        for f in infos:
+            if f.name not in col_fields and f.name not in row_fields:
+                rest.append(f)
+                continue
+            dim = 1 if f.name in col_fields else 0
+            extent = f.shape[dim]
+            if extent % world:
+                raise ValueError(
+                    f"{root}.{f.name}: extent {extent} on dim {dim} "
+                    f"does not divide by world {world}")
+            per = extent // world
+            for r in range(world):
+                assignments.append(Assignment(
+                    Region(root, f.name, rows=(r * per, (r + 1) * per),
+                           dim=dim),
+                    owner=r, resident=r))
+        if rest:
+            replicated_by_root[root] = rest
+    if replicated_by_root:
+        sub = zero1_halves(replicated_by_root, group, world,
+                           replicate_below_bytes=replicate_below_bytes)
+        assignments.extend(sub.assignments)
+    return ShardPlan(group=group, world=world,
+                     assignments=tuple(assignments),
+                     fields_by_root=fields_by_root)
+
+
 def zero1_halves(fields_by_root: dict, group: str, world: int,
                  replicate_below_bytes: int = 1 << 16) -> ShardPlan:
     """The v1 builder: per root, greedy field-snapped byte buckets —
     approximately equal 1/world shards, whole fields only. Fields
     smaller than ``replicate_below_bytes`` (norms, biases) go
-    updater=ALL_RANKS: redundant update is cheaper than propagating
+    owner=ALL_RANKS: redundant update is cheaper than propagating
     them."""
     assignments = []
     for root, infos in fields_by_root.items():
@@ -355,7 +499,7 @@ def expert_shards(fields_by_root: dict, group: str, world: int, *,
                   ) -> ShardPlan:
     """Expert-sharded OPTIMIZER STATE (NOT expert parallelism —
     resident stays ALL_RANKS): fields for which ``expert_field_of``
-    returns an expert index are assigned updater = index % world;
+    returns an expert index are assigned owner = index % world;
     ``replicated_fields`` (router/norms) go ALL_RANKS; everything else
     falls back to zero1-style bucketing."""
     assignments = []

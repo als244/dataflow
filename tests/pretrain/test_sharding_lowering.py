@@ -82,7 +82,7 @@ def test_shard_block_params_consistent_across_ranks():
         assert a is not None and b is not None, tid
         # the collective sequence must match rank to rank
         assert a["comm"] == b["comm"], tid
-        assert all(e["updater"] in (0, 1) for e in a["comm"])
+        assert all(e["owner"] in (0, 1) for e in a["comm"])
         # whole-field sharded regions are updated by exactly one rank
         whole_sharded = {e["field"] for e in a["comm"]
                          if e["rows"] is None}

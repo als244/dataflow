@@ -595,7 +595,7 @@ class AdamWStep(_Base):  # name kept for resolver back-compat; see OptimizerStep
                 es.wait_event(summed)
             elif gh is not None:
                 # sharded grads-in: each sharded region reduces to its
-                # updater (everyone contributes, only the owner lands the
+                # owner (everyone contributes, only the owner lands the
                 # sum); replicated fields keep the redundant-update
                 # allreduce. Same op sequence on every rank: plan-order
                 # comm entries, then grad-layout-order replicated fields.
@@ -608,7 +608,7 @@ class AdamWStep(_Base):  # name kept for resolver back-compat; see OptimizerStep
                     if e["rows"] is not None:
                         lo, hi = int(e["rows"][0]), int(e["rows"][1])
                         gview = gview[lo:hi]
-                    gh.reduce(gview, root=int(e["updater"]))
+                    gh.reduce(gview, root=int(e["owner"]))
                 for f in gl_.fields:
                     if f.name in sharded_names:
                         continue
@@ -684,7 +684,7 @@ class AdamWStep(_Base):  # name kept for resolver back-compat; see OptimizerStep
                          states, shape)
             if gh is not None and sh is not None and sh["comm"]:
                 # propagate updated params: each sharded region
-                # broadcasts from its updater. The final es wait keeps
+                # broadcasts from its owner. The final es wait keeps
                 # the W mutation inside THIS task's stream order — the
                 # planner is free to move/offload W right after the
                 # task completes (the dp_overlap lesson).
@@ -696,7 +696,7 @@ class AdamWStep(_Base):  # name kept for resolver back-compat; see OptimizerStep
                     if e["rows"] is not None:
                         lo, hi = int(e["rows"][0]), int(e["rows"][1])
                         wview = wview[lo:hi]
-                    gh.broadcast(wview, root=int(e["updater"]))
+                    gh.broadcast(wview, root=int(e["owner"]))
                 propagated = torch.cuda.Event()
                 propagated.record(gh.stream)
                 es.wait_event(propagated)

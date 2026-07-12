@@ -64,7 +64,7 @@ def main() -> None:
     tr.add_argument("--opt-shard", default=None,
                     help="optimizer-state sharding: 'zero1' halves each "
                          "rank's O bytes (field-snapped shards; sharded "
-                         "regions reduce to their updater, update "
+                         "regions reduce to their owner, update "
                          "locally, broadcast W back)")
     tr.add_argument("--dp-overlap", action="store_true",
                     help="EXPERIMENTAL, known-broken at scale: tail "
