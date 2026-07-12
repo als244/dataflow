@@ -53,6 +53,7 @@ from .sharding import (
     ParallelConfig,
     layer_fields_by_root,
     shard_block_params,
+    tp_mlp_shards,
     tp_opt_block_params,
     tp_view,
     update_regions,
