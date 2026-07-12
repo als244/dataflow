@@ -33,6 +33,7 @@ from dataflow.tasks.layouts import (
     activation_layout,
     embed_weight_layout,
     head_weight_layout,
+    sliced_layout,
     weight_layout,
 )
 from ..lowering import FamilyLayouts, LayerLayout, apply_exact_sizes, initial_values_from_layouts, size_of_factory
@@ -175,13 +176,40 @@ def dims_of(cfg: ShapedLlamaConfig) -> LlamaDims:
     )
 
 
-def family_layouts(cfg: ShapedLlamaConfig) -> tuple[LlamaDims, FamilyLayouts]:
+# which saved activations narrow alongside a tensor-parallel weight
+# slice: x1/x3 are the w1/w3 up-projections, so they share the d_ff
+# column range (the same (dim, lo, hi) tuple — both slice dim 1)
+TP_ACTIVATION_OF_WEIGHT = {"w1": "x1", "w3": "x3"}
+
+
+def family_layouts(cfg: ShapedLlamaConfig, tp_view: dict | None = None
+                   ) -> tuple[LlamaDims, FamilyLayouts]:
+    """``tp_view`` ({root: {field: (dim, lo, hi)}}, from
+    sharding.tp_view) makes this a PER-RANK view: listed weight
+    fields — and the saved activations tied to them — materialize at
+    shard shape. Grad/opt layouts, exact sizes, and init offsets all
+    derive from these layouts, so the transform lands everywhere by
+    construction."""
     dims = dims_of(cfg)
     cl = activation_layout(dims)
+    view = tp_view or {}
+    layers = []
+    for i in range(cfg.n_layers):
+        wl = weight_layout(dims, layer=i)
+        cli = cl
+        slices = view.get(f"W_{i}")
+        if slices:
+            wl = sliced_layout(wl, slices)
+            act_slices = {}
+            for wf, af in TP_ACTIVATION_OF_WEIGHT.items():
+                if wf in slices:
+                    act_slices[af] = slices[wf]
+            if act_slices:
+                cli = sliced_layout(cl, act_slices)
+        layers.append(LayerLayout(kind="block", weights=wl,
+                                  activations=cli))
     return dims, FamilyLayouts(
-        layers=[LayerLayout(kind="block", weights=weight_layout(dims, layer=i),
-                            activations=cl)
-                for i in range(cfg.n_layers)],
+        layers=layers,
         embed=embed_weight_layout(dims),
         head=head_weight_layout(dims),
     )
@@ -201,6 +229,29 @@ def lower_llama3(
     return apply_exact_sizes(shaped, "llama3-exact", size_of=size_of_factory(dims, fl))
 
 
-def initial_values(program: Program, cfg: ShapedLlamaConfig, backend, *, seed: int = 0, into=None):
-    dims, fl = family_layouts(cfg)
-    return initial_values_from_layouts(program, dims, fl, backend, seed=seed, into=into)
+def tp_fill_slices(cfg: ShapedLlamaConfig, tp_view: dict) -> dict:
+    """{root: {field: (dim, lo, hi, full_shape)}} for the init fill:
+    tp-sharded fields DRAW at the full single-GPU shape (keeping the
+    generator stream byte-aligned with a plain run) and write only
+    the rank's slice."""
+    dims = dims_of(cfg)
+    out: dict = {}
+    for root, slices in tp_view.items():
+        layer = int(root.split("_")[1])
+        full = {f.name: f.shape
+                for f in weight_layout(dims, layer=layer).fields}
+        per: dict = {}
+        for name, sl in slices.items():
+            dim, lo, hi = (int(x) for x in sl)
+            per[name] = (dim, lo, hi, full[name])
+        out[root] = per
+    return out
+
+
+def initial_values(program: Program, cfg: ShapedLlamaConfig, backend, *,
+                   seed: int = 0, into=None, tp_view: dict | None = None):
+    dims, fl = family_layouts(cfg, tp_view=tp_view)
+    slices_by_root = tp_fill_slices(cfg, tp_view) if tp_view else None
+    return initial_values_from_layouts(program, dims, fl, backend,
+                                       seed=seed, into=into,
+                                       tp_slices_by_root=slices_by_root)

@@ -235,12 +235,18 @@ def apply_exact_sizes(
     )
 
 
-def fill_weight_fields(buf, layout, gen, *, special=None) -> None:
+def fill_weight_fields(buf, layout, gen, *, special=None,
+                       tp_slices=None) -> None:
     """Per-FIELD init at each field's OWN storage dtype: N(0, 0.02) draws,
     ``*_norm_w`` fields ones, ``special[name](n, gen)`` overrides (A_log
     etc.). Padding gaps are explicitly zeroed (deterministic bytes for
     comparators). Draw order = field order — part of run-to-run
-    reproducibility, not of golden parity (goldens init FROM these bytes)."""
+    reproducibility, not of golden parity (goldens init FROM these bytes).
+
+    ``tp_slices`` ({field: (dim, lo, hi, full_shape)}): tensor-parallel
+    shard fields DRAW at ``full_shape`` — consuming exactly the plain
+    run's generator stream, so every rank and every later field stays
+    byte-aligned with single-GPU init — and write only the slice."""
     import torch
 
     from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME, torch_view
@@ -259,6 +265,15 @@ def fill_weight_fields(buf, layout, gen, *, special=None) -> None:
             v.fill_(1.0)
         elif special is not None and f.name in special:
             v.copy_(special[f.name](n, gen).to(v.dtype))
+        elif tp_slices is not None and f.name in tp_slices:
+            dim, lo, hi, full_shape = tp_slices[f.name]
+            n_full = 1
+            for s in full_shape:
+                n_full *= int(s)
+            draw = (torch.randn(n_full, generator=gen) * 0.02)
+            draw = draw.reshape(full_shape)
+            part = draw[:, lo:hi] if dim == 1 else draw[lo:hi]
+            v.copy_(part.reshape(-1).to(v.dtype))
         else:
             v.copy_((torch.randn(n, generator=gen) * 0.02).to(v.dtype))
     if buf.size_bytes > end:
@@ -266,7 +281,8 @@ def fill_weight_fields(buf, layout, gen, *, special=None) -> None:
 
 
 def initial_values_from_layouts(program: Program, dims, fl: FamilyLayouts,
-                                backend, *, seed: int = 0, into=None):
+                                backend, *, seed: int = 0, into=None,
+                                tp_slices_by_root=None):
     """Allocate + fill pinned buffers for every initial object: per-field
     weight init at storage dtypes (``fill_weight_fields``), optimizer state
     zeroed, tokens/targets uniform ints. Returns {object_id: Buffer} for
@@ -295,8 +311,10 @@ def initial_values_from_layouts(program: Program, dims, fl: FamilyLayouts,
             buffers[spec.id] = buf
         if spec.id.startswith("W_") and spec.id not in ("W_embed", "W_head"):
             layer = int(spec.id.split("_")[1])
+            slices = (tp_slices_by_root or {}).get(spec.id)
             fill_weight_fields(buf, fl.layers[layer].weights, gen,
-                               special=fl.init_specials)
+                               special=fl.init_specials,
+                               tp_slices=slices)
         elif spec.id == "W_embed":
             fill_weight_fields(buf, fl.embed, gen)
         elif spec.id == "W_head":

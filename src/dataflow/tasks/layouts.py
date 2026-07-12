@@ -299,6 +299,23 @@ def opt_state_layout(weight: PackedLayout, policy: DTypePolicy,
     return PackedLayout.build(specs)
 
 
+def sliced_layout(layout: PackedLayout, slices: dict) -> PackedLayout:
+    """Rebuild a packed layout with the given fields narrowed to a
+    (dim, lo, hi) slice — the resident-shard (tensor parallel) layout
+    transform from a ShardPlan's ``tp_view``. Field order is
+    preserved; offsets repack densely, so the result is a normal
+    dense layout of the shard."""
+    specs = []
+    for f in layout.fields:
+        shape = f.shape
+        if f.name in slices:
+            dim, lo, hi = (int(x) for x in slices[f.name])
+            shape = tuple(hi - lo if i == dim else s
+                          for i, s in enumerate(f.shape))
+        specs.append((f.name, shape, f.dtype))
+    return PackedLayout.build(specs)
+
+
 def weight_layout(dims: LlamaDims, layer: int | None = None) -> PackedLayout:
     d, kv, ff = dims.d_model, dims.kv_dim, dims.d_ff
     return PackedLayout.build(_param_specs(dims, [

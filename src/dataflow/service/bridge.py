@@ -37,14 +37,17 @@ def fill_family_objects(store, fill: dict, *, writer: str) -> dict:
     fam = _family(fill["family"])
     cfg_obj = fam.config_type(**fill["cfg"])
     prog = fam.lower(cfg_obj)
+    tp_view = fill.get("tp_view")
     overrides = fill.get("object_sizes") or {}
-    bad = [oid for oid in overrides
-           if not oid.startswith("O_")]
-    if bad:
+    for oid in overrides:
+        if oid.startswith("O_"):
+            continue            # bulk-zero fill: any size is safe
+        if tp_view is not None and oid.startswith("W_"):
+            continue            # per-rank tp layouts bound the fill
         raise ServiceError(
             "BAD_REQUEST",
-            f"object_sizes may only override optimizer-state objects "
-            f"(bulk-zero fills); got {bad}")
+            f"object_sizes may only override optimizer state (or, "
+            f"under a tp_view, sharded weights); got {oid!r}")
     specs = [dc_replace(s, size_bytes=int(overrides[s.id]))
              if s.id in overrides else s
              for s in prog.initial_objects]
@@ -55,8 +58,13 @@ def fill_family_objects(store, fill: dict, *, writer: str) -> dict:
         into[s.id] = Buffer(id=f"store:{s.id}", location="backing",
                             size_bytes=s.size_bytes,
                             ptr=store.ptr_of(rec), raw=None)
-    fam.initial_values(prog, cfg_obj, None,
-                       seed=int(fill.get("seed", 0)), into=into)
+    if tp_view is not None:
+        fam.initial_values(prog, cfg_obj, None,
+                           seed=int(fill.get("seed", 0)), into=into,
+                           tp_view=tp_view)
+    else:
+        fam.initial_values(prog, cfg_obj, None,
+                           seed=int(fill.get("seed", 0)), into=into)
     return {"created": [s.id for s in specs],
             "bytes": sum(s.size_bytes for s in specs)}
 
