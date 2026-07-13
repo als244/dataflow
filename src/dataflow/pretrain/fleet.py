@@ -474,14 +474,12 @@ def run_fleet_dp(global_cfg, recipe: Recipe, stream, steps: int, *,
         plan.v1_consumable()
         parallels = [ParallelConfig(group=gspec.name, rank=i, world=world,
                                     plan=plan) for i in range(world)]
-    if ck is not None:
-        ck["save_plan"] = save_plan_for(parallels, world)
 
     ck = None
     if checkpoint_every:
         ck = {"every": int(checkpoint_every),
-              "dir": Path(checkpoint_dir) / run_name, "run": run_name}
-        # save_plan filled after parallels are built (below)
+              "dir": Path(checkpoint_dir) / run_name, "run": run_name,
+              "save_plan": save_plan_for(parallels, world)}
     fleet_manifest = None
     if resume is not None:
         fleet_manifest = resolve_resume(
