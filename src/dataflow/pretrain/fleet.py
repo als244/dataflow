@@ -185,19 +185,43 @@ def distribute_shared(fleet_manifest: dict, hosts, log) -> None:
     """Make the shared (rank-0-deduped) artifact locally available on
     every resuming host; records per-rank local paths in the
     manifest. Redundant copies made at save time shortcut this."""
+    import subprocess
+
     shared = fleet_manifest.get("shared_path")
     if not shared:
         fleet_manifest["local_shared"] = [None] * len(hosts)
         return
+    if not Path(shared).is_dir():
+        # primary gone: pull a redundant copy back (same path layout)
+        by_name = {h.name: h for h in hosts}
+        for name in fleet_manifest.get("shared_copies", []):
+            host = by_name.get(name)
+            if host is None or host.is_local():
+                continue
+            probe = run_on(host, f"test -d {shared} && echo yes || "
+                                 f"echo no").strip()
+            if probe == "yes":
+                subprocess.run(
+                    ["scp", "-q", "-r", f"{host.ssh}:{shared}",
+                     str(Path(shared).parent)], check=True)
+                log(f"[fleet] shared artifact recovered from "
+                    f"{name}'s redundant copy")
+                break
+        if not Path(shared).is_dir():
+            raise RuntimeError(
+                f"shared checkpoint artifact missing at {shared} and "
+                f"no redundant copy reachable")
     local = []
     for host in hosts:
         if host.is_local():
             local.append(shared)
             continue
-        dest_parent = str(Path(shared).parent)
-        push_dir(host, shared, dest_parent)
+        probe = run_on(host, f"test -d {shared} && echo yes || "
+                             f"echo no").strip()
+        if probe != "yes":
+            push_dir(host, shared, str(Path(shared).parent))
+            log(f"[fleet] shared checkpoint artifact -> {host.name}")
         local.append(shared)   # same path layout on every host
-        log(f"[fleet] shared checkpoint artifact -> {host.name}")
     fleet_manifest["local_shared"] = local
 
 
@@ -242,9 +266,18 @@ def checkpoint_fleet(ranks, ck: dict, step_next: int, meta: dict,
         s = rank.client.wait_snapshot(snap_id, timeout=600.0)
         if s["state"] != "done":
             raise RuntimeError(f"{rank.name} snapshot failed: {s}")
+    copies = []
+    if shared_path and ck.get("redundancy", 1) > 1:
+        # k-redundant shared artifact: copies live on distinct hosts
+        # (fault tolerance — resume can source any of them)
+        for rank in ranks[1:ck["redundancy"]]:
+            host = ck["hosts_by_name"][rank.name]
+            push_dir(host, shared_path, str(step_dir))
+            copies.append(rank.name)
     manifest = {"step": step_next, **meta,
                 "save_plan": plan,
                 "shared_path": shared_path,
+                "shared_copies": copies,
                 "rank_paths": rank_paths,
                 "losses": list(losses_so_far)}
     with open(step_dir / "fleet.json", "w") as f:
@@ -252,6 +285,19 @@ def checkpoint_fleet(ranks, ck: dict, step_next: int, meta: dict,
     log(f"[fleet] checkpoint @ step {step_next} -> {step_dir} "
         f"(shared: {bool(shared_path)}, per-rank: "
         f"{sum(1 for d in rank_paths if d)})")
+    keep = ck.get("keep_last", 0)
+    if keep > 0:
+        import shutil
+
+        complete = sorted(ck["dir"].glob("step_*/fleet.json"))
+        for mf in complete[:-keep]:
+            old_dir = mf.parent
+            shutil.rmtree(old_dir, ignore_errors=True)
+            for rank in ranks:
+                host = ck["hosts_by_name"][rank.name]
+                if not host.is_local():
+                    run_on(host, f"rm -rf {old_dir}")
+            log(f"[fleet] pruned checkpoint {old_dir.name}")
 
 
 def lower_with_group(cfg, dp_group: str, recompute_levels=None,
@@ -408,6 +454,8 @@ def run_fleet_dp(global_cfg, recipe: Recipe, stream, steps: int, *,
                  tp_mlp: bool = False,
                  checkpoint_every: int | None = None,
                  checkpoint_dir: str = "results/pretrain/checkpoints",
+                 checkpoint_redundancy: int = 1,
+                 checkpoint_keep_last: int = 0,
                  run_name: str = "run",
                  resume: str | None = None,
                  prof_dir: str = "results/pretrain/logs") -> RunResult:
@@ -479,7 +527,10 @@ def run_fleet_dp(global_cfg, recipe: Recipe, stream, steps: int, *,
     if checkpoint_every:
         ck = {"every": int(checkpoint_every),
               "dir": Path(checkpoint_dir) / run_name, "run": run_name,
-              "save_plan": save_plan_for(parallels, world)}
+              "save_plan": save_plan_for(parallels, world),
+              "redundancy": int(checkpoint_redundancy),
+              "keep_last": int(checkpoint_keep_last),
+              "hosts_by_name": {h.name: h for h in hosts}}
     fleet_manifest = None
     if resume is not None:
         fleet_manifest = resolve_resume(

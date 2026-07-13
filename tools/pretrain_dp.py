@@ -72,6 +72,11 @@ def main() -> None:
                          "host-local snapshots + a conductor fleet "
                          "manifest written last as the completeness "
                          "marker)")
+    tr.add_argument("--checkpoint-redundancy", type=int, default=1,
+                    help="shared-artifact copies on distinct hosts")
+    tr.add_argument("--checkpoint-keep-last", type=int, default=0,
+                    help="prune all but the newest K checkpoints "
+                         "(0 = keep everything)")
     tr.add_argument("--resume", default=None,
                     help="'auto' (newest complete checkpoint for this "
                          "--out run name) or a step directory path")
@@ -132,6 +137,8 @@ def main() -> None:
                            opt_shard=args.opt_shard,
                            tp_mlp=args.tp_mlp,
                            checkpoint_every=args.checkpoint_every,
+                           checkpoint_redundancy=args.checkpoint_redundancy,
+                           checkpoint_keep_last=args.checkpoint_keep_last,
                            run_name=Path(args.out).stem,
                            resume=args.resume)
         res.save(args.out)
