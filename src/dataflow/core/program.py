@@ -65,14 +65,17 @@ class TaskSpec:
     implements this task — resolution is by key, never by task id, so
     planner-inserted tasks (e.g. recompute) bind automatically.
 
-    ``comm_groups`` declares the peer-group ROLES this task communicates
-    in, by purpose: {"dp": role} for the data-parallel gradient
-    exchange, {"wait": role} for ordering behind a group stream's tail
-    (overlap lowerings), {"tp": role} for tensor-parallel activation
-    collectives. Values are role NAMES — pure data; the live handles
-    bind per run (ctx.groups), and a run without the role executes the
-    task standalone. Empty means a pure-local task. Topology addressing
-    lives HERE; ``block_params`` stays geometry/math the block needs.
+    ``comm_groups`` maps a comm PURPOSE to the NAME of the peer group
+    serving it: {"dp": name} — this task exchanges gradients over
+    that group; {"wait": name} — this task exchanges nothing but must
+    order behind that group's stream tail before reading its inputs
+    (overlap lowerings deliver pre-reduced grads on the group
+    stream); {"tp": name} — tensor-parallel activation collectives.
+    The name is the lookup key into the per-run ctx.groups table
+    (create_peer_group named it; topology [groups.X]); a run without
+    that group executes the task standalone. Empty means a pure-local
+    task. Group addressing lives HERE; ``block_params`` stays
+    geometry/math the block needs.
     """
 
     id: str

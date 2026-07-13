@@ -61,12 +61,13 @@ muon's whole-matrix requirement), and checked against a consumer
 contract (`plan.consumable("optimizer")` or `"tp"`). Everything a
 task needs at runtime is baked into the task as plain data — compute
 keys select code, `block_params` carries the geometry (shard regions,
-slices), and `comm_groups` names the peer-group ROLES the task
-communicates in by purpose (`{"dp": ...}` for the gradient exchange,
-`{"tp": ...}` for tensor-parallel collectives). Roles are names, not
-handles: the live group binds per run, and a run without the group
-executes the same task standalone — which is exactly what the fleet
-warm-up does.
+slices), and `comm_groups` maps a comm purpose to the NAME of the
+peer group serving it (`{"dp": <group name>}` for the gradient
+exchange, `{"tp": <group name>}` for tensor-parallel collectives —
+the name is whatever the topology calls the group, e.g. `node`). The
+program stores names, never handles: the live group binds per run,
+and a run without the group executes the same task standalone —
+which is exactly what the fleet warm-up does.
 
 ## 3. The parallelism configurations
 
