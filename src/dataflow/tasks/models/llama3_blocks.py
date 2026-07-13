@@ -86,10 +86,18 @@ def tp_allreduce_inplace(gh, es, tensor) -> None:
 def tp_stage_down_resid(kctx, K, d, st):
     """Tensor-parallel down-projection: the shard's PARTIAL product
     allreduces over the tp group BEFORE the (replicated) residual
-    joins — adding h_mid first would double it across ranks."""
-    partial = st.pop("s") @ st["w"]["w2"]
+    joins — adding h_mid first would double it across ranks.
+
+    Partials cross the wire in FP32. Rounding each shard's partial to
+    bf16 before the sum injects relative error wherever the shards
+    CANCEL — invisible at toy scale, but at 1B geometry it compounded
+    into a diverging loss curve once the lr peaked (T4 attempt logs).
+    fp32 partials keep ONE bf16 rounding total, matching the plain
+    path's fused fp32-epilogue semantics."""
+    partial = st.pop("s").float() @ st["w"]["w2"].float()
     tp_allreduce_inplace(st["tp_gh"], st["tp_es"], partial)
-    torch.add(st.pop("h_mid"), partial, out=st["y"])
+    partial.add_(st.pop("h_mid"))      # residual joins in fp32
+    st["y"].copy_(partial)             # the ONE bf16 rounding
 
 
 @dataclass(frozen=True)
@@ -397,10 +405,14 @@ def tp_mlp_tail_bwd(kctx, K, dy, h_mid, rstd_ffn, x1, x3, w, acc,
     if acc.wanted("w3"):
         acc("w3", h2.T @ dx3)
     del h2
-    dh2 = dx1 @ w["w1"].T
-    dh2.addmm_(dx3, w["w3"].T)
+    # fp32 partials across the wire: bf16-rounding each shard's
+    # partial before the sum injects cancellation error (see
+    # tp_stage_down_resid) — one bf16 rounding AFTER the sum
+    dh2 = dx1.float() @ w["w1"].T.float()
+    dh2.addmm_(dx3.float(), w["w3"].T.float())
     del dx1, dx3
     tp_allreduce_inplace(gh, es, dh2)   # partial over shards -> full
+    dh2 = dh2.to(torch.bfloat16)
     dh_mid, dffn_norm = norm_bwd(dh2, h_mid, rstd_ffn, w["ffn_norm_w"])
     del dh2
     acc("ffn_norm_w", dffn_norm)

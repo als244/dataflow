@@ -319,9 +319,19 @@ def execute_run(program, resolver, values, *, prog_id, store=None,
         _abort_drain(store)
         return None, "CANCELLED", str(e)
     except ExecutionError as e:
+        # print BEFORE draining: the drain can wedge behind pending
+        # collectives whose peer died with us, and the error must
+        # reach the daemon log even then (the fp32-partials incident:
+        # the run's real exception was unreadable behind a drain
+        # deadlock)
+        print(f"[run-failed] {e}", flush=True)
         _abort_drain(store)
         return None, "RUN_FAILED", str(e)
     except Exception as e:  # noqa: BLE001 — daemon survives anything
+        import traceback
+
+        print(f"[run-failed] {type(e).__name__}: {e}", flush=True)
+        traceback.print_exc()
         _abort_drain(store)
         return None, "RUN_FAILED", f"{type(e).__name__}: {e}"
 
