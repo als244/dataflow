@@ -42,3 +42,25 @@ budget_gib = 12.0
 # coordinator (its daemon holds the control star).
 members = ["alpha", "beta"]
 backend = "auto"
+
+# ---- Multi-GPU single machine (e.g. an 8-GPU node) ----
+# One [hosts.*] entry PER GPU, all local (no `ssh`), each with its
+# own `device` index and a distinct peer_listen port. The conductor
+# must be one of them. Backend must be "nccl" for world > 2 (the
+# hostmem backend is pairwise).
+#
+# conductor = "g0"
+# [hosts.g0]
+# peer_listen = "127.0.0.1:29700"
+# device = 0
+# slab_gib = 60.0
+# budget_gib = 60.0
+# [hosts.g1]
+# peer_listen = "127.0.0.1:29701"
+# device = 1
+# slab_gib = 60.0
+# budget_gib = 60.0
+# # ... g2..g7 ...
+# [groups.node]
+# members = ["g0", "g1", "g2", "g3", "g4", "g5", "g6", "g7"]
+# backend = "nccl"

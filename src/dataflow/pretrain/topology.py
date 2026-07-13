@@ -113,7 +113,8 @@ def build_host(name: str, entry: dict) -> HostSpec:
         ib_dev=entry.get("ib_dev"),
         iface=entry.get("iface"),
         slab_gib=float(entry.get("slab_gib", 8.0)),
-        budget_gib=float(entry.get("budget_gib", 8.0)))
+        budget_gib=float(entry.get("budget_gib", 8.0)),
+        device=int(entry.get("device", 0)))
 
 
 def load_topology(path: str | None = None) -> Topology:

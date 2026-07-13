@@ -30,9 +30,19 @@ python = "/opt/py/bin/python"
 repo = "/srv/dataflow"
 peer_listen = "10.0.0.2:29700"
 
+[hosts.alpha_g1]
+peer_listen = "10.0.0.1:29710"
+device = 1
+slab_gib = 2.0
+budget_gib = 1.0
+
 [groups.dp]
 members = ["alpha", "beta"]
 backend = "hostmem"
+
+[groups.node]
+members = ["alpha", "alpha_g1"]
+backend = "nccl"
 """
 
 
@@ -56,6 +66,12 @@ def test_loader_roundtrip(tmp_path):
     group = topo.group("dp")
     assert group.members == ("alpha", "beta")
     assert [h.name for h in topo.group_hosts("dp")] == ["alpha", "beta"]
+    # multi-GPU single machine: a second LOCAL entry with its own CUDA
+    # device — the world-N pattern (one daemon per GPU, same host)
+    assert local.device == 0
+    g1 = topo.host("alpha_g1")
+    assert g1.is_local() and g1.device == 1
+    assert topo.group("node").backend == "nccl"
 
 
 def test_loader_validation(tmp_path):

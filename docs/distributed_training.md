@@ -250,3 +250,94 @@ this floor.
 - `tests/fleet/test_coll_dtypes_crossbox.py` — per-(backend, dtype)
   verified collectives on the real wire.
 - The handshake runs automatically at every fleet launch.
+
+## 6. Bringing up a new machine (single node, N GPUs)
+
+Day-1 ladder for a fresh multi-GPU box (e.g. an 8-GPU node). Each
+rung is cheap and localizes its own failure class; don't skip rungs
+on a new GPU architecture.
+
+**Setup (once).**
+
+```
+git clone <repo> && cd dataflow
+pip install -e .                       # same interpreter for daemons
+ln -s /path/to/fineweb10B datasets/fineweb10B   # llm.c GPT-2 shards
+cp topology.example.toml topology.toml # multi-GPU pattern is in the
+                                       # example: one [hosts.*] per
+                                       # GPU, device = 0..N-1,
+                                       # distinct ports, one
+                                       # [groups.node] backend "nccl"
+```
+
+Only the conductor's machine needs the dataset — token slices ride
+the control plane to every rank.
+
+**Rung 1 — re-bless the architecture (pure battery).** Kernels have
+only been certified on the architectures we run; a new one must
+re-pass the goldens and the kernel-audit battery before any fleet
+work:
+
+```
+python -m pytest -q
+```
+
+**Rung 2 — single-GPU training sanity.**
+
+```
+python tools/pretrain_run.py smoke --steps 20
+```
+
+(one engine, one GPU, real fineweb tokens — no fleet machinery).
+
+**Rung 3 — the fleet lane on this node.** Loopback gates boot real
+daemons and exercise groups, sharding, and checkpointing end to end:
+
+```
+python -m pytest -m fleet -q \
+    tests/fleet/test_zero1_loopback.py \
+    tests/fleet/test_zero1rs_loopback.py \
+    tests/fleet/test_checkpoint_drill.py
+```
+
+**Rung 4 — small fleet smoke, then scale the world.** Start at
+world 2 (`--group` of two members), then the full node:
+
+```
+python tools/pretrain_dp.py train --preset l3_125m --steps 60 \
+    --group node --backend nccl --rounds 1,1,1,1,1,1,1,1 \
+    --out results/pretrain/node_smoke.json
+```
+
+`--rounds` must list one entry per member (the per-rank split of the
+step's grad-accum rounds; equal on a homogeneous node). The version
+handshake, link probes, and warm-up dance run automatically.
+
+**Rung 5 — the real run, sharded + checkpointed.**
+
+```
+python tools/pretrain_dp.py train --preset l3_1b --steps 1000 \
+    --group node --backend nccl --rounds 1,1,1,1,1,1,1,1 \
+    --opt-shard zero1rs \
+    --checkpoint-every 100 --checkpoint-keep-last 3 \
+    --out results/pretrain/l3_1b_node.json
+```
+
+Resume after any interruption with the same command plus
+`--resume auto`. Compare the loss curve to a recorded single-box or
+crossbox run of the same preset per section 4's numeric
+expectations.
+
+**Known limits on a new node** (state of the world; the fleet will
+refuse or warn rather than corrupt):
+
+- world > 2 requires `backend = "nccl"` — hostmem collectives are
+  pairwise.
+- NCCL env defaults in `hostops.py` were tuned for a socket fabric
+  (`NCCL_IB_DISABLE=1` etc.). Harmless intra-node (NVLink/P2P
+  ignores them), but a MULTI-node IB/RoCE cluster needs them moved
+  to per-fabric topology settings first.
+- Tensor parallelism (`--tp-mlp`) is valid on this substrate
+  (matched GPUs) but is a correctness track, not a throughput one.
+- The `--rounds` default is a 2-rank split; always pass it
+  explicitly for other world sizes.
