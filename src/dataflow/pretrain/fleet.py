@@ -82,6 +82,13 @@ def check_fleet_versions(hosts, log) -> None:
         ["git", "-C", str(repo_root()), "status", "--porcelain",
          "--untracked-files=no"],
         capture_output=True, text=True, check=True).stdout.strip()
+    import torch
+
+    local_env = (f"torch {torch.__version__} cuda {torch.version.cuda} "
+                 f"cudnn {torch.backends.cudnn.version()}")
+    env_probe = ('import torch; print("torch", torch.__version__, '
+                 '"cuda", torch.version.cuda, '
+                 '"cudnn", torch.backends.cudnn.version())')
     for host in hosts:
         if host.is_local():
             continue
@@ -100,7 +107,20 @@ def check_fleet_versions(hosts, log) -> None:
                 f"uncommitted tracked changes that {host.name} cannot "
                 f"have:\n{dirty}\ncommit+push+pull (or stash) before "
                 f"a fleet run")
-    log(f"[fleet] version handshake ok ({local_rev[:10]})")
+        env = run_on(host, f"cd {host.repo} && {host.python} -c "
+                           f"'{env_probe}'").strip()
+        if env != local_env:
+            # replicated compute must actually replicate: a torch/cuda
+            # version difference changes kernel algorithms — data
+            # parallelism is structurally immune (the grad allreduce
+            # shares one sum) but tensor parallelism's replicated
+            # fields silently train a chimera (the 1B tp incident,
+            # round two)
+            raise RuntimeError(
+                f"fleet ENV skew: {host.name} runs [{env}] but the "
+                f"conductor runs [{local_env}] — align the "
+                f"environments before a fleet run")
+    log(f"[fleet] version handshake ok ({local_rev[:10]}, {local_env})")
 
 
 def lower_with_group(cfg, dp_group: str, recompute_levels=None,
