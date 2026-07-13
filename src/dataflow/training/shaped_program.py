@@ -228,7 +228,7 @@ def build_shaped_program(
     name: str | None = None,
     aux_shared=None,
     round_prologue: bool = False,
-    dp_group: str | None = None,   # optimizer tasks carry the group ROLE
+    dp_group: str | None = None,   # peer-group NAME optimizer tasks
                                    # name; present handle => allreduce(dW)
                                    # before the update (P4a data parallel)
     dp_overlap: bool = False,      # tail placement only: emit grad_reduce

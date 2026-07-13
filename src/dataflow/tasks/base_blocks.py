@@ -590,8 +590,8 @@ class AdamWStep(_Base):  # name kept for resolver back-compat; see OptimizerStep
             o_buf = (ctx.mutates[ctx.task.mutates[1]]
                      if len(ctx.task.mutates) > 1 else None)
             wl_, gl_, ol_, ns = self._layouts(ctx.task, w_buf.size_bytes)
-            # comm participation: task.comm_groups carries group ROLE
-            # NAMES by purpose (pure data, set by the conductor's
+            # comm participation: task.comm_groups maps a purpose to
+            # a peer-group NAME (pure data, set by the conductor's
             # lowering); the HANDLES arrive per run via ctx.groups. An
             # absent handle means a standalone run of the same artifact
             # — the fleet warm-up path — and each variant degrades to
