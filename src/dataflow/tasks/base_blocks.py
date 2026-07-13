@@ -579,9 +579,7 @@ class AdamWStep(_Base):  # name kept for resolver back-compat; see OptimizerStep
                 ns)
 
     def launch(self, ctx: TaskContext) -> None:
-        from dataclasses import replace as dc_replace
-
-        from .optim import OPTIMIZERS, hyper_for, resolve_opt_policy
+        from .adamw import dp, rs, shards
 
         es, kctx = self._stream_ctx(ctx)
         with torch.cuda.stream(es):
@@ -592,15 +590,16 @@ class AdamWStep(_Base):  # name kept for resolver back-compat; see OptimizerStep
             o_buf = (ctx.mutates[ctx.task.mutates[1]]
                      if len(ctx.task.mutates) > 1 else None)
             wl_, gl_, ol_, ns = self._layouts(ctx.task, w_buf.size_bytes)
-            # data-parallel gradient sum (P4a): the group ROLE name is
-            # baked in block_params; the HANDLE arrives per run via
-            # ctx.groups. Present => per-field allreduce(dW) on the
-            # GROUP stream with event edges both ways (enqueue-only);
-            # absent => standalone run of the same artifact (valid
-            # exactly because plain-allreduce DP is rank-complete).
+            # comm participation: block_params carry group ROLE NAMES
+            # (pure data, set by the conductor's lowering); the HANDLES
+            # arrive per run via ctx.groups. An absent handle means a
+            # standalone run of the same artifact — the fleet warm-up
+            # path — and each variant degrades to local-only work.
+            groups = getattr(ctx, "groups", None) or {}
             dp_name = ctx.task.block_params.get("dp_group")
-            gh = (getattr(ctx, "groups", None) or {}).get(dp_name) \
-                if dp_name else None
+            gh = groups.get(dp_name) if dp_name else None
+            wait_name = ctx.task.block_params.get("dp_wait_group")
+            gw = groups.get(wait_name) if wait_name else None
             sh = ctx.task.block_params.get("shard")
             if sh is not None and self.update_specials:
                 raise NotImplementedError(
@@ -608,246 +607,14 @@ class AdamWStep(_Base):  # name kept for resolver back-compat; see OptimizerStep
                     f"— the special's inputs are rank-local (MoE counts) "
                     f"and would diverge across replicas")
             if sh is not None and sh.get("mode") == "rs":
-                # byte-equal ZeRO (rs/ag fast path): ONE reduce_scatter
-                # of the flattened grad buffer, owned-slice update with
-                # flat m/v, ONE all_gather of the params; the world-
-                # remainder tail is allreduced and updated redundantly.
-                # Eligibility (uniform adamw rule + uniform dtypes with
-                # param==grad) was checked at plan derivation. With no
-                # group bound (standalone warm-up run) the comm skips
-                # and slice 0 updates from LOCAL grads — same kernels
-                # at the same flat shapes, results discarded before
-                # real steps.
-                n_slice = int(sh["n_slice"])
-                n_tail = int(sh["n_tail"])
-                dt = TORCH_DTYPE_BY_NAME[sh["dtype"]]
-                total = w_buf.size_bytes // dt.itemsize
-                rank = gh.rank if gh is not None else 0
-                if gh is not None and n_slice * gh.world + n_tail \
-                        != total:
-                    raise RuntimeError(
-                        f"{ctx.task.id}: rs shard geometry "
-                        f"{n_slice}*{gh.world}+{n_tail} != packed "
-                        f"element count {total} — plan/world mismatch")
-                n_main = total - n_tail
-                g_flat = torch_view(g_buf, (total,), dt)
-                w_flat = torch_view(w_buf, (total,), dt)
-                own_g = g_flat[rank * n_slice:(rank + 1) * n_slice]
-                if gh is not None:
-                    grads_ready = torch.cuda.Event()
-                    grads_ready.record(es)
-                    gh.stream.wait_event(grads_ready)
-                    gh.reduce_scatter(g_flat[:n_main], own_g)
-                    if n_tail:
-                        gh.allreduce(g_flat[n_main:])
-                    summed = torch.cuda.Event()
-                    summed.record(gh.stream)
-                    es.wait_event(summed)
-                ra = getattr(ctx, "run_args", None) or {}
-                step = int(ra.get("step",
-                                  ctx.task.block_params.get("step", 0))) + 1
-                op = resolve_opt_policy(getattr(self.dims, "opt_policy",
-                                                None))
-                layer = self.layer_of(ctx.task)
-                key = (lambda n: f"{ns}.{n}") if ns else (lambda n: n)
-                first = wl_.fields[0]
-                opt = OPTIMIZERS[op.for_field(key(first.name), layer,
-                                              first.shape)]
-                hp = hyper_for(op, key(first.name), layer, self.hyper)
-                # ONE flat update means ONE rule + ONE hyper set for
-                # the whole root (and the slice layout is adamw's m/v);
-                # the plan builder rejected anything else (rs_eligible),
-                # so a deviation here is policy drift between plan time
-                # and run time — refuse rather than train wrong
-                if opt.name != "adamw":
-                    raise RuntimeError(
-                        f"{ctx.task.id}: rs shard is adamw-only, "
-                        f"policy resolved {opt.name!r}")
-                for f in wl_.fields[1:]:
-                    if op.for_field(key(f.name), layer, f.shape) \
-                            != opt.name \
-                            or hyper_for(op, key(f.name), layer,
-                                         self.hyper) != hp:
-                        raise RuntimeError(
-                            f"{ctx.task.id}: rs shard needs one "
-                            f"optimizer story for the whole root; "
-                            f"field {f.name!r} deviates")
-                sched = self.hyper.schedule
-                if sched is not None and sched.scale(step) != 1.0:
-                    from dataclasses import replace as dc_replace2
-                    s_ = sched.scale(step)
-                    hp = dc_replace2(hp, lr=hp.lr * s_,
-                                     muon_lr=(hp.muon_lr * s_
-                                              if hp.muon_lr else
-                                              hp.muon_lr))
-                own_w = w_flat[rank * n_slice:(rank + 1) * n_slice]
-                opt.step(kctx, self.kernels, hp, step, own_w, own_g,
-                         {"m": ol_.view(o_buf, "m_slice").view(-1),
-                          "v": ol_.view(o_buf, "v_slice").view(-1)},
-                         (n_slice,))
-                if n_tail:
-                    opt.step(kctx, self.kernels, hp, step,
-                             w_flat[n_main:], g_flat[n_main:],
-                             {"m": ol_.view(o_buf, "m_tail").view(-1),
-                              "v": ol_.view(o_buf, "v_tail").view(-1)},
-                             (n_tail,))
-                if gh is not None:
-                    w_ready = torch.cuda.Event()
-                    w_ready.record(es)
-                    gh.stream.wait_event(w_ready)
-                    gh.all_gather(own_w, w_flat[:n_main])
-                    gathered = torch.cuda.Event()
-                    gathered.record(gh.stream)
-                    es.wait_event(gathered)
-                return
-            if gh is not None and sh is None:
-                grads_ready = torch.cuda.Event()
-                grads_ready.record(es)
-                gh.stream.wait_event(grads_ready)
-                dtypes = {f.dtype for f in gl_.fields}
-                if len(dtypes) == 1:
-                    # contiguous grad layout, uniform dtype: ONE fused
-                    # exchange for the whole layer's grads (wire-floor
-                    # sized) instead of a round trip per field —
-                    # elementwise sums, so bitwise-identical results
-                    total = 0
-                    for f in gl_.fields:
-                        n = 1
-                        for s in f.shape:
-                            n *= s
-                        dt_f = TORCH_DTYPE_BY_NAME[f.dtype]
-                        end = f.offset_bytes + n * dt_f.itemsize
-                        if end > total:
-                            total = end
-                    dt_all = TORCH_DTYPE_BY_NAME[gl_.fields[0].dtype]
-                    fused = torch_view(g_buf, (total // dt_all.itemsize,),
-                                       dt_all)
-                    gh.allreduce(fused)
-                else:
-                    for f in gl_.fields:
-                        gview = torch_view(g_buf, f.shape,
-                                           TORCH_DTYPE_BY_NAME[f.dtype],
-                                           offset_bytes=f.offset_bytes)
-                        gh.allreduce(gview)
-                summed = torch.cuda.Event()
-                summed.record(gh.stream)
-                es.wait_event(summed)
-            elif gh is not None and sh.get("grads", "partial") == "partial":
-                # sharded PARTIAL grads (a data split ran): each sharded
-                # region reduces to its owner (everyone contributes, only
-                # the owner lands the sum); replicated fields keep the
-                # redundant-update allreduce. Same op sequence on every
-                # rank: plan-order comm entries, then grad-layout-order
-                # replicated fields.
-                grads_ready = torch.cuda.Event()
-                grads_ready.record(es)
-                gh.stream.wait_event(grads_ready)
-                sharded_names = {e["field"] for e in sh["comm"]}
-                for e in sh["comm"]:
-                    gview = gl_.view(g_buf, e["field"])
-                    if e["rows"] is not None:
-                        lo, hi = int(e["rows"][0]), int(e["rows"][1])
-                        gview = gview[lo:hi]
-                    gh.reduce(gview, root=int(e["owner"]))
-                for f in gl_.fields:
-                    if f.name in sharded_names:
-                        continue
-                    gh.allreduce(gl_.view(g_buf, f.name))
-                summed = torch.cuda.Event()
-                summed.record(gh.stream)
-                es.wait_event(summed)
-            # sh["grads"] == "replica" (tensor parallelism: no data
-            # split): every rank's grad for a replicated field is
-            # already the complete gradient — a sum-reduce would double
-            # it. NO pre-update comm; owners update from their local
-            # copy and the post-update broadcast (below) re-pins the
-            # replicas. Resident-narrowed (tp) fields have no comm
-            # entries at all — their grads and updates are fully local.
-            wait_name = ctx.task.block_params.get("dp_wait_group")
-            gw = (getattr(ctx, "groups", None) or {}).get(wait_name) \
-                if wait_name else None
-            if gw is not None:
-                # overlap lowering: grads arrive PRE-REDUCED in the
-                # dWg input, summed on the GROUP stream by an earlier
-                # grad_reduce task — order es behind its current tail
-                # (FIFO stream => covers this layer's sum)
-                summed = torch.cuda.Event()
-                summed.record(gw.stream)
-                es.wait_event(summed)
-            ra = getattr(ctx, "run_args", None) or {}
-            # service runs bind the global step per run (run_args);
-            # in-process paths keep baking it into block_params
-            step = int(ra.get("step", ctx.task.block_params.get("step", 0))) + 1
-            op = resolve_opt_policy(getattr(self.dims, "opt_policy", None))
-            layer = self.layer_of(ctx.task)
-            key = (lambda n: f"{ns}.{n}") if ns else (lambda n: n)
-            # lr schedule: pure function of the step index; scales lr
-            # AND muon_lr, applied AFTER per-field hyper overrides
-            sched = self.hyper.schedule
-            sched_scale = sched.scale(step) if sched is not None else 1.0
-            upd = None
-            if sh is not None:
-                upd = {name: (tuple(rows) if rows else None)
-                       for name, rows in sh["update"].items()}
-            for f in wl_.fields:
-                if self.update_specials is not None and f.name in self.update_specials:
-                    # highest-priority per-field override (noaux bias
-                    # rule, frozen fields) — skips policy AND state
-                    self.update_specials[f.name](
-                        kctx, self.kernels,
-                        wl_.view(w_buf, f.name).view(-1),
-                        gl_.view(g_buf, f.name).view(-1),
-                    )
-                    continue
-                if upd is not None and f.name not in upd:
-                    continue        # another rank's region: no state
-                                    # here; its bytes arrive by broadcast
-                rows = upd.get(f.name) if upd is not None else None
-                opt = OPTIMIZERS[op.for_field(key(f.name), layer, f.shape)]
-                if opt.name == "frozen":
-                    continue        # frozen: no grad storage, no update
-                hp = hyper_for(op, key(f.name), layer, self.hyper)
-                if sched_scale != 1.0:
-                    hp = dc_replace(
-                        hp, lr=hp.lr * sched_scale,
-                        muon_lr=(hp.muon_lr * sched_scale
-                                 if hp.muon_lr else hp.muon_lr))
-                if opt.slots and o_buf is None:
-                    raise ValueError(
-                        f"{ctx.task.id}: field {f.name!r} wants "
-                        f"{opt.name!r} state but the task has no O object")
-                states = {slot: ol_.view(o_buf, f"{slot}_{f.name}").view(-1)
-                          for slot in opt.slots}
-                w_v = wl_.view(w_buf, f.name)
-                g_v = gl_.view(g_buf, f.name)
-                shape = f.shape
-                if rows is not None:
-                    lo, hi = rows
-                    w_v = w_v[lo:hi]        # dim-0 slice of a packed
-                    g_v = g_v[lo:hi]        # field view: contiguous
-                    shape = (hi - lo,) + tuple(f.shape[1:])
-                opt.step(kctx, self.kernels, hp, step,
-                         w_v.reshape(-1), g_v.reshape(-1),
-                         states, shape)
-            if gh is not None and sh is not None and sh["comm"]:
-                # propagate updated params: each sharded region
-                # broadcasts from its owner. The final es wait keeps
-                # the W mutation inside THIS task's stream order — the
-                # planner is free to move/offload W right after the
-                # task completes (the dp_overlap lesson).
-                w_ready = torch.cuda.Event()
-                w_ready.record(es)
-                gh.stream.wait_event(w_ready)
-                for e in sh["comm"]:
-                    wview = wl_.view(w_buf, e["field"])
-                    if e["rows"] is not None:
-                        lo, hi = int(e["rows"][0]), int(e["rows"][1])
-                        wview = wview[lo:hi]
-                    gh.broadcast(wview, root=int(e["owner"]))
-                propagated = torch.cuda.Event()
-                propagated.record(gh.stream)
-                es.wait_event(propagated)
-
+                rs.launch(self, ctx, es, kctx, wl_, gl_, ol_, ns,
+                          w_buf, g_buf, o_buf, gh, sh)
+            elif sh is not None:
+                shards.launch(self, ctx, es, kctx, wl_, gl_, ol_, ns,
+                              w_buf, g_buf, o_buf, gh, gw, sh)
+            else:
+                dp.launch(self, ctx, es, kctx, wl_, gl_, ol_, ns,
+                          w_buf, g_buf, o_buf, gh, gw)
 
 
 OptimizerStep = AdamWStep  # the general per-field-policy optimizer executable
