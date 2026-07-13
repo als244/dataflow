@@ -316,6 +316,22 @@ def sliced_layout(layout: PackedLayout, slices: dict) -> PackedLayout:
     return PackedLayout.build(specs)
 
 
+def opt_state_slice_layout(n_slice: int, n_tail: int,
+                           opt_dtype: str) -> PackedLayout:
+    """Optimizer state for a BYTE-EQUAL shard (the rs/ag fast path):
+    flat m/v over this rank's slice elements plus the full
+    world-remainder tail (updated redundantly on every rank). Field
+    identity is deliberately absent — byte-equal shards require a
+    uniform optimizer policy across the root, checked at plan
+    derivation."""
+    specs = [("m_slice", (n_slice,), opt_dtype),
+             ("v_slice", (n_slice,), opt_dtype)]
+    if n_tail:
+        specs += [("m_tail", (n_tail,), opt_dtype),
+                  ("v_tail", (n_tail,), opt_dtype)]
+    return PackedLayout.build(specs)
+
+
 def weight_layout(dims: LlamaDims, layer: int | None = None) -> PackedLayout:
     d, kv, ff = dims.d_model, dims.kv_dim, dims.d_ff
     return PackedLayout.build(_param_specs(dims, [

@@ -59,6 +59,7 @@ from .sharding import (
     tp_view,
     update_regions,
     zero1_halves,
+    zero1rs_block_params,
 )
 from .topology import load_topology
 
@@ -146,7 +147,8 @@ def resolve_resume(run_dir: Path, resume: str, log) -> dict:
     return json.loads(mf.read_text())
 
 
-def save_plan_for(parallels, world: int) -> dict:
+def save_plan_for(parallels, world: int,
+                  opt_shard: str | None = None) -> dict:
     """The SavePlan (Shein's design): who saves what, derived from
     the ownership algebra. Data objects (tokens/targets/losses) are
     never saved — resume re-derives them from the stream. Returns
@@ -160,6 +162,9 @@ def save_plan_for(parallels, world: int) -> dict:
         (owned shards);
       tp:       per-rank = W_* + O_* (physically sharded objects).
     """
+    if opt_shard == "zero1rs":
+        # byte-equal shards: replicated W, per-rank slice O
+        return {"shared": ["W_"], "per_rank": ["O_"]}
     par = parallels[0] if parallels else None
     if par is None or par.plan is None:
         return {"shared": ["W_", "O_"], "per_rank": []}
@@ -301,7 +306,8 @@ def checkpoint_fleet(ranks, ck: dict, step_next: int, meta: dict,
 
 
 def lower_with_group(cfg, dp_group: str, recompute_levels=None,
-                     dp_overlap: bool = False, parallel=None):
+                     dp_overlap: bool = False, parallel=None,
+                     zero1rs_world: int | None = None):
     """``parallel`` (sharding.ParallelConfig with a plan) makes this a
     PER-RANK lowering. An optimizer-consumable plan (zero1): optimizer
     tasks gain shard block_params and the rank's O objects shrink to
@@ -315,7 +321,20 @@ def lower_with_group(cfg, dp_group: str, recompute_levels=None,
     tp_params = None
     opt_regions = None
     rank_view = None
-    if parallel is not None and parallel.plan is not None:
+    opt_slices = None
+    if zero1rs_world is not None:
+        dims0, fl0 = family_layouts(cfg)
+        shard_params = zero1rs_block_params(
+            layer_fields_by_root(cfg), dims0, zero1rs_world)
+        if not shard_params:
+            raise ValueError("zero1rs: no root is byte-equal eligible "
+                             "(needs uniform adamw + uniform dtypes "
+                             "with param==grad)")
+        opt_slices = {root: {"n_slice": sh["n_slice"],
+                             "n_tail": sh["n_tail"],
+                             "opt_dtype": sh["opt_dtype"]}
+                      for root, sh in shard_params.items()}
+    elif parallel is not None and parallel.plan is not None:
         plan = parallel.plan
         narrowed = any(a.resident != ALL_RANKS for a in plan.assignments)
         if narrowed:
@@ -343,24 +362,27 @@ def lower_with_group(cfg, dp_group: str, recompute_levels=None,
     dims, fl = family_layouts(cfg, tp_view=rank_view)
     return apply_exact_sizes(
         shaped, "llama3-exact",
-        size_of=size_of_factory(dims, fl, opt_update_regions=opt_regions))
+        size_of=size_of_factory(dims, fl, opt_update_regions=opt_regions,
+                                opt_slice_by_root=opt_slices))
 
 
 class GroupedBuildVariant:
     """plan_program's recompute rebuilder for dp_group lowerings."""
 
     def __init__(self, cfg, dp_group: str, dp_overlap: bool = False,
-                 parallel=None):
+                 parallel=None, zero1rs_world=None):
         self.cfg = cfg
         self.dp_group = dp_group
         self.dp_overlap = dp_overlap
         self.parallel = parallel
+        self.zero1rs_world = zero1rs_world
 
     def __call__(self, levels):
         return lower_with_group(self.cfg, self.dp_group,
                                 recompute_levels=levels,
                                 dp_overlap=self.dp_overlap,
-                                parallel=self.parallel)
+                                parallel=self.parallel,
+                                zero1rs_world=self.zero1rs_world)
 
 
 class RankState:
@@ -515,10 +537,13 @@ def run_fleet_dp(global_cfg, recipe: Recipe, stream, steps: int, *,
         plan.consumable("tp")
         parallels = [ParallelConfig(group=gspec.name, rank=i, world=world,
                                     plan=plan) for i in range(world)]
+    elif opt_shard == "zero1rs":
+        pass    # byte-equal rs/ag: derived at lowering (no ShardPlan)
     elif opt_shard is not None:
         if opt_shard != "zero1":
-            raise ValueError(f"opt_shard {opt_shard!r}: only 'zero1' "
-                             f"(field-snapped equal halves) exists")
+            raise ValueError(f"opt_shard {opt_shard!r}: 'zero1' "
+                             f"(field-snapped) or 'zero1rs' "
+                             f"(byte-equal rs/ag)")
         plan = zero1_halves(layer_fields_by_root(global_cfg),
                             gspec.name, world)
         plan.validate(getattr(global_cfg, "opt_policy", None))
@@ -530,7 +555,8 @@ def run_fleet_dp(global_cfg, recipe: Recipe, stream, steps: int, *,
     if checkpoint_every:
         ck = {"every": int(checkpoint_every),
               "dir": Path(checkpoint_dir) / run_name, "run": run_name,
-              "save_plan": save_plan_for(parallels, world),
+              "save_plan": save_plan_for(parallels, world,
+                                         opt_shard=opt_shard),
               "redundancy": int(checkpoint_redundancy),
               "keep_last": int(checkpoint_keep_last),
               "hosts_by_name": {h.name: h for h in hosts}}
@@ -612,7 +638,9 @@ def run_fleet_dp(global_cfg, recipe: Recipe, stream, steps: int, *,
                           r_global=r_global, profile=profile,
                           dp_overlap=dp_overlap, parallels=parallels,
                           tp_mode=tp_mlp, checkpoint=ck,
-                          fleet_manifest=fleet_manifest)
+                          fleet_manifest=fleet_manifest,
+                          zero1rs_world=(world if opt_shard == "zero1rs"
+                                         else None))
     finally:
         for rig in rigs:
             if rig.client is None:
@@ -650,7 +678,8 @@ def fleet_loop(ranks, gspec, recipe, stream, steps, *, budgets, seed,
                profile: dict | None = None,
                dp_overlap: bool = False, parallels=None,
                tp_mode: bool = False, checkpoint: dict | None = None,
-               fleet_manifest: dict | None = None) -> RunResult:
+               fleet_manifest: dict | None = None,
+               zero1rs_world: int | None = None) -> RunResult:
     world = len(ranks)
     start_step = int(fleet_manifest["step"]) if fleet_manifest else 0
 
@@ -659,17 +688,26 @@ def fleet_loop(ranks, gspec, recipe, stream, steps, *, budgets, seed,
         par = parallels[i] if parallels else None
         planned = plan_program(
             lower_with_group(rank.cfg, gspec.name, dp_overlap=dp_overlap,
-                             parallel=par),
+                             parallel=par, zero1rs_world=zero1rs_world),
             fast_memory_capacity=int(budgets[i] * 1024 ** 3),
             recompute=True,
             build_variant=GroupedBuildVariant(rank.cfg, gspec.name,
                                               dp_overlap=dp_overlap,
-                                              parallel=par))
+                                              parallel=par,
+                                              zero1rs_world=zero1rs_world))
         prog_dict = program_to_dict(planned.program)
         resolver = {"family": "llama3", "cfg": cfg_dict(rank.cfg),
                     "hyper": recipe.hyper_spec()}
         fill = {"kind": "family_init_all", "family": "llama3",
                 "cfg": cfg_dict(rank.cfg), "seed": seed}
+        if zero1rs_world is not None:
+            fill["object_sizes"] = {
+                s.id: s.size_bytes
+                for s in planned.program.initial_objects
+                if s.id.startswith("O_")}
+            o_bytes = sum(fill["object_sizes"].values())
+            log(f"[fleet] {rank.name}: byte-equal sharded optimizer "
+                f"state {o_bytes / 1024 ** 3:.2f} GiB")
         if par is not None and par.plan is not None:
             narrowed = any(a.resident != ALL_RANKS
                            for a in par.plan.assignments)

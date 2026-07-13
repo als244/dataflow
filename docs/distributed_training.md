@@ -87,6 +87,48 @@ the owner updates, and the updated params broadcast back. Per-rank
 optimizer bytes halve (world 2); certified bitwise-equal to plain DP
 and at the 1000-step horizon.
 
+Field-snapped buckets lose balance as world approaches the per-root
+field count (a llama3 block has ~7 large fields; at world 8 the
+worst/best owned-bytes ratio degrades toward 0.2). For world > 2,
+prefer `zero1rs`.
+
+### Byte-equal ZeRO-1 (`--opt-shard zero1rs`)
+
+The bandwidth-optimal formulation, and the one that scales to any
+world size. Instead of per-field owner buckets, each eligible weight
+object is treated as ONE flat array of `total` elements (alignment
+gaps included), cut into `world` byte-equal slices plus a
+`total % world` tail:
+
+1. ONE `reduce_scatter` of the flattened gradient buffer — each rank
+   receives the sum for its own slice (the tail, if any, is
+   allreduced and updated redundantly on every rank);
+2. the rank updates its slice with flat AdamW moments (`m`/`v` are
+   sized to the slice, so per-rank `O_*` bytes are `~1/world`);
+3. ONE `all_gather` re-assembles the full updated parameters
+   everywhere.
+
+Elementwise sums and updates over identically-reduced values: the
+result is bitwise-identical to plain DP per weight field (the flat
+update also rewrites the packing gaps — unread noise, identical
+across ranks, only ever seen by a whole-buffer byte diff). Balance is
+exact at every world size, and the two collectives touch each byte
+once — no per-field round trips.
+
+**Eligibility is per weight object, checked at plan time**
+(`rs_eligible`): one flat update means ONE optimizer story for the
+whole object — every field must resolve to `adamw` at that layer
+(after `layer_overrides` routing), match no `hyper_overrides`
+pattern (a per-field lr/wd would silently apply to the whole range),
+and share uniform param/grad/opt dtypes with param == grad (that
+byte-coincidence is what lets one geometry describe both W and dW).
+Policy names are namespaced exactly as the update task sees them
+(`embed.w`, `head.final_norm_w`, block fields bare). Objects that
+fail any test silently keep the field-snapped `zero1` treatment —
+the two modes compose per root. The update task re-verifies the
+uniformity at run time and refuses to train if the policy drifted
+from what the plan assumed.
+
 ### Tensor parallelism (`--tp-mlp`)
 
 A `tp_mlp_shards` plan: the MLP fields shard over `d_ff` with
@@ -154,7 +196,7 @@ the parallelism — derived automatically from the run's plan:
 | configuration | shared artifact (written once by rank 0) | per-rank artifacts |
 |---|---|---|
 | plain DP  | `W_*` and `O_*` (fully replicated) | — (other ranks write nothing) |
-| ZeRO-1    | `W_*` (replicated weights)         | each rank's owned `O_*` shards |
+| ZeRO-1 (`zero1` or `zero1rs`) | `W_*` (replicated weights) | each rank's owned `O_*` shards |
 | TP        | —                                  | each rank's `W_*` + `O_*` shards |
 
 Data objects (`tokens_*`, `targets_*`, `loss_*`) are never saved:

@@ -81,10 +81,12 @@ def main() -> None:
                     help="'auto' (newest complete checkpoint for this "
                          "--out run name) or a step directory path")
     tr.add_argument("--opt-shard", default=None,
-                    help="optimizer-state sharding: 'zero1' halves each "
-                         "rank's O bytes (field-snapped shards; sharded "
-                         "regions reduce to their owner, update "
-                         "locally, broadcast W back)")
+                    help="optimizer-state sharding: 'zero1' (field-"
+                         "snapped shards, per-bucket reduce+broadcast) "
+                         "or 'zero1rs' (byte-equal shards, ONE "
+                         "reduce_scatter + ONE all_gather per object — "
+                         "bandwidth-optimal at any world; needs a "
+                         "uniform adamw policy)")
     tr.add_argument("--dp-overlap", action="store_true",
                     help="EXPERIMENTAL, known-broken at scale: tail "
                          "optimizers on PRE-REDUCED grads (grad_reduce "

@@ -279,3 +279,116 @@ def test_world_n_plans():
         w1 = [v["W_0"]["w1"] for v in views]
         assert len({sl[1:] for sl in w1}) == world      # distinct slices
         assert all(sl[0] == 1 for sl in w1)             # column axis
+
+
+def test_zero1rs_block_params_sizing():
+    """Byte-equal builder: every root of the real tiny-llama3 layouts
+    is eligible under the default policy; slices are exact world-
+    fractions of the packed element count (alignment gaps included);
+    the flat opt-state layout sizes to slice+tail elements per slot."""
+    from dataflow.pretrain.sharding import (
+        layer_fields_by_root,
+        zero1rs_block_params,
+    )
+    from dataflow.tasks.layouts import opt_state_slice_layout
+    from dataflow.training.models.llama3 import (
+        ShapedLlamaConfig,
+        dims_of,
+    )
+
+    cfg = ShapedLlamaConfig.tiny()
+    dims = dims_of(cfg)
+    fbr = layer_fields_by_root(cfg)
+    totals = {}
+    for world in (2, 3, 4, 8):
+        params = zero1rs_block_params(fbr, dims, world)
+        assert set(params) == set(fbr), (world, sorted(params))
+        for root, sh in params.items():
+            assert sh["mode"] == "rs" and sh["grads"] == "partial"
+            assert sh["dtype"] == "bf16" and sh["opt_dtype"] == "bf16"
+            total = sh["n_slice"] * world + sh["n_tail"]
+            assert totals.setdefault(root, total) == total, (
+                world, root)                    # world-invariant total
+            assert 0 <= sh["n_tail"] < world
+            if world in (2, 4, 8):
+                # 256B-aligned packing => elements divisible by any
+                # power-of-2 world we target; tails are a 3/5/6/7-way
+                # concern
+                assert sh["n_tail"] == 0, (world, root, sh)
+            ol = opt_state_slice_layout(sh["n_slice"], sh["n_tail"],
+                                        sh["opt_dtype"])
+            names = [f.name for f in ol.fields]
+            want = (["m_slice", "v_slice", "m_tail", "v_tail"]
+                    if sh["n_tail"] else ["m_slice", "v_slice"])
+            assert names == want, (world, root, names)
+            per = {f.name: f.nbytes for f in ol.fields}
+            assert per["m_slice"] == sh["n_slice"] * 2  # bf16 moments
+            assert per["m_slice"] == per["v_slice"]
+
+
+def test_zero1rs_eligibility_rejections():
+    """Roots drop out (fall back to the field-snapped path) whenever
+    ONE flat hyper/rule/dtype story doesn't hold: a layer routed to
+    the muon recipe, a hyper override touching any field (namespaced
+    keys for embed/head), or non-uniform dtypes inside the root."""
+    from dataclasses import replace
+
+    from dataflow.pretrain.sharding import (
+        layer_fields_by_root,
+        zero1rs_block_params,
+    )
+    from dataflow.tasks.layouts import DTypePolicy, ParamDTypes
+    from dataflow.tasks.optim import OptPolicy
+    from dataflow.training.models.llama3 import (
+        ShapedLlamaConfig,
+        dims_of,
+    )
+
+    cfg = ShapedLlamaConfig.tiny()
+    dims = dims_of(cfg)
+    fbr = layer_fields_by_root(cfg)
+    n_layers = cfg.n_layers
+    all_roots = set(fbr)
+
+    # layer 0 routed to the muon recipe: W_0 mixes muon+adamw -> out;
+    # other layers and the loose tables keep the flat path
+    d = replace(dims, opt_policy=OptPolicy(
+        default="adamw", layer_overrides=(((0,), "muon"),)))
+    params = zero1rs_block_params(fbr, d, 2)
+    assert "W_0" not in params
+    assert set(params) == all_roots - {"W_0"}
+
+    # per-field hyper override: every root containing a match drops
+    d = replace(dims, opt_policy=OptPolicy(
+        default="adamw",
+        hyper_overrides=(("*_norm_w", {"weight_decay": 0.0}),)))
+    params = zero1rs_block_params(fbr, d, 2)
+    blocks = {f"W_{i}" for i in range(n_layers)}
+    assert not (set(params) & blocks)           # every block has norms
+    assert "W_head" not in params               # head.final_norm_w
+    assert "W_embed" in params                  # embed.w only
+
+    # ...and the override key is NAMESPACED for the loose tables
+    d = replace(dims, opt_policy=OptPolicy(
+        default="adamw", hyper_overrides=(("embed.*", {"lr": 1e-5}),)))
+    params = zero1rs_block_params(fbr, d, 2)
+    assert "W_embed" not in params
+    assert set(params) == all_roots - {"W_embed"}
+
+    # non-uniform dtypes inside a root (wq fp32 island) -> out; a
+    # UNIFORM fp32 opt dtype is fine (still one flat story)
+    d = replace(dims, dtypes=DTypePolicy(
+        overrides=(("wq", ParamDTypes("fp32", "fp32", "fp32")),)))
+    params = zero1rs_block_params(fbr, d, 2)
+    assert not (set(params) & blocks)
+    assert {"W_embed", "W_head"} <= set(params)
+    d = replace(dims, dtypes=DTypePolicy(
+        default=ParamDTypes("bf16", "bf16", "fp32")))
+    params = zero1rs_block_params(fbr, d, 2)
+    assert set(params) == all_roots
+    assert all(sh["opt_dtype"] == "fp32" for sh in params.values())
+
+    # param != grad dtype: flat W/dW byte-coincidence breaks -> out
+    d = replace(dims, dtypes=DTypePolicy(
+        default=ParamDTypes("bf16", "fp32", "fp32")))
+    assert zero1rs_block_params(fbr, d, 2) == {}

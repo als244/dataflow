@@ -584,3 +584,70 @@ def layer_fields_by_root(cfg) -> dict:
     out["W_embed"] = field_infos(fl.embed)
     out["W_head"] = field_infos(fl.head)
     return out
+
+
+def rs_eligible(infos, dims, layer: int | None = None,
+                ns: str | None = None) -> bool:
+    """Byte-equal (rs/ag) shards update a flat byte range with ONE
+    hyper set, so every field in the root must share ONE optimizer
+    story: the same adamw rule AT THIS LAYER (layer_overrides route
+    here exactly as they do at update time), no matching
+    hyper_overrides (a per-field lr/wd would silently apply to the
+    whole flat range), and param/grad/opt dtypes uniform (param==grad
+    also makes the W and dW layouts byte-coincident, which the flat
+    views assume). ``ns`` is the root's policy namespace — policies
+    address embed/head fields as "embed.w"/"head.w", block fields
+    bare — so lookups here see the same keys the update task uses."""
+    from fnmatch import fnmatch
+
+    from dataflow.tasks.optim import resolve_opt_policy
+
+    op = resolve_opt_policy(getattr(dims, "opt_policy", None))
+    pol = op.for_layer(layer) if hasattr(op, "for_layer") else op
+    policy = dims.dtypes
+    seen = set()
+    for f in infos:
+        key = f"{ns}.{f.name}" if ns else f.name
+        rule = op.for_field(key, layer, f.shape)
+        if rule != "adamw":
+            return False
+        for pat, _ in getattr(pol, "hyper_overrides", ()):
+            if fnmatch(key, pat):
+                return False
+        dts = policy.for_field(key, layer)
+        seen.add((dts.param, dts.grad, dts.opt))
+    if len(seen) != 1:
+        return False
+    param, grad, opt = next(iter(seen))
+    return param == grad
+
+
+def zero1rs_block_params(fields_by_root: dict, dims, world: int) -> dict:
+    """Per-root byte-equal shard dicts for the rs/ag fast path (the
+    same dict on every rank — the slice index comes from the group
+    handle's rank at run time): ONE reduce_scatter of the flattened
+    grad buffer + owned-slice update + ONE all_gather of the params,
+    with the world-remainder tail allreduced and updated redundantly.
+    Roots failing rs_eligible get NO entry (v1 field-snapped path)."""
+    from dataflow.core import DTYPE_BITS
+    from dataflow.tasks.layouts import grad_layout, PackedLayout
+
+    out = {}
+    for root, infos in fields_by_root.items():
+        suffix = root.split("_", 1)[1]
+        layer = int(suffix) if suffix.isdigit() else None
+        ns = None if suffix.isdigit() else suffix
+        if not rs_eligible(infos, dims, layer=layer, ns=ns):
+            continue
+        key0 = f"{ns}.{infos[0].name}" if ns else infos[0].name
+        dts = dims.dtypes.for_field(key0, layer)
+        item = DTYPE_BITS[dts.grad] // 8
+        wl = PackedLayout.build([(f.name, f.shape, dts.param)
+                                 for f in infos])
+        total = wl.total_bytes // item
+        n_slice = total // world
+        n_tail = total - n_slice * world
+        out[root] = {"mode": "rs", "grads": "partial",
+                     "n_slice": n_slice, "n_tail": n_tail,
+                     "dtype": dts.grad, "opt_dtype": dts.opt}
+    return out

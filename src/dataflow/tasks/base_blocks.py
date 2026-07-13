@@ -25,6 +25,7 @@ from .layouts import (
     grad_layout,
     head_weight_layout,
     opt_state_layout,
+    opt_state_slice_layout,
     sliced_layout,
     weight_layout,
 )
@@ -558,6 +559,16 @@ class AdamWStep(_Base):  # name kept for resolver back-compat; see OptimizerStep
         # call the lowering sized the O object with (exact match by
         # construction, so the buffer/layout equality below still holds)
         sh = task.block_params.get("shard")
+        if sh is not None and sh.get("mode") == "rs":
+            # byte-equal shard: flat slice+tail state, sized by the
+            # SAME parameters the lowering used
+            ol_ = opt_state_slice_layout(int(sh["n_slice"]),
+                                         int(sh["n_tail"]),
+                                         sh["opt_dtype"])
+            return (wl_,
+                    grad_layout(wl_, p, ns=ns, layer=layer,
+                                opt_policy=op),
+                    ol_, ns)
         regions = None
         if sh is not None:
             regions = {name: (tuple(rows) if rows else None)
@@ -596,6 +607,99 @@ class AdamWStep(_Base):  # name kept for resolver back-compat; see OptimizerStep
                     f"{ctx.task.id}: sharded optimizer + update_specials "
                     f"— the special's inputs are rank-local (MoE counts) "
                     f"and would diverge across replicas")
+            if sh is not None and sh.get("mode") == "rs":
+                # byte-equal ZeRO (rs/ag fast path): ONE reduce_scatter
+                # of the flattened grad buffer, owned-slice update with
+                # flat m/v, ONE all_gather of the params; the world-
+                # remainder tail is allreduced and updated redundantly.
+                # Eligibility (uniform adamw rule + uniform dtypes with
+                # param==grad) was checked at plan derivation. With no
+                # group bound (standalone warm-up run) the comm skips
+                # and slice 0 updates from LOCAL grads — same kernels
+                # at the same flat shapes, results discarded before
+                # real steps.
+                n_slice = int(sh["n_slice"])
+                n_tail = int(sh["n_tail"])
+                dt = TORCH_DTYPE_BY_NAME[sh["dtype"]]
+                total = w_buf.size_bytes // dt.itemsize
+                rank = gh.rank if gh is not None else 0
+                if gh is not None and n_slice * gh.world + n_tail \
+                        != total:
+                    raise RuntimeError(
+                        f"{ctx.task.id}: rs shard geometry "
+                        f"{n_slice}*{gh.world}+{n_tail} != packed "
+                        f"element count {total} — plan/world mismatch")
+                n_main = total - n_tail
+                g_flat = torch_view(g_buf, (total,), dt)
+                w_flat = torch_view(w_buf, (total,), dt)
+                own_g = g_flat[rank * n_slice:(rank + 1) * n_slice]
+                if gh is not None:
+                    grads_ready = torch.cuda.Event()
+                    grads_ready.record(es)
+                    gh.stream.wait_event(grads_ready)
+                    gh.reduce_scatter(g_flat[:n_main], own_g)
+                    if n_tail:
+                        gh.allreduce(g_flat[n_main:])
+                    summed = torch.cuda.Event()
+                    summed.record(gh.stream)
+                    es.wait_event(summed)
+                ra = getattr(ctx, "run_args", None) or {}
+                step = int(ra.get("step",
+                                  ctx.task.block_params.get("step", 0))) + 1
+                op = resolve_opt_policy(getattr(self.dims, "opt_policy",
+                                                None))
+                layer = self.layer_of(ctx.task)
+                key = (lambda n: f"{ns}.{n}") if ns else (lambda n: n)
+                first = wl_.fields[0]
+                opt = OPTIMIZERS[op.for_field(key(first.name), layer,
+                                              first.shape)]
+                hp = hyper_for(op, key(first.name), layer, self.hyper)
+                # ONE flat update means ONE rule + ONE hyper set for
+                # the whole root (and the slice layout is adamw's m/v);
+                # the plan builder rejected anything else (rs_eligible),
+                # so a deviation here is policy drift between plan time
+                # and run time — refuse rather than train wrong
+                if opt.name != "adamw":
+                    raise RuntimeError(
+                        f"{ctx.task.id}: rs shard is adamw-only, "
+                        f"policy resolved {opt.name!r}")
+                for f in wl_.fields[1:]:
+                    if op.for_field(key(f.name), layer, f.shape) \
+                            != opt.name \
+                            or hyper_for(op, key(f.name), layer,
+                                         self.hyper) != hp:
+                        raise RuntimeError(
+                            f"{ctx.task.id}: rs shard needs one "
+                            f"optimizer story for the whole root; "
+                            f"field {f.name!r} deviates")
+                sched = self.hyper.schedule
+                if sched is not None and sched.scale(step) != 1.0:
+                    from dataclasses import replace as dc_replace2
+                    s_ = sched.scale(step)
+                    hp = dc_replace2(hp, lr=hp.lr * s_,
+                                     muon_lr=(hp.muon_lr * s_
+                                              if hp.muon_lr else
+                                              hp.muon_lr))
+                own_w = w_flat[rank * n_slice:(rank + 1) * n_slice]
+                opt.step(kctx, self.kernels, hp, step, own_w, own_g,
+                         {"m": ol_.view(o_buf, "m_slice").view(-1),
+                          "v": ol_.view(o_buf, "v_slice").view(-1)},
+                         (n_slice,))
+                if n_tail:
+                    opt.step(kctx, self.kernels, hp, step,
+                             w_flat[n_main:], g_flat[n_main:],
+                             {"m": ol_.view(o_buf, "m_tail").view(-1),
+                              "v": ol_.view(o_buf, "v_tail").view(-1)},
+                             (n_tail,))
+                if gh is not None:
+                    w_ready = torch.cuda.Event()
+                    w_ready.record(es)
+                    gh.stream.wait_event(w_ready)
+                    gh.all_gather(own_w, w_flat[:n_main])
+                    gathered = torch.cuda.Event()
+                    gathered.record(gh.stream)
+                    es.wait_event(gathered)
+                return
             if gh is not None and sh is None:
                 grads_ready = torch.cuda.Event()
                 grads_ready.record(es)
