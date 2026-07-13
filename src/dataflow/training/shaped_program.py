@@ -481,7 +481,9 @@ def build_shaped_program(
                     fwd_mut = (f"Aux_{i}",)   # counts accumulate; recompute never has this edge
                 tp_extra = ({"tp": tp_params[f"W_{i}"]}
                             if tp_params and f"W_{i}" in tp_params else {})
-                task(f"block_fwd_{s}_{r}_{i}", f"{sp.key_prefix}_fwd", fwd_ins, outs,
+                key_prefix = (f"tp_{sp.key_prefix}" if tp_extra
+                              else sp.key_prefix)
+                task(f"block_fwd_{s}_{r}_{i}", f"{key_prefix}_fwd", fwd_ins, outs,
                      sp.fwd_us, group="forward",
                      params={"layer": i, **tp_extra},
                      mutates=fwd_mut, subops=sp.fwd_subops)
@@ -493,8 +495,8 @@ def build_shaped_program(
                         RecomputeOption(level=0, saved_bytes=sp.a_bytes, recompute_us=0.0, label="save"),
                         RecomputeOption(level=1, saved_bytes=0, recompute_us=sp.recompute_us, label="recompute"),
                     ),
-                    f_compute_block_key=f"{sp.key_prefix}_fwd",
-                    r_compute_block_key=f"{sp.key_prefix}_recompute",
+                    f_compute_block_key=f"{key_prefix}_fwd",
+                    r_compute_block_key=f"{key_prefix}_recompute",
                     group_key=f"layer_{i}",
                 ))
             last_y = f"y_{s}_{r}_{cfg.n_layers - 1}"
@@ -544,8 +546,10 @@ def build_shaped_program(
                     aux_ins.append(f"AuxTemp_{s}_{r}_{aux_producer_of[i]}")
                 tp_extra = ({"tp": tp_params[f"W_{i}"]}
                             if tp_params and f"W_{i}" in tp_params else {})
+                key_prefix = (f"tp_{sp.key_prefix}" if tp_extra
+                              else sp.key_prefix)
                 if levels.get(a_id, 0) == 1:
-                    task(f"block_recompute_{s}_{r}_{i}", f"{sp.key_prefix}_recompute",
+                    task(f"block_recompute_{s}_{r}_{i}", f"{key_prefix}_recompute",
                          [x_id, f"W_{i}"] + aux_ins,
                          [OutputSpec(id=a_id, size_bytes=sp.a_bytes, role="activation")],
                          sp.recompute_us, group="recompute",
@@ -587,7 +591,7 @@ def build_shaped_program(
                         # own round's AuxTemp is already in aux_ins)
                         bwd_inputs.extend(f"AuxTemp_{s}_{rr}_{i}"
                                           for rr in range(r))
-                task(f"block_bwd_{s}_{r}_{i}", f"{sp.key_prefix}_bwd", bwd_inputs, outs,
+                task(f"block_bwd_{s}_{r}_{i}", f"{key_prefix}_bwd", bwd_inputs, outs,
                      sp.bwd_us, mutates=mutates, group="backward",
                      params={"layer": i, **tp_extra},
                      subops=sp.bwd_subops)

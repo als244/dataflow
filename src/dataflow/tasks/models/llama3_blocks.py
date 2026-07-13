@@ -68,10 +68,32 @@ def tp_group_handle(ctx, task):
     return (getattr(ctx, "groups", None) or {}).get(tp["group"])
 
 
+@dataclass(frozen=True)
+class TpComm:
+    """Per-launch tensor-parallel comm state, assembled by the Tp*
+    block subclasses: the group handle (None on standalone/warm-up
+    runs), the task stream, and — backward only — the task's dx
+    output buffer that serves as the engine-owned dh2 landing."""
+
+    gh: object
+    es: object
+    dx_out: object = None
+
+
 def tp_allreduce_inplace(gh, es, tensor) -> None:
     """Producer-contract in-place allreduce on the group stream:
     es -> gh edge, sum over the tp group, gh -> es edge. gh None
-    leaves the PARTIAL in place (standalone semantics)."""
+    leaves the PARTIAL in place (standalone semantics).
+
+    OPERAND CONTRACT: ``tensor`` must be a view into ENGINE-MANAGED
+    memory (a task input/output buffer), NEVER a torch-allocator
+    temporary. The caching allocator only tracks the allocating
+    stream, so its pressure-reclaim path can cudaFree a temporary
+    while the collective still holds it on gh.stream — on the nccl
+    lane that hold spans the whole wire round-trip (the 1B tp
+    incident). Task-buffer lifetime covers the collective by the
+    engine's completion contract: the planner cannot move the extent
+    before the task's stream finishes."""
     if gh is None:
         return
     produced = torch.cuda.Event()
@@ -88,16 +110,14 @@ def tp_stage_down_resid(kctx, K, d, st):
     allreduces over the tp group BEFORE the (replicated) residual
     joins — adding h_mid first would double it across ranks.
 
-    Partials cross the wire in FP32. Rounding each shard's partial to
-    bf16 before the sum injects relative error wherever the shards
-    CANCEL — invisible at toy scale, but at 1B geometry it compounded
-    into a diverging loss curve once the lr peaked (T4 attempt logs).
-    fp32 partials keep ONE bf16 rounding total, matching the plain
-    path's fused fp32-epilogue semantics."""
-    partial = st.pop("s").float() @ st["w"]["w2"].float()
-    tp_allreduce_inplace(st["tp_gh"], st["tp_es"], partial)
-    partial.add_(st.pop("h_mid"))      # residual joins in fp32
-    st["y"].copy_(partial)             # the ONE bf16 rounding
+    Everything is bf16 and the partial lands DIRECTLY in the task's
+    engine-owned y output view: the gemm writes it, the collective
+    sums it in place (operand contract above), the residual joins
+    after. No torch-allocator memory ever touches the wire."""
+    comm = st["comm"]
+    torch.matmul(st.pop("s"), st["w"]["w2"], out=st["y"])
+    tp_allreduce_inplace(comm.gh, comm.es, st["y"])
+    st["y"].add_(st.pop("h_mid"))
 
 
 @dataclass(frozen=True)
@@ -106,10 +126,10 @@ class BlockFwd(_Base):
     context (and metadata) fields through to the ctx buffers."""
     emit_context: bool = True
 
-    # stage implementations swapped in under a tensor-parallel block
-    # param (everything else is shard-transparent: up_proj gemms take
-    # their width from the SLICED weight views, swiglu is elementwise)
-    TP_STAGE_OVERRIDES = {"down_resid": tp_stage_down_resid}
+    def comm_state(self, ctx, es) -> dict:
+        """Extras the forward stages need for collectives — nothing
+        for the dense block; TpBlockFwd returns {"comm": TpComm(...)}."""
+        return {}
 
     def launch(self, ctx: TaskContext) -> None:
         d = self.dims
@@ -132,9 +152,7 @@ class BlockFwd(_Base):
             aux_counts = self._aux_counts_state(ctx)
             if aux_counts is not None:
                 extras["aux_counts"] = aux_counts
-            if ctx.task.block_params.get("tp") is not None:
-                extras["tp_gh"] = tp_group_handle(ctx, ctx.task)
-                extras["tp_es"] = es
+            extras.update(self.comm_state(ctx, es))
             self._forward(kctx, x, w, y, a, extras=extras)
 
     # --- staged forward -------------------------------------------------------
@@ -276,28 +294,13 @@ class BlockFwd(_Base):
     def context_fields_emitted(cls) -> set:
         return {f for entry in cls.STAGES for f in entry[2]}
 
-    def stage_impls(self, st) -> tuple:
-        """The stage list for this invocation: tensor-parallel runs
-        (st carries tp_gh/tp_es) swap in the TP_STAGE_OVERRIDES
-        entries by name; everything else is the plain STAGES list."""
-        if "tp_es" not in st:
-            return self.STAGES
-        out = []
-        for entry in self.STAGES:
-            override = self.TP_STAGE_OVERRIDES.get(entry[0])
-            if override is None:
-                out.append(entry)
-            else:
-                out.append((entry[0], override) + tuple(entry[2:]))
-        return tuple(out)
-
     def _run_stages(self, kctx, x, w, a, *, count: int, y=None,
                     extras=None) -> None:
         st = {"x": x, "w": w, "a": a, "y": y}
         if extras:
             st.update(extras)
         skip_aux_temp = bool(st.get("aux_temp_ready"))
-        for entry in self.stage_impls(st)[:count]:
+        for entry in self.STAGES[:count]:
             if skip_aux_temp and len(entry) > 3 and entry[3] == "aux_temp":
                 continue  # the aux pack is supplied, never recomputed
             entry[1](kctx, self.kernels, self.dims, st)
@@ -334,6 +337,22 @@ class BlockRecompute(BlockFwd):
                          count=self.recompute_stage_count_present(),
                          extras=extras)
 
+
+
+def replace_stage(stages: tuple, name: str, fn) -> tuple:
+    """A STAGES tuple with the named stage's implementation replaced —
+    used by subclasses to declare their stage lists statically."""
+    out = []
+    replaced = False
+    for entry in stages:
+        if entry[0] == name:
+            out.append((entry[0], fn) + tuple(entry[2:]))
+            replaced = True
+        else:
+            out.append(entry)
+    if not replaced:
+        raise ValueError(f"no stage named {name!r}")
+    return tuple(out)
 
 
 def dense_mlp_tail_bwd(kctx, K, dy, h_mid, rstd_ffn, x1, x3, w, acc, norm_bwd):
@@ -379,7 +398,7 @@ def dense_mlp_tail_bwd(kctx, K, dy, h_mid, rstd_ffn, x1, x3, w, acc, norm_bwd):
 
 
 def tp_mlp_tail_bwd(kctx, K, dy, h_mid, rstd_ffn, x1, x3, w, acc,
-                    norm_bwd, gh, es):
+                    norm_bwd, gh, es, dh2_out):
     """Tensor-parallel twin of dense_mlp_tail_bwd: identical math on
     the SHARD-width views (x1/x3 and the w1/w3/w2 views arrive
     sliced), with ONE collective — the residual-stream gradient dh2
@@ -405,16 +424,17 @@ def tp_mlp_tail_bwd(kctx, K, dy, h_mid, rstd_ffn, x1, x3, w, acc,
     if acc.wanted("w3"):
         acc("w3", h2.T @ dx3)
     del h2
-    # fp32 partials across the wire: bf16-rounding each shard's
-    # partial before the sum injects cancellation error (see
-    # tp_stage_down_resid) — one bf16 rounding AFTER the sum
-    dh2 = dx1.float() @ w["w1"].T.float()
-    dh2.addmm_(dx3.float(), w["w3"].T.float())
+    # the dh2 partial lands in dh2_out — the task's dx OUTPUT buffer,
+    # unused until attention backward overwrites it at the end: an
+    # engine-owned scratch with task-output lifetime (operand
+    # contract in tp_allreduce_inplace). bf16 throughout, the same
+    # gemm-then-addmm tree as the dense path.
+    torch.matmul(dx1, w["w1"].T, out=dh2_out)
+    dh2_out.addmm_(dx3, w["w3"].T)
     del dx1, dx3
-    tp_allreduce_inplace(gh, es, dh2)   # partial over shards -> full
-    dh2 = dh2.to(torch.bfloat16)
-    dh_mid, dffn_norm = norm_bwd(dh2, h_mid, rstd_ffn, w["ffn_norm_w"])
-    del dh2
+    tp_allreduce_inplace(gh, es, dh2_out)   # partials -> full
+    dh_mid, dffn_norm = norm_bwd(dh2_out, h_mid, rstd_ffn,
+                                 w["ffn_norm_w"])
     acc("ffn_norm_w", dffn_norm)
     dh_mid.add_(dy)
     return dh_mid
@@ -451,9 +471,7 @@ class BlockBwd(_Base):
             aux_counts = self._aux_counts_state(ctx)
             if aux_counts is not None:
                 a["aux_counts"] = aux_counts
-            if ctx.task.block_params.get("tp") is not None:
-                a["tp_gh"] = tp_group_handle(ctx, ctx.task)
-                a["tp_es"] = es
+            a.update(self.comm_state(ctx, es, dx))
             aux_temp = self._aux_temp_state(ctx)
             if aux_temp is None:
                 self._backward(kctx, dy, a, x, w, dx, dw, accum)
@@ -472,13 +490,12 @@ class BlockBwd(_Base):
         dh_mid = self._mlp_bwd(kctx, dy, a, w, dw, accum, acc, norm_bwd)
         self._attn_bwd(kctx, dh_mid, a, x, w, acc, norm_bwd, dx_out)
 
+    def comm_state(self, ctx, es, dx) -> dict:
+        """Extras the backward needs for collectives — nothing for
+        the dense block; TpBlockBwd returns {"comm": TpComm(...)}."""
+        return {}
+
     def _mlp_bwd(self, kctx, dy, a, w, dw, accum, acc, norm_bwd):
-        if "tp_es" in a:
-            return tp_mlp_tail_bwd(
-                kctx, self.kernels, dy, a[self.MLP_RESID_FIELD],
-                a["rstd_ffn"], a["x1"], a["x3"], w, acc, norm_bwd,
-                gh=a["tp_gh"], es=a["tp_es"],
-            )
         return dense_mlp_tail_bwd(
             kctx, self.kernels, dy, a[self.MLP_RESID_FIELD], a["rstd_ffn"],
             a["x1"], a["x3"], w, acc, norm_bwd,
@@ -525,6 +542,49 @@ class BlockBwd(_Base):
 
 
 
+@dataclass(frozen=True)
+class TpBlockFwd(BlockFwd):
+    """Tensor-parallel block forward (tp_block_fwd compute key,
+    sharded layers only): the identical stage pipeline with the
+    down-projection swapped for the partial+allreduce variant,
+    declared statically — everything else is shard-transparent
+    through the sliced weight/context views."""
+
+    STAGES = replace_stage(BlockFwd.STAGES, "down_resid",
+                           tp_stage_down_resid)
+
+    def comm_state(self, ctx, es) -> dict:
+        return {"comm": TpComm(gh=tp_group_handle(ctx, ctx.task),
+                               es=es)}
+
+
+@dataclass(frozen=True)
+class TpBlockRecompute(BlockRecompute):
+    """Recompute replays the shared stage prefix and stops before
+    down_resid (derived boundary), so it runs no collective; carrying
+    the tp STAGES keeps it honest if the boundary ever moves."""
+
+    STAGES = TpBlockFwd.STAGES
+
+
+@dataclass(frozen=True)
+class TpBlockBwd(BlockBwd):
+    """Tensor-parallel block backward (tp_block_bwd): the MLP tail
+    twin with the dh2 allreduce landing in the task's dx output."""
+
+    def comm_state(self, ctx, es, dx) -> dict:
+        return {"comm": TpComm(gh=tp_group_handle(ctx, ctx.task),
+                               es=es, dx_out=dx)}
+
+    def _mlp_bwd(self, kctx, dy, a, w, dw, accum, acc, norm_bwd):
+        comm = a["comm"]
+        return tp_mlp_tail_bwd(
+            kctx, self.kernels, dy, a[self.MLP_RESID_FIELD],
+            a["rstd_ffn"], a["x1"], a["x3"], w, acc, norm_bwd,
+            gh=comm.gh, es=comm.es, dh2_out=comm.dx_out,
+        )
+
+
 def build_resolver(
     dims: LlamaDims,
     hyper: AdamWHyper = AdamWHyper(),
@@ -546,6 +606,9 @@ def build_resolver(
         "optimizer_block": AdamWStep(dims, kernels, hyper, kind="block"),
         "optimizer_embed": AdamWStep(dims, kernels, hyper, kind="embed"),
         "optimizer_head": AdamWStep(dims, kernels, hyper, kind="head"),
+        "tp_block_fwd": TpBlockFwd(dims, kernels),
+        "tp_block_recompute": TpBlockRecompute(dims, kernels),
+        "tp_block_bwd": TpBlockBwd(dims, kernels),
         "grad_reduce_block": GradReduceStep(dims, kernels, kind="block"),
         "grad_reduce_embed": GradReduceStep(dims, kernels, kind="embed"),
         "grad_reduce_head": GradReduceStep(dims, kernels, kind="head"),

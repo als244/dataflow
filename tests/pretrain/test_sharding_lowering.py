@@ -127,11 +127,13 @@ def test_tp_lowering_params_sizes_and_serialization():
     for t in r0.tasks:
         bp = t.block_params or {}
         if t.id.startswith("block_fwd_"):
+            assert t.compute_block_key == "tp_block_fwd", t.id
             assert "tp" in bp, t.id
             assert bp["tp"]["group"] == "dp"
             assert set(bp["tp"]["slices"]) == {"w1", "w3", "w2"}
             tp_fwd += 1
         if t.id.startswith("block_bwd_"):
+            assert t.compute_block_key == "tp_block_bwd", t.id
             assert "tp" in bp, t.id
             tp_bwd += 1
         if t.id.startswith("optimizer_") and "layer" in bp:
