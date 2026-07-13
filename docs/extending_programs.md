@@ -88,7 +88,9 @@ Semantics to get right (the validator catches most violations):
 - `compute_block_key` + `block_params` are the resolver-binding seam
   (buffer order is positional per key — documented next to each block
   class). Free-form executables can key however they like; the resolver
-  is just `task -> executable`.
+  is just `task -> executable`. Tasks that participate in collectives
+  additionally declare `comm_groups` (purpose -> peer-group name; see
+  distributed_training.md §2) — solo programs leave it empty.
 
 Costs: hand-set `runtime_us` is fine to get running (PressureFit
 schedules against whatever you declare; the sim prediction is only as

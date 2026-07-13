@@ -25,6 +25,10 @@ the simulator installed.
 - `TaskSpec.compute_block_key` + `block_params` identify the executable
   implementing the task. Executables resolve by key — never by task id — so
   planner-inserted tasks (recompute) bind automatically.
+- `TaskSpec.comm_groups` maps a comm purpose to a peer-group NAME
+  (`{"dp": ...}`, `{"tp": ...}`): which tasks communicate is program
+  structure; the live handles bind per run, and a run without the group
+  executes the task standalone. `block_params` stays geometry-only.
 - Sizes are **exact**: when an object carries dense `TensorMeta`
   (shape+dtype, no strides), validation asserts `size_bytes` equals the dense
   size. Units: bytes, microseconds; bandwidths are bytes/µs.

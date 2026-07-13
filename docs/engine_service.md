@@ -66,7 +66,10 @@ else the run creates (gradients, activation staging) is a
 **transient** — named in the program, never in the catalog, carved
 lazily from the same slab, recycled across steps, returned at
 `unregister_program`. `rebind` points a program input id at a
-different resident per run (streaming data). Runs execute FIFO on
+different resident per run (streaming data). Each run also snapshots
+the daemon's live peer-group table: tasks that declare `comm_groups`
+resolve their group by NAME at that moment, and run standalone when
+it isn't there (distributed_training.md). Runs execute FIFO on
 one dispatcher; status/query verbs answer instantly from a fast
 path; `cancel_run` takes effect at the next task boundary; a
 failed run poisons nothing (abort drain + boundary unwind).

@@ -37,7 +37,8 @@ Field additions bump the schema version; don't hand-write JSON.
 | `runtime_us` | float | task cost — roofline at lowering, replaced by measured profiles; sim + PressureFit quality depend on it |
 | `group` | str | coarse label (`"optimizer"`, `"recompute"`, ...) used by tooling/display, not by the engine |
 | `compute_block_key` | str | the resolver key: `resolver(task) -> executable` dispatches on it |
-| `block_params` | dict | executable parameters (e.g. `layer`, optimizer `step` index) |
+| `block_params` | dict | executable parameters — geometry/math the block needs (e.g. `layer`, shard regions, `tp_slices`) |
+| `comm_groups` | dict | comm purpose → peer-group NAME (`{"dp": name}` gradient exchange, `{"tp": name}` tensor-parallel collectives); names resolve to live handles per run, an absent group means the task runs standalone, empty means pure-local (omitted from JSON when empty) |
 | `releases_after` | tuple[str] | directive: free these objects' fast allocations when the task completes |
 | `offload_after` | tuple[TransferDirective] | directive: enqueue fast→slow copy, release fast on completion |
 | `prefetch_after` | tuple[TransferDirective] | directive: enqueue slow→fast copy |
