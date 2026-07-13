@@ -243,10 +243,11 @@ def build_shaped_program(
                                    # allreduce+update (ZeRO-1 style); O
                                    # sizes shrink at exact-size time via
                                    # size_of_factory's opt_update_regions
-    tp_params=None,                # {object_root -> {"group", "slices"}}
+    tp_params=None,                # {object_root -> {field -> slice}}
                                    # (sharding.tp_view derived): fwd/
                                    # recompute/bwd tasks of listed layers
-                                   # gain a "tp" block param — blocks view
+                                   # gain a "tp_slices" block param and a
+                                   # {"tp": dp_group} comm role — blocks view
                                    # sharded weights/activations at shard
                                    # shape and run the partial+allreduce
                                    # MLP variants; per-rank object sizes
@@ -340,7 +341,7 @@ def build_shaped_program(
 
     def task(tid: str, block: str, inputs: list[str], outputs: list[OutputSpec], runtime_us: float,
              *, mutates: tuple[str, ...] = (), group: str = "compute", params: dict | None = None,
-             subops: list | None = None) -> None:
+             comm: dict | None = None, subops: list | None = None) -> None:
         tasks.append(TaskSpec(
             id=tid,
             inputs=tuple(inputs),
@@ -350,6 +351,7 @@ def build_shaped_program(
             group=group,
             compute_block_key=block,
             block_params=params or {},
+            comm_groups=comm or {},
             metadata={"cost_subops": loose.subops[block] if subops is None else subops},
         ))
 
@@ -385,11 +387,11 @@ def build_shaped_program(
         # final mutation of its gradient (last round's backward task), so O
         # prefetches and W/O writebacks overlap the rest of the backward
         # instead of draining serially after all compute is done.
-        opt_params = {"dp_group": dp_group} if dp_group else {}
+        opt_comm = {"dp": dp_group} if dp_group else None
         if dp_overlap:
             # overlap mode: the EXCHANGE lives in grad_reduce tasks;
             # optimizers only wait on the group stream's tail
-            opt_params = {"dp_wait_group": dp_group}
+            opt_comm = {"wait": dp_group}
 
         shards = shard_params or {}
         tps = tp_params or {}
@@ -399,13 +401,12 @@ def build_shaped_program(
             extra = ({"shard": shards["W_embed"]}
                      if "W_embed" in shards else {})
             if "W_embed" in tps:
-                extra["tp"] = tps["W_embed"]
-            params = {**opt_params, **extra}
+                extra["tp_slices"] = tps["W_embed"]
             task(f"optimizer_embed_{s}", "optimizer_embed",
                  ["W_embed", g_embed, "O_embed"], [],
                  loose.optimizer_us["embed"], mutates=("W_embed", "O_embed"),
                  group="optimizer",
-                 params=params or None)
+                 params=extra or None, comm=opt_comm)
 
         def opt_block(i: int, s: int = s) -> None:
             sp = layer_specs[i]
@@ -413,12 +414,12 @@ def build_shaped_program(
             extra = ({"shard": shards[f"W_{i}"]}
                      if f"W_{i}" in shards else {})
             if f"W_{i}" in tps:
-                extra["tp"] = tps[f"W_{i}"]
+                extra["tp_slices"] = tps[f"W_{i}"]
             task(f"optimizer_{s}_{i}", "optimizer_block",
                  [f"W_{i}", g_blk, f"O_{i}"], [],
                  sp.optimizer_us, mutates=(f"W_{i}", f"O_{i}"),
                  group="optimizer",
-                 params={"layer": i, **opt_params, **extra},
+                 params={"layer": i, **extra}, comm=opt_comm,
                  subops=sp.optimizer_subops)
 
         def opt_head(s: int = s) -> None:
@@ -428,13 +429,12 @@ def build_shaped_program(
             extra = ({"shard": shards["W_head"]}
                      if "W_head" in shards else {})
             if "W_head" in tps:
-                extra["tp"] = tps["W_head"]
-            params = {**opt_params, **extra}
+                extra["tp_slices"] = tps["W_head"]
             task(f"optimizer_head_{s}", "optimizer_head",
                  ["W_head", g_head, "O_head"], [],
                  loose.optimizer_us["head"], mutates=("W_head", "O_head"),
                  group="optimizer",
-                 params=params or None)
+                 params=extra or None, comm=opt_comm)
 
         for r in range(cfg.grad_accum_rounds):
             first_round = r == 0
@@ -479,13 +479,14 @@ def build_shaped_program(
                     fwd_ins.append(f"current_round_{s}_{r}")
                     fwd_ins.append(f"Aux_{i}")
                     fwd_mut = (f"Aux_{i}",)   # counts accumulate; recompute never has this edge
-                tp_extra = ({"tp": tp_params[f"W_{i}"]}
+                tp_extra = ({"tp_slices": tp_params[f"W_{i}"]}
                             if tp_params and f"W_{i}" in tp_params else {})
+                tp_comm = {"tp": dp_group} if tp_extra else None
                 key_prefix = (f"tp_{sp.key_prefix}" if tp_extra
                               else sp.key_prefix)
                 task(f"block_fwd_{s}_{r}_{i}", f"{key_prefix}_fwd", fwd_ins, outs,
                      sp.fwd_us, group="forward",
-                     params={"layer": i, **tp_extra},
+                     params={"layer": i, **tp_extra}, comm=tp_comm,
                      mutates=fwd_mut, subops=sp.fwd_subops)
                 rewrites.append(RecomputeRewrite(
                     object_id=a_id,
@@ -530,7 +531,7 @@ def build_shaped_program(
                      [f"dW_head_{s}"],
                      [OutputSpec(id=f"dWg_head_{s}", size_bytes=w_head,
                                  role="gradient")],
-                     1.0, group="optimizer", params={"dp_group": dp_group},
+                     1.0, group="optimizer", comm={"dp": dp_group},
                      subops=[])
             if interleaved and last_round:
                 opt_head()  # dW_head_{s} saw its final mutation just now
@@ -544,8 +545,9 @@ def build_shaped_program(
                     aux_ins.append(f"AuxTemp_{s}_{r}_{i}")
                 if i in aux_producer_of:
                     aux_ins.append(f"AuxTemp_{s}_{r}_{aux_producer_of[i]}")
-                tp_extra = ({"tp": tp_params[f"W_{i}"]}
+                tp_extra = ({"tp_slices": tp_params[f"W_{i}"]}
                             if tp_params and f"W_{i}" in tp_params else {})
+                tp_comm = {"tp": dp_group} if tp_extra else None
                 key_prefix = (f"tp_{sp.key_prefix}" if tp_extra
                               else sp.key_prefix)
                 if levels.get(a_id, 0) == 1:
@@ -553,7 +555,7 @@ def build_shaped_program(
                          [x_id, f"W_{i}"] + aux_ins,
                          [OutputSpec(id=a_id, size_bytes=sp.a_bytes, role="activation")],
                          sp.recompute_us, group="recompute",
-                         params={"layer": i, **tp_extra},
+                         params={"layer": i, **tp_extra}, comm=tp_comm,
                          subops=sp.recompute_subops)
                 bwd_inputs = [f"dy_{s}_{r}_{i}", a_id, x_id, f"W_{i}"] + aux_ins
                 outs = [OutputSpec(id=(f"dy_embed_{s}_{r}" if i == 0 else f"dy_{s}_{r}_{i - 1}"),
@@ -593,7 +595,7 @@ def build_shaped_program(
                                           for rr in range(r))
                 task(f"block_bwd_{s}_{r}_{i}", f"{key_prefix}_bwd", bwd_inputs, outs,
                      sp.bwd_us, mutates=mutates, group="backward",
-                     params={"layer": i, **tp_extra},
+                     params={"layer": i, **tp_extra}, comm=tp_comm,
                      subops=sp.bwd_subops)
                 if dp_overlap and last_round:
                     task(f"grad_reduce_{s}_{i}", "grad_reduce_block",
@@ -602,7 +604,7 @@ def build_shaped_program(
                                      size_bytes=sp.w_bytes,
                                      role="gradient")],
                          1.0, group="optimizer",
-                         params={"dp_group": dp_group, "layer": i},
+                         params={"layer": i}, comm={"dp": dp_group},
                          subops=[])
                 if interleaved and last_round:
                     opt_block(i)  # dW_{s}_{i} is final; W_i still resident from bwd
@@ -622,7 +624,7 @@ def build_shaped_program(
                      [f"dW_embed_{s}"],
                      [OutputSpec(id=f"dWg_embed_{s}", size_bytes=w_embed,
                                  role="gradient")],
-                     1.0, group="optimizer", params={"dp_group": dp_group},
+                     1.0, group="optimizer", comm={"dp": dp_group},
                      subops=[])
             if interleaved and last_round:
                 opt_embed()  # embed_bwd is the round's last task; embed opt closes the step

@@ -67,6 +67,8 @@ def _task_to_dict(t: TaskSpec) -> dict[str, Any]:
         d["compute_block_key"] = t.compute_block_key
     if t.block_params:
         d["block_params"] = dict(t.block_params)
+    if t.comm_groups:
+        d["comm_groups"] = dict(t.comm_groups)
     if t.releases_after:
         d["releases_after"] = list(t.releases_after)
     if t.offload_after:
@@ -165,6 +167,7 @@ def _task_from_dict(d: dict[str, Any]) -> TaskSpec:
         group=d.get("group", "compute"),
         compute_block_key=d.get("compute_block_key"),
         block_params=dict(d.get("block_params", {})),
+        comm_groups=dict(d.get("comm_groups", {})),
         releases_after=tuple(d.get("releases_after", ())),
         offload_after=tuple(_trigger_from_dict(x) for x in d.get("offload_after", ())),
         prefetch_after=tuple(_trigger_from_dict(x) for x in d.get("prefetch_after", ())),

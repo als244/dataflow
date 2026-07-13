@@ -118,11 +118,11 @@ class _Base:
         """Weight-field shard slices from the task's tensor-parallel
         block param: {field: (dim, lo, hi)}, or None when the task is
         not tensor-parallel."""
-        tp = task.block_params.get("tp")
+        tp = task.block_params.get("tp_slices")
         if tp is None:
             return None
         return {name: tuple(int(x) for x in sl)
-                for name, sl in tp["slices"].items()}
+                for name, sl in tp.items()}
 
     def wl_for(self, task) -> PackedLayout:
         wl = self._weight_layout(self.layer_of(task))
@@ -486,7 +486,7 @@ class GradReduceStep(_Base):
                                     offset_bytes=f.offset_bytes),
                          torch_view(g_global, f.shape, dt_f,
                                     offset_bytes=f.offset_bytes)))
-            dp_name = ctx.task.block_params.get("dp_group")
+            dp_name = ctx.task.comm_groups.get("dp")
             gh = (getattr(ctx, "groups", None) or {}).get(dp_name) \
                 if dp_name else None
             if gh is None:
@@ -590,15 +590,16 @@ class AdamWStep(_Base):  # name kept for resolver back-compat; see OptimizerStep
             o_buf = (ctx.mutates[ctx.task.mutates[1]]
                      if len(ctx.task.mutates) > 1 else None)
             wl_, gl_, ol_, ns = self._layouts(ctx.task, w_buf.size_bytes)
-            # comm participation: block_params carry group ROLE NAMES
-            # (pure data, set by the conductor's lowering); the HANDLES
-            # arrive per run via ctx.groups. An absent handle means a
-            # standalone run of the same artifact — the fleet warm-up
-            # path — and each variant degrades to local-only work.
+            # comm participation: task.comm_groups carries group ROLE
+            # NAMES by purpose (pure data, set by the conductor's
+            # lowering); the HANDLES arrive per run via ctx.groups. An
+            # absent handle means a standalone run of the same artifact
+            # — the fleet warm-up path — and each variant degrades to
+            # local-only work.
             groups = getattr(ctx, "groups", None) or {}
-            dp_name = ctx.task.block_params.get("dp_group")
+            dp_name = ctx.task.comm_groups.get("dp")
             gh = groups.get(dp_name) if dp_name else None
-            wait_name = ctx.task.block_params.get("dp_wait_group")
+            wait_name = ctx.task.comm_groups.get("wait")
             gw = groups.get(wait_name) if wait_name else None
             sh = ctx.task.block_params.get("shard")
             if sh is not None and self.update_specials:

@@ -61,11 +61,11 @@ from dataflow.tasks.base_blocks import (
 def tp_group_handle(ctx, task):
     """The task's tensor-parallel GroupHandle, or None (standalone /
     warm-up run before the group exists — rank-local semantics, like
-    a dp_group artifact run standalone)."""
-    tp = task.block_params.get("tp")
-    if tp is None:
+    a dp artifact run standalone)."""
+    role = task.comm_groups.get("tp")
+    if role is None:
         return None
-    return (getattr(ctx, "groups", None) or {}).get(tp["group"])
+    return (getattr(ctx, "groups", None) or {}).get(role)
 
 
 @dataclass(frozen=True)

@@ -346,9 +346,7 @@ def lower_with_group(cfg, dp_group: str, recompute_levels=None,
             plan.consumable("tp")
             rank_view = tp_view(plan, parallel.rank)
             tp_params = {
-                root: {"group": parallel.group,
-                       "slices": {name: list(sl)
-                                  for name, sl in slices.items()}}
+                root: {name: list(sl) for name, sl in slices.items()}
                 for root, slices in rank_view.items()}
             shard_params = tp_opt_block_params(plan, parallel.rank)
             opt_regions = {root: dict(sh["update"])

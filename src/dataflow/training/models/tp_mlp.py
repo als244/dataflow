@@ -122,7 +122,7 @@ def lower_tp_mlp(cfg: TpMlpConfig) -> Program:
                      ),
                      runtime_us=50.0, group="forward",
                      compute_block_key="tp_fwd",
-                     block_params={"tp_group": GROUP_ROLE}),
+                     comm_groups={"tp": GROUP_ROLE}),
             TaskSpec(id="tp_bwd_0_0_0",
                      inputs=("dy_0", "x_0", "W_tp", "A_0"),
                      outputs=(
@@ -132,7 +132,7 @@ def lower_tp_mlp(cfg: TpMlpConfig) -> Program:
                      ),
                      runtime_us=100.0, group="backward",
                      compute_block_key="tp_bwd",
-                     block_params={"tp_group": GROUP_ROLE}),
+                     comm_groups={"tp": GROUP_ROLE}),
         ),
         final_locations={"y_0": "backing", "dW_tp_0": "backing",
                          "dx_0": "backing"},
@@ -233,7 +233,7 @@ class TpMlpFwd:
                            (d.t, d.d), torch.bfloat16)
             y.copy_(h @ wl.view(w_buf, "w2"))   # partial sum, in place
             gh = (getattr(ctx, "groups", None) or {}).get(
-                ctx.task.block_params.get("tp_group"))
+                ctx.task.comm_groups.get("tp"))
             if gh is None:
                 return          # standalone/warm-up: partials stand
             produced = torch.cuda.Event()
@@ -281,7 +281,7 @@ class TpMlpBwd:
                             (d.t, d.d), torch.bfloat16)
             dx.copy_(da1 @ w1.T + da3 @ w3.T)   # partial, in place
             gh = (getattr(ctx, "groups", None) or {}).get(
-                ctx.task.block_params.get("tp_group"))
+                ctx.task.comm_groups.get("tp"))
             if gh is None:
                 return
             produced = torch.cuda.Event()

@@ -59,8 +59,14 @@ Plans are built by helpers, validated (`plan.validate()` checks full
 cover, bounds, one axis per field, and optimizer-aware rules like
 muon's whole-matrix requirement), and checked against a consumer
 contract (`plan.consumable("optimizer")` or `"tp"`). Everything a
-task needs at runtime is baked into its `block_params` as plain
-data — compute keys select code, params parametrize it.
+task needs at runtime is baked into the task as plain data — compute
+keys select code, `block_params` carries the geometry (shard regions,
+slices), and `comm_groups` names the peer-group ROLES the task
+communicates in by purpose (`{"dp": ...}` for the gradient exchange,
+`{"tp": ...}` for tensor-parallel collectives). Roles are names, not
+handles: the live group binds per run, and a run without the group
+executes the same task standalone — which is exactly what the fleet
+warm-up does.
 
 ## 3. The parallelism configurations
 

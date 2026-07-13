@@ -57,6 +57,12 @@ def validate_program(program: Program) -> None:
     task_ids: set[str] = set()
     for idx, task in enumerate(program.tasks):
         where = f"task {task.id!r} (index {idx})"
+        for purpose, role in dict(task.comm_groups).items():
+            if not (isinstance(purpose, str) and purpose
+                    and isinstance(role, str) and role):
+                err(f"{where}: comm_groups entries must map a non-empty "
+                    f"purpose to a non-empty role name, got "
+                    f"{purpose!r}: {role!r}")
         if task.id in task_ids:
             err(f"duplicate task id {task.id!r}")
         task_ids.add(task.id)

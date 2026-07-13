@@ -64,6 +64,15 @@ class TaskSpec:
     ``compute_block_key`` + ``block_params`` identify the executable that
     implements this task — resolution is by key, never by task id, so
     planner-inserted tasks (e.g. recompute) bind automatically.
+
+    ``comm_groups`` declares the peer-group ROLES this task communicates
+    in, by purpose: {"dp": role} for the data-parallel gradient
+    exchange, {"wait": role} for ordering behind a group stream's tail
+    (overlap lowerings), {"tp": role} for tensor-parallel activation
+    collectives. Values are role NAMES — pure data; the live handles
+    bind per run (ctx.groups), and a run without the role executes the
+    task standalone. Empty means a pure-local task. Topology addressing
+    lives HERE; ``block_params`` stays geometry/math the block needs.
     """
 
     id: str
@@ -74,6 +83,7 @@ class TaskSpec:
     group: str = "compute"
     compute_block_key: str | None = None
     block_params: Mapping[str, Any] = field(default_factory=dict)
+    comm_groups: Mapping[str, str] = field(default_factory=dict)
     releases_after: tuple[str, ...] = ()
     offload_after: tuple[TransferDirective, ...] = ()
     prefetch_after: tuple[TransferDirective, ...] = ()
