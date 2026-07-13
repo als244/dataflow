@@ -50,7 +50,6 @@ from ..layouts import (
 from dataflow.tasks.base_blocks import (
     AdamWHyper,
     AdamWStep,
-    GradReduceStep,
     EmbedBwd,
     EmbedFwd,
     HeadLoss,
@@ -609,9 +608,6 @@ def build_resolver(
         "tp_block_fwd": TpBlockFwd(dims, kernels),
         "tp_block_recompute": TpBlockRecompute(dims, kernels),
         "tp_block_bwd": TpBlockBwd(dims, kernels),
-        "grad_reduce_block": GradReduceStep(dims, kernels, kind="block"),
-        "grad_reduce_embed": GradReduceStep(dims, kernels, kind="embed"),
-        "grad_reduce_head": GradReduceStep(dims, kernels, kind="head"),
     }
 
     def resolver(task: TaskSpec):

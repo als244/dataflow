@@ -415,10 +415,11 @@ def distperf_sections(R: dict) -> list:
 
     sections.append(
         "<section><h2>What remains on the table</h2><ul>"
-        "<li><b>Exchange/backward overlap</b> (grad_reduce tasks + "
-        "tail optimizers): implemented opt-in and bitwise-correct at "
-        "one step, parked pending an engine completion-contract "
-        "extension; projected ~2.9-3.1 s/step at 64K.</li>"
+        "<li><b>Exchange/backward overlap</b> (dedicated grad-reduce "
+        "tasks + tail optimizers): prototyped and bitwise-correct at "
+        "one step, then removed pending an engine completion-contract "
+        "extension (output produced-ness); the design and measurements "
+        "are recorded; projected ~2.9-3.1 s/step at 64K.</li>"
         "<li><b>Pipelined comm worker</b>: deterministic landing ring "
         "kills the RDY round-trip and the last ~0.5 ms/op tax for "
         "non-contiguous patterns.</li>"

@@ -13,11 +13,11 @@ from __future__ import annotations
 import torch
 
 from ..interop import TORCH_DTYPE_BY_NAME, torch_view
-from .update import update_fields, wait_group_tail
+from .update import update_fields
 
 
 def launch(block, ctx, es, kctx, wl, gl, ol, ns,
-           w_buf, g_buf, o_buf, gh, gw) -> None:
+           w_buf, g_buf, o_buf, gh) -> None:
     if gh is not None:
         grads_ready = torch.cuda.Event()
         grads_ready.record(es)
@@ -50,10 +50,5 @@ def launch(block, ctx, es, kctx, wl, gl, ol, ns,
         summed = torch.cuda.Event()
         summed.record(gh.stream)
         es.wait_event(summed)
-    if gw is not None:
-        # overlap lowering: grads arrive PRE-REDUCED in the dWg
-        # input, summed on the GROUP stream by an earlier grad_reduce
-        # task
-        wait_group_tail(es, gw)
     update_fields(block, ctx, kctx, wl, gl, ol, ns,
                   w_buf, g_buf, o_buf)

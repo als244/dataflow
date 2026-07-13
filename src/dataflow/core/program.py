@@ -67,10 +67,8 @@ class TaskSpec:
 
     ``comm_groups`` maps a comm PURPOSE to the NAME of the peer group
     serving it: {"dp": name} — this task exchanges gradients over
-    that group; {"wait": name} — this task exchanges nothing but must
-    order behind that group's stream tail before reading its inputs
-    (overlap lowerings deliver pre-reduced grads on the group
-    stream); {"tp": name} — tensor-parallel activation collectives.
+    that group; {"tp": name} — tensor-parallel activation
+    collectives.
     The name is the lookup key into the per-run ctx.groups table
     (create_peer_group named it; topology [groups.X]); a run without
     that group executes the task standalone. Empty means a pure-local

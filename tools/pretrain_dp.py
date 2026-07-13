@@ -87,13 +87,6 @@ def main() -> None:
                          "reduce_scatter + ONE all_gather per object — "
                          "bandwidth-optimal at any world; needs a "
                          "uniform adamw policy)")
-    tr.add_argument("--dp-overlap", action="store_true",
-                    help="EXPERIMENTAL, known-broken at scale: tail "
-                         "optimizers on PRE-REDUCED grads (grad_reduce "
-                         "tasks overlap the exchange with backward). "
-                         "Bitwise-correct at one step; NaNs under memory "
-                         "pressure — needs the completion-stream engine "
-                         "extension (findings) before real use")
     tr.add_argument("--profile", action="store_true",
                     help="bracket steps with the vendor capture API; "
                          "launched daemons are wrapped in the canonical "
@@ -108,10 +101,6 @@ def main() -> None:
 
     if args.cmd == "train":
         cfg = preset(args.preset)
-        if args.dp_overlap:
-            from dataclasses import replace as dc_replace
-
-            cfg = dc_replace(cfg, optimizer_placement="tail")
         recipe = Recipe(peak_lr=args.peak_lr, min_lr=args.peak_lr / 10,
                         warmup_steps=max(1, args.steps // 10),
                         total_steps=args.steps)
@@ -134,7 +123,6 @@ def main() -> None:
                            topology=load_topology(args.topology),
                            group=args.group, attach=attach,
                            seed=args.seed, profile=profile,
-                           dp_overlap=args.dp_overlap,
                            backend=args.backend,
                            opt_shard=args.opt_shard,
                            tp_mlp=args.tp_mlp,

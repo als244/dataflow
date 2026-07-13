@@ -231,10 +231,6 @@ def build_shaped_program(
     dp_group: str | None = None,   # peer-group NAME optimizer tasks
                                    # name; present handle => allreduce(dW)
                                    # before the update (P4a data parallel)
-    dp_overlap: bool = False,      # tail placement only: emit grad_reduce
-                                   # tasks after each final-round bwd so the
-                                   # exchange overlaps the remaining backward;
-                                   # optimizers consume the PRE-REDUCED dWg
     shard_params=None,             # {object_root -> "shard" dict} from
                                    # sharding.shard_block_params: optimizer
                                    # tasks for listed roots execute region
@@ -361,25 +357,12 @@ def build_shaped_program(
             f"got {cfg.optimizer_placement!r}"
         )
     interleaved = cfg.optimizer_placement == "interleaved"
-    if dp_overlap and (dp_group is None or interleaved):
-        raise ValueError(
-            "dp_overlap requires dp_group and optimizer_placement='tail' "
-            "(the exchange overlaps backward; interleaved placement "
-            "already interleaves by construction)")
-    if shard_params:
-        if dp_group is None:
-            raise ValueError("shard_params requires dp_group — the shard "
-                             "collectives ride the same group handle")
-        if dp_overlap:
-            raise ValueError("shard_params is incompatible with dp_overlap "
-                             "(grad_reduce tasks assume the replicated "
-                             "allreduce+update shape)")
-    if tp_params:
-        if dp_group is None:
-            raise ValueError("tp_params requires dp_group — the tp "
-                             "collectives ride the same group handle")
-        if dp_overlap:
-            raise ValueError("tp_params is incompatible with dp_overlap")
+    if shard_params and dp_group is None:
+        raise ValueError("shard_params requires dp_group — the shard "
+                         "collectives ride the same group handle")
+    if tp_params and dp_group is None:
+        raise ValueError("tp_params requires dp_group — the tp "
+                         "collectives ride the same group handle")
 
     for s in range(cfg.num_steps):
         # Optimizer emitters: one per parameter family; ids/inputs identical
@@ -388,16 +371,12 @@ def build_shaped_program(
         # prefetches and W/O writebacks overlap the rest of the backward
         # instead of draining serially after all compute is done.
         opt_comm = {"dp": dp_group} if dp_group else None
-        if dp_overlap:
-            # overlap mode: the EXCHANGE lives in grad_reduce tasks;
-            # optimizers only wait on the group stream's tail
-            opt_comm = {"wait": dp_group}
 
         shards = shard_params or {}
         tps = tp_params or {}
 
         def opt_embed(s: int = s) -> None:
-            g_embed = f"dWg_embed_{s}" if dp_overlap else f"dW_embed_{s}"
+            g_embed = f"dW_embed_{s}"
             extra = ({"shard": shards["W_embed"]}
                      if "W_embed" in shards else {})
             if "W_embed" in tps:
@@ -410,7 +389,7 @@ def build_shaped_program(
 
         def opt_block(i: int, s: int = s) -> None:
             sp = layer_specs[i]
-            g_blk = f"dWg_{s}_{i}" if dp_overlap else f"dW_{s}_{i}"
+            g_blk = f"dW_{s}_{i}"
             extra = ({"shard": shards[f"W_{i}"]}
                      if f"W_{i}" in shards else {})
             if f"W_{i}" in tps:
@@ -425,7 +404,7 @@ def build_shaped_program(
         def opt_head(s: int = s) -> None:
             if tied:
                 return  # optimizer_embed covers the shared W_embed/O_embed
-            g_head = f"dWg_head_{s}" if dp_overlap else f"dW_head_{s}"
+            g_head = f"dW_head_{s}"
             extra = ({"shard": shards["W_head"]}
                      if "W_head" in shards else {})
             if "W_head" in tps:
@@ -526,13 +505,6 @@ def build_shaped_program(
             task(f"head_loss_{s}_{r}", "head_loss", head_inputs, head_outs,
                  loose.head_loss_us, mutates=head_mutates, group="backward")
             final_locations[f"loss_{s}_{r}"] = "backing"
-            if dp_overlap and last_round and not tied:
-                task(f"grad_reduce_head_{s}", "grad_reduce_head",
-                     [f"dW_head_{s}"],
-                     [OutputSpec(id=f"dWg_head_{s}", size_bytes=w_head,
-                                 role="gradient")],
-                     1.0, group="optimizer", comm={"dp": dp_group},
-                     subops=[])
             if interleaved and last_round:
                 opt_head()  # dW_head_{s} saw its final mutation just now
 
@@ -597,15 +569,6 @@ def build_shaped_program(
                      sp.bwd_us, mutates=mutates, group="backward",
                      params={"layer": i, **tp_extra}, comm=tp_comm,
                      subops=sp.bwd_subops)
-                if dp_overlap and last_round:
-                    task(f"grad_reduce_{s}_{i}", "grad_reduce_block",
-                         [f"dW_{s}_{i}"],
-                         [OutputSpec(id=f"dWg_{s}_{i}",
-                                     size_bytes=sp.w_bytes,
-                                     role="gradient")],
-                         1.0, group="optimizer",
-                         params={"layer": i}, comm={"dp": dp_group},
-                         subops=[])
                 if interleaved and last_round:
                     opt_block(i)  # dW_{s}_{i} is final; W_i still resident from bwd
 
@@ -619,13 +582,6 @@ def build_shaped_program(
                 embed_mutates = (f"dW_embed_{s}",)
             task(f"embed_bwd_{s}_{r}", "embed_bwd", embed_bwd_inputs, embed_outs,
                  loose.embed_bwd_us, mutates=embed_mutates, group="backward")
-            if dp_overlap and last_round:
-                task(f"grad_reduce_embed_{s}", "grad_reduce_embed",
-                     [f"dW_embed_{s}"],
-                     [OutputSpec(id=f"dWg_embed_{s}", size_bytes=w_embed,
-                                 role="gradient")],
-                     1.0, group="optimizer", comm={"dp": dp_group},
-                     subops=[])
             if interleaved and last_round:
                 opt_embed()  # embed_bwd is the round's last task; embed opt closes the step
 

@@ -24,11 +24,11 @@ from __future__ import annotations
 
 import torch
 
-from .update import update_fields, wait_group_tail
+from .update import update_fields
 
 
 def launch(block, ctx, es, kctx, wl, gl, ol, ns,
-           w_buf, g_buf, o_buf, gh, gw, sh) -> None:
+           w_buf, g_buf, o_buf, gh, sh) -> None:
     if gh is not None and sh.get("grads", "partial") == "partial":
         grads_ready = torch.cuda.Event()
         grads_ready.record(es)
@@ -47,8 +47,6 @@ def launch(block, ctx, es, kctx, wl, gl, ol, ns,
         summed = torch.cuda.Event()
         summed.record(gh.stream)
         es.wait_event(summed)
-    if gw is not None:
-        wait_group_tail(es, gw)
     regions = {name: (tuple(rows) if rows else None)
                for name, rows in sh["update"].items()}
     update_fields(block, ctx, kctx, wl, gl, ol, ns,

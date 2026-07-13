@@ -311,7 +311,7 @@ def checkpoint_fleet(ranks, ck: dict, step_next: int, meta: dict,
 
 
 def lower_with_group(cfg, dp_group: str, recompute_levels=None,
-                     dp_overlap: bool = False, parallel=None,
+                     parallel=None,
                      zero1rs_world: int | None = None):
     """``parallel`` (sharding.ParallelConfig with a plan) makes this a
     PER-RANK lowering. An optimizer-consumable plan (zero1): optimizer
@@ -358,7 +358,7 @@ def lower_with_group(cfg, dp_group: str, recompute_levels=None,
         cfg, hw=hw, family="llama3-shaped",
         kinds={"block": roofline_block_kind_spec(cfg, hw)},
         dp_group=dp_group, recompute_levels=recompute_levels,
-        dp_overlap=dp_overlap, shard_params=shard_params,
+        shard_params=shard_params,
         tp_params=tp_params)
     from dataflow.training.lowering import apply_exact_sizes, size_of_factory
 
@@ -372,18 +372,16 @@ def lower_with_group(cfg, dp_group: str, recompute_levels=None,
 class GroupedBuildVariant:
     """plan_program's recompute rebuilder for dp_group lowerings."""
 
-    def __init__(self, cfg, dp_group: str, dp_overlap: bool = False,
+    def __init__(self, cfg, dp_group: str,
                  parallel=None, zero1rs_world=None):
         self.cfg = cfg
         self.dp_group = dp_group
-        self.dp_overlap = dp_overlap
         self.parallel = parallel
         self.zero1rs_world = zero1rs_world
 
     def __call__(self, levels):
         return lower_with_group(self.cfg, self.dp_group,
                                 recompute_levels=levels,
-                                dp_overlap=self.dp_overlap,
                                 parallel=self.parallel,
                                 zero1rs_world=self.zero1rs_world)
 
@@ -474,7 +472,7 @@ def run_fleet_dp(global_cfg, recipe: Recipe, stream, steps: int, *,
                  rank_rounds=(6, 2), budgets=None, slabs=None,
                  topology=None, group: str = "dp", attach=None,
                  seed: int = 11, log=print, log_every: int = 10,
-                 profile: dict | None = None, dp_overlap: bool = False,
+                 profile: dict | None = None,
                  backend: str | None = None, opt_shard: str | None = None,
                  tp_mlp: bool = False,
                  checkpoint_every: int | None = None,
@@ -639,7 +637,7 @@ def run_fleet_dp(global_cfg, recipe: Recipe, stream, steps: int, *,
                           log_every=log_every,
                           tokens_step=tokens_per_step(global_cfg),
                           r_global=r_global, profile=profile,
-                          dp_overlap=dp_overlap, parallels=parallels,
+                          parallels=parallels,
                           tp_mode=tp_mlp, checkpoint=ck,
                           fleet_manifest=fleet_manifest,
                           zero1rs_world=(world if opt_shard == "zero1rs"
@@ -679,7 +677,7 @@ def run_fleet_dp(global_cfg, recipe: Recipe, stream, steps: int, *,
 def fleet_loop(ranks, gspec, recipe, stream, steps, *, budgets, seed,
                log, log_every, tokens_step, r_global,
                profile: dict | None = None,
-               dp_overlap: bool = False, parallels=None,
+               parallels=None,
                tp_mode: bool = False, checkpoint: dict | None = None,
                fleet_manifest: dict | None = None,
                zero1rs_world: int | None = None) -> RunResult:
@@ -690,12 +688,11 @@ def fleet_loop(ranks, gspec, recipe, stream, steps, *, budgets, seed,
     for i, rank in enumerate(ranks):
         par = parallels[i] if parallels else None
         planned = plan_program(
-            lower_with_group(rank.cfg, gspec.name, dp_overlap=dp_overlap,
+            lower_with_group(rank.cfg, gspec.name,
                              parallel=par, zero1rs_world=zero1rs_world),
             fast_memory_capacity=int(budgets[i] * 1024 ** 3),
             recompute=True,
             build_variant=GroupedBuildVariant(rank.cfg, gspec.name,
-                                              dp_overlap=dp_overlap,
                                               parallel=par,
                                               zero1rs_world=zero1rs_world))
         prog_dict = program_to_dict(planned.program)

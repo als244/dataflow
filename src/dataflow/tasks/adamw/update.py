@@ -12,8 +12,6 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-import torch
-
 from ..optim import OPTIMIZERS, hyper_for, resolve_opt_policy
 
 
@@ -30,16 +28,6 @@ def run_step(ctx) -> int:
     (run_args); in-process paths keep baking it into block_params."""
     ra = getattr(ctx, "run_args", None) or {}
     return int(ra.get("step", ctx.task.block_params.get("step", 0))) + 1
-
-
-def wait_group_tail(es, gw) -> None:
-    """Order ``es`` behind a group stream's current tail. Overlap
-    lowerings deliver grads PRE-REDUCED by an earlier grad_reduce
-    task on the group stream; its FIFO order means the tail covers
-    this layer's sum."""
-    summed = torch.cuda.Event()
-    summed.record(gw.stream)
-    es.wait_event(summed)
 
 
 def update_fields(block, ctx, kctx, wl, gl, ol, ns,
