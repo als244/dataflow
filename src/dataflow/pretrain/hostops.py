@@ -54,7 +54,9 @@ def run_py(host: HostSpec, code: str, *, timeout: float = 120.0) -> str:
 
 
 def daemon_paths(host: HostSpec, lane: str = "fleet") -> dict:
-    base = f"/tmp/dataflowd-{lane}"
+    # keyed by (lane, topology entry): multi-GPU hosts run one daemon
+    # per entry, and entry names are unique by construction
+    base = f"/tmp/dataflowd-{lane}-{host.name}"
     return {"sock": f"{base}.sock", "log": f"{base}.log",
             "pid": f"{base}.pid"}
 
@@ -98,6 +100,7 @@ def launch_daemon(host: HostSpec, *, lane: str = "fleet",
     inner = (f"{env_prefix}{wrap} {host.python} -u "
              f"{host.repo}/tools/dataflowd.py "
              f"start --socket {paths['sock']} --slab-gib {slab_gib} "
+             f"--device {host.device} "
              f"--peer-name {host.name} "
              f"--peer-listen {host.peer_addr(peer_port)} "
              f"{extra_flags}").strip()

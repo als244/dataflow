@@ -475,9 +475,12 @@ def run_fleet_dp(global_cfg, recipe: Recipe, stream, steps: int, *,
                           backend=backend)
     hosts = topo.group_hosts(group)
     world = len(hosts)
-    if world != 2:
-        raise ValueError(f"the hostmem fleet driver is world-2 for "
-                         f"now; group {group!r} has {world} members")
+    if world < 2:
+        raise ValueError(f"group {group!r} has {world} member(s)")
+    if world > 2 and gspec.backend == "hostmem":
+        raise ValueError(
+            "the hostmem lane is pairwise (world-2 CI); groups with "
+            f"{world} members need backend 'nccl' or 'auto'")
     if len(rank_rounds) != world:
         raise ValueError(f"rank_rounds {rank_rounds} vs {world} members")
     r_global = global_cfg.grad_accum_rounds

@@ -31,6 +31,8 @@ class HostSpec:
     iface: str | None = None       # fast-link netdev (NCCL_SOCKET_IFNAME)
     slab_gib: float = 8.0
     budget_gib: float = 8.0
+    device: int = 0                # CUDA device index (multi-GPU hosts
+                                   # use one topology entry per GPU)
 
     def is_local(self) -> bool:
         return self.ssh is None

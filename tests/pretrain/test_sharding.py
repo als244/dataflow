@@ -230,3 +230,52 @@ def test_real_llama3_layouts_shard():
         agg[0] += o0
         agg[1] += o1
     assert min(agg) / max(agg) > 0.85, agg
+
+
+def test_world_n_plans():
+    """WN0: the builders and block-param derivations at world 4 and
+    8 — balance, cover, divisibility, and the cross-rank comm-
+    sequence identity that collective pairing depends on."""
+    from dataflow.pretrain.presets import preset
+    from dataflow.pretrain.sharding import (
+        layer_fields_by_root,
+        shard_block_params,
+        tp_mlp_shards,
+        tp_view,
+        zero1_halves,
+    )
+
+    fbr = layer_fields_by_root(preset("l3_125m"))
+    for world in (4, 8):
+        plan = zero1_halves(fbr, "dp", world)
+        plan.validate()
+        plan.v1_consumable()
+        owned = []
+        for root in plan.roots():
+            per = [sum(hi - lo for lo, hi in plan.owned_ranges(r, root))
+                   for r in range(world)]
+            owned.append(per)
+        agg = [sum(per[r] for per in owned) for r in range(world)]
+        # field-snapped whole-field shards lose balance as world
+        # approaches the per-root field count (7 big fields into 8
+        # buckets); the byte-equal rs/ag builder is the world-8
+        # answer — this gates the honest v1 floor, not aspiration
+        floor = {4: 0.4, 8: 0.2}[world]
+        assert min(agg) / max(agg) > floor, (world, agg)
+        params = [shard_block_params(plan, r) for r in range(world)]
+        for root in params[0]:
+            comms = [p[root]["comm"] for p in params]
+            assert all(c == comms[0] for c in comms), (world, root)
+            assert all(e["owner"] in range(world)
+                       for e in comms[0]), (world, root)
+
+    # tp at world 4 (d_ff 3072 divides); world 8 too (3072 % 8 == 0)
+    for world in (4, 8):
+        plan = tp_mlp_shards(fbr, "tp", world)
+        plan.validate()
+        plan.consumable("tp")
+        assert not plan.redundant()
+        views = [tp_view(plan, r) for r in range(world)]
+        w1 = [v["W_0"]["w1"] for v in views]
+        assert len({sl[1:] for sl in w1}) == world      # distinct slices
+        assert all(sl[0] == 1 for sl in w1)             # column axis
