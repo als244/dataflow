@@ -43,6 +43,7 @@ from .hostops import (
     kill_daemon,
     launch_daemon,
     nsys_command,
+    repo_path,
     run_on,
     uds_forward,
     wait_daemon_exit,
@@ -176,14 +177,17 @@ def save_plan_for(parallels, world: int,
 
 def push_dir(host, src_dir: str, dest_dir: str) -> None:
     """Ship a checkpoint artifact directory to a remote host (scp -r;
-    local hosts are a no-op — the artifact is already there)."""
+    local hosts are a no-op — the artifact is already there).
+    ``dest_dir`` may be repo-relative; it lands under the host's
+    repo, mirroring how the daemon resolves it at restore."""
     import subprocess
 
     if host.is_local():
         return
-    run_on(host, f"mkdir -p {dest_dir}")
+    dest = repo_path(host, dest_dir)
+    run_on(host, f"mkdir -p {dest}")
     subprocess.run(["scp", "-q", "-r", src_dir,
-                    f"{host.ssh}:{dest_dir}/"], check=True)
+                    f"{host.ssh}:{dest}/"], check=True)
 
 
 def distribute_shared(fleet_manifest: dict, hosts, log) -> None:
@@ -203,11 +207,12 @@ def distribute_shared(fleet_manifest: dict, hosts, log) -> None:
             host = by_name.get(name)
             if host is None or host.is_local():
                 continue
-            probe = run_on(host, f"test -d {shared} && echo yes || "
-                                 f"echo no").strip()
+            probe = run_on(host, f"test -d {repo_path(host, shared)} "
+                                 f"&& echo yes || echo no").strip()
             if probe == "yes":
                 subprocess.run(
-                    ["scp", "-q", "-r", f"{host.ssh}:{shared}",
+                    ["scp", "-q", "-r",
+                     f"{host.ssh}:{repo_path(host, shared)}",
                      str(Path(shared).parent)], check=True)
                 log(f"[fleet] shared artifact recovered from "
                     f"{name}'s redundant copy")
@@ -221,8 +226,8 @@ def distribute_shared(fleet_manifest: dict, hosts, log) -> None:
         if host.is_local():
             local.append(shared)
             continue
-        probe = run_on(host, f"test -d {shared} && echo yes || "
-                             f"echo no").strip()
+        probe = run_on(host, f"test -d {repo_path(host, shared)} && "
+                             f"echo yes || echo no").strip()
         if probe != "yes":
             push_dir(host, shared, str(Path(shared).parent))
             log(f"[fleet] shared checkpoint artifact -> {host.name}")
@@ -301,7 +306,7 @@ def checkpoint_fleet(ranks, ck: dict, step_next: int, meta: dict,
             for rank in ranks:
                 host = ck["hosts_by_name"][rank.name]
                 if not host.is_local():
-                    run_on(host, f"rm -rf {old_dir}")
+                    run_on(host, f"rm -rf {repo_path(host, str(old_dir))}")
             log(f"[fleet] pruned checkpoint {old_dir.name}")
 
 

@@ -31,6 +31,25 @@ def nsys_command(host: HostSpec, out_path: str) -> str:
     return " ".join(parts)
 
 
+def repo_path(host: HostSpec, path: str) -> str:
+    """Resolve a repo-relative artifact path on a host. Daemons run
+    with cwd = the repo root, so relative paths in manifests mean
+    "under the repo" — but ssh sessions land in $HOME, so every
+    remote shell/scp operation must absolute-ify first. (Learned the
+    hard way: scp to a relative dest silently ships checkpoints to
+    ~/results/... while the daemon restores from <repo>/results/...)"""
+    import os
+
+    if os.path.isabs(path):
+        return path
+    if host.is_local():
+        return path
+    if not host.repo:
+        raise RuntimeError(f"host {host.name}: repo-relative path "
+                           f"{path!r} needs host.repo in the topology")
+    return f"{host.repo}/{path}"
+
+
 def run_on(host: HostSpec, cmd: str, *, timeout: float = 120.0) -> str:
     """Run a shell command on the host. Local hosts get a local shell;
     remote hosts one BatchMode ssh session."""
