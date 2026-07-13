@@ -43,6 +43,7 @@ from .hostops import (
     kill_daemon,
     launch_daemon,
     nsys_command,
+    run_on,
     uds_forward,
     wait_daemon_exit,
 )
@@ -145,6 +146,61 @@ def resolve_resume(run_dir: Path, resume: str, log) -> dict:
     return json.loads(mf.read_text())
 
 
+def save_plan_for(parallels, world: int) -> dict:
+    """The SavePlan (Shein's design): who saves what, derived from
+    the ownership algebra. Data objects (tokens/targets/losses) are
+    never saved — resume re-derives them from the stream. Returns
+    {"shared": [id prefixes identical on every rank; rank 0 writes
+    them once], "per_rank": [prefixes unique per rank; every rank
+    writes its own]}.
+
+      plain DP: shared = W_* + O_* (fully replicated) — only rank 0
+        writes anything;
+      zero1:    shared = W_* (replicated weights); per-rank = O_*
+        (owned shards);
+      tp:       per-rank = W_* + O_* (physically sharded objects).
+    """
+    par = parallels[0] if parallels else None
+    if par is None or par.plan is None:
+        return {"shared": ["W_", "O_"], "per_rank": []}
+    narrowed = any(a.resident != ALL_RANKS for a in par.plan.assignments)
+    if narrowed:
+        return {"shared": [], "per_rank": ["W_", "O_"]}
+    return {"shared": ["W_"], "per_rank": ["O_"]}
+
+
+def push_dir(host, src_dir: str, dest_dir: str) -> None:
+    """Ship a checkpoint artifact directory to a remote host (scp -r;
+    local hosts are a no-op — the artifact is already there)."""
+    import subprocess
+
+    if host.is_local():
+        return
+    run_on(host, f"mkdir -p {dest_dir}")
+    subprocess.run(["scp", "-q", "-r", src_dir,
+                    f"{host.ssh}:{dest_dir}/"], check=True)
+
+
+def distribute_shared(fleet_manifest: dict, hosts, log) -> None:
+    """Make the shared (rank-0-deduped) artifact locally available on
+    every resuming host; records per-rank local paths in the
+    manifest. Redundant copies made at save time shortcut this."""
+    shared = fleet_manifest.get("shared_path")
+    if not shared:
+        fleet_manifest["local_shared"] = [None] * len(hosts)
+        return
+    local = []
+    for host in hosts:
+        if host.is_local():
+            local.append(shared)
+            continue
+        dest_parent = str(Path(shared).parent)
+        push_dir(host, shared, dest_parent)
+        local.append(shared)   # same path layout on every host
+        log(f"[fleet] shared checkpoint artifact -> {host.name}")
+    fleet_manifest["local_shared"] = local
+
+
 def checkpoint_fleet(ranks, ck: dict, step_next: int, meta: dict,
                      losses_so_far: list, log) -> None:
     """Conductor-orchestrated fleet checkpoint at a step boundary:
@@ -158,24 +214,44 @@ def checkpoint_fleet(ranks, ck: dict, step_next: int, meta: dict,
 
     step_dir = ck["dir"] / f"step_{step_next:06d}"
     os.makedirs(step_dir, exist_ok=True)   # conductor side (fleet.json)
+    plan = ck["save_plan"]
     snaps = []
+    rank_paths = []
+    shared_path = None
     for i, rank in enumerate(ranks):
         # dest is DAEMON-LOCAL: the snapshot writer mkdirs on its host
-        dest = str(step_dir / f"rank{i}")
-        out = rank.client.snapshot(
-            "all", dest,
-            client_meta={"step": step_next, "rank": i, **meta})
-        snaps.append((rank, dest, out["snap_id"]))
-    for rank, dest, snap_id in snaps:
+        own = [oid for oid in rank.persist_ids
+               if any(oid.startswith(p) for p in plan["per_rank"])]
+        if i == 0 and plan["shared"]:
+            shared = [oid for oid in rank.persist_ids
+                      if any(oid.startswith(p) for p in plan["shared"])]
+            shared_path = str(step_dir / "shared")
+            out = rank.client.snapshot(
+                "all", shared_path, ids=shared,
+                client_meta={"step": step_next, "shared": True, **meta})
+            snaps.append((rank, out["snap_id"]))
+        dest = None
+        if own:
+            dest = str(step_dir / f"rank{i}")
+            out = rank.client.snapshot(
+                "all", dest, ids=own,
+                client_meta={"step": step_next, "rank": i, **meta})
+            snaps.append((rank, out["snap_id"]))
+        rank_paths.append(dest)
+    for rank, snap_id in snaps:
         s = rank.client.wait_snapshot(snap_id, timeout=600.0)
         if s["state"] != "done":
             raise RuntimeError(f"{rank.name} snapshot failed: {s}")
     manifest = {"step": step_next, **meta,
-                "rank_paths": [d for _, d, _ in snaps],
+                "save_plan": plan,
+                "shared_path": shared_path,
+                "rank_paths": rank_paths,
                 "losses": list(losses_so_far)}
     with open(step_dir / "fleet.json", "w") as f:
         json.dump(manifest, f)
-    log(f"[fleet] checkpoint @ step {step_next} -> {step_dir}")
+    log(f"[fleet] checkpoint @ step {step_next} -> {step_dir} "
+        f"(shared: {bool(shared_path)}, per-rank: "
+        f"{sum(1 for d in rank_paths if d)})")
 
 
 def lower_with_group(cfg, dp_group: str, recompute_levels=None,
@@ -251,6 +327,8 @@ class RankState:
         self.prog_id = prog_id
         self.losses: list = []
         self.error: str | None = None
+        self.persist_ids: list = []    # W_*/O_* ids from the rank's
+                                       # registered program (SavePlan)
 
 
 class StepRun:
@@ -396,15 +474,19 @@ def run_fleet_dp(global_cfg, recipe: Recipe, stream, steps: int, *,
         plan.v1_consumable()
         parallels = [ParallelConfig(group=gspec.name, rank=i, world=world,
                                     plan=plan) for i in range(world)]
+    if ck is not None:
+        ck["save_plan"] = save_plan_for(parallels, world)
 
     ck = None
     if checkpoint_every:
         ck = {"every": int(checkpoint_every),
               "dir": Path(checkpoint_dir) / run_name, "run": run_name}
+        # save_plan filled after parallels are built (below)
     fleet_manifest = None
     if resume is not None:
         fleet_manifest = resolve_resume(
             Path(checkpoint_dir) / run_name, resume, log)
+        distribute_shared(fleet_manifest, hosts, log)
         expect = {"world": world, "rank_rounds": list(rank_rounds),
                   "backend": gspec.backend, "seed": seed,
                   "hosts": [h.name for h in hosts]}
@@ -563,6 +645,9 @@ def fleet_loop(ranks, gspec, recipe, stream, steps, *, budgets, seed,
         if missing:
             raise RuntimeError(f"{rank.name}: unbound {missing}")
         rank.prog_id = reg["prog_id"]
+        rank.persist_ids = sorted(
+            s.id for s in planned.program.initial_objects
+            if s.id.startswith(("W_", "O_")))
         log(f"[fleet] {rank.name}: registered {rank.prog_id} "
             f"(rounds {rank.rounds}, budget {budgets[i]} GiB)")
         # WARM-UP (group absent => comm skips): compiles + loads every
@@ -575,14 +660,28 @@ def fleet_loop(ranks, gspec, recipe, stream, steps, *, budgets, seed,
         if fleet_manifest is not None:
             # RESUME: restore over the warm-up's mutated state (this
             # ordering makes the kernel warm-up harmless), then feed
-            # the START step's rounds
-            res = rank.client.restore_snapshot(
-                fleet_manifest["rank_paths"][i], overwrite=True)
-            meta = res["client_meta"]
-            if meta["step"] != start_step or meta["rank"] != i:
+            # the START step's rounds. Restores the shared artifact
+            # (rank-0-deduped state, distributed to this host by the
+            # conductor) plus this rank's own artifact, if any.
+            restored_step = None
+            shared = fleet_manifest.get("shared_path")
+            if shared:
+                res = rank.client.restore_snapshot(
+                    fleet_manifest["local_shared"][i], overwrite=True)
+                restored_step = res["client_meta"]["step"]
+            own = fleet_manifest["rank_paths"][i]
+            if own:
+                res = rank.client.restore_snapshot(own, overwrite=True)
+                meta = res["client_meta"]
+                if meta["rank"] != i:
+                    raise RuntimeError(
+                        f"{rank.name}: rank artifact meta {meta} is "
+                        f"not rank {i}")
+                restored_step = meta["step"]
+            if restored_step != start_step:
                 raise RuntimeError(
-                    f"{rank.name}: snapshot meta {meta} does not match "
-                    f"resume step {start_step} rank {i}")
+                    f"{rank.name}: restored step {restored_step} != "
+                    f"resume step {start_step}")
             put_rank_rounds(rank, stream, start_step, r_global)
             log(f"[fleet] {rank.name}: restored checkpoint @ step "
                 f"{start_step}")

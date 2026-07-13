@@ -127,7 +127,16 @@ def install(server) -> None:
         scope, dest = a["scope"], a["dest"]
         client_meta = a.get("client_meta") or {}
         label = a.get("label")
-        ids = sorted(store.resolve_scope(scope))
+        if a.get("ids"):
+            # explicit id list (SavePlan dedup: a saver writes only
+            # the objects its plan assigns it)
+            ids = sorted(a["ids"])
+            missing = [i for i in ids if i not in store.objects]
+            if missing:
+                raise ServiceError("BAD_REQUEST",
+                                   f"snapshot ids absent: {missing[:5]}")
+        else:
+            ids = sorted(store.resolve_scope(scope))
         if not ids:
             raise ServiceError("BAD_REQUEST", f"scope '{scope}' is empty")
 

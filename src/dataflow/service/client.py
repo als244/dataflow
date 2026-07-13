@@ -284,10 +284,11 @@ class EngineClient:
         return self._call("query_fast", {})
 
     # ---- programs + runs ----
-    def snapshot(self, scope: str, dest: str, *, client_meta=None,
-                 label=None, wait=True):
+    def snapshot(self, scope: str, dest: str, *, ids=None,
+                 client_meta=None, label=None, wait=True):
         return self._call("snapshot",
                           {"scope": scope, "dest": str(dest),
+                           "ids": list(ids) if ids else None,
                            "client_meta": client_meta or {},
                            "label": label}, wait=wait)
 
