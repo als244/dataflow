@@ -123,6 +123,61 @@ def check_fleet_versions(hosts, log) -> None:
     log(f"[fleet] version handshake ok ({local_rev[:10]}, {local_env})")
 
 
+def resolve_resume(run_dir: Path, resume: str, log) -> dict:
+    """Locate the resume fleet manifest. ``resume`` is a step
+    directory path or "auto" (newest COMPLETE checkpoint wins —
+    fleet.json is written LAST by the conductor, so its presence is
+    the completeness marker; a crash mid-snapshot leaves no marker
+    and auto skips that step)."""
+    import json
+
+    if resume != "auto":
+        mf = Path(resume) / "fleet.json"
+        if not mf.is_file():
+            raise RuntimeError(f"no fleet.json at {resume}")
+        return json.loads(mf.read_text())
+    candidates = sorted(run_dir.glob("step_*/fleet.json"))
+    if not candidates:
+        raise RuntimeError(f"resume=auto found no complete checkpoint "
+                           f"under {run_dir}")
+    mf = candidates[-1]
+    log(f"[fleet] resume=auto -> {mf.parent}")
+    return json.loads(mf.read_text())
+
+
+def checkpoint_fleet(ranks, ck: dict, step_next: int, meta: dict,
+                     losses_so_far: list, log) -> None:
+    """Conductor-orchestrated fleet checkpoint at a step boundary:
+    every rank snapshots its WHOLE store to a host-LOCAL path (per-
+    rank stores already hold exactly their shards, so this is
+    correct for plain/zero1/tp alike; the SavePlan dedup layer comes
+    separately), then the conductor writes fleet.json LAST as the
+    completeness marker."""
+    import json
+    import os
+
+    step_dir = ck["dir"] / f"step_{step_next:06d}"
+    os.makedirs(step_dir, exist_ok=True)   # conductor side (fleet.json)
+    snaps = []
+    for i, rank in enumerate(ranks):
+        # dest is DAEMON-LOCAL: the snapshot writer mkdirs on its host
+        dest = str(step_dir / f"rank{i}")
+        out = rank.client.snapshot(
+            "all", dest,
+            client_meta={"step": step_next, "rank": i, **meta})
+        snaps.append((rank, dest, out["snap_id"]))
+    for rank, dest, snap_id in snaps:
+        s = rank.client.wait_snapshot(snap_id, timeout=600.0)
+        if s["state"] != "done":
+            raise RuntimeError(f"{rank.name} snapshot failed: {s}")
+    manifest = {"step": step_next, **meta,
+                "rank_paths": [d for _, d, _ in snaps],
+                "losses": list(losses_so_far)}
+    with open(step_dir / "fleet.json", "w") as f:
+        json.dump(manifest, f)
+    log(f"[fleet] checkpoint @ step {step_next} -> {step_dir}")
+
+
 def lower_with_group(cfg, dp_group: str, recompute_levels=None,
                      dp_overlap: bool = False, parallel=None):
     """``parallel`` (sharding.ParallelConfig with a plan) makes this a
@@ -273,6 +328,10 @@ def run_fleet_dp(global_cfg, recipe: Recipe, stream, steps: int, *,
                  profile: dict | None = None, dp_overlap: bool = False,
                  backend: str | None = None, opt_shard: str | None = None,
                  tp_mlp: bool = False,
+                 checkpoint_every: int | None = None,
+                 checkpoint_dir: str = "results/pretrain/checkpoints",
+                 run_name: str = "run",
+                 resume: str | None = None,
                  prof_dir: str = "results/pretrain/logs") -> RunResult:
     """Train ``global_cfg``'s step batch across the group's hosts;
     returns the conductor's RunResult (losses = GLOBAL step means).
@@ -338,6 +397,24 @@ def run_fleet_dp(global_cfg, recipe: Recipe, stream, steps: int, *,
         parallels = [ParallelConfig(group=gspec.name, rank=i, world=world,
                                     plan=plan) for i in range(world)]
 
+    ck = None
+    if checkpoint_every:
+        ck = {"every": int(checkpoint_every),
+              "dir": Path(checkpoint_dir) / run_name, "run": run_name}
+    fleet_manifest = None
+    if resume is not None:
+        fleet_manifest = resolve_resume(
+            Path(checkpoint_dir) / run_name, resume, log)
+        expect = {"world": world, "rank_rounds": list(rank_rounds),
+                  "backend": gspec.backend, "seed": seed,
+                  "hosts": [h.name for h in hosts]}
+        for key, want in expect.items():
+            got = fleet_manifest[key]
+            if got != want:
+                raise RuntimeError(
+                    f"resume manifest mismatch: {key} was {got!r} at "
+                    f"checkpoint time but the run asks {want!r}")
+
     attach = dict(attach or {})
     rigs = [HostRig(h, slabs[i], budgets[i])
             for i, h in enumerate(hosts)]
@@ -400,7 +477,8 @@ def run_fleet_dp(global_cfg, recipe: Recipe, stream, steps: int, *,
                           tokens_step=tokens_per_step(global_cfg),
                           r_global=r_global, profile=profile,
                           dp_overlap=dp_overlap, parallels=parallels,
-                          tp_mode=tp_mlp)
+                          tp_mode=tp_mlp, checkpoint=ck,
+                          fleet_manifest=fleet_manifest)
     finally:
         for rig in rigs:
             if rig.client is None:
@@ -437,8 +515,10 @@ def fleet_loop(ranks, gspec, recipe, stream, steps, *, budgets, seed,
                log, log_every, tokens_step, r_global,
                profile: dict | None = None,
                dp_overlap: bool = False, parallels=None,
-               tp_mode: bool = False) -> RunResult:
+               tp_mode: bool = False, checkpoint: dict | None = None,
+               fleet_manifest: dict | None = None) -> RunResult:
     world = len(ranks)
+    start_step = int(fleet_manifest["step"]) if fleet_manifest else 0
 
     # ---- per-rank register + warm-up ----------------------------------
     for i, rank in enumerate(ranks):
@@ -492,9 +572,24 @@ def fleet_loop(ranks, gspec, recipe, stream, steps, *, budgets, seed,
                                args={"step": 0, "valid_rows": tokens_step})
         if warm.get("state") != "done":
             raise RuntimeError(f"{rank.name} warm-up: {warm}")
-        rank.client.materialize_group(fill)
-        put_rank_rounds(rank, stream, 0, r_global)
-        log(f"[fleet] {rank.name}: warm-up done, re-seeded")
+        if fleet_manifest is not None:
+            # RESUME: restore over the warm-up's mutated state (this
+            # ordering makes the kernel warm-up harmless), then feed
+            # the START step's rounds
+            res = rank.client.restore_snapshot(
+                fleet_manifest["rank_paths"][i], overwrite=True)
+            meta = res["client_meta"]
+            if meta["step"] != start_step or meta["rank"] != i:
+                raise RuntimeError(
+                    f"{rank.name}: snapshot meta {meta} does not match "
+                    f"resume step {start_step} rank {i}")
+            put_rank_rounds(rank, stream, start_step, r_global)
+            log(f"[fleet] {rank.name}: restored checkpoint @ step "
+                f"{start_step}")
+        else:
+            rank.client.materialize_group(fill)
+            put_rank_rounds(rank, stream, 0, r_global)
+            log(f"[fleet] {rank.name}: warm-up done, re-seeded")
 
     ranks[0].client._call("create_peer_group",
                           {"name": gspec.name,
@@ -512,24 +607,30 @@ def fleet_loop(ranks, gspec, recipe, stream, steps, *, budgets, seed,
                           "budgets_gib": list(budgets),
                           "tokens_per_step": tokens_step})
 
+    if fleet_manifest is not None:
+        # continuous curve across the resume: pre-checkpoint losses
+        # ride the manifest
+        res.losses.extend(fleet_manifest.get("losses", []))
+        res.meta["resumed_from_step"] = start_step
+
     # ---- lockstep step loop -------------------------------------------
     prof_start = profile.get("start") if profile else None
     prof_stop = profile.get("stop") if profile else None
     peaks = {r.name: {} for r in ranks}
-    for step in range(steps):
+    for step in range(start_step, steps):
         if prof_start is not None and step == prof_start:
             for rank in ranks:
                 rank.client.profiler_control("start")
             log(f"[fleet] profiler capture STARTED before step {step}")
         t0 = time.perf_counter()
-        if step > 0:
+        if step > start_step:
             valid = 0
             for k, rank in enumerate(ranks):
                 v = put_rank_rounds(rank, stream, step, r_global)
                 if k == 0 or not tp_mode:
                     valid += v   # tp replicas share ONE batch: count once
         else:
-            valid = tokens_step        # step-0 rounds already resident
+            valid = tokens_step        # start-step rounds already resident
         jobs = [StepRun(rank, step, valid) for rank in ranks]
         threads = [threading.Thread(target=j) for j in jobs]
         for t in threads:
@@ -577,6 +678,16 @@ def fleet_loop(ranks, gspec, recipe, stream, steps, *, budgets, seed,
                 rank.client.profiler_control("stop")
             log(f"[fleet] profiler capture STOPPED after step {step} "
                 f"(training continues)")
+        if (checkpoint is not None
+                and (step + 1) % checkpoint["every"] == 0
+                and step + 1 < steps):
+            checkpoint_fleet(
+                ranks, checkpoint, step + 1,
+                {"run": checkpoint["run"], "world": world,
+                 "hosts": [r.name for r in ranks],
+                 "rank_rounds": [len(r.rounds) for r in ranks],
+                 "backend": gspec.backend, "seed": seed},
+                res.losses, log)
     # peak DEVICE + HOST accounting, recorded BY DEFAULT per rank
     for rank in ranks:
         try:

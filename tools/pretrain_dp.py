@@ -67,6 +67,14 @@ def main() -> None:
                          "w1/w3/w2 sharded over d_ff (rank_rounds "
                          "does not apply); correctness track, not a "
                          "throughput one on this pair")
+    tr.add_argument("--checkpoint-every", type=int, default=None,
+                    help="fleet checkpoint every N steps (per-rank "
+                         "host-local snapshots + a conductor fleet "
+                         "manifest written last as the completeness "
+                         "marker)")
+    tr.add_argument("--resume", default=None,
+                    help="'auto' (newest complete checkpoint for this "
+                         "--out run name) or a step directory path")
     tr.add_argument("--opt-shard", default=None,
                     help="optimizer-state sharding: 'zero1' halves each "
                          "rank's O bytes (field-snapped shards; sharded "
@@ -122,7 +130,10 @@ def main() -> None:
                            dp_overlap=args.dp_overlap,
                            backend=args.backend,
                            opt_shard=args.opt_shard,
-                           tp_mlp=args.tp_mlp)
+                           tp_mlp=args.tp_mlp,
+                           checkpoint_every=args.checkpoint_every,
+                           run_name=Path(args.out).stem,
+                           resume=args.resume)
         res.save(args.out)
         print(f"saved {args.out} (final loss {res.losses[-1]:.4f}, "
               f"steady {res.steady_tok_per_s:.0f} tok/s)")
