@@ -62,6 +62,47 @@ from .sharding import (
 from .topology import load_topology
 
 
+def check_fleet_versions(hosts, log) -> None:
+    """Refuse a MIXED-VERSION fleet: every member's repo must sit on
+    the same commit as the conductor's. Version skew produces the
+    worst failure class there is — structurally mismatched collectives
+    that hang (nccl) or silently reduce garbage (hostmem seq-pairing),
+    with nothing pointing at the cause (the fp32-partials incident:
+    one uncommitted block-side change made a two-box run NaN from
+    step 0)."""
+    import subprocess
+
+    from .hostops import run_on
+    from .topology import repo_root
+
+    local_rev = subprocess.run(
+        ["git", "-C", str(repo_root()), "rev-parse", "HEAD"],
+        capture_output=True, text=True, check=True).stdout.strip()
+    dirty = subprocess.run(
+        ["git", "-C", str(repo_root()), "status", "--porcelain",
+         "--untracked-files=no"],
+        capture_output=True, text=True, check=True).stdout.strip()
+    for host in hosts:
+        if host.is_local():
+            continue
+        rev = run_on(host, f"git -C {host.repo} rev-parse HEAD").strip()
+        if rev != local_rev:
+            raise RuntimeError(
+                f"fleet version skew: {host.name} is at {rev[:10]} but "
+                f"the conductor is at {local_rev[:10]} — push/pull "
+                f"before launching (mixed-version collectives hang or "
+                f"corrupt silently)")
+        if dirty:
+            # local uncommitted edits CANNOT be on the remote — the
+            # exact skew that caused the incident
+            raise RuntimeError(
+                f"fleet version skew: the conductor repo has "
+                f"uncommitted tracked changes that {host.name} cannot "
+                f"have:\n{dirty}\ncommit+push+pull (or stash) before "
+                f"a fleet run")
+    log(f"[fleet] version handshake ok ({local_rev[:10]})")
+
+
 def lower_with_group(cfg, dp_group: str, recompute_levels=None,
                      dp_overlap: bool = False, parallel=None):
     """``parallel`` (sharding.ParallelConfig with a plan) makes this a
@@ -280,6 +321,7 @@ def run_fleet_dp(global_cfg, recipe: Recipe, stream, steps: int, *,
     attach = dict(attach or {})
     rigs = [HostRig(h, slabs[i], budgets[i])
             for i, h in enumerate(hosts)]
+    check_fleet_versions(hosts, log)
     try:
         for rig in rigs:
             host = rig.host
@@ -480,10 +522,15 @@ def fleet_loop(ranks, gspec, recipe, stream, steps, *, budgets, seed,
         if tp_mode:
             # replicas compute the SAME loss (allreduced activations);
             # take rank 0's and demand the others agree — divergence
-            # here means the tp group plane broke
+            # here means the tp group plane broke. NaN checked
+            # explicitly: abs(nan - nan) > tol is False, so a NaN run
+            # sails through a plain tolerance test (incident lesson)
             per_rank = [sum(j.fetched.values()) for j in jobs]
             step_loss = per_rank[0]
-            for k, other in enumerate(per_rank[1:], start=1):
+            for k, other in enumerate(per_rank):
+                if other != other:
+                    raise RuntimeError(
+                        f"step {step}: rank {k} loss is NaN")
                 if abs(other - step_loss) > 1e-3:
                     raise RuntimeError(
                         f"step {step}: tp replicas disagree — rank 0 "
