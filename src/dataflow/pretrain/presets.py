@@ -378,13 +378,25 @@ def cfg_dict(cfg) -> dict:
     """JSON-able config for the wire resolver spec. The daemon rebuilds
     ``config_type(**cfg)`` (the service resolver), so every field here must
     be a constructor kwarg; omitted fields take their defaults (all-bf16
-    ``dtypes``, ``opt_policy='adamw'``, ``seq_lens=None`` uniform) — the SAME
-    defaults the planned program used, so the rebuilt dims match."""
+    ``dtypes``, ``seq_lens=None`` uniform) — the SAME defaults the planned
+    program used, so the rebuilt dims match. A non-default ``opt_policy``
+    rides along when it is a string shorthand ("muon", "sgd", ...) — the
+    daemon's layouts must size optimizer state with the SAME policy the
+    program was lowered with (muon matrices carry m only, half the adamw
+    bytes). Policy OBJECTS cannot ride the wire spec."""
     name = type(cfg).__name__
     if name not in CFG_DICT_BY_TYPE:
         raise KeyError(f"no cfg_dict serializer for config type {name}; "
                        f"known: {sorted(CFG_DICT_BY_TYPE)}")
-    return CFG_DICT_BY_TYPE[name](cfg)
+    d = CFG_DICT_BY_TYPE[name](cfg)
+    policy = getattr(cfg, "opt_policy", None)
+    if policy is not None and policy != "adamw":
+        if not isinstance(policy, str):
+            raise ValueError(
+                f"{name}.opt_policy is a policy object — only string "
+                f"shorthands ride the wire resolver spec")
+        d["opt_policy"] = policy
+    return d
 
 
 def param_counts(cfg: ShapedLlamaConfig) -> dict:

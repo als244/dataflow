@@ -206,9 +206,42 @@ def cmd_reference(args) -> int:
     return 0
 
 
+def cmd_engine(args) -> int:
+    """Engine-ONLY run (one daemon, one GPU): the service engine
+    trained end to end, the curve saved for comparison against a
+    reference yardstick (same seed/stream/recipe conventions)."""
+    from dataclasses import replace
+
+    cfg = P.preset(args.preset)
+    if args.opt:
+        cfg = replace(cfg, opt_policy=args.opt)
+    recipe = _recipe(args.steps, peak_lr=args.peak_lr)
+    stream = make_stream(cfg.tokens)
+    _log(f"ENGINE-ONLY: {args.preset} opt={getattr(cfg, 'opt_policy', 'adamw')} "
+         f"steps={args.steps} budget={args.budget}GiB")
+    with daemon_client(slab_gib=args.slab, log=_log) as client:
+        res = run_engine(client, cfg, recipe, stream, args.steps,
+                         budget_gib=args.budget, seed=11, log=_log)
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    res.save(out)
+    _log(f"saved {out} (final loss {res.losses[-1]:.4f})")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
+
+    e = sub.add_parser("engine")
+    e.add_argument("--preset", default="l3_1b")
+    e.add_argument("--steps", type=int, default=P.TRAIN_STEPS)
+    e.add_argument("--opt", choices=["adamw", "muon"], default=None)
+    e.add_argument("--peak-lr", type=float, default=3e-4)
+    e.add_argument("--budget", type=float, default=14.0)
+    e.add_argument("--slab", type=float, default=100.0)
+    e.add_argument("--out", required=True)
+    e.set_defaults(fn=cmd_engine)
 
     r = sub.add_parser("reference")
     r.add_argument("--preset", default="l3_1b")
