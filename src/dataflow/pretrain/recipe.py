@@ -30,6 +30,9 @@ class Recipe:
     beta2: float = 0.95
     eps: float = 1e-8
     weight_decay: float = 0.1
+    momentum: float = 0.95          # muon/sgdm momentum (muon runs)
+    muon_lr: float | None = None    # None: muon shares the scheduled lr
+                                    # (the Moonshot scale's design)
     grad_clip: float | None = None  # v1: no clipping, both sides
 
     def schedule(self) -> CosineSchedule:
@@ -50,6 +53,7 @@ class Recipe:
         return AdamWHyper(
             lr=self.peak_lr, beta1=self.beta1, beta2=self.beta2,
             eps=self.eps, weight_decay=self.weight_decay,
+            momentum=self.momentum, muon_lr=self.muon_lr,
             schedule=self.schedule().lrschedule(),
         )
 
@@ -64,6 +68,8 @@ class Recipe:
             "beta2": self.beta2,
             "eps": self.eps,
             "weight_decay": self.weight_decay,
+            "momentum": self.momentum,
+            "muon_lr": self.muon_lr,
             "schedule": {
                 "kind": "cosine",
                 "warmup_steps": self.warmup_steps,

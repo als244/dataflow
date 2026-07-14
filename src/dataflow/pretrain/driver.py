@@ -146,11 +146,10 @@ class ReferenceMuon:
     is designed for that); when set it rides the same schedule via
     the peak-lr ratio."""
 
-    def __init__(self, model, recipe: Recipe, *,
-                 muon_lr: float | None = None, momentum: float = 0.95):
+    def __init__(self, model, recipe: Recipe):
         self.recipe = recipe
-        self.muon_lr = muon_lr
-        self.momentum = momentum
+        self.muon_lr = recipe.muon_lr
+        self.momentum = recipe.momentum
         self.adamw_params: list = []
         self.muon_params: list = []
         for name, par in model.named_parameters():
