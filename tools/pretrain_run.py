@@ -209,19 +209,33 @@ def cmd_reference(args) -> int:
 def cmd_engine(args) -> int:
     """Engine-ONLY run (one daemon, one GPU): the service engine
     trained end to end, the curve saved for comparison against a
-    reference yardstick (same seed/stream/recipe conventions)."""
+    reference yardstick (same seed/stream/recipe conventions).
+    Long runs checkpoint host-locally and resume with --resume."""
     from dataclasses import replace
 
     cfg = P.resolve_preset(args.preset)
+    overrides = {}
     if args.opt:
-        cfg = replace(cfg, opt_policy=args.opt)
+        overrides["opt_policy"] = args.opt
+    if args.ga_rounds:
+        overrides["grad_accum_rounds"] = args.ga_rounds
+    if overrides:
+        cfg = replace(cfg, **overrides)
     recipe = _recipe(args.steps, peak_lr=args.peak_lr)
     stream = make_stream(cfg.tokens)
+    ck_dir = None
+    if args.checkpoint_every:
+        ck_dir = RESULTS / "checkpoints" / Path(args.out).stem
+        ck_dir.mkdir(parents=True, exist_ok=True)
     _log(f"ENGINE-ONLY: {args.preset} opt={getattr(cfg, 'opt_policy', 'adamw')} "
-         f"steps={args.steps} budget={args.budget}GiB")
+         f"steps={args.steps} budget={args.budget}GiB "
+         f"tokens/step={cfg.seq_len * cfg.batch * cfg.grad_accum_rounds} "
+         f"ckpt={args.checkpoint_every or 'off'}")
     with daemon_client(slab_gib=args.slab, log=_log) as client:
         res = run_engine(client, cfg, recipe, stream, args.steps,
-                         budget_gib=args.budget, seed=11, log=_log)
+                         budget_gib=args.budget, seed=11, log=_log,
+                         checkpoint_every=args.checkpoint_every,
+                         checkpoint_dir=ck_dir, resume=args.resume)
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     res.save(out)
@@ -240,6 +254,12 @@ def main() -> int:
     e.add_argument("--peak-lr", type=float, default=3e-4)
     e.add_argument("--budget", type=float, default=14.0)
     e.add_argument("--slab", type=float, default=100.0)
+    e.add_argument("--ga-rounds", type=int, default=None,
+                   help="override grad-accum rounds (tokens/step = "
+                        "seq*batch*rounds; 64 -> 512K at the locked "
+                        "8192-token round)")
+    e.add_argument("--checkpoint-every", type=int, default=None)
+    e.add_argument("--resume", action="store_true")
     e.add_argument("--out", required=True)
     e.set_defaults(fn=cmd_engine)
 

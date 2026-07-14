@@ -371,10 +371,32 @@ def plan_at_budget(cfg, budget_gib: float, *, recompute: bool = True):
                         recompute=recompute, build_variant=variant)
 
 
+def latest_engine_checkpoint(ckpt_dir) -> Path | None:
+    """Newest COMPLETE solo checkpoint under ``ckpt_dir`` (the snapshot
+    writer lands manifest.json last, so its presence is the
+    completeness marker), or None."""
+    if ckpt_dir is None:
+        return None
+    found = sorted(Path(ckpt_dir).glob("step_*/manifest.json"))
+    return found[-1].parent if found else None
+
+
 def run_engine(client, cfg, recipe: Recipe, stream, steps: int, *,
                budget_gib: float, seed: int = 11, recompute: bool = True,
-               log=print, log_every: int = 10) -> RunResult:
-    """Train ``cfg`` through the daemon at ``budget_gib`` device budget."""
+               log=print, log_every: int = 10,
+               checkpoint_every: int | None = None,
+               checkpoint_dir=None, keep_last: int = 3,
+               resume: bool = False) -> RunResult:
+    """Train ``cfg`` through the daemon at ``budget_gib`` device budget.
+
+    ``checkpoint_every``: snapshot W_*/O_* + the loss curve every N
+    steps (host-local under ``checkpoint_dir``; keep-last pruning).
+    ``resume``: restore the newest complete checkpoint AFTER init and
+    registration, then continue — the engine is stateless per step,
+    so bytes + step index + recorded losses are the whole trajectory
+    (data rounds re-derive from the stream by step index)."""
+    import shutil
+
     from dataflow.core.jsonio import program_to_dict
 
     planned = plan_at_budget(cfg, budget_gib, recompute=recompute)
@@ -407,8 +429,25 @@ def run_engine(client, cfg, recipe: Recipe, stream, steps: int, *,
                           "peak_fast_bytes": planned.peak_fast_bytes,
                           "recompute": recompute,
                           "tokens_per_step": tokens_per_step(cfg)})
+    persist = sorted(s.id for s in planned.program.initial_objects
+                     if s.id.startswith(("W_", "O_")))
+    start_step = 0
+    if resume:
+        ck = latest_engine_checkpoint(checkpoint_dir)
+        if ck is None:
+            raise RuntimeError(f"resume: no complete checkpoint under "
+                               f"{checkpoint_dir}")
+        got = client.restore_snapshot(str(ck), overwrite=True)
+        meta = got["client_meta"]
+        if int(meta["seed"]) != seed:
+            raise RuntimeError(f"resume: checkpoint seed {meta['seed']} "
+                               f"!= run seed {seed}")
+        start_step = int(meta["step"])
+        res.losses = [float(x) for x in meta["losses"]]
+        res.meta["resumed_from"] = str(ck)
+        log(f"[engine] resumed @ step {start_step} from {ck}")
     fetch = [f"loss_0_{r}" for r in range(R)]
-    for step in range(steps):
+    for step in range(start_step, steps):
         if step > 0:
             for r in range(R):
                 put_round(step, r)
@@ -431,4 +470,22 @@ def run_engine(client, cfg, recipe: Recipe, stream, steps: int, *,
             log(f"[engine {budget_gib:g}GiB] step {step:4d}/{steps}  "
                 f"loss {step_loss:.4f}  lr {recipe.lr_at(step):.2e}  "
                 f"{tokens_per_step(cfg) / dt:.0f} tok/s")
+        step_next = step + 1
+        if checkpoint_every and step_next % checkpoint_every == 0 \
+                and checkpoint_dir is not None:
+            dest = Path(checkpoint_dir) / f"step_{step_next:06d}"
+            out = client.snapshot("all", str(dest), ids=persist,
+                                  client_meta={"step": step_next,
+                                               "seed": seed,
+                                               "losses": res.losses})
+            done = client.wait_snapshot(out["snap_id"], timeout=600.0)
+            if done["state"] != "done":
+                raise RuntimeError(f"checkpoint @ {step_next} failed: "
+                                   f"{done}")
+            log(f"[engine] checkpoint @ step {step_next} -> {dest}")
+            if keep_last > 0:
+                complete = sorted(
+                    Path(checkpoint_dir).glob("step_*/manifest.json"))
+                for mf in complete[:-keep_last]:
+                    shutil.rmtree(mf.parent, ignore_errors=True)
     return res
