@@ -184,9 +184,43 @@ def cmd_scaling(args) -> int:
     return 0
 
 
+def cmd_reference(args) -> int:
+    """Reference-ONLY run: the pure-torch twin trained end to end, the
+    loss curve saved as a yardstick (e.g. the muon-recipe curve the
+    engine leg must later match)."""
+    from dataclasses import replace
+
+    cfg = P.preset(args.preset)
+    if args.opt:
+        cfg = replace(cfg, opt_policy=args.opt)
+    recipe = _recipe(args.steps, peak_lr=args.peak_lr)
+    stream = make_stream(cfg.tokens)
+    _log(f"REFERENCE-ONLY: {args.preset} opt={getattr(cfg, 'opt_policy', 'adamw')} "
+         f"steps={args.steps} grad_checkpoint={args.grad_checkpoint}")
+    res = run_reference(cfg, recipe, stream, args.steps,
+                        grad_checkpoint=args.grad_checkpoint, log=_log)
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    res.save(out)
+    _log(f"saved {out} (final loss {res.losses[-1]:.4f})")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
+
+    r = sub.add_parser("reference")
+    r.add_argument("--preset", default="l3_1b")
+    r.add_argument("--steps", type=int, default=P.TRAIN_STEPS)
+    r.add_argument("--opt", choices=["adamw", "muon"], default=None,
+                   help="override the preset's opt_policy ('muon' = the "
+                        "hybrid recipe: muon matrices, adamw for "
+                        "embed/head/norms)")
+    r.add_argument("--peak-lr", type=float, default=3e-4)
+    r.add_argument("--grad-checkpoint", action="store_true")
+    r.add_argument("--out", required=True)
+    r.set_defaults(fn=cmd_reference)
 
     s = sub.add_parser("smoke")
     s.add_argument("--steps", type=int, default=P.SMOKE_STEPS)

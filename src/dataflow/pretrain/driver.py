@@ -109,6 +109,122 @@ class ReferenceAdamW:
                            weight_decay=r.weight_decay, step=bc)
 
 
+NS_A, NS_B, NS_C = 3.4445, -4.7750, 2.0315   # quintic Newton-Schulz
+NS_ITERS = 5
+
+# the engine recipe's adamw carve-outs (MuonRecipePolicy in
+# tasks/optim.py) restated over reference parameter names — a test
+# asserts the two stay identical
+MUON_ADAMW_FRAGMENTS = ("norm", "embed", "head", "router", "idx")
+
+
+def ns_orthogonalize(x: "torch.Tensor", *, eps: float = 1e-8,
+                     iters: int = NS_ITERS) -> "torch.Tensor":
+    """(..., r, c) fp32 -> per-matrix approximate UV^T. The reference
+    twin of kernels/muon.py: transpose-to-wide, Frobenius normalize
+    with eps inside the add, quintic iteration."""
+    transposed = x.shape[-2] > x.shape[-1]
+    if transposed:
+        x = x.mT
+    x = x / x.norm(dim=(-2, -1), keepdim=True).add_(eps)
+    for _ in range(iters):
+        a = x @ x.mT
+        b = NS_B * a + NS_C * (a @ a)
+        x = NS_A * x + b @ x
+    return x.mT if transposed else x
+
+
+class ReferenceMuon:
+    """The muon deployment split over a reference nn.Module, mirroring
+    the engine end to end: matrix params (rank 2, and rank-3 expert
+    stacks) run nesterov momentum + quintic Newton-Schulz with the
+    Moonshot 0.2*sqrt(max(r, c)) scale and decoupled weight decay —
+    momentum arithmetic in the (bf16) momentum buffer's dtype, NS in
+    fp32 (kernels/muon.py semantics); embed/head tables, norms, and
+    every other param take the exact ReferenceAdamW step. ``muon_lr``
+    None means muon shares the scheduled adamw lr (the Moonshot scale
+    is designed for that); when set it rides the same schedule via
+    the peak-lr ratio."""
+
+    def __init__(self, model, recipe: Recipe, *,
+                 muon_lr: float | None = None, momentum: float = 0.95):
+        self.recipe = recipe
+        self.muon_lr = muon_lr
+        self.momentum = momentum
+        self.adamw_params: list = []
+        self.muon_params: list = []
+        for name, par in model.named_parameters():
+            if not par.requires_grad:
+                continue
+            low = name.lower()
+            if par.ndim not in (2, 3) \
+                    or any(fr in low for fr in MUON_ADAMW_FRAGMENTS):
+                self.adamw_params.append(par)
+            else:
+                if min(par.shape[-2:]) <= 1:
+                    raise ValueError(
+                        f"{name}: degenerate matrix {tuple(par.shape)} "
+                        f"classified muon — name it into an adamw "
+                        f"carve-out instead")
+                self.muon_params.append(par)
+        if not self.muon_params:
+            raise ValueError("muon recipe found no matrix params — "
+                             "wrong model or naming?")
+        self.adamw_state = {id(par): (torch.zeros_like(par),
+                                      torch.zeros_like(par))
+                            for par in self.adamw_params}
+        self.muon_state = {id(par): torch.zeros_like(par)
+                           for par in self.muon_params}
+
+    def zero_grad(self) -> None:
+        for par in self.adamw_params + self.muon_params:
+            par.grad = None
+
+    def step(self, opt_step: int) -> None:
+        r = self.recipe
+        lr = r.lr_at(opt_step)
+        bc = opt_step + 1
+        for par in self.adamw_params:
+            if par.grad is None:
+                continue
+            m, v = self.adamw_state[id(par)]
+            _adamw_inplace(par.data, par.grad, m, v, lr=lr,
+                           beta1=r.beta1, beta2=r.beta2, eps=r.eps,
+                           weight_decay=r.weight_decay, step=bc)
+        mlr = lr if self.muon_lr is None \
+            else self.muon_lr * (lr / r.peak_lr)
+        for par in self.muon_params:
+            if par.grad is None:
+                continue
+            m = self.muon_state[id(par)]
+            gm = par.grad.to(m.dtype)
+            m.mul_(self.momentum).add_(gm)
+            eff = gm.add(m, alpha=self.momentum)      # nesterov
+            if eff.ndim == 2:
+                eff = eff.unsqueeze(0)
+            o = ns_orthogonalize(eff.float(), eps=r.eps)
+            if r.weight_decay:
+                w32 = par.data.float().mul_(1.0 - mlr * r.weight_decay)
+                par.data.copy_(w32.to(par.dtype))
+            scale = 0.2 * max(par.shape[-2:]) ** 0.5
+            par.data.add_(o.reshape(par.shape).to(par.dtype),
+                          alpha=-mlr * scale)
+
+
+def reference_optimizer(model, cfg, recipe: Recipe):
+    """The reference optimizer for the config's opt_policy: "muon"
+    means the hybrid recipe (ReferenceMuon), anything unset/adamw the
+    plain ReferenceAdamW. Other engine policies have no reference
+    twin yet — refuse loudly."""
+    policy = getattr(cfg, "opt_policy", None) or "adamw"
+    if policy == "muon":
+        return ReferenceMuon(model, recipe)
+    if policy == "adamw":
+        return ReferenceAdamW(model.parameters(), recipe)
+    raise ValueError(f"opt_policy {policy!r} has no reference "
+                     f"optimizer (have: adamw, muon)")
+
+
 def run_reference(cfg, recipe: Recipe, stream, steps: int, *, seed: int = 11,
                   device: str = "cuda", grad_checkpoint: bool = False,
                   log=print, log_every: int = 10) -> RunResult:
@@ -127,7 +243,7 @@ def run_reference(cfg, recipe: Recipe, stream, steps: int, *, seed: int = 11,
         backend.free(buf)
     model.grad_checkpoint = grad_checkpoint
     model.train()
-    opt = ReferenceAdamW(model.parameters(), recipe)
+    opt = reference_optimizer(model, cfg, recipe)
 
     B, T = dims.tokens // dims.seq_len, dims.seq_len
     R = cfg.grad_accum_rounds
@@ -139,6 +255,8 @@ def run_reference(cfg, recipe: Recipe, stream, steps: int, *, seed: int = 11,
     res = RunResult(backend="reference", budget_gib=None,
                     meta={"seed": seed, "grad_checkpoint": grad_checkpoint,
                           "aux_coef": aux_coef,
+                          "opt_policy": getattr(cfg, "opt_policy", None)
+                          or "adamw",
                           "tokens_per_step": tokens_per_step(cfg)})
     for step in range(steps):
         t0 = time.perf_counter()
