@@ -190,7 +190,7 @@ def cmd_reference(args) -> int:
     engine leg must later match)."""
     from dataclasses import replace
 
-    cfg = P.preset(args.preset)
+    cfg = P.resolve_preset(args.preset)
     if args.opt:
         cfg = replace(cfg, opt_policy=args.opt)
     recipe = _recipe(args.steps, peak_lr=args.peak_lr)
@@ -212,7 +212,7 @@ def cmd_engine(args) -> int:
     reference yardstick (same seed/stream/recipe conventions)."""
     from dataclasses import replace
 
-    cfg = P.preset(args.preset)
+    cfg = P.resolve_preset(args.preset)
     if args.opt:
         cfg = replace(cfg, opt_policy=args.opt)
     recipe = _recipe(args.steps, peak_lr=args.peak_lr)
