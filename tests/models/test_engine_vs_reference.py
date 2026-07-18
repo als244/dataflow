@@ -50,10 +50,22 @@ FAMILY_PRESETS = {
     "glm52": "glm52_smoke_preset",
 }
 
-# (step0_tol, trajectory_tol): PLACEHOLDER-GENEROUS until calibration
-# pins them (A0/A1 calibration runs on both arches; see the refactor
-# findings ledger for the measured floors).
-BANDS = {name: (1e-3, 8e-2) for name in FAMILY_PRESETS}
+# (step0_tol, trajectory_tol) per family, BOTH input modes: pinned at
+# ~4-5x the measured sm86 floors (refactor findings ledger, A1
+# calibration table); re-verified on sm120 at the chicago pull.
+# Dense families sit at 1e-4-scale; MoE adds routing discreteness;
+# the MLA trio (+DSA for dsv32) is the loosest.
+BANDS = {
+    "llama3": (5e-4, 2e-3),
+    "qwen3": (5e-4, 2e-3),
+    "qwen35": (8e-4, 2e-3),
+    "olmoe": (1e-3, 3e-3),
+    "qwen3moe": (1e-3, 3e-3),
+    "qwen35moe": (4e-3, 1e-2),
+    "dsv3": (8e-3, 2e-2),
+    "dsv32": (8e-3, 4e-2),
+    "glm52": (8e-3, 2e-2),
+}
 
 
 def quiet_log(msg: str) -> None:

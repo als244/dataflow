@@ -59,10 +59,12 @@ def load_result(path: str | os.PathLike) -> RunResult:
 
 # =============================== reference ===================================
 
-def _adamw_inplace(w, g, m, v, *, lr, beta1, beta2, eps, weight_decay, step):
+def adamw_field_step(w, g, m, v, *, lr, beta1, beta2, eps, weight_decay, step):
     """In-place AdamW on one flat parameter, mirroring ops.adamw_step: bf16
     states, fp32 math, bias correction on the ROUND-TRIPPED states, weight
-    decay applied to every element. Chunked to bound fp32 temporaries."""
+    decay applied to every element. Chunked to bound fp32 temporaries.
+    THE exact-replica update both reference harnesses share (the twin
+    trainer and the engine-vs-twin gradcheck)."""
     CHUNK = 1 << 24
     wf, gf_, mf_, vf_ = w.view(-1), g.view(-1), m.view(-1), v.view(-1)
     n = wf.numel()
@@ -104,7 +106,7 @@ class ReferenceAdamW:
             if p.grad is None:
                 continue
             m, v = self.state[id(p)]
-            _adamw_inplace(p.data, p.grad, m, v, lr=lr, beta1=r.beta1,
+            adamw_field_step(p.data, p.grad, m, v, lr=lr, beta1=r.beta1,
                            beta2=r.beta2, eps=r.eps,
                            weight_decay=r.weight_decay, step=bc)
 
@@ -187,7 +189,7 @@ class ReferenceMuon:
             if par.grad is None:
                 continue
             m, v = self.adamw_state[id(par)]
-            _adamw_inplace(par.data, par.grad, m, v, lr=lr,
+            adamw_field_step(par.data, par.grad, m, v, lr=lr,
                            beta1=r.beta1, beta2=r.beta2, eps=r.eps,
                            weight_decay=r.weight_decay, step=bc)
         mlr = lr if self.muon_lr is None \
