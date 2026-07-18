@@ -14,9 +14,9 @@ import torch
 if not torch.cuda.is_available():
     pytest.skip("no CUDA device", allow_module_level=True)
 
-from dataflow.tasks import ops  # noqa: E402
-from dataflow.training.models.llama3 import ShapedLlamaConfig  # noqa: E402
-from dataflow.training.testing.gradcheck import check_model_step, rel_l2  # noqa: E402
+from dataflow_training.blocks import ops  # noqa: E402
+from dataflow_training.model_families.llama3 import ShapedLlamaConfig  # noqa: E402
+from dataflow_training.testing.gradcheck import check_model_step, rel_l2  # noqa: E402
 
 pytestmark = pytest.mark.gpu
 
@@ -62,7 +62,7 @@ def test_qwen35_model_step_ragged():
     reset via ragged cu_seqlens, gated attention block-diagonal."""
     from dataclasses import replace
 
-    from dataflow.training.models.qwen35 import ShapedQwen35Config
+    from dataflow_training.model_families.qwen35 import ShapedQwen35Config
 
     cfg = replace(ShapedQwen35Config.tiny(), seq_lens=RAGGED)
     grad_tol, min_cos, budget = _FAMILY_GRAD_GATE["qwen35"]
@@ -127,7 +127,7 @@ _QWEN35_BIAS_ATOL = {"dt_bias": 2.5e-4}
 # Per-family gradient bands live in gradcheck.FAMILY_GRAD_GATE (shared
 # by every ladder-3 suite); see docs/correctness_compare.md for the
 # calibration and tier mechanisms.
-from dataflow.training.testing.gradcheck import FAMILY_GRAD_GATE as _FAMILY_GRAD_GATE
+from dataflow_training.testing.gradcheck import FAMILY_GRAD_GATE as _FAMILY_GRAD_GATE
 
 
 @pytest.mark.parametrize("family", [
@@ -149,7 +149,7 @@ def test_model_step_ragged_all_families(family):
     from dataclasses import replace
     import importlib
 
-    mod = importlib.import_module(f"dataflow.training.models.{family}")
+    mod = importlib.import_module(f"dataflow_training.model_families.{family}")
     cfg_cls = next(v for k, v in vars(mod).items()
                    if k.startswith("Shaped") and k.endswith("Config"))
     cfg = cfg_cls.tiny()

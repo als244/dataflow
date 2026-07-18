@@ -5,9 +5,9 @@ from dataclasses import replace
 
 import torch
 
-from dataflow.tasks.modules.dsa_reference import dsa_mask_from_idx
-from dataflow.tasks.layouts import glm52_aux_temp_layout
-from dataflow.training.models.glm52 import ShapedGlm52Config
+from dataflow_training.blocks.modules.dsa_reference import dsa_mask_from_idx
+from dataflow_training.blocks.layouts import glm52_aux_temp_layout
+from dataflow_training.model_families.glm52 import ShapedGlm52Config
 
 from pinned_golden import RlGlm52
 

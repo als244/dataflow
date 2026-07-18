@@ -5,24 +5,24 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from dataflow.pretrain.driver import (  # noqa: E402
+from dataflow_training.run.driver import (  # noqa: E402
     MUON_ADAMW_FRAGMENTS,
     ReferenceMuon,
     ns_orthogonalize,
     reference_optimizer,
 )
-from dataflow.pretrain.recipe import Recipe  # noqa: E402
+from dataflow_training.run.recipe import Recipe  # noqa: E402
 
 
 def test_fragments_mirror_engine_recipe():
-    from dataflow.tasks import optim
+    from dataflow_training.blocks import optim
 
     engine = getattr(optim, "_RECIPE_ADAMW_FRAGMENTS")
     assert tuple(MUON_ADAMW_FRAGMENTS) == tuple(engine)
 
 
 def test_ns_orthogonalize_matches_engine_and_conditions():
-    from dataflow.tasks.kernels.muon import ns_orthogonalize_batched
+    from dataflow_training.kernels.muon import ns_orthogonalize_batched
 
     g = torch.Generator().manual_seed(3)
     for r, c in ((64, 256), (256, 64), (128, 128)):
@@ -73,7 +73,7 @@ def test_reference_optimizer_dispatch():
     from dataclasses import replace
 
     from reference_models.llama3 import Llama3Config, Llama3
-    from dataflow.training.models.llama3 import ShapedLlamaConfig
+    from dataflow_training.model_families.llama3 import ShapedLlamaConfig
 
     rcfg = Llama3Config(n_layers=1, d_model=64, n_heads=2, n_kv_heads=2,
                         d_ff=128, vocab_size=256)

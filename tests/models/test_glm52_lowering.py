@@ -8,7 +8,7 @@ create/mutate/consume chain; singleton groups have no dM."""
 import pytest
 
 from dataflow.core import validate_program
-from dataflow.training.models.glm52 import ShapedGlm52Config, lower_glm52
+from dataflow_training.model_families.glm52 import ShapedGlm52Config, lower_glm52
 
 
 def test_tiny_lowers_with_correct_sp_grammar():
@@ -54,7 +54,7 @@ def test_full_scale_presets_lower():
         # dM objects exist exactly for multi-member groups
         dm = {o.id for t in p.tasks for o in t.outputs if o.id.startswith("dAuxTemp_")}
         cfg = ctor(seq_len=128)
-        from dataflow.training.models.glm52 import dims_of_glm52
+        from dataflow_training.model_families.glm52 import dims_of_glm52
         dims = dims_of_glm52(cfg)
         multi = [ld for ld in dims.leaders() if len(dims.group_members(ld)) > 1]
         assert len(dm) == len(multi)
@@ -84,8 +84,8 @@ def test_dense_warmup_and_frozen_indexer_modes():
     # LEAN GRADS: frozen params carry no dW/O. Followers (gmf) have no
     # dW at all; leaders' dW is indexer-only; dW_head/dW_embed and the
     # embed_bwd + frozen optimizer tasks are pruned outright.
-    from dataflow.tasks.layouts import dsv32_dense_weight_layout, grad_layout
-    from dataflow.training.models.glm52 import dims_of_glm52
+    from dataflow_training.blocks.layouts import dsv32_dense_weight_layout, grad_layout
+    from dataflow_training.model_families.glm52 import dims_of_glm52
 
     wdims = dims_of_glm52(rep(ShapedGlm52Config.tiny(), sparse_mode=False))
     idx_dw = grad_layout(dsv32_dense_weight_layout(wdims), wdims.dtypes,

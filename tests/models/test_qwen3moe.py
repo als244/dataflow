@@ -16,7 +16,7 @@ torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
     pytest.skip("no CUDA device", allow_module_level=True)
 
-from dataflow.training.testing.gradcheck import (  # noqa: E402
+from dataflow_training.testing.gradcheck import (  # noqa: E402
     check_model_step,
     family_gate_kwargs,
     rel_l2,
@@ -26,13 +26,13 @@ pytestmark = pytest.mark.gpu
 
 
 def _tiny_cfg(**over):
-    from dataflow.training.models.qwen3moe import ShapedQwen3MoeConfig
+    from dataflow_training.model_families.qwen3moe import ShapedQwen3MoeConfig
 
     return replace(ShapedQwen3MoeConfig.tiny(), **over)
 
 
 def _tiny_dims(cfg=None):
-    from dataflow.training.models.qwen3moe import dims_of_qwen3moe
+    from dataflow_training.model_families.qwen3moe import dims_of_qwen3moe
 
     return dims_of_qwen3moe(cfg if cfg is not None else _tiny_cfg())
 
@@ -54,8 +54,8 @@ def _tiny_dims(cfg=None):
 
 
 def test_qwen3moe_stage_context_completeness():
-    from dataflow.tasks.layouts import qwen3moe_activation_layout
-    from dataflow.tasks.models.qwen3moe_blocks import Qwen3MoeBlockFwd
+    from dataflow_training.blocks.layouts import qwen3moe_activation_layout
+    from dataflow_training.model_families.qwen3moe_blocks import Qwen3MoeBlockFwd
 
     cl = qwen3moe_activation_layout(_tiny_dims())
     declared = {f.name for f in cl.fields}
@@ -68,8 +68,8 @@ def test_qwen3moe_stage_context_completeness():
 
 def test_qwen3moe_lowering_validates_and_plans():
     from dataflow.core import validate_program
-    from dataflow.training.families import resolve_family
-    from dataflow.training.planning import plan_program, simulate_program
+    from dataflow_training.model_families.families import resolve_family
+    from dataflow_training.lowering.planning import plan_program, simulate_program
 
     cfg = _tiny_cfg()
     fam = resolve_family(cfg)
@@ -91,7 +91,7 @@ def test_qwen3moe_full_scale_presets_lower_and_validate():
     succeed even though neither trains on this host (183 GiB / 1.4 TiB
     pinned — documented in training/models/qwen3moe.py)."""
     from dataflow.core import validate_program
-    from dataflow.training.models.qwen3moe import ShapedQwen3MoeConfig, lower_qwen3moe
+    from dataflow_training.model_families.qwen3moe import ShapedQwen3MoeConfig, lower_qwen3moe
 
     for cfg in (ShapedQwen3MoeConfig.qwen3moe_30b(seq_len=128),
                 ShapedQwen3MoeConfig.qwen3moe_235b(seq_len=128)):
@@ -105,12 +105,12 @@ def test_qwen3moe_partial_ownership_lowering_rejected():
     import dataclasses
     import unittest.mock as mock
 
-    from dataflow.training.models.qwen3moe import dims_of_qwen3moe, lower_qwen3moe
+    from dataflow_training.model_families.qwen3moe import dims_of_qwen3moe, lower_qwen3moe
 
     cfg = _tiny_cfg()
     part = dataclasses.replace(dims_of_qwen3moe(cfg).moe, expert_ids=(0, 1, 2))
     with pytest.raises(NotImplementedError):
-        with mock.patch("dataflow.training.models.qwen3moe.moe_spec_of", return_value=part):
+        with mock.patch("dataflow_training.model_families.qwen3moe.moe_spec_of", return_value=part):
             lower_qwen3moe(cfg)
 
 
@@ -152,16 +152,16 @@ def test_qwen3moe_ga2_matches_reference():
     backward on the total — engine == the isolated twin (each round is
     one packed forward, so the twin's forward-global aux IS the engine's
     round-global default)."""
-    from dataflow.pretrain import bridges
-    from dataflow.pretrain.driver import adamw_field_step
+    from dataflow_training.model_families import bridges
+    from dataflow_training.run.driver import adamw_field_step
     from dataflow.runtime import Engine
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.runtime.device.fake import FakeBackend
-    from dataflow.tasks.base_blocks import AdamWHyper
-    from dataflow.tasks.interop import torch_view
-    from dataflow.training.families import resolve_family
-    from dataflow.training.planning import plan_program
-    from dataflow.training.testing.gradcheck import EngineFinalBytes
+    from dataflow_training.blocks.base_blocks import AdamWHyper
+    from dataflow.runtime.interop import torch_view
+    from dataflow_training.model_families.families import resolve_family
+    from dataflow_training.lowering.planning import plan_program
+    from dataflow_training.testing.gradcheck import EngineFinalBytes
 
     cfg = _tiny_cfg(grad_accum_rounds=2)
     fam = resolve_family(cfg)
@@ -220,9 +220,9 @@ def _run(engine_kwargs=None, program=None, seed=7, resolver_wrapper=None):
     from dataflow.runtime import Engine
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.runtime.device.fake import FakeBackend
-    from dataflow.tasks.interop import torch_view
-    from dataflow.training.families import resolve_family
-    from dataflow.training.planning import plan_program
+    from dataflow.runtime.interop import torch_view
+    from dataflow_training.model_families.families import resolve_family
+    from dataflow_training.lowering.planning import plan_program
 
     cfg = _tiny_cfg()
     fam = resolve_family(cfg)
@@ -276,9 +276,9 @@ def test_qwen3moe_fixed_seed_bitwise_deterministic():
 
 def test_qwen3moe_measured_costs_replan_still_golden():
     from dataflow.runtime.device.cuda import CudaBackend
-    from dataflow.training.families import resolve_family
-    from dataflow.training.planning import plan_program
-    from dataflow.training.profiling import apply_measured_costs, profile_program
+    from dataflow_training.model_families.families import resolve_family
+    from dataflow_training.lowering.planning import plan_program
+    from dataflow_training.run.profiling import apply_measured_costs, profile_program
 
     cfg = _tiny_cfg()
     fam = resolve_family(cfg)

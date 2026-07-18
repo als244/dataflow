@@ -6,7 +6,7 @@ autograd gradient of the shared reference. Odd sizes exercise masking.
 """
 import pytest
 
-from dataflow.tasks.kernels import registry as reg
+from dataflow_training.kernels import registry as reg
 
 # --- registry mechanics (no device needed) -----------------------------------
 
@@ -56,9 +56,9 @@ if not torch.cuda.is_available():
     pytest.skip("no CUDA device", allow_module_level=True)
 pytest.importorskip("triton")
 
-from dataflow.tasks import ops  # noqa: E402
-from dataflow.tasks.kernels import KernelCtx, resolve_kernels  # noqa: E402
-from dataflow.training.testing.gradcheck import rel_l2  # noqa: E402
+from dataflow_training.blocks import ops  # noqa: E402
+from dataflow_training.kernels import KernelCtx, resolve_kernels  # noqa: E402
+from dataflow_training.testing.gradcheck import rel_l2  # noqa: E402
 
 pytestmark = pytest.mark.gpu
 

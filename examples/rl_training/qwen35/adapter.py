@@ -4,7 +4,7 @@ the plain per-kind golden forward from fixed inputs. Shows the harness
 handling heterogeneous layer kinds and a standalone golden class."""
 import torch
 
-from dataflow.training.models.qwen35 import ShapedQwen35Config
+from dataflow_training.model_families.qwen35 import ShapedQwen35Config
 
 from golden_base import GoldenQwen35
 

@@ -7,8 +7,8 @@ from unittest.mock import patch
 
 import torch
 
-from dataflow.tasks.layouts import dsv32_aux_temp_layout
-from dataflow.training.models.dsv32 import ShapedDsv32Config
+from dataflow_training.blocks.layouts import dsv32_aux_temp_layout
+from dataflow_training.model_families.dsv32 import ShapedDsv32Config
 
 from golden_base import GoldenDsv32
 
@@ -28,8 +28,8 @@ def make_golden(dims, n_layers, leaves):
 
 
 def _refs():
-    import dataflow.tasks.modules.dsa_reference as dref
-    import dataflow.tasks.modules.moe.reference as mref
+    import dataflow_training.blocks.modules.dsa_reference as dref
+    import dataflow_training.blocks.modules.moe.reference as mref
 
     return dref, mref
 

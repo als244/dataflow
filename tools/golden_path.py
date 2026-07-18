@@ -20,8 +20,8 @@ from pathlib import Path
 from dataflow.core import save_program, validate_program
 from dataflow.core.jsonio import program_to_dict
 from dataflow.core.convert import to_webapp_program
-from dataflow.training.planning import plan_program, simulate_program
-from dataflow.training.models.llama3 import ShapedLlamaConfig, build_shaped_llama3
+from dataflow_training.lowering.planning import plan_program, simulate_program
+from dataflow_training.model_families.llama3 import ShapedLlamaConfig, build_shaped_llama3
 
 GIB = 1024**3
 

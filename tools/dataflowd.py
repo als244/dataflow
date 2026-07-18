@@ -49,7 +49,7 @@ def main() -> None:
     args = p.parse_args()
     if args.cmd == "start":
         if args.plugin:
-            from dataflow.training.families import load_plugins
+            from dataflow_training.model_families.families import load_plugins
 
             load_plugins(explicit=args.plugin)
         slab = args.slab_gib if args.slab_gib == "auto" else float(args.slab_gib)

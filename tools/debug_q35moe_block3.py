@@ -25,16 +25,16 @@ import torch.nn as nn  # noqa: E402
 
 
 def main() -> int:
-    from dataflow.pretrain import bridges
+    from dataflow_training.model_families import bridges
     from dataflow.runtime import Engine
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.runtime.device.fake import FakeBackend
     from dataflow.runtime.engine import uniform_segments
-    from dataflow.tasks.interop import torch_view
-    from dataflow.training.families import resolve_family
-    from dataflow.training.models.qwen35moe import ShapedQwen35MoeConfig
-    from dataflow.training.planning import plan_program
-    from dataflow.training.testing.gradcheck import cos_sim, rel_l2
+    from dataflow.runtime.interop import torch_view
+    from dataflow_training.model_families.families import resolve_family
+    from dataflow_training.model_families.qwen35moe import ShapedQwen35MoeConfig
+    from dataflow_training.lowering.planning import plan_program
+    from dataflow_training.testing.gradcheck import cos_sim, rel_l2
     from reference_models.qwen35moe import rope_tables
 
     cfg = ShapedQwen35MoeConfig.tiny()

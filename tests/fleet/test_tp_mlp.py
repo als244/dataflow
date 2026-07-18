@@ -30,11 +30,11 @@ if not torch.cuda.is_available():
 
 from dataclasses import asdict, replace  # noqa: E402
 
-import dataflow.training.models.tp_mlp as tp  # noqa: E402  (registers)
+import dataflow_training.model_families.tp_mlp as tp  # noqa: E402  (registers)
 from dataflow.core.jsonio import program_to_dict  # noqa: E402
 from dataflow.service import EngineClient, EngineConfig, Server  # noqa: E402
-from dataflow.training.planning import plan_program  # noqa: E402
-from dataflow.training.testing.gradcheck import rel_l2  # noqa: E402
+from dataflow_training.lowering.planning import plan_program  # noqa: E402
+from dataflow_training.testing.gradcheck import rel_l2  # noqa: E402
 
 pytestmark = pytest.mark.fleet
 
@@ -225,13 +225,13 @@ def test_tp_mlp_loopback_hostmem(tmp_path):
 
 
 def test_tp_mlp_crossbox_auto():
-    from dataflow.pretrain.hostops import (
+    from dataflow_training.distributed.hostops import (
         daemon_paths,
         kill_daemon,
         launch_daemon,
         uds_forward,
     )
-    from dataflow.pretrain.topology import load_topology_or_none
+    from dataflow_training.distributed.topology import load_topology_or_none
 
     topo = load_topology_or_none()
     if topo is None or not topo.remotes():
@@ -245,7 +245,7 @@ def test_tp_mlp_crossbox_auto():
             kill_daemon(host, lane=lane)
             launch_daemon(
                 host, lane=lane, slab_gib=2.0, peer_port=port,
-                extra_flags="--plugin dataflow.training.models.tp_mlp")
+                extra_flags="--plugin dataflow_training.model_families.tp_mlp")
         import tempfile
 
         fwd_sock = tempfile.mktemp(suffix=".sock", prefix="tpfwd-")

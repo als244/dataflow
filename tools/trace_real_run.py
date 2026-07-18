@@ -95,9 +95,9 @@ def capture_run(client, cfg, recipe, stream, steps: int, *,
     """K real steps with trace capture; returns {program, annotated,
     trace (last step), losses}."""
     from dataflow.core.jsonio import program_to_dict
-    from dataflow.pretrain.presets import cfg_dict, resolver_family
-    from dataflow.training.families import resolve_family
-    from dataflow.training.planning import plan_program
+    from dataflow_training.run.presets import cfg_dict, resolver_family
+    from dataflow_training.model_families.families import resolve_family
+    from dataflow_training.lowering.planning import plan_program
 
     fam = resolve_family(cfg)
     bare = fam.lower(cfg)
@@ -141,10 +141,10 @@ def capture_run(client, cfg, recipe, stream, steps: int, *,
 def main() -> int:
     from dataflow.core.convert import to_webapp_program
     from dataflow.core.jsonio import program_to_dict
-    from dataflow.pretrain import presets as P
-    from dataflow.pretrain.driver import daemon_client
-    from dataflow.pretrain.fineweb import make_stream
-    from dataflow.pretrain.recipe import Recipe
+    from dataflow_training.run import presets as P
+    from dataflow_training.run.driver import daemon_client
+    from dataflow_training.data.fineweb import make_stream
+    from dataflow_training.run.recipe import Recipe
 
     ap = argparse.ArgumentParser()
     ap.add_argument("--preset", default="smoke")

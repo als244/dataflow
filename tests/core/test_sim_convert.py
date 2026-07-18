@@ -8,7 +8,7 @@ from dataflow.core.convert import (
     to_sim_chain,
     to_webapp_program,
 )
-from dataflow.training.models.llama3 import ShapedLlamaConfig, build_shaped_llama3
+from dataflow_training.model_families.llama3 import ShapedLlamaConfig, build_shaped_llama3
 
 
 @pytest.fixture(scope="module")

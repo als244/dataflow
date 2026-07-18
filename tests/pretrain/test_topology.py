@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from dataflow.pretrain.topology import (
+from dataflow_training.distributed.topology import (
     load_topology,
     load_topology_or_none,
     repo_root,

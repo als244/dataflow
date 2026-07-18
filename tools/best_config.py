@@ -68,7 +68,7 @@ def config_factory(family_name: str, preset: str | None, model_json: str | None)
     override either. batch/ga/seq_len are injected per enumerated combo."""
     import dataclasses
 
-    from dataflow.training.families import family as family_named
+    from dataflow_training.model_families.families import family as family_named
 
     fam = family_named(family_name)
     cls = fam.config_type
@@ -113,7 +113,7 @@ def divisor_combos(seqs: int, cap: int | None) -> list[tuple[int, int]]:
 
 
 def main() -> None:
-    from dataflow.training.families import load_plugins
+    from dataflow_training.model_families.families import load_plugins
 
     ap = argparse.ArgumentParser(
         description="simulate tok/s for every bs/ga combo per device budget")
@@ -160,9 +160,9 @@ def main() -> None:
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.runtime.device.fake import FakeBackend
     from dataflow.runtime.placement import PlacementRecorder, compute_placement
-    from dataflow.training.families import resolve_family
-    from dataflow.training.planning import plan_program
-    from dataflow.training.profiling import (
+    from dataflow_training.model_families.families import resolve_family
+    from dataflow_training.lowering.planning import plan_program
+    from dataflow_training.run.profiling import (
         apply_measured_costs, cached_pcie, load_or_profile,
     )
 

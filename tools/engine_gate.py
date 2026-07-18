@@ -25,9 +25,9 @@ from dataflow.core.convert import to_sim_chain
 from dataflow.runtime import Engine
 from dataflow.runtime.device.cuda import CudaBackend, _check
 from dataflow.runtime.device.cuda_spin import make_spin_resolver
-from dataflow.training.planning import plan_program
-from dataflow.training.models.llama3 import ShapedLlamaConfig, build_shaped_llama3
-from dataflow.training.shaped_program import ShapedHardware
+from dataflow_training.lowering.planning import plan_program
+from dataflow_training.model_families.llama3 import ShapedLlamaConfig, build_shaped_llama3
+from dataflow_training.lowering.shaped_program import ShapedHardware
 
 GIB = 1024**3
 
@@ -111,7 +111,7 @@ def main() -> None:
     # an override (tasks and transfers alike). If the runtime schedules like
     # the simulator, makespans match up to dispatch overhead — bandwidth-model
     # error is factored out entirely.
-    from dataflow.training.replay import replay_gap_pct as _rg
+    from dataflow_training.lowering.replay import replay_gap_pct as _rg
 
     replay_gap_pct = _rg(program, result.trace, result.makespan_us)
 

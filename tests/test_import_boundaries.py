@@ -3,8 +3,9 @@
 - ``dataflow.core`` imports nothing heavy (no torch/jax/cuda/dataflow_sim).
 - ``dataflow.runtime`` may not import torch, jax, or dataflow_sim.
 - Only ``dataflow.runtime.device.cuda`` may import cuda bindings.
-- Only ``dataflow.tasks`` may import torch/triton.
-- Only ``dataflow.training`` (and tools/tests) may import dataflow_sim.
+- Only ``dataflow_training`` may import torch/triton (interim form;
+  the full R1-R4 rules land with the mirrored-test milestone).
+- Only ``dataflow_training.lowering`` (and tools/tests) may import dataflow_sim.
 
 Each check runs in a fresh interpreter so prior imports can't mask leaks.
 """
@@ -14,7 +15,7 @@ import sys
 FORBIDDEN_AFTER_IMPORT = {
     "dataflow.core": ("torch", "jax", "cuda", "dataflow_sim"),
     "dataflow.runtime": ("torch", "jax", "dataflow_sim"),
-    "dataflow.tasks": ("dataflow_sim",),
+    "dataflow_training.blocks": ("dataflow_sim",),
 }
 
 
@@ -38,4 +39,4 @@ def test_runtime_never_imports_torch_or_sim():
 
 
 def test_tasks_never_imports_sim():
-    _check("dataflow.tasks", ("dataflow_sim",))
+    _check("dataflow_training.blocks", ("dataflow_sim",))

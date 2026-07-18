@@ -15,16 +15,16 @@ if not torch.cuda.is_available():
     pytest.skip("no CUDA device", allow_module_level=True)
 
 from dataflow.core.jsonio import program_to_dict  # noqa: E402
-from dataflow.pretrain.presets import (  # noqa: E402
+from dataflow_training.run.presets import (  # noqa: E402
     cfg_dict,
     resolver_family,
     smoke_preset,
 )
-from dataflow.pretrain.driver import daemon_client  # noqa: E402
-from dataflow.pretrain.fineweb import make_stream  # noqa: E402
-from dataflow.pretrain.recipe import Recipe  # noqa: E402
-from dataflow.training.families import resolve_family  # noqa: E402
-from dataflow.training.planning import plan_program  # noqa: E402
+from dataflow_training.run.driver import daemon_client  # noqa: E402
+from dataflow_training.data.fineweb import make_stream  # noqa: E402
+from dataflow_training.run.recipe import Recipe  # noqa: E402
+from dataflow_training.model_families.families import resolve_family  # noqa: E402
+from dataflow_training.lowering.planning import plan_program  # noqa: E402
 
 STEPS = 3
 

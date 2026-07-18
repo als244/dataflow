@@ -32,7 +32,7 @@ def fill_family_objects(store, fill: dict, *, writer: str) -> dict:
     from dataclasses import replace as dc_replace
 
     from dataflow.runtime.device.cuda import Buffer
-    from dataflow.training.families import family as _family
+    from dataflow_training.model_families.families import family as _family
 
     fam = _family(fill["family"])
     cfg_obj = fam.config_type(**fill["cfg"])
@@ -214,12 +214,12 @@ def _hyper_from_spec(h: dict | None):
     via ``register_program(resolver={..., 'hyper': {...}})``; without it the
     service is stuck at the built-in default (lr=1e-4, no schedule). ``None``
     -> the family default (unchanged historical behavior)."""
-    from dataflow.tasks.base_blocks import AdamWHyper
+    from dataflow_training.blocks.base_blocks import AdamWHyper
 
     h = dict(h or {})
     sched = h.pop("schedule", None)
     if sched is not None:
-        from dataflow.tasks.optim import LRSchedule
+        from dataflow_training.blocks.optim import LRSchedule
 
         h["schedule"] = LRSchedule(**sched)
     return AdamWHyper(**h)
@@ -235,7 +235,7 @@ def resolver_for(spec: dict):
     — the losses-bit-equal path is untouched)."""
     import json
 
-    from dataflow.training.families import family as _family
+    from dataflow_training.model_families.families import family as _family
 
     key = (spec["family"], json.dumps(spec["cfg"], sort_keys=True),
            json.dumps(spec.get("hyper"), sort_keys=True))
@@ -369,7 +369,7 @@ def capture_finals(store, program, values, result, *, writer):
 
 
 def profile_program(program_dict: dict, spec: dict, *, refresh: bool):
-    from dataflow.training.profiling import load_or_profile
+    from dataflow_training.run.profiling import load_or_profile
 
     program = parse_program(program_dict)
     fam, cfg_obj, dims, resolver = resolver_for(spec)
@@ -388,7 +388,7 @@ def load_plugin(spec: dict):
     import importlib
     import importlib.util
 
-    from dataflow.training import families as fam_mod
+    from dataflow_training.model_families import families as fam_mod
 
     before = set(fam_mod._FAMILIES)
     if "module" in spec:
@@ -404,7 +404,7 @@ def load_plugin(spec: dict):
 
 
 def list_families():
-    from dataflow.training import families as fam_mod
+    from dataflow_training.model_families import families as fam_mod
 
     return [{"family": name, "source": "builtin"}
             for name in sorted(fam_mod._FAMILIES)]

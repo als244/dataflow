@@ -32,7 +32,7 @@ def ragged_for(cfg):
 
 
 def tiny_cfg(family: str):
-    mod = importlib.import_module(f"dataflow.training.models.{family}")
+    mod = importlib.import_module(f"dataflow_training.model_families.{family}")
     cfg_cls = next(v for k, v in vars(mod).items()
                    if k.startswith("Shaped") and k.endswith("Config"))
     return cfg_cls.tiny()
@@ -62,7 +62,7 @@ def stats_of(report):
 
 
 def main() -> int:
-    from dataflow.training.testing.gradcheck import check_model_step
+    from dataflow_training.testing.gradcheck import check_model_step
 
     ap = argparse.ArgumentParser()
     ap.add_argument("--families", default=None)

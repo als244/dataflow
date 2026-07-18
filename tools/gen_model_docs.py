@@ -34,7 +34,7 @@ import dataclasses
 import sys
 from pathlib import Path
 
-from dataflow.training import families as F
+from dataflow_training.model_families import families as F
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -71,15 +71,15 @@ def _aux_temp_layout(family: str, dims, layer: int):
     layouts are family vocabulary (docs/extending.md §2)."""
     try:
         if family in ("dsv32",):
-            from dataflow.tasks.layouts import dsv32_aux_temp_layout
+            from dataflow_training.blocks.layouts import dsv32_aux_temp_layout
 
             return dsv32_aux_temp_layout(dims, dims.kinds[layer])
         if family in ("glm52",):
-            from dataflow.tasks.layouts import glm52_aux_temp_layout
+            from dataflow_training.blocks.layouts import glm52_aux_temp_layout
 
             return glm52_aux_temp_layout(dims, dims.kinds[layer])
         if family in ("olmoe", "qwen3moe", "qwen35moe", "dsv3"):
-            from dataflow.tasks.modules.moe.spec import moe_aux_temp_layout
+            from dataflow_training.blocks.modules.moe.spec import moe_aux_temp_layout
 
             layer_kinds = getattr(dims, "kinds", ())
             kind = layer_kinds[layer] if layer_kinds else "moe"
@@ -237,8 +237,8 @@ def record_kernel_seqs(fam, cfg, dims, prog) -> dict[str, str]:
     """Execute each task signature once (profiler machinery, tiny dims)
     through a recording kernel proxy; {compute_key: op sequence}."""
     from dataflow.runtime.device.cuda import CudaBackend
-    from dataflow.tasks.kernels import resolve_kernels
-    from dataflow.training.profiling import profile_program
+    from dataflow_training.kernels import resolve_kernels
+    from dataflow_training.run.profiling import profile_program
 
     proxy = RecordingKernels(resolve_kernels())
     base = fam.build_resolver(dims, kernels=proxy)
@@ -371,7 +371,7 @@ def gen_page(name: str, preset: str, record: bool,
               "default: `m_f`+`v_f` at the opt dtype; sgd fields "
               "contribute none — see extending.md §6). `A_i`/`M_i` exist "
               "per (step, round).", ""]
-    from dataflow.tasks.layouts import grad_layout, opt_state_layout
+    from dataflow_training.blocks.layouts import grad_layout, opt_state_layout
 
     for kind, layer in rep_layer.items():
         fwd_task = None
@@ -409,7 +409,7 @@ def gen_page(name: str, preset: str, record: bool,
             summary.append((f"M ({kind})", "layer × round", ml.total_bytes))
 
     try:
-        from dataflow.tasks.layouts import head_weight_layout
+        from dataflow_training.blocks.layouts import head_weight_layout
 
         hl = head_weight_layout(dims)
         detail += field_table(hl, "`W_head`")

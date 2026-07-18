@@ -32,9 +32,9 @@ def _cfg_dict(cfg):
 
 @pytest.fixture(scope="module")
 def rig(tmp_path_factory):
-    from dataflow.training.families import resolve_family
-    from dataflow.training.models.llama3 import ShapedLlamaConfig
-    from dataflow.training.planning import plan_program
+    from dataflow_training.model_families.families import resolve_family
+    from dataflow_training.model_families.llama3 import ShapedLlamaConfig
+    from dataflow_training.lowering.planning import plan_program
 
     tmp = tmp_path_factory.mktemp("svc_snap")
     sock = str(tmp / "snap.sock")

@@ -56,7 +56,7 @@ def prologue_run_start(run_args: dict, backend) -> dict:
     Host Segments pass through unmaterialized on non-physical backends
     (planning/sim). Returns an augmented COPY; the caller's dict is
     untouched."""
-    from dataflow.tasks.ops import Segments
+    from dataflow.core.segments import Segments
 
     segs = run_args.get("segments")
     if segs is None:
@@ -85,7 +85,7 @@ def uniform_segments(dims, program) -> dict:
     commits to "every run provides segments". Round key is the task id's
     ``{s}_{r}_{i}`` middle field (matches _Base._round_of), a superset of
     block rounds; extra keys are harmless."""
-    from dataflow.tasks.ops import Segments
+    from dataflow.core.segments import Segments
 
     seg = Segments.of_dims(dims)
     rounds = set()

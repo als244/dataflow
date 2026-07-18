@@ -220,8 +220,8 @@ def test_real_boot_family_init_byte_identity(tmp_path):
                             slab_backing_gib=2.0)
     try:
         from dataflow.runtime.device.cuda import CudaBackend
-        from dataflow.tasks.interop import torch_view
-        from dataflow.training.families import family
+        from dataflow.runtime.interop import torch_view
+        from dataflow_training.model_families.families import family
 
         fam = family("llama3")
         cfg = fam.config_type.tiny()

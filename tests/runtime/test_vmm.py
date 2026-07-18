@@ -14,7 +14,7 @@ import torch  # noqa: E402
 
 from dataflow.runtime.device.cuda import CudaBackend  # noqa: E402
 from dataflow.runtime.device.vmm import GRANULE, VmmArena, VmmError  # noqa: E402
-from dataflow.tasks.interop import torch_view  # noqa: E402
+from dataflow.runtime.interop import torch_view  # noqa: E402
 
 MB = 1024**2
 
@@ -189,9 +189,9 @@ def test_e2e_mini_vmm_matches_static():
     exactly deterministic, so equality is byte equality)."""
     from dataflow.runtime import Engine
     from dataflow.runtime.engine import uniform_segments
-    from dataflow.training.families import resolve_family
-    from dataflow.training.models.llama3 import ShapedLlamaConfig
-    from dataflow.training.planning import plan_program
+    from dataflow_training.model_families.families import resolve_family
+    from dataflow_training.model_families.llama3 import ShapedLlamaConfig
+    from dataflow_training.lowering.planning import plan_program
 
     cfg = ShapedLlamaConfig(
         n_layers=2, d_model=64, n_heads=4, n_kv_heads=2, d_ff=160,

@@ -21,9 +21,9 @@ sys.path.insert(0, str(_ROOT))
 
 import torch
 
-from dataflow.pretrain import bridges
-from dataflow.pretrain import presets as P
-from dataflow.pretrain.fineweb import make_stream
+from dataflow_training.model_families import bridges
+from dataflow_training.run import presets as P
+from dataflow_training.data.fineweb import make_stream
 
 CKPTS = _ROOT / "results" / "pretrain" / "checkpoints"
 
@@ -69,7 +69,7 @@ def main() -> int:
 
     cfg = P.resolve_preset(args.preset)
     payload = CheckpointPayload(ck)
-    from dataflow.training.families import resolve_family
+    from dataflow_training.model_families.families import resolve_family
 
     fam = resolve_family(cfg)
     dims = fam.dims_of(cfg)

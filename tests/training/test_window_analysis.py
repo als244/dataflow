@@ -12,9 +12,9 @@ from window_plans import (  # noqa: E402
     task_step,
 )
 
-from dataflow.training.models.llama3 import lower_llama3  # noqa: E402
-from dataflow.training.planning import plan_program, simulate_program  # noqa: E402
-from dataflow.training.models.llama3 import ShapedLlamaConfig  # noqa: E402
+from dataflow_training.model_families.llama3 import lower_llama3  # noqa: E402
+from dataflow_training.lowering.planning import plan_program, simulate_program  # noqa: E402
+from dataflow_training.model_families.llama3 import ShapedLlamaConfig  # noqa: E402
 
 
 def test_canonicalization_strips_only_step_index():

@@ -15,7 +15,7 @@ from dataclasses import replace
 import pytest
 import torch
 
-from dataflow.tasks.optim import (
+from dataflow_training.blocks.optim import (
     OPTIMIZERS,
     OptPolicy,
     _ns_orthogonalize,
@@ -85,10 +85,10 @@ def test_muon_orthogonalizes_2d_and_falls_back_1d():
 
 
 def test_muon_recipe_classification_and_3d():
-    from dataflow.tasks.kernels.muon import (
+    from dataflow_training.kernels.muon import (
         ns_orthogonalize_batched as _ns_orthogonalize_batched,
     )
-    from dataflow.tasks.optim import resolve_opt_policy
+    from dataflow_training.blocks.optim import resolve_opt_policy
 
     r = resolve_opt_policy("muon")
     assert r.for_field("wq", None, (256, 256)) == "muon"
@@ -124,9 +124,9 @@ def test_policy_dispatch_and_validation():
 
 
 def test_opt_state_layout_slots_follow_policy():
-    from dataflow.tasks.layouts import opt_state_layout, weight_layout
-    from dataflow.training.families import resolve_family as _rf
-    from dataflow.training.models.llama3 import ShapedLlamaConfig
+    from dataflow_training.blocks.layouts import opt_state_layout, weight_layout
+    from dataflow_training.model_families.families import resolve_family as _rf
+    from dataflow_training.model_families.llama3 import ShapedLlamaConfig
 
     dims = _rf(ShapedLlamaConfig.tiny()).dims_of(ShapedLlamaConfig.tiny())
     wl = weight_layout(dims)
@@ -177,8 +177,8 @@ def engine_grad_fields(result, dw_id, weights, dims, ns=None, layer=None):
     """{field name: tensor view} of one retained dW slab, unpacked with
     the grad layout mirroring ``weights``. Frozen fields carry no
     gradient storage, so they are absent by construction."""
-    from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME, torch_view
-    from dataflow.tasks.layouts import grad_layout
+    from dataflow.runtime.interop import TORCH_DTYPE_BY_NAME, torch_view
+    from dataflow_training.blocks.layouts import grad_layout
 
     gl = grad_layout(weights, dims.dtypes, ns=ns, layer=layer,
                      opt_policy=getattr(dims, "opt_policy", None))
@@ -198,13 +198,13 @@ def test_mixed_policy_model_step_vs_hand_replica():
     from dataflow.runtime import Engine
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.runtime.device.fake import FakeBackend
-    from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME, torch_view
-    from dataflow.tasks.base_blocks import AdamWHyper
-    from dataflow.tasks.layouts import weight_layout
-    from dataflow.training.families import resolve_family
-    from dataflow.training.models.llama3 import ShapedLlamaConfig
-    from dataflow.training.planning import plan_program
-    from dataflow.training.testing.gradcheck import rel_l2
+    from dataflow.runtime.interop import TORCH_DTYPE_BY_NAME, torch_view
+    from dataflow_training.blocks.base_blocks import AdamWHyper
+    from dataflow_training.blocks.layouts import weight_layout
+    from dataflow_training.model_families.families import resolve_family
+    from dataflow_training.model_families.llama3 import ShapedLlamaConfig
+    from dataflow_training.lowering.planning import plan_program
+    from dataflow_training.testing.gradcheck import rel_l2
 
     policy = OptPolicy(default="adamw",
                        overrides=(("wq", "muon"), ("w1", "sgdm"),
@@ -295,14 +295,14 @@ def test_muon_recipe_string_model_step_vs_hand_replica():
     from dataflow.runtime import Engine
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.runtime.device.fake import FakeBackend
-    from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME, torch_view
-    from dataflow.tasks.base_blocks import AdamWHyper
-    from dataflow.tasks.layouts import weight_layout
-    from dataflow.training.families import resolve_family
-    from dataflow.training.models.llama3 import ShapedLlamaConfig
-    from dataflow.training.planning import plan_program
-    from dataflow.training.testing.gradcheck import rel_l2
-    from dataflow.tasks.optim import _ns_orthogonalize, resolve_opt_policy
+    from dataflow.runtime.interop import TORCH_DTYPE_BY_NAME, torch_view
+    from dataflow_training.blocks.base_blocks import AdamWHyper
+    from dataflow_training.blocks.layouts import weight_layout
+    from dataflow_training.model_families.families import resolve_family
+    from dataflow_training.model_families.llama3 import ShapedLlamaConfig
+    from dataflow_training.lowering.planning import plan_program
+    from dataflow_training.testing.gradcheck import rel_l2
+    from dataflow_training.blocks.optim import _ns_orthogonalize, resolve_opt_policy
 
     cfg = replace(ShapedLlamaConfig.tiny(), opt_policy="muon")
     fam = resolve_family(cfg)
@@ -380,13 +380,13 @@ def test_layer_indexed_policy_sizes_and_model_step():
     from dataflow.runtime import Engine
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.runtime.device.fake import FakeBackend
-    from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME, torch_view
-    from dataflow.tasks.base_blocks import AdamWHyper
-    from dataflow.tasks.layouts import weight_layout
-    from dataflow.training.families import resolve_family
-    from dataflow.training.models.llama3 import ShapedLlamaConfig
-    from dataflow.training.planning import plan_program
-    from dataflow.training.testing.gradcheck import rel_l2
+    from dataflow.runtime.interop import TORCH_DTYPE_BY_NAME, torch_view
+    from dataflow_training.blocks.base_blocks import AdamWHyper
+    from dataflow_training.blocks.layouts import weight_layout
+    from dataflow_training.model_families.families import resolve_family
+    from dataflow_training.model_families.llama3 import ShapedLlamaConfig
+    from dataflow_training.lowering.planning import plan_program
+    from dataflow_training.testing.gradcheck import rel_l2
 
     policy = OptPolicy(default="adamw",
                        layer_overrides=(((0,), "sgd"),))
@@ -459,7 +459,7 @@ def test_layer_indexed_policy_sizes_and_model_step():
 
 
 def test_lr_schedules_shapes():
-    from dataflow.tasks.optim import LRSchedule
+    from dataflow_training.blocks.optim import LRSchedule
 
     w = LRSchedule("wsd", warmup_steps=10, total_steps=100,
                    decay_frac=0.2, min_lr_frac=0.1)
@@ -482,15 +482,15 @@ def test_hyper_overrides_and_schedule_model_step():
     from dataflow.runtime import Engine
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.runtime.device.fake import FakeBackend
-    from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME, torch_view
-    from dataflow.tasks.base_blocks import AdamWHyper
-    from dataflow.tasks.layouts import embed_weight_layout, weight_layout
-    from dataflow.tasks.models.llama3_blocks import build_resolver
-    from dataflow.tasks.optim import LRSchedule
-    from dataflow.training.families import resolve_family
-    from dataflow.training.models.llama3 import ShapedLlamaConfig
-    from dataflow.training.planning import plan_program
-    from dataflow.training.testing.gradcheck import rel_l2
+    from dataflow.runtime.interop import TORCH_DTYPE_BY_NAME, torch_view
+    from dataflow_training.blocks.base_blocks import AdamWHyper
+    from dataflow_training.blocks.layouts import embed_weight_layout, weight_layout
+    from dataflow_training.model_families.llama3_blocks import build_resolver
+    from dataflow_training.blocks.optim import LRSchedule
+    from dataflow_training.model_families.families import resolve_family
+    from dataflow_training.model_families.llama3 import ShapedLlamaConfig
+    from dataflow_training.lowering.planning import plan_program
+    from dataflow_training.testing.gradcheck import rel_l2
 
     base_lr, wd = 1e-2, 0.1
     policy = OptPolicy(default="adamw", hyper_overrides=(

@@ -16,13 +16,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from dataflow.pretrain import parity
-from dataflow.pretrain.driver import load_result
-from dataflow.pretrain.fineweb import make_stream
-from dataflow.pretrain.fleet import run_fleet_dp
-from dataflow.pretrain.presets import preset
-from dataflow.pretrain.recipe import Recipe
-from dataflow.pretrain.topology import load_topology
+from dataflow_training.run import parity
+from dataflow_training.run.driver import load_result
+from dataflow_training.data.fineweb import make_stream
+from dataflow_training.distributed.fleet import run_fleet_dp
+from dataflow_training.run.presets import preset
+from dataflow_training.run.recipe import Recipe
+from dataflow_training.distributed.topology import load_topology
 
 
 def floats_or_none(raw: str):

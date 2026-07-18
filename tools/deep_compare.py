@@ -68,20 +68,20 @@ def ragged_for(cfg):
 
 
 def main() -> int:
-    from dataflow.pretrain import bridges
+    from dataflow_training.model_families import bridges
     from dataflow.runtime import Engine
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.runtime.device.fake import FakeBackend
     from dataflow.runtime.engine import uniform_segments
-    from dataflow.tasks.interop import torch_view
-    from dataflow.training.families import resolve_family
-    from dataflow.training.planning import plan_program
-    from dataflow.training.testing.gradcheck import (
+    from dataflow.runtime.interop import torch_view
+    from dataflow_training.model_families.families import resolve_family
+    from dataflow_training.lowering.planning import plan_program
+    from dataflow_training.testing.gradcheck import (
         cos_sim,
         engine_grad_state_dict,
         rel_l2,
     )
-    from dataflow.tasks.base_blocks import AdamWHyper
+    from dataflow_training.blocks.base_blocks import AdamWHyper
     import dataclasses
 
     ap = argparse.ArgumentParser()
@@ -98,7 +98,7 @@ def main() -> int:
     args = ap.parse_args()
 
     mod = importlib.import_module(
-        f"dataflow.training.models.{args.family}")
+        f"dataflow_training.model_families.{args.family}")
     cfg_cls = next(v for k, v in vars(mod).items()
                    if k.startswith("Shaped") and k.endswith("Config"))
     cfg = cfg_cls.tiny()
@@ -290,7 +290,7 @@ def main() -> int:
     counters = [(n, m) for n, m in twin.named_modules()
                 if hasattr(m, "step_counts") and m.step_counts is not None]
     if aux_ids and counters:
-        from dataflow.tasks.modules.moe.spec import moe_aux_layout
+        from dataflow_training.blocks.modules.moe.spec import moe_aux_layout
 
         layout = moe_aux_layout(dims, dims.moe)
         print("\n== MoE counts parity (engine Aux_ vs twin step_counts):")

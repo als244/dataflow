@@ -26,11 +26,11 @@ if not torch.cuda.is_available():
 from dataclasses import replace  # noqa: E402
 
 from dataflow.core.jsonio import program_to_dict  # noqa: E402
-from dataflow.pretrain.fleet import lower_with_group  # noqa: E402
+from dataflow_training.distributed.fleet import lower_with_group  # noqa: E402
 from dataflow.service import EngineClient, EngineConfig, Server  # noqa: E402
 from dataflow.service.wire import ServiceError  # noqa: E402
-from dataflow.training.models.llama3 import ShapedLlamaConfig  # noqa: E402
-from dataflow.training.planning import plan_program  # noqa: E402
+from dataflow_training.model_families.llama3 import ShapedLlamaConfig  # noqa: E402
+from dataflow_training.lowering.planning import plan_program  # noqa: E402
 
 pytestmark = pytest.mark.fleet
 

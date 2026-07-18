@@ -15,8 +15,8 @@ pytestmark = pytest.mark.skipif(not torch.cuda.is_available(),
                                 reason="needs CUDA")
 
 from dataflow.core.jsonio import program_to_dict
-from dataflow.training.models.llama3 import ShapedLlamaConfig, lower_llama3
-from dataflow.training.testing.gradcheck import check_model_step
+from dataflow_training.model_families.llama3 import ShapedLlamaConfig, lower_llama3
+from dataflow_training.testing.gradcheck import check_model_step
 
 LENS = (73, 38, 17)
 # boundary notation (convention): cumulative [0, ..., t]
@@ -69,9 +69,9 @@ def test_packed_mode_materializes_positions_once(monkeypatch):
     from dataflow.runtime import Engine
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.runtime.device.fake import FakeBackend
-    from dataflow.tasks.ops import Segments
-    from dataflow.training.families import resolve_family
-    from dataflow.training.planning import plan_program
+    from dataflow.core.segments import Segments
+    from dataflow_training.model_families.families import resolve_family
+    from dataflow_training.lowering.planning import plan_program
 
     cfg = _cfg()
     fam = resolve_family(cfg)
@@ -98,7 +98,7 @@ def test_packed_mode_materializes_positions_once(monkeypatch):
     assert calls["n"] == 1
     result.close()
     dry.close()
-    from dataflow.tasks.interop import clear_view_cache
+    from dataflow.runtime.interop import clear_view_cache
 
     clear_view_cache()
     for buf in values.values():

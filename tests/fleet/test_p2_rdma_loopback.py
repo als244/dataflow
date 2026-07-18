@@ -12,7 +12,7 @@ if not torch.cuda.is_available():
     pytest.skip("no CUDA device", allow_module_level=True)
 pytest.importorskip("pyverbs")
 
-from dataflow.pretrain.topology import load_topology_or_none  # noqa: E402
+from dataflow_training.distributed.topology import load_topology_or_none  # noqa: E402
 from dataflow.service import EngineClient, EngineConfig, Server  # noqa: E402
 from dataflow.service.peer.rdma import roce_v2_ipv4_gid  # noqa: E402
 

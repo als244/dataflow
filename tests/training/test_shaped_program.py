@@ -1,5 +1,5 @@
 from dataflow.core import validate_program
-from dataflow.training.models.llama3 import ShapedLlamaConfig, build_shaped_llama3
+from dataflow_training.model_families.llama3 import ShapedLlamaConfig, build_shaped_llama3
 
 GIB = 1024**3
 
@@ -121,7 +121,7 @@ def test_tied_embeddings_chain_structure():
     AND head; head_loss (which runs first in the round) creates the shared
     dW_embed, embed_bwd accumulates; no head objects or optimizer_head."""
     from dataclasses import dataclass
-    from dataflow.training.planning import plan_program, simulate_program
+    from dataflow_training.lowering.planning import plan_program, simulate_program
 
     @dataclass(frozen=True)
     class TiedCfg(ShapedLlamaConfig):
@@ -156,7 +156,7 @@ def test_tied_embeddings_chain_structure():
 def test_heterogeneous_kinds_emit_per_kind_keys_and_sizes():
     """LayerKindSpec table: task IDS stay uniform (tooling contract) while
     compute_block_keys, W/A sizes, and rewrite keys follow the layer kind."""
-    from dataflow.training.shaped_program import LayerKindSpec, build_shaped_program
+    from dataflow_training.lowering.shaped_program import LayerKindSpec, build_shaped_program
 
     cfg = ShapedLlamaConfig.tiny()  # 2 layers
     sub = [{"kind": "roofline", "name": "x", "flops": 1, "memory_bytes": 1, "efficiency": "matmul"}]

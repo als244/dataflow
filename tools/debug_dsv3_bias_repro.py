@@ -40,16 +40,16 @@ def ragged_for(cfg):
 
 
 def main() -> int:
-    from dataflow.pretrain import bridges
+    from dataflow_training.model_families import bridges
     from dataflow.runtime import Engine
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.runtime.device.fake import FakeBackend
     from dataflow.runtime.engine import uniform_segments
-    from dataflow.tasks.interop import torch_view
-    from dataflow.tasks.modules.moe.spec import moe_aux_layout
-    from dataflow.training.families import resolve_family
-    from dataflow.training.models.dsv3 import ShapedDsv3Config
-    from dataflow.training.planning import plan_program
+    from dataflow.runtime.interop import torch_view
+    from dataflow_training.blocks.modules.moe.spec import moe_aux_layout
+    from dataflow_training.model_families.families import resolve_family
+    from dataflow_training.model_families.dsv3 import ShapedDsv3Config
+    from dataflow_training.lowering.planning import plan_program
 
     cfg = ShapedDsv3Config.tiny()
     lens = ragged_for(cfg)
@@ -201,7 +201,7 @@ def main() -> int:
         engine_counts[oid] = views["expert_counts_current_step"].clone().cpu()
 
     engine_state = bridges.to_reference_state_dict(
-        cfg, __import__("dataflow.training.testing.gradcheck",
+        cfg, __import__("dataflow_training.testing.gradcheck",
                         fromlist=["EngineFinalBytes"]).EngineFinalBytes(result))
     engine_bias = {k: v.clone().float().cpu() for k, v in engine_state.items()
                    if k.endswith("router_bias")}
@@ -237,7 +237,7 @@ def main() -> int:
 
     result.close()
     dry.close()
-    from dataflow.tasks.interop import clear_view_cache
+    from dataflow.runtime.interop import clear_view_cache
     clear_view_cache()
     for buf in values.values():
         backend.free(buf)

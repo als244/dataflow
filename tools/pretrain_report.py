@@ -16,8 +16,8 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT))
 
-from dataflow.pretrain import parity, scaling
-from dataflow.pretrain.plot import PALETTE, Series, svg_line_chart
+from dataflow_training.run import parity, scaling
+from dataflow_training.run.plot import PALETTE, Series, svg_line_chart
 
 RESULTS = _ROOT / "results" / "pretrain"
 REPORTS = RESULTS / "reports"
@@ -122,7 +122,7 @@ def scaling_section(R: dict) -> str | None:
     if "l3_1b_engine_14gib" in R:
         top = R["l3_1b_engine_14gib"]
         if top.meta.get("params") is None:
-            from dataflow.pretrain import presets as P
+            from dataflow_training.run import presets as P
 
             top.meta["params"] = P.param_counts(P.preset("l3_1b"))
             top.meta["preset"] = "l3_1b"
@@ -244,7 +244,7 @@ MICRO_ROWS = [
 
 
 def distperf_sections(R: dict) -> list:
-    from dataflow.pretrain.driver import load_result
+    from dataflow_training.run.driver import load_result
 
     sections = []
     prov = ("<section><h2>Measured floors, not guesses</h2><p>Every "

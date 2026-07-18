@@ -37,13 +37,13 @@ from dataflow.runtime import Engine  # noqa: E402
 from dataflow.runtime.device.cuda import CudaBackend  # noqa: E402
 from dataflow.runtime.device.fake import FakeBackend  # noqa: E402
 from dataflow.runtime.engine import uniform_segments  # noqa: E402
-from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME, torch_view  # noqa: E402
-from dataflow.tasks.modules.moe.spec import moe_aux_layout  # noqa: E402
-from dataflow.training.families import resolve_family  # noqa: E402
-from dataflow.training.models.dsv3 import ShapedDsv3Config  # noqa: E402
-from dataflow.training.models.olmoe import ShapedOlmoeConfig  # noqa: E402
-from dataflow.training.planning import plan_program  # noqa: E402
-from dataflow.training.testing.gradcheck import rel_l2  # noqa: E402
+from dataflow.runtime.interop import TORCH_DTYPE_BY_NAME, torch_view  # noqa: E402
+from dataflow_training.blocks.modules.moe.spec import moe_aux_layout  # noqa: E402
+from dataflow_training.model_families.families import resolve_family  # noqa: E402
+from dataflow_training.model_families.dsv3 import ShapedDsv3Config  # noqa: E402
+from dataflow_training.model_families.olmoe import ShapedOlmoeConfig  # noqa: E402
+from dataflow_training.lowering.planning import plan_program  # noqa: E402
+from dataflow_training.testing.gradcheck import rel_l2  # noqa: E402
 
 # one step's tokens, partitioned two ways: ga=1 x (b=4, s=32) == ga=4 x (b=1, s=32)
 T_STEP = 128
@@ -99,12 +99,12 @@ def run_step(cfg, seed=7, *, steps_in_program=1, recompute_levels=None,
     )
     out: dict = {}
     fl = None
-    from dataflow.training.models import dsv3 as dsv3_mod
-    from dataflow.training.models import olmoe as olmoe_mod
+    from dataflow_training.model_families import dsv3 as dsv3_mod
+    from dataflow_training.model_families import olmoe as olmoe_mod
     mod = olmoe_mod if type(cfg).__name__ == "ShapedOlmoeConfig" else dsv3_mod
     _, fl = mod.family_layouts(cfg)
     if pin_dw0:
-        from dataflow.tasks.layouts import grad_layout
+        from dataflow_training.blocks.layouts import grad_layout
         for li in (0, 1):
             gl = grad_layout(fl.layers[li].weights, fam.dims_of(cfg).dtypes,
                              layer=li,

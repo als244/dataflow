@@ -13,7 +13,7 @@ import torch
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(),
                                 reason="needs CUDA")
 
-from dataflow.tasks import ops
+from dataflow_training.blocks import ops
 
 H, HKV, D = 4, 2, 64
 SEGS = [300, 200, 240, 28]                      # incl. a tiny tail seg

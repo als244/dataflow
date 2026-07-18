@@ -14,7 +14,7 @@ torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
     pytest.skip("no CUDA device", allow_module_level=True)
 
-from dataflow.training.testing.gradcheck import rel_l2  # noqa: E402
+from dataflow_training.testing.gradcheck import rel_l2  # noqa: E402
 
 pytestmark = pytest.mark.gpu
 
@@ -55,7 +55,7 @@ def _weights(d: _Dims, seed=0, dtype=torch.float32):
 
 def test_padded_v_attention_is_exact():
     """softmax(QK^T) @ [V|0] == [softmax(QK^T) @ V | 0], fwd and bwd."""
-    from dataflow.tasks import ops
+    from dataflow_training.blocks import ops
 
     torch.manual_seed(1)
     t, h, qk, v = 128, 4, 24, 16
@@ -92,7 +92,7 @@ def test_padded_v_attention_is_exact():
 
 
 def test_mla_reference_shapes_and_grads_flow():
-    from dataflow.tasks.modules.mla_reference import mla_block_reference
+    from dataflow_training.blocks.modules.mla_reference import mla_block_reference
 
     d = _Dims()
     w = _weights(d)
@@ -112,8 +112,8 @@ def test_mla_shared_k_rope_broadcast_gradient():
     gradient must equal the SUM over heads of per-head k-rope grads.
     Verified by comparing against a variant with independent per-head
     copies whose grads are summed."""
-    from dataflow.tasks import ops
-    from dataflow.tasks.modules.mla_reference import mla_attention_reference
+    from dataflow_training.blocks import ops
+    from dataflow_training.blocks.modules.mla_reference import mla_attention_reference
 
     d = _Dims()
     w = _weights(d, seed=3)
@@ -135,7 +135,7 @@ def test_mla_shared_k_rope_broadcast_gradient():
 def test_mla_reference_ragged_packing_matches_per_sequence():
     from dataclasses import replace
 
-    from dataflow.tasks.modules.mla_reference import mla_block_reference
+    from dataflow_training.blocks.modules.mla_reference import mla_block_reference
 
     d_packed = _Dims(tokens=96, seq_len=None, seq_lens=(64, 32))
     w = _weights(d_packed, seed=5)
@@ -153,8 +153,8 @@ def test_mla_reference_ragged_packing_matches_per_sequence():
 
 
 def _dsv3_dims(kind="moe", **over):
-    from dataflow.tasks.layouts import Dsv3Dims, DTypePolicy, ParamDTypes
-    from dataflow.tasks.modules.moe.spec import MoESpec
+    from dataflow_training.blocks.layouts import Dsv3Dims, DTypePolicy, ParamDTypes
+    from dataflow_training.blocks.modules.moe.spec import MoESpec
 
     moe = MoESpec(
         n_experts=8, top_k=2, d_ff_expert=32,
@@ -176,7 +176,7 @@ def _dsv3_dims(kind="moe", **over):
 
 
 def _block_state(dims, wl, seed):
-    from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME
+    from dataflow.runtime.interop import TORCH_DTYPE_BY_NAME
 
     gen = torch.Generator(device="cuda").manual_seed(seed)
     views = {}
@@ -198,9 +198,9 @@ def _block_state(dims, wl, seed):
 
 def _golden_block(x_ref, leaves, dims, kind, route_ids=None, segments=None):
     """Autograd block: MLA attention (reference) + dense-or-moe tail."""
-    from dataflow.tasks import ops
-    from dataflow.tasks.modules.mla_reference import mla_attention_reference
-    from dataflow.tasks.modules.moe.reference import moe_mlp_reference
+    from dataflow_training.blocks import ops
+    from dataflow_training.blocks.modules.mla_reference import mla_attention_reference
+    from dataflow_training.blocks.modules.moe.reference import moe_mlp_reference
 
     h1 = ops.rmsnorm_reference(x_ref, leaves["attn_norm_w"])
     attn = mla_attention_reference(h1, leaves, dims, segments)
@@ -219,7 +219,7 @@ def _golden_block(x_ref, leaves, dims, kind, route_ids=None, segments=None):
 
 @pytest.mark.parametrize("kind", ["dense", "moe"])
 def test_dsv3_block_ladder2(kind):
-    from dataflow.tasks.models.dsv3_blocks import (
+    from dataflow_training.model_families.dsv3_blocks import (
         Dsv3DenseBlockBwd,
         Dsv3DenseBlockFwd,
         Dsv3DenseBlockRecompute,
@@ -227,10 +227,10 @@ def test_dsv3_block_ladder2(kind):
         Dsv3MoeBlockFwd,
         Dsv3MoeBlockRecompute,
     )
-    from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME
-    from dataflow.tasks.kernels import KernelCtx, resolve_kernels
-    from dataflow.tasks.layouts import grad_layout
-    from dataflow.training.testing.gradcheck import rel_l2
+    from dataflow.runtime.interop import TORCH_DTYPE_BY_NAME
+    from dataflow_training.kernels import KernelCtx, resolve_kernels
+    from dataflow_training.blocks.layouts import grad_layout
+    from dataflow_training.testing.gradcheck import rel_l2
 
     dims = _dsv3_dims()
     kernels = resolve_kernels()
@@ -251,8 +251,8 @@ def test_dsv3_block_ladder2(kind):
         for f in cl.fields
     }
     y = torch.empty_like(x)
-    from dataflow.tasks.modules.moe.spec import moe_aux_temp_layout
-    from dataflow.tasks.ops import Segments
+    from dataflow_training.blocks.modules.moe.spec import moe_aux_temp_layout
+    from dataflow.core.segments import Segments
 
     # ONE materialized Segments handed to fwd/recompute (extras) and bwd
     # (a["_seg"]) — standing in for the engine's run-prologue that normally
@@ -331,8 +331,8 @@ def test_dsv3_block_ladder2(kind):
 
 
 def test_dsv3_stage_context_completeness():
-    from dataflow.tasks.models.dsv3_blocks import Dsv3DenseBlockFwd, Dsv3MoeBlockFwd
-    from dataflow.tasks.layouts import (
+    from dataflow_training.model_families.dsv3_blocks import Dsv3DenseBlockFwd, Dsv3MoeBlockFwd
+    from dataflow_training.blocks.layouts import (
         dsv3_dense_activation_layout,
         dsv3_moe_activation_layout,
     )

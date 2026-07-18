@@ -25,14 +25,14 @@ import dataclasses
 import pytest
 import torch  # noqa: F401
 
-from dataflow.tasks.optim import freeze
-from dataflow.training.freeze_plan import FreezePlan, derive_freeze_plan
-from dataflow.training.models.llama3 import (
+from dataflow_training.blocks.optim import freeze
+from dataflow_training.lowering.freeze_plan import FreezePlan, derive_freeze_plan
+from dataflow_training.model_families.llama3 import (
     ShapedLlamaConfig,
     dims_of,
     lower_llama3,
 )
-from dataflow.training.testing.gradcheck import check_model_step
+from dataflow_training.testing.gradcheck import check_model_step
 
 FIELDS = ("attn_norm_w", "wq", "wk", "wv", "wo", "ffn_norm_w",
           "w1", "w3", "w2")
@@ -149,15 +149,15 @@ def assert_frozen_model_step(cfg, *, frozen_prefixes, tol=3e-2, seed=0):
     optimizer task per weight object; fully-frozen objects have none."""
     import torch
 
-    from dataflow.pretrain import bridges
+    from dataflow_training.model_families import bridges
     from dataflow.runtime import Engine
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.runtime.device.fake import FakeBackend
     from dataflow.runtime.engine import uniform_segments
-    from dataflow.tasks.interop import torch_view
-    from dataflow.training.families import resolve_family
-    from dataflow.training.planning import plan_program
-    from dataflow.training.testing.gradcheck import (
+    from dataflow.runtime.interop import torch_view
+    from dataflow_training.model_families.families import resolve_family
+    from dataflow_training.lowering.planning import plan_program
+    from dataflow_training.testing.gradcheck import (
         EngineFinalBytes,
         reference_model_step,
         rel_l2,
@@ -255,17 +255,17 @@ def test_model_step_truncated_ga2():
     frozen-bit-identity all gate."""
     import torch
 
-    from dataflow.pretrain import bridges
-    from dataflow.pretrain.driver import adamw_field_step
+    from dataflow_training.model_families import bridges
+    from dataflow_training.run.driver import adamw_field_step
     from dataflow.runtime import Engine
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.runtime.device.fake import FakeBackend
     from dataflow.runtime.engine import uniform_segments
-    from dataflow.tasks.base_blocks import AdamWHyper
-    from dataflow.tasks.interop import torch_view
-    from dataflow.training.families import resolve_family
-    from dataflow.training.planning import plan_program
-    from dataflow.training.testing.gradcheck import EngineFinalBytes, rel_l2
+    from dataflow_training.blocks.base_blocks import AdamWHyper
+    from dataflow.runtime.interop import torch_view
+    from dataflow_training.model_families.families import resolve_family
+    from dataflow_training.lowering.planning import plan_program
+    from dataflow_training.testing.gradcheck import EngineFinalBytes, rel_l2
 
     cfg = _tiny(grad_accum_rounds=2,
                 opt_policy=freeze(layers=(0,), embed=True))
@@ -336,7 +336,7 @@ def test_model_step_pair_freeze():
     """(field, layer)-pair axis, end to end: different fields frozen on
     different layers -> per-layer dW layouts differ exactly per policy;
     engine matches the policy-dispatched golden."""
-    from dataflow.tasks.layouts import grad_layout, weight_layout
+    from dataflow_training.blocks.layouts import grad_layout, weight_layout
 
     cfg = _tiny(opt_policy=freeze(pairs=(("wo", 0), ("w1", 1))))
     prog = lower_llama3(cfg)
@@ -356,7 +356,7 @@ def test_fleet_truncated_prefix_lowers():
     program still validates. (Engine semantics are covered by the llama3
     and olmoe E2E gates — this pins the structural wiring fleet-wide.)"""
     from dataflow.core.validate import validate_program
-    from dataflow.training.families import family
+    from dataflow_training.model_families.families import family
 
     for fname in ("qwen3", "qwen35", "qwen35moe", "qwen3moe", "olmoe",
                   "dsv3", "dsv32", "glm52"):
@@ -377,7 +377,7 @@ def test_model_step_truncated_olmoe():
     experts and all) + embedding frozen — the MoE tail's guarded direct
     dw writes and the aux injection above the boundary must still match
     the twin (which drives the same round-global LBL channel)."""
-    from dataflow.training.models.olmoe import ShapedOlmoeConfig
+    from dataflow_training.model_families.olmoe import ShapedOlmoeConfig
 
     cfg = dataclasses.replace(ShapedOlmoeConfig.tiny(),
                               opt_policy=freeze(layers=(0,), embed=True))
@@ -389,11 +389,11 @@ def test_train_indexer_unified_into_policy():
     indexer fields vanish from dW/O layouts (before: present, zeroed,
     and skipped by a resolver special-case). The family ablation gates
     prove step parity; this pins the storage consequence."""
-    from dataflow.tasks.layouts import (
+    from dataflow_training.blocks.layouts import (
         dsv32_dense_weight_layout,
         grad_layout,
     )
-    from dataflow.training.models.dsv32 import (
+    from dataflow_training.model_families.dsv32 import (
         ShapedDsv32Config,
         dims_of_dsv32,
         lower_dsv32,
@@ -465,8 +465,8 @@ def test_initial_values_refill_identity():
     import torch
 
     from dataflow.runtime.device.cuda import CudaBackend
-    from dataflow.tasks.interop import torch_view
-    from dataflow.training.families import resolve_family
+    from dataflow.runtime.interop import torch_view
+    from dataflow_training.model_families.families import resolve_family
 
     cfg = _tiny()
     fam = resolve_family(cfg)

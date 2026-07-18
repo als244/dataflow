@@ -16,7 +16,7 @@ import dataclasses
 import sys
 from collections import Counter
 
-from dataflow.training import families as F
+from dataflow_training.model_families import families as F
 
 HEADER = """# Builtin model families and presets
 

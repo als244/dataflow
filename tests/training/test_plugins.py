@@ -17,9 +17,9 @@ STUB = textwrap.dedent('''
     config type — the minimum a plugin must do."""
     from dataclasses import dataclass
 
-    from dataflow.training.families import Family, register_family
-    from dataflow.training.models.llama3 import ShapedLlamaConfig, lower_llama3
-    from dataflow.training.presets import register_bench_config
+    from dataflow_training.model_families.families import Family, register_family
+    from dataflow_training.model_families.llama3 import ShapedLlamaConfig, lower_llama3
+    from dataflow_training.run.bench_presets import register_bench_config
 
 
     @dataclass(frozen=True)
@@ -28,7 +28,7 @@ STUB = textwrap.dedent('''
 
 
     def _stub() -> Family:
-        from dataflow.training.families import family
+        from dataflow_training.model_families.families import family
 
         base = family("llama3")
         return Family(
@@ -45,8 +45,8 @@ STUB = textwrap.dedent('''
 
 
 def _cleanup():
-    import dataflow.training.families as F
-    from dataflow.training.presets import EXTRA_CONFIGS
+    import dataflow_training.model_families.families as F
+    from dataflow_training.run.bench_presets import EXTRA_CONFIGS
 
     F._FAMILIES.pop("stubfam", None)
     F._cache.pop("stubfam", None)
@@ -59,7 +59,7 @@ def test_explicit_plugin_load_end_to_end(tmp_path, monkeypatch):
     (tmp_path / "stub_plugin.py").write_text(STUB)
     monkeypatch.syspath_prepend(str(tmp_path))
 
-    import dataflow.training.families as F
+    import dataflow_training.model_families.families as F
 
     F.load_plugins(explicit=["stub_plugin"])
     try:
@@ -72,7 +72,7 @@ def test_explicit_plugin_load_end_to_end(tmp_path, monkeypatch):
         assert F.resolve_family(cfg).name == "stubfam"
         assert fam.lower(cfg).task_by_id()
         # the bench preset is registered the way bench_train merges it
-        from dataflow.training.presets import EXTRA_CONFIGS
+        from dataflow_training.run.bench_presets import EXTRA_CONFIGS
 
         assert type(EXTRA_CONFIGS["stubfam-tiny"]) is stub_plugin.ShapedStubConfig
         # the structural contract validator accepts it
@@ -87,7 +87,7 @@ def test_entry_point_discovery(tmp_path, monkeypatch):
     (tmp_path / "stub_plugin.py").write_text(STUB)
     monkeypatch.syspath_prepend(str(tmp_path))
 
-    import dataflow.training.families as F
+    import dataflow_training.model_families.families as F
 
     class _EP:
         name = "stubfam"
@@ -115,7 +115,7 @@ def test_entry_point_discovery(tmp_path, monkeypatch):
 
 
 def test_validate_family_reports_broken_surface():
-    import dataflow.training.families as F
+    import dataflow_training.model_families.families as F
 
     def _broken():
         base = F.family("llama3")
@@ -138,7 +138,7 @@ def test_validate_family_reports_broken_surface():
 def test_register_family_rejects_duplicates():
     import pytest
 
-    from dataflow.training.families import register_family
+    from dataflow_training.model_families.families import register_family
 
     with pytest.raises(ValueError):
         register_family("llama3", lambda: None)

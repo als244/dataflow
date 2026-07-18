@@ -18,15 +18,15 @@ from dataclasses import dataclass
 
 import torch
 
-from dataflow.tasks import ops
-from dataflow.tasks.modules.dsa_reference import (
+from dataflow_training.blocks import ops
+from dataflow_training.blocks.modules.dsa_reference import (
     dsa_index_scores_reference,
     dsa_mask_from_idx,
     dsa_sparse_attention_reference,
     dsa_topk_reference,
 )
-from dataflow.tasks.modules.mla_reference import mla_qkv_reference
-from dataflow.tasks.modules.moe.reference import moe_mlp_reference, moe_topk_reference
+from dataflow_training.blocks.modules.mla_reference import mla_qkv_reference
+from dataflow_training.blocks.modules.moe.reference import moe_mlp_reference, moe_topk_reference
 
 from golden_base import GoldenGlm52
 

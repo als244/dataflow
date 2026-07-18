@@ -45,9 +45,9 @@ def program_hash(program) -> str:
 
 
 def current_hashes() -> dict:
-    from dataflow.pretrain import presets
-    from dataflow.training.families import resolve_family
-    from dataflow.training.planning import plan_program
+    from dataflow_training.run import presets
+    from dataflow_training.model_families.families import resolve_family
+    from dataflow_training.lowering.planning import plan_program
 
     out = {}
     for name, preset_fn in SMOKE_PRESETS.items():

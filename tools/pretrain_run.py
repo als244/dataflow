@@ -20,14 +20,14 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT))
 
-from dataflow.pretrain import parity, presets as P
-from dataflow.pretrain.driver import (
+from dataflow_training.run import parity, presets as P
+from dataflow_training.run.driver import (
     daemon_client,
     run_engine,
     run_reference,
 )
-from dataflow.pretrain.fineweb import make_stream
-from dataflow.pretrain.recipe import Recipe
+from dataflow_training.data.fineweb import make_stream
+from dataflow_training.run.recipe import Recipe
 
 RESULTS = _ROOT / "results" / "pretrain"
 
@@ -49,8 +49,8 @@ def _init_bytes_identical(cfg, client, seed: int) -> bool:
     import torch
 
     from dataflow.runtime.device.cuda import CudaBackend
-    from dataflow.tasks.interop import torch_view
-    from dataflow.training.families import resolve_family
+    from dataflow.runtime.interop import torch_view
+    from dataflow_training.model_families.families import resolve_family
 
     fam = resolve_family(cfg)
     backend = CudaBackend()

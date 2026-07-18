@@ -23,7 +23,7 @@ STEPS = [((73, 38, 17), T), ((50, 41, 37), T), ((60, 31), 91)]
 
 
 def _cfg():
-    from dataflow.training.models.llama3 import ShapedLlamaConfig
+    from dataflow_training.model_families.llama3 import ShapedLlamaConfig
 
     return ShapedLlamaConfig(
         n_layers=2, d_model=256, n_heads=8, n_kv_heads=2, d_ff=512,
@@ -63,9 +63,9 @@ def test_daemon_packed_args_bit_equal(tmp_path):
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.runtime.device.fake import FakeBackend
     from dataflow.runtime.engine import Session
-    from dataflow.tasks.interop import torch_view
-    from dataflow.training.families import resolve_family
-    from dataflow.training.planning import plan_program
+    from dataflow.runtime.interop import torch_view
+    from dataflow_training.model_families.families import resolve_family
+    from dataflow_training.lowering.planning import plan_program
 
     cfg = _cfg()
     fam = resolve_family(cfg)

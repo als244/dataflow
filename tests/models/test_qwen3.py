@@ -10,10 +10,10 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from dataflow.tasks.layouts import Qwen3Dims, qwen3_activation_layout  # noqa: E402
-from dataflow.tasks.models.qwen3_blocks import Qwen3BlockFwd  # noqa: E402
-from dataflow.training.models.qwen3 import dims_of_qwen3, lower_qwen3  # noqa: E402
-from dataflow.training.models.qwen3 import ShapedQwen3Config  # noqa: E402
+from dataflow_training.blocks.layouts import Qwen3Dims, qwen3_activation_layout  # noqa: E402
+from dataflow_training.model_families.qwen3_blocks import Qwen3BlockFwd  # noqa: E402
+from dataflow_training.model_families.qwen3 import dims_of_qwen3, lower_qwen3  # noqa: E402
+from dataflow_training.model_families.qwen3 import ShapedQwen3Config  # noqa: E402
 
 CFG = ShapedQwen3Config(
     n_layers=2, d_model=256, n_heads=4, n_kv_heads=2, head_dim=64,
@@ -44,7 +44,7 @@ def test_qwen3_derived_recompute_excludes_boundary_work():
 
 def test_qwen3_lowering_validates_and_plans():
     from dataflow.core import validate_program
-    from dataflow.training.planning import plan_program, simulate_program
+    from dataflow_training.lowering.planning import plan_program, simulate_program
 
     program = lower_qwen3(CFG)
     validate_program(program)
@@ -63,9 +63,9 @@ gpu = pytest.mark.skipif(not torch.cuda.is_available(), reason="no CUDA device")
 @pytest.mark.gpu
 def test_qknorm_kernel_reuse_matches_reference():
     """Ladder 1 for the one new op shape: rmsnorm at (tokens*heads, head_dim)."""
-    from dataflow.tasks import ops
-    from dataflow.tasks.kernels import KernelCtx, resolve_kernels
-    from dataflow.training.testing.gradcheck import rel_l2
+    from dataflow_training.blocks import ops
+    from dataflow_training.kernels import KernelCtx, resolve_kernels
+    from dataflow_training.testing.gradcheck import rel_l2
 
     t, h, hd = 128, 4, 64
     gen = torch.Generator(device="cuda").manual_seed(3)
@@ -96,8 +96,8 @@ def test_qknorm_kernel_reuse_matches_reference():
 def test_qwen3_block_backward():
     """Ladder 2: dx + every packed dW field (incl. q/k norm weights),
     recompute-equivalence, 2x accumulation."""
-    from dataflow.training.families import family
-    from dataflow.training.testing.gradcheck import check_block_backward
+    from dataflow_training.model_families.families import family
+    from dataflow_training.testing.gradcheck import check_block_backward
 
     check_block_backward(dims_of_qwen3(CFG), family=family("qwen3")).assert_ok()
 
@@ -108,7 +108,7 @@ def test_qwen3_block_backward():
 @pytest.mark.gpu
 def test_qwen3_plan_invariance():
     """Different budgets + recompute plans must produce identical math."""
-    from dataflow.training.testing.gradcheck import check_model_step
+    from dataflow_training.testing.gradcheck import check_model_step
 
     r1 = check_model_step(CFG, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2)
     r2 = check_model_step(CFG, fast_memory_capacity=8 * 1024 * 1024, tol=3e-2)

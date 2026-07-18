@@ -26,14 +26,14 @@ torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
     pytest.skip("no CUDA device", allow_module_level=True)
 
-from dataflow.pretrain import presets as P  # noqa: E402
-from dataflow.pretrain.driver import (  # noqa: E402
+from dataflow_training.run import presets as P  # noqa: E402
+from dataflow_training.run.driver import (  # noqa: E402
     daemon_client,
     run_engine,
     run_reference,
 )
-from dataflow.pretrain.fineweb import make_stream  # noqa: E402
-from dataflow.pretrain.recipe import Recipe  # noqa: E402
+from dataflow_training.data.fineweb import make_stream  # noqa: E402
+from dataflow_training.run.recipe import Recipe  # noqa: E402
 
 STEPS = 6
 CALIBRATE = bool(os.environ.get("DATAFLOW_CALIBRATE"))
@@ -113,11 +113,11 @@ def test_engine_matches_reference_ragged(name):
     from dataclasses import replace
 
     from dataflow.core.jsonio import program_to_dict
-    from dataflow.pretrain.presets import cfg_dict, resolver_family
-    from dataflow.pretrain import bridges
-    from dataflow.pretrain.driver import reference_optimizer
-    from dataflow.training.families import resolve_family
-    from dataflow.training.planning import plan_program
+    from dataflow_training.run.presets import cfg_dict, resolver_family
+    from dataflow_training.model_families import bridges
+    from dataflow_training.run.driver import reference_optimizer
+    from dataflow_training.model_families.families import resolve_family
+    from dataflow_training.lowering.planning import plan_program
 
     total = sum(RAGGED_LENGTHS)
     base = getattr(P, FAMILY_PRESETS[name])()

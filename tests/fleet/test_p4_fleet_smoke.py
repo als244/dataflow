@@ -11,7 +11,7 @@ torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
     pytest.skip("no CUDA device", allow_module_level=True)
 
-from dataflow.pretrain.topology import load_topology_or_none  # noqa: E402
+from dataflow_training.distributed.topology import load_topology_or_none  # noqa: E402
 
 TOPO = load_topology_or_none()
 if TOPO is None or not TOPO.remotes():
@@ -26,10 +26,10 @@ def quiet(*a, **k):
 
 
 def test_fleet_dp_125m_smoke():
-    from dataflow.pretrain.fineweb import make_stream
-    from dataflow.pretrain.fleet import run_fleet_dp
-    from dataflow.pretrain.presets import preset
-    from dataflow.pretrain.recipe import Recipe
+    from dataflow_training.data.fineweb import make_stream
+    from dataflow_training.distributed.fleet import run_fleet_dp
+    from dataflow_training.run.presets import preset
+    from dataflow_training.run.recipe import Recipe
 
     cfg = preset("l3_125m")
     steps = 12

@@ -14,14 +14,14 @@ torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
     pytest.skip("no CUDA device", allow_module_level=True)
 
-from dataflow.pretrain.hostops import (  # noqa: E402
+from dataflow_training.distributed.hostops import (  # noqa: E402
     daemon_paths,
     kill_daemon,
     launch_daemon,
     run_py,
     uds_forward,
 )
-from dataflow.pretrain.topology import load_topology_or_none  # noqa: E402
+from dataflow_training.distributed.topology import load_topology_or_none  # noqa: E402
 from dataflow.service import EngineClient  # noqa: E402
 from dataflow.service.peer import nccl  # noqa: E402
 

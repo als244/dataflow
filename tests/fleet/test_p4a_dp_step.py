@@ -29,20 +29,20 @@ from dataflow.runtime.device.cuda import CudaBackend  # noqa: E402
 from dataflow.runtime.device.fake import FakeBackend  # noqa: E402
 from dataflow.runtime.engine import uniform_segments  # noqa: E402
 from dataflow.service import EngineClient, EngineConfig, Server  # noqa: E402
-from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME, torch_view  # noqa: E402
-from dataflow.training.families import resolve_family  # noqa: E402
-from dataflow.training.lowering import apply_exact_sizes, size_of_factory  # noqa: E402
-from dataflow.training.models.llama3 import (  # noqa: E402
+from dataflow.runtime.interop import TORCH_DTYPE_BY_NAME, torch_view  # noqa: E402
+from dataflow_training.model_families.families import resolve_family  # noqa: E402
+from dataflow_training.lowering.emit import apply_exact_sizes, size_of_factory  # noqa: E402
+from dataflow_training.model_families.llama3 import (  # noqa: E402
     ShapedLlamaConfig,
     family_layouts,
 )
-from dataflow.training.planning import plan_program  # noqa: E402
-from dataflow.training.shaped_program import (  # noqa: E402
+from dataflow_training.lowering.planning import plan_program  # noqa: E402
+from dataflow_training.lowering.shaped_program import (  # noqa: E402
     ShapedHardware,
     build_shaped_program,
     roofline_block_kind_spec,
 )
-from dataflow.training.testing.gradcheck import rel_l2  # noqa: E402
+from dataflow_training.testing.gradcheck import rel_l2  # noqa: E402
 
 pytestmark = pytest.mark.fleet
 

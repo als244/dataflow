@@ -18,10 +18,10 @@ def quiet_log(*args, **kwargs):
 
 def run_family_parity(cfg, *, steps: int = 15, slab_gib: float = 6.0,
                       budget_gib: float = 4.0) -> None:
-    from dataflow.pretrain import parity
-    from dataflow.pretrain.driver import daemon_client, run_engine, run_reference
-    from dataflow.pretrain.fineweb import make_stream
-    from dataflow.pretrain.recipe import Recipe
+    from dataflow_training.run import parity
+    from dataflow_training.run.driver import daemon_client, run_engine, run_reference
+    from dataflow_training.data.fineweb import make_stream
+    from dataflow_training.run.recipe import Recipe
 
     recipe = Recipe(peak_lr=3e-4, min_lr=3e-5, warmup_steps=3, total_steps=steps)
     stream = make_stream(cfg.tokens)
@@ -47,7 +47,7 @@ def run_family_parity(cfg, *, steps: int = 15, slab_gib: float = 6.0,
 def test_qwen3_engine_vs_reference():
     if not torch.cuda.is_available():
         pytest.skip("no CUDA")
-    from dataflow.pretrain.presets import qwen3_smoke_preset
+    from dataflow_training.run.presets import qwen3_smoke_preset
 
     run_family_parity(qwen3_smoke_preset())
 
@@ -58,7 +58,7 @@ def test_olmoe_engine_vs_reference():
     must too."""
     if not torch.cuda.is_available():
         pytest.skip("no CUDA")
-    from dataflow.pretrain.presets import olmoe_smoke_preset
+    from dataflow_training.run.presets import olmoe_smoke_preset
 
     run_family_parity(olmoe_smoke_preset())
 
@@ -76,7 +76,7 @@ def test_olmoe_engine_vs_reference_lbl_on():
         pytest.skip("no CUDA")
     from dataclasses import replace
 
-    from dataflow.pretrain.presets import olmoe_smoke_preset
+    from dataflow_training.run.presets import olmoe_smoke_preset
 
     run_family_parity(replace(olmoe_smoke_preset(), aux_coef=0.01))
 
@@ -85,7 +85,7 @@ def test_olmoe_engine_vs_reference_lbl_on():
 def test_qwen3moe_engine_vs_reference():
     if not torch.cuda.is_available():
         pytest.skip("no CUDA")
-    from dataflow.pretrain.presets import qwen3moe_smoke_preset
+    from dataflow_training.run.presets import qwen3moe_smoke_preset
 
     run_family_parity(qwen3moe_smoke_preset())
 
@@ -94,7 +94,7 @@ def test_qwen3moe_engine_vs_reference():
 def test_qwen35moe_engine_vs_reference():
     if not torch.cuda.is_available():
         pytest.skip("no CUDA")
-    from dataflow.pretrain.presets import qwen35moe_smoke_preset
+    from dataflow_training.run.presets import qwen35moe_smoke_preset
 
     run_family_parity(qwen35moe_smoke_preset())
 
@@ -104,7 +104,7 @@ def test_dsv3_engine_vs_reference():
     """LBL-OFF (aux 0, bias speed 0): pure CE + AdamW on both sides."""
     if not torch.cuda.is_available():
         pytest.skip("no CUDA")
-    from dataflow.pretrain.presets import dsv3_smoke_preset
+    from dataflow_training.run.presets import dsv3_smoke_preset
 
     run_family_parity(dsv3_smoke_preset())
 
@@ -115,7 +115,7 @@ def test_dsv32_engine_vs_reference():
     sides while its selection drives the sparse attention."""
     if not torch.cuda.is_available():
         pytest.skip("no CUDA")
-    from dataflow.pretrain.presets import dsv32_smoke_preset
+    from dataflow_training.run.presets import dsv32_smoke_preset
 
     run_family_parity(dsv32_smoke_preset())
 
@@ -124,6 +124,6 @@ def test_dsv32_engine_vs_reference():
 def test_glm52_engine_vs_reference():
     if not torch.cuda.is_available():
         pytest.skip("no CUDA")
-    from dataflow.pretrain.presets import glm52_smoke_preset
+    from dataflow_training.run.presets import glm52_smoke_preset
 
     run_family_parity(glm52_smoke_preset())

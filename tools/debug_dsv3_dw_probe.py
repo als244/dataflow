@@ -26,12 +26,12 @@ import torch  # noqa: E402
 
 def engine_grad_dict(cfg, dims, result) -> dict:
     """Mirror of bridges.dsv3.to_dsv3_state_dict over dW objects."""
-    from dataflow.pretrain.bridges.dsv3 import (
+    from dataflow_training.model_families.bridges.dsv3 import (
         mla_attention_entries,
         transposed,
     )
-    from dataflow.tasks.interop import torch_view
-    from dataflow.tasks.layouts import (
+    from dataflow.runtime.interop import torch_view
+    from dataflow_training.blocks.layouts import (
         dsv3_dense_weight_layout,
         dsv3_moe_weight_layout,
         embed_weight_layout,
@@ -92,10 +92,10 @@ def main() -> int:
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.runtime.device.fake import FakeBackend
     from dataflow.runtime.engine import uniform_segments
-    from dataflow.training.families import resolve_family
-    from dataflow.training.models.dsv3 import ShapedDsv3Config
-    from dataflow.training.planning import plan_program
-    from dataflow.training.testing.gradcheck import (
+    from dataflow_training.model_families.families import resolve_family
+    from dataflow_training.model_families.dsv3 import ShapedDsv3Config
+    from dataflow_training.lowering.planning import plan_program
+    from dataflow_training.testing.gradcheck import (
         cos_sim,
         reference_model_step,
         rel_l2,
@@ -164,7 +164,7 @@ def main() -> int:
     # outputs captured by composition recorders during the SAME per-seq
     # forwards (concatenated in token order)
     import torch.nn as nn
-    from dataflow.tasks.interop import torch_view as tv
+    from dataflow.runtime.interop import torch_view as tv
 
     class BlockRecorder(nn.Module):
         def __init__(self, inner):
@@ -179,9 +179,9 @@ def main() -> int:
                 -1, keep.shape[-1]))
             return y
 
-    twin2 = __import__("dataflow.pretrain.bridges",
+    twin2 = __import__("dataflow_training.model_families.bridges",
                        fromlist=["bridges"]).build_reference_model(cfg)
-    from dataflow.pretrain import bridges as _b
+    from dataflow_training.model_families import bridges as _b
     _b.load_reference_init(twin2, cfg, dims,
                            _b.get_bytes_from_values(values))
     twin2.eval()
@@ -201,8 +201,8 @@ def main() -> int:
             twin2.loss(tok[lo:lo + ln].view(1, ln),
                        tgt[lo:lo + ln].view(1, ln))
             lo += ln
-    from dataflow.training.testing.gradcheck import cos_sim as _cs
-    from dataflow.training.testing.gradcheck import rel_l2 as _rl
+    from dataflow_training.testing.gradcheck import cos_sim as _cs
+    from dataflow_training.testing.gradcheck import rel_l2 as _rl
     print("\nforward divergence by depth (engine y_* vs twin blocks):")
     for bi, rec in enumerate(recs):
         oid = f"y_0_0_{bi}"

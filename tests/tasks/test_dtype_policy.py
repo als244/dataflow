@@ -5,7 +5,7 @@ per-family ladders once wired.
 """
 import pytest
 
-from dataflow.tasks.layouts import DTypePolicy, ParamDTypes
+from dataflow_training.blocks.layouts import DTypePolicy, ParamDTypes
 
 
 def test_default_policy_is_all_bf16():

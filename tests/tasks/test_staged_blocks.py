@@ -7,10 +7,10 @@
   crept back in);
 - the boundary sits exactly after the last context-emitting stage.
 """
-from dataflow.tasks.models.llama3_blocks import BlockFwd
-from dataflow.tasks.layouts import activation_layout
-from dataflow.training.models.llama3 import dims_of
-from dataflow.training.models.llama3 import ShapedLlamaConfig
+from dataflow_training.model_families.llama3_blocks import BlockFwd
+from dataflow_training.blocks.layouts import activation_layout
+from dataflow_training.model_families.llama3 import dims_of
+from dataflow_training.model_families.llama3 import ShapedLlamaConfig
 
 
 def test_stage_context_completeness():

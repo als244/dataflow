@@ -34,17 +34,17 @@ from dataflow.runtime import Engine  # noqa: E402
 from dataflow.runtime.device.cuda import CudaBackend  # noqa: E402
 from dataflow.runtime.device.fake import FakeBackend  # noqa: E402
 from dataflow.runtime.engine import uniform_segments  # noqa: E402
-from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME, torch_view  # noqa: E402
-from dataflow.training.families import resolve_family  # noqa: E402
-from dataflow.training.planning import plan_program  # noqa: E402
-from dataflow.training.testing.gradcheck import rel_l2  # noqa: E402
+from dataflow.runtime.interop import TORCH_DTYPE_BY_NAME, torch_view  # noqa: E402
+from dataflow_training.model_families.families import resolve_family  # noqa: E402
+from dataflow_training.lowering.planning import plan_program  # noqa: E402
+from dataflow_training.testing.gradcheck import rel_l2  # noqa: E402
 
 T_STEP = 128
 SEQ = 32
 
 
 def llama_cfg(ga: int, opt: str):
-    from dataflow.training.models.llama3 import ShapedLlamaConfig
+    from dataflow_training.model_families.llama3 import ShapedLlamaConfig
 
     return replace(ShapedLlamaConfig.tiny(), seq_len=SEQ,
                    batch=T_STEP // (SEQ * ga), grad_accum_rounds=ga,
@@ -52,7 +52,7 @@ def llama_cfg(ga: int, opt: str):
 
 
 def olmoe_cfg(ga: int):
-    from dataflow.training.models.olmoe import ShapedOlmoeConfig
+    from dataflow_training.model_families.olmoe import ShapedOlmoeConfig
 
     return replace(ShapedOlmoeConfig.tiny(), seq_len=SEQ,
                    batch=T_STEP // (SEQ * ga), grad_accum_rounds=ga,
@@ -61,9 +61,9 @@ def olmoe_cfg(ga: int):
 
 def family_layers(cfg):
     if type(cfg).__name__ == "ShapedOlmoeConfig":
-        from dataflow.training.models.olmoe import family_layouts
+        from dataflow_training.model_families.olmoe import family_layouts
     else:
-        from dataflow.training.models.llama3 import family_layouts
+        from dataflow_training.model_families.llama3 import family_layouts
     return family_layouts(cfg)[1].layers
 
 

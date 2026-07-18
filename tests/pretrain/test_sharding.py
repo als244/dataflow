@@ -3,7 +3,7 @@ classification, the muon rejection, the expert-shards builder's
 owned/redundant views, and serialization. Pure CPU."""
 import pytest
 
-from dataflow.pretrain.sharding import (
+from dataflow_training.distributed.sharding import (
     ALL_RANKS,
     Assignment,
     FieldInfo,
@@ -126,7 +126,7 @@ def tp_toy_fields():
 
 
 def test_tp_mlp_shards_plan_and_views():
-    from dataflow.pretrain.sharding import (
+    from dataflow_training.distributed.sharding import (
         tp_mlp_shards,
         tp_view,
         update_regions,
@@ -162,7 +162,7 @@ def test_tp_mlp_shards_plan_and_views():
 
 
 def test_tp_axis_validation():
-    from dataflow.pretrain.sharding import tp_mlp_shards
+    from dataflow_training.distributed.sharding import tp_mlp_shards
 
     fbr = {"W_0": [FieldInfo("m", (8, 4), "bf16", 0, 64)]}
     with pytest.raises(ValueError, match="mixed shard axes"):
@@ -183,7 +183,7 @@ def test_tp_axis_validation():
 
 
 def test_tp_serialization_roundtrip():
-    from dataflow.pretrain.sharding import tp_mlp_shards
+    from dataflow_training.distributed.sharding import tp_mlp_shards
 
     fbr = tp_toy_fields()
     plan = tp_mlp_shards(fbr, "tp", 2)
@@ -210,8 +210,8 @@ def test_serialization_roundtrip_and_required_groups():
 
 def test_real_llama3_layouts_shard():
     torch = pytest.importorskip("torch")
-    from dataflow.pretrain.presets import preset
-    from dataflow.pretrain.sharding import layer_fields_by_root
+    from dataflow_training.run.presets import preset
+    from dataflow_training.distributed.sharding import layer_fields_by_root
 
     fbr = layer_fields_by_root(preset("l3_125m"))
     plan = zero1_halves(fbr, "dp", 2)
@@ -236,8 +236,8 @@ def test_world_n_plans():
     """WN0: the builders and block-param derivations at world 4 and
     8 — balance, cover, divisibility, and the cross-rank comm-
     sequence identity that collective pairing depends on."""
-    from dataflow.pretrain.presets import preset
-    from dataflow.pretrain.sharding import (
+    from dataflow_training.run.presets import preset
+    from dataflow_training.distributed.sharding import (
         layer_fields_by_root,
         shard_block_params,
         tp_mlp_shards,
@@ -286,12 +286,12 @@ def test_zero1rs_block_params_sizing():
     is eligible under the default policy; slices are exact world-
     fractions of the packed element count (alignment gaps included);
     the flat opt-state layout sizes to slice+tail elements per slot."""
-    from dataflow.pretrain.sharding import (
+    from dataflow_training.distributed.sharding import (
         layer_fields_by_root,
         zero1rs_block_params,
     )
-    from dataflow.tasks.layouts import opt_state_slice_layout
-    from dataflow.training.models.llama3 import (
+    from dataflow_training.blocks.layouts import opt_state_slice_layout
+    from dataflow_training.model_families.llama3 import (
         ShapedLlamaConfig,
         dims_of,
     )
@@ -333,13 +333,13 @@ def test_zero1rs_eligibility_rejections():
     keys for embed/head), or non-uniform dtypes inside the root."""
     from dataclasses import replace
 
-    from dataflow.pretrain.sharding import (
+    from dataflow_training.distributed.sharding import (
         layer_fields_by_root,
         zero1rs_block_params,
     )
-    from dataflow.tasks.layouts import DTypePolicy, ParamDTypes
-    from dataflow.tasks.optim import OptPolicy
-    from dataflow.training.models.llama3 import (
+    from dataflow_training.blocks.layouts import DTypePolicy, ParamDTypes
+    from dataflow_training.blocks.optim import OptPolicy
+    from dataflow_training.model_families.llama3 import (
         ShapedLlamaConfig,
         dims_of,
     )

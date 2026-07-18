@@ -22,7 +22,7 @@ torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
     pytest.skip("no CUDA device", allow_module_level=True)
 
-from dataflow.training.testing.gradcheck import (  # noqa: E402
+from dataflow_training.testing.gradcheck import (  # noqa: E402
     check_model_step,
     family_gate_kwargs,
     rel_l2,
@@ -32,13 +32,13 @@ pytestmark = pytest.mark.gpu
 
 
 def _tiny_cfg(**over):
-    from dataflow.training.models.dsv32 import ShapedDsv32Config
+    from dataflow_training.model_families.dsv32 import ShapedDsv32Config
 
     return replace(ShapedDsv32Config.tiny(), **over)
 
 
 def _tiny_dims(cfg=None):
-    from dataflow.training.models.dsv32 import dims_of_dsv32
+    from dataflow_training.model_families.dsv32 import dims_of_dsv32
 
     return dims_of_dsv32(cfg if cfg is not None else _tiny_cfg())
 
@@ -53,8 +53,8 @@ def _tiny_dims(cfg=None):
 
 def test_dsv32_lowering_validates_and_plans():
     from dataflow.core import validate_program
-    from dataflow.training.families import resolve_family
-    from dataflow.training.planning import plan_program, simulate_program
+    from dataflow_training.model_families.families import resolve_family
+    from dataflow_training.lowering.planning import plan_program, simulate_program
 
     cfg = _tiny_cfg()
     fam = resolve_family(cfg)
@@ -74,7 +74,7 @@ def test_dsv32_lowering_validates_and_plans():
 
 def test_dsv32_full_scale_presets_lower_and_validate():
     from dataflow.core import validate_program
-    from dataflow.training.models.dsv32 import ShapedDsv32Config, lower_dsv32
+    from dataflow_training.model_families.dsv32 import ShapedDsv32Config, lower_dsv32
 
     for ctor, layers in ((ShapedDsv32Config.dsv32_mini, 18),
                          (ShapedDsv32Config.dsv32_671b, 61),
@@ -92,12 +92,12 @@ def test_dsv32_partial_ownership_lowering_rejected():
     import dataclasses
     import unittest.mock as mock
 
-    from dataflow.training.models.dsv32 import dims_of_dsv32, lower_dsv32
+    from dataflow_training.model_families.dsv32 import dims_of_dsv32, lower_dsv32
 
     cfg = _tiny_cfg()
     part = dataclasses.replace(dims_of_dsv32(cfg).moe, expert_ids=(0, 1, 2))
     with pytest.raises(NotImplementedError):
-        with mock.patch("dataflow.training.models.dsv32.moe_spec_of", return_value=part):
+        with mock.patch("dataflow_training.model_families.dsv32.moe_spec_of", return_value=part):
             lower_dsv32(cfg)
 
 
@@ -165,16 +165,16 @@ def test_dsv32_ga2_matches_reference():
     MoE module's counts across rounds before its own sign rule;
     sign-lottery bias fields compare under the _BIAS_ATOL envelope (see
     module docstring)."""
-    from dataflow.pretrain import bridges
-    from dataflow.pretrain.driver import adamw_field_step
+    from dataflow_training.model_families import bridges
+    from dataflow_training.run.driver import adamw_field_step
     from dataflow.runtime import Engine
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.runtime.device.fake import FakeBackend
-    from dataflow.tasks.base_blocks import AdamWHyper
-    from dataflow.tasks.interop import torch_view
-    from dataflow.training.families import resolve_family
-    from dataflow.training.planning import plan_program
-    from dataflow.training.testing.gradcheck import (
+    from dataflow_training.blocks.base_blocks import AdamWHyper
+    from dataflow.runtime.interop import torch_view
+    from dataflow_training.model_families.families import resolve_family
+    from dataflow_training.lowering.planning import plan_program
+    from dataflow_training.testing.gradcheck import (
         EngineFinalBytes,
         field_atol_for,
     )
@@ -259,9 +259,9 @@ def _run(engine_kwargs=None, program=None, seed=7, resolver_wrapper=None):
     from dataflow.runtime import Engine
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.runtime.device.fake import FakeBackend
-    from dataflow.tasks.interop import torch_view
-    from dataflow.training.families import resolve_family
-    from dataflow.training.planning import plan_program
+    from dataflow.runtime.interop import torch_view
+    from dataflow_training.model_families.families import resolve_family
+    from dataflow_training.lowering.planning import plan_program
 
     cfg = _tiny_cfg()
     fam = resolve_family(cfg)
@@ -323,9 +323,9 @@ def test_dsv32_fixed_seed_bitwise_deterministic():
 
 def test_dsv32_measured_costs_replan_still_golden():
     from dataflow.runtime.device.cuda import CudaBackend
-    from dataflow.training.families import resolve_family
-    from dataflow.training.planning import plan_program
-    from dataflow.training.profiling import apply_measured_costs, profile_program
+    from dataflow_training.model_families.families import resolve_family
+    from dataflow_training.lowering.planning import plan_program
+    from dataflow_training.run.profiling import apply_measured_costs, profile_program
 
     cfg = _tiny_cfg()
     fam = resolve_family(cfg)
@@ -355,9 +355,9 @@ def test_dsv32_frozen_indexer_ablation():
     from dataflow.runtime import Engine
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.runtime.device.fake import FakeBackend
-    from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME, torch_view
-    from dataflow.training.families import resolve_family
-    from dataflow.training.planning import plan_program
+    from dataflow.runtime.interop import TORCH_DTYPE_BY_NAME, torch_view
+    from dataflow_training.model_families.families import resolve_family
+    from dataflow_training.lowering.planning import plan_program
 
     cfg = _tiny_cfg(train_indexer=False)
     check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
@@ -371,7 +371,7 @@ def test_dsv32_frozen_indexer_ablation():
     values = fam.initial_values(planned.program, cfg, backend, seed=11)
     before = {}
     wl_of = {}
-    from dataflow.tasks.layouts import dsv32_dense_weight_layout, dsv32_moe_weight_layout
+    from dataflow_training.blocks.layouts import dsv32_dense_weight_layout, dsv32_moe_weight_layout
     for i in range(cfg.n_layers):
         wl = (dsv32_dense_weight_layout(dims) if dims.kinds[i] == "dense"
               else dsv32_moe_weight_layout(dims))
@@ -415,10 +415,10 @@ def test_dsv32_dense_warmup_model_step():
     from dataflow.runtime import Engine
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.runtime.device.fake import FakeBackend
-    from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME, torch_view
-    from dataflow.tasks.layouts import dsv32_dense_weight_layout, dsv32_moe_weight_layout
-    from dataflow.training.families import resolve_family
-    from dataflow.training.planning import plan_program
+    from dataflow.runtime.interop import TORCH_DTYPE_BY_NAME, torch_view
+    from dataflow_training.blocks.layouts import dsv32_dense_weight_layout, dsv32_moe_weight_layout
+    from dataflow_training.model_families.families import resolve_family
+    from dataflow_training.lowering.planning import plan_program
 
     cfg = _tiny_cfg(sparse_mode=False)
     idx_only = ("w_idx_q", "w_idx_k", "idx_k_ln_w", "idx_k_ln_b", "w_idx_w")

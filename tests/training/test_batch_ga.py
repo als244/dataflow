@@ -11,13 +11,13 @@ if not torch.cuda.is_available():
 from dataflow.runtime import Engine  # noqa: E402
 from dataflow.runtime.device.cuda import CudaBackend  # noqa: E402
 from dataflow.runtime.device.fake import FakeBackend  # noqa: E402
-from dataflow.tasks.interop import torch_view  # noqa: E402
-from dataflow.tasks.models.llama3_blocks import build_resolver  # noqa: E402
-from dataflow.tasks import ops  # noqa: E402
-from dataflow.training.models.llama3 import dims_of, initial_values, lower_llama3  # noqa: E402
-from dataflow.training.planning import plan_program  # noqa: E402
-from dataflow.training.models.llama3 import ShapedLlamaConfig  # noqa: E402
-from dataflow.training.testing.gradcheck import rel_l2  # noqa: E402
+from dataflow.runtime.interop import torch_view  # noqa: E402
+from dataflow_training.model_families.llama3_blocks import build_resolver  # noqa: E402
+from dataflow_training.blocks import ops  # noqa: E402
+from dataflow_training.model_families.llama3 import dims_of, initial_values, lower_llama3  # noqa: E402
+from dataflow_training.lowering.planning import plan_program  # noqa: E402
+from dataflow_training.model_families.llama3 import ShapedLlamaConfig  # noqa: E402
+from dataflow_training.testing.gradcheck import rel_l2  # noqa: E402
 
 pytestmark = pytest.mark.gpu
 
@@ -46,10 +46,10 @@ def test_batch_ga_model_step_matches_reference():
     """Grad accumulation (2 rounds) through the engine == the isolated
     twin accumulating the same per-round losses — final params compared
     in twin-name space through the bridge."""
-    from dataflow.pretrain import bridges
-    from dataflow.pretrain.driver import adamw_field_step
-    from dataflow.tasks.base_blocks import AdamWHyper
-    from dataflow.training.testing.gradcheck import EngineFinalBytes
+    from dataflow_training.model_families import bridges
+    from dataflow_training.run.driver import adamw_field_step
+    from dataflow_training.blocks.base_blocks import AdamWHyper
+    from dataflow_training.testing.gradcheck import EngineFinalBytes
 
     dims = dims_of(CFG)
     program = lower_llama3(CFG)

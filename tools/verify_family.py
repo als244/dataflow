@@ -90,7 +90,7 @@ def main() -> None:
                          "dataflow.families entry point load automatically")
     args = ap.parse_args()
 
-    from dataflow.training import families as F
+    from dataflow_training.model_families import families as F
 
     F.load_plugins(explicit=[m for arg in (args.plugin or [])
                              for m in arg.split(",")])

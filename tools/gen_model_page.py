@@ -26,7 +26,7 @@ from gen_model_docs import (  # noqa: E402  (tools/ sibling import)
     shape_tag,
 )
 
-from dataflow.training import families as F
+from dataflow_training.model_families import families as F
 
 
 def main() -> None:

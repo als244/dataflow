@@ -15,7 +15,7 @@ torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
     pytest.skip("no CUDA device", allow_module_level=True)
 
-from dataflow.training.testing.gradcheck import (  # noqa: E402
+from dataflow_training.testing.gradcheck import (  # noqa: E402
     check_model_step,
     family_gate_kwargs,
     rel_l2,
@@ -25,13 +25,13 @@ pytestmark = pytest.mark.gpu
 
 
 def _tiny_cfg(**over):
-    from dataflow.training.models.qwen35moe import ShapedQwen35MoeConfig
+    from dataflow_training.model_families.qwen35moe import ShapedQwen35MoeConfig
 
     return replace(ShapedQwen35MoeConfig.tiny(), **over)
 
 
 def _tiny_dims(cfg=None):
-    from dataflow.training.models.qwen35moe import dims_of_qwen35moe
+    from dataflow_training.model_families.qwen35moe import dims_of_qwen35moe
 
     return dims_of_qwen35moe(cfg if cfg is not None else _tiny_cfg())
 
@@ -54,11 +54,11 @@ def _tiny_dims(cfg=None):
 
 
 def test_qwen35moe_stage_context_completeness():
-    from dataflow.tasks.layouts import (
+    from dataflow_training.blocks.layouts import (
         qwen35moe_attn_activation_layout,
         qwen35moe_lin_activation_layout,
     )
-    from dataflow.tasks.models.qwen35moe_blocks import Qwen35MoeAttnBlockFwd, Qwen35MoeLinBlockFwd
+    from dataflow_training.model_families.qwen35moe_blocks import Qwen35MoeAttnBlockFwd, Qwen35MoeLinBlockFwd
 
     dims = _tiny_dims()
     for cls, cl in (
@@ -75,8 +75,8 @@ def test_qwen35moe_stage_context_completeness():
 
 def test_qwen35moe_lowering_validates_and_plans():
     from dataflow.core import validate_program
-    from dataflow.training.families import resolve_family
-    from dataflow.training.planning import plan_program, simulate_program
+    from dataflow_training.model_families.families import resolve_family
+    from dataflow_training.lowering.planning import plan_program, simulate_program
 
     cfg = _tiny_cfg()
     fam = resolve_family(cfg)
@@ -149,9 +149,9 @@ def _run(engine_kwargs=None, resolver_wrapper=None, program=None, seed=7):
     from dataflow.runtime import Engine
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.runtime.device.fake import FakeBackend
-    from dataflow.tasks.interop import torch_view
-    from dataflow.training.families import resolve_family
-    from dataflow.training.planning import plan_program
+    from dataflow.runtime.interop import torch_view
+    from dataflow_training.model_families.families import resolve_family
+    from dataflow_training.lowering.planning import plan_program
 
     cfg = _tiny_cfg()
     fam = resolve_family(cfg)
@@ -172,7 +172,7 @@ def _run(engine_kwargs=None, resolver_wrapper=None, program=None, seed=7):
     )
     # mask alignment-padding gaps (8-byte A_log/dt_bias fields at tiny
     # scale — the qwen35 padding artifact; see test_qwen35_math._run35)
-    from dataflow.tasks.layouts import (
+    from dataflow_training.blocks.layouts import (
         head_weight_layout,
         qwen35moe_attn_weight_layout,
         qwen35moe_lin_weight_layout,
@@ -266,9 +266,9 @@ def test_qwen35moe_measured_costs_replan_still_golden():
     packed ctx with int32 routing fields) through the profile_fill hook;
     re-planning on measured costs must not change the math."""
     from dataflow.runtime.device.cuda import CudaBackend
-    from dataflow.training.families import resolve_family
-    from dataflow.training.planning import plan_program
-    from dataflow.training.profiling import apply_measured_costs, profile_program
+    from dataflow_training.model_families.families import resolve_family
+    from dataflow_training.lowering.planning import plan_program
+    from dataflow_training.run.profiling import apply_measured_costs, profile_program
 
     cfg = _tiny_cfg()
     fam = resolve_family(cfg)

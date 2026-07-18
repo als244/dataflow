@@ -1,8 +1,8 @@
 """Gates for the LR schedule: warmup->cosine shape, and BYTE-exact
 agreement with the engine's LRSchedule (the parity authority)."""
-from dataflow.pretrain.recipe import Recipe
-from dataflow.pretrain.schedule import CosineSchedule
-from dataflow.tasks.optim import LRSchedule
+from dataflow_training.run.recipe import Recipe
+from dataflow_training.run.schedule import CosineSchedule
+from dataflow_training.blocks.optim import LRSchedule
 
 
 def test_warmup_then_cosine_shape():

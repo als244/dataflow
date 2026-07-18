@@ -20,7 +20,7 @@ import time
 
 import torch
 
-from dataflow.tasks.kernels import KernelCtx, resolve_kernels
+from dataflow_training.kernels import KernelCtx, resolve_kernels
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 FLEX_KERNELS = ROOT / "refs/flextrain/flextrain/ops/_kernels/moe.py"

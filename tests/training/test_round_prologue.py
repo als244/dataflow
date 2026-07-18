@@ -10,8 +10,8 @@ from dataclasses import dataclass, replace
 import pytest
 
 from dataflow.core.validate import validate_program
-from dataflow.training.models.llama3 import ShapedLlamaConfig
-from dataflow.training.shaped_program import (
+from dataflow_training.model_families.llama3 import ShapedLlamaConfig
+from dataflow_training.lowering.shaped_program import (
     ShapedHardware,
     build_shaped_program,
     roofline_block_kind_spec,
@@ -101,12 +101,12 @@ def test_round_prologue_engine_e2e():
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.runtime.device.fake import FakeBackend
     from dataflow.runtime.engine import uniform_segments
-    from dataflow.tasks.base_blocks import RoundPrologue
-    from dataflow.tasks.interop import torch_view
-    from dataflow.tasks.models.llama3_blocks import build_resolver
-    from dataflow.training.lowering import apply_exact_sizes, size_of_factory
-    from dataflow.training.models.llama3 import family_layouts, initial_values
-    from dataflow.training.planning import plan_program
+    from dataflow_training.blocks.base_blocks import RoundPrologue
+    from dataflow.runtime.interop import torch_view
+    from dataflow_training.model_families.llama3_blocks import build_resolver
+    from dataflow_training.lowering.emit import apply_exact_sizes, size_of_factory
+    from dataflow_training.model_families.llama3 import family_layouts, initial_values
+    from dataflow_training.lowering.planning import plan_program
 
     cfg = TINY
     dims, fl = family_layouts(cfg)

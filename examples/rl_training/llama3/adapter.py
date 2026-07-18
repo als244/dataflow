@@ -5,7 +5,7 @@ from dataclasses import replace
 
 import torch
 
-from dataflow.training.models.llama3 import ShapedLlamaConfig
+from dataflow_training.model_families.llama3 import ShapedLlamaConfig
 
 from golden_base import GoldenLlama3
 

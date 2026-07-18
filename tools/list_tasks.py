@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import inspect
 
-from dataflow.training import families as F
+from dataflow_training.model_families import families as F
 
 HEADER = """# Task kinds: compute keys and executables
 

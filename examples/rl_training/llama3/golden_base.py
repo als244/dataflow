@@ -22,16 +22,16 @@ from dataclasses import dataclass, field
 
 import torch
 
-from dataflow.tasks import ops
-from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME
-from dataflow.tasks.layouts import (
+from dataflow_training.blocks import ops
+from dataflow.runtime.interop import TORCH_DTYPE_BY_NAME
+from dataflow_training.blocks.layouts import (
     LlamaDims,
     PackedLayout,
     embed_weight_layout,
     head_weight_layout,
     weight_layout,
 )
-from dataflow.tasks.base_blocks import AdamWHyper
+from dataflow_training.blocks.base_blocks import AdamWHyper
 
 Leaves = dict[str, torch.Tensor]
 
@@ -143,7 +143,7 @@ class GoldenLlama3:
         the muon recipe routes them to adamw by construction. Gradients
         round through their grad STORAGE dtype; slots live at the opt
         dtype (adamw m+v, muon m, sgd none, frozen nothing at all)."""
-        from dataflow.tasks.optim import reference_field_step
+        from dataflow_training.blocks.optim import reference_field_step
 
         ns = obj if obj in ("embed", "head") else None
         layer = int(obj.split("_")[1]) if obj.startswith("block_") else None

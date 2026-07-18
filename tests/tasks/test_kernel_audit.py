@@ -29,7 +29,7 @@ from typing import Callable
 
 import pytest
 
-from dataflow.tasks.kernels import registry as reg
+from dataflow_training.kernels import registry as reg
 
 torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
@@ -1135,11 +1135,11 @@ def test_every_registered_op_is_audited():
     import importlib
     import pkgutil
 
-    import dataflow.tasks.kernels as kernels_pkg
+    import dataflow_training.kernels as kernels_pkg
 
     for m in pkgutil.iter_modules(kernels_pkg.__path__):
         if m.name != "registry":
-            importlib.import_module(f"dataflow.tasks.kernels.{m.name}")
+            importlib.import_module(f"dataflow_training.kernels.{m.name}")
     all_ops = set(reg._REGISTRY)
     covered = set(CASES) | set(EXEMPT)
     missing = sorted(all_ops - covered)

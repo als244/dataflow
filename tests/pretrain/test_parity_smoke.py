@@ -10,10 +10,10 @@ import torch
 def test_reference_vs_service_parity_smoke():
     if not torch.cuda.is_available():
         pytest.skip("no CUDA")
-    from dataflow.pretrain import parity, presets as P
-    from dataflow.pretrain.driver import daemon_client, run_engine, run_reference
-    from dataflow.pretrain.fineweb import make_stream
-    from dataflow.pretrain.recipe import Recipe
+    from dataflow_training.run import parity, presets as P
+    from dataflow_training.run.driver import daemon_client, run_engine, run_reference
+    from dataflow_training.data.fineweb import make_stream
+    from dataflow_training.run.recipe import Recipe
 
     cfg = P.smoke_preset()
     steps = 15

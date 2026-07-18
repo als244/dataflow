@@ -16,8 +16,8 @@ torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
     pytest.skip("no CUDA device", allow_module_level=True)
 
-from dataflow.tasks import ops  # noqa: E402
-from dataflow.training.testing.gradcheck import rel_l2  # noqa: E402
+from dataflow_training.blocks import ops  # noqa: E402
+from dataflow_training.testing.gradcheck import rel_l2  # noqa: E402
 
 pytestmark = pytest.mark.gpu
 
@@ -151,7 +151,7 @@ def test_conv_and_l2norm_helpers_match_references():
 
 
 def _tiny_dims():
-    from dataflow.training.models.qwen35 import ShapedQwen35Config, dims_of_qwen35
+    from dataflow_training.model_families.qwen35 import ShapedQwen35Config, dims_of_qwen35
 
     return dims_of_qwen35(ShapedQwen35Config.tiny())
 
@@ -168,17 +168,17 @@ def _tiny_dims():
 def _tiny_cfg(**over):
     from dataclasses import replace
 
-    from dataflow.training.models.qwen35 import ShapedQwen35Config
+    from dataflow_training.model_families.qwen35 import ShapedQwen35Config
 
     return replace(ShapedQwen35Config.tiny(), **over)
 
 
 def test_qwen35_stage_context_completeness():
-    from dataflow.tasks.layouts import (
+    from dataflow_training.blocks.layouts import (
         qwen35_attn_activation_layout,
         qwen35_lin_activation_layout,
     )
-    from dataflow.tasks.models.qwen35_blocks import Qwen35AttnBlockFwd, Qwen35LinBlockFwd
+    from dataflow_training.model_families.qwen35_blocks import Qwen35AttnBlockFwd, Qwen35LinBlockFwd
 
     dims = _tiny_dims()
     for cls, cl in (
@@ -193,9 +193,9 @@ def test_qwen35_stage_context_completeness():
 
 def test_qwen35_lowering_validates_and_plans():
     from dataflow.core import validate_program
-    from dataflow.training.families import resolve_family
-    from dataflow.training.planning import plan_program, simulate_program
-    from dataflow.training.models.qwen35 import ShapedQwen35Config
+    from dataflow_training.model_families.families import resolve_family
+    from dataflow_training.lowering.planning import plan_program, simulate_program
+    from dataflow_training.model_families.qwen35 import ShapedQwen35Config
 
     # untied (the 9B default): separate W_head/O_head, bare-table W_embed
     cfg = _tiny_cfg()
@@ -222,8 +222,8 @@ def test_qwen35_lowering_validates_and_plans():
 def test_qwen35_tied_model_step_vs_golden():
     """The 2B-style tied variant stays golden-verified E2E (one W_embed
     leaf, head_bwd round-0 creates the shared dW_embed)."""
-    from dataflow.training.models.qwen35 import ShapedQwen35Config
-    from dataflow.training.testing.gradcheck import check_model_step, family_gate_kwargs
+    from dataflow_training.model_families.qwen35 import ShapedQwen35Config
+    from dataflow_training.testing.gradcheck import check_model_step, family_gate_kwargs
 
     kw = family_gate_kwargs("qwen35")
     # the tied config's state-path grads (A_log/dt_bias) draw ~0.9952
@@ -246,7 +246,7 @@ def test_qwen35_plan_invariance():
     far-future Belady candidate) until DeadlockError. Known byte-timing-inversion-class
     timing-inversion corner, loud not silent; 9B budgets show 0 evictions.
     12 MiB still forces offload traffic + the forced-recompute plan."""
-    from dataflow.training.testing.gradcheck import check_model_step, family_gate_kwargs
+    from dataflow_training.testing.gradcheck import check_model_step, family_gate_kwargs
 
     cfg = _tiny_cfg()
     r1 = check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
@@ -266,7 +266,7 @@ def test_qwen35_batch2_packed_sequences_vs_golden():
     """batch=2 packs two sequences into one token axis: cu_seqlens must reset
     the conv window and the DeltaNet recurrence at the boundary (the golden
     reference resets by construction — agreement pins the kernels do too)."""
-    from dataflow.training.testing.gradcheck import check_model_step, family_gate_kwargs
+    from dataflow_training.testing.gradcheck import check_model_step, family_gate_kwargs
 
     cfg = _tiny_cfg(batch=2, seq_len=64)
     check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
@@ -278,9 +278,9 @@ def _run35(engine_kwargs=None, resolver_wrapper=None, program=None, seed=7):
     from dataflow.runtime import Engine
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.runtime.device.fake import FakeBackend
-    from dataflow.tasks.interop import torch_view
-    from dataflow.training.families import resolve_family
-    from dataflow.training.planning import plan_program
+    from dataflow.runtime.interop import torch_view
+    from dataflow_training.model_families.families import resolve_family
+    from dataflow_training.lowering.planning import plan_program
 
     cfg = _tiny_cfg()
     fam = resolve_family(cfg)
@@ -306,7 +306,7 @@ def _run35(engine_kwargs=None, resolver_wrapper=None, program=None, seed=7):
     # contract; the gate compares the model. (llama3/qwen3 never had gaps —
     # every field size there is an alignment multiple; the qwen35 lin layout
     # has 8-byte A_log/dt_bias fields at tiny scale.)
-    from dataflow.tasks.layouts import (
+    from dataflow_training.blocks.layouts import (
         head_weight_layout,
         qwen35_attn_weight_layout,
         qwen35_lin_weight_layout,
@@ -393,9 +393,9 @@ def test_qwen35_measured_costs_replan_still_golden():
     """Profiling must handle the heterogeneous task set (linattn_*/gattn_*
     keys); re-planning on measured costs must not change the math."""
     from dataflow.runtime.device.cuda import CudaBackend
-    from dataflow.training.families import resolve_family
-    from dataflow.training.planning import plan_program
-    from dataflow.training.profiling import apply_measured_costs, profile_program
+    from dataflow_training.model_families.families import resolve_family
+    from dataflow_training.lowering.planning import plan_program
+    from dataflow_training.run.profiling import apply_measured_costs, profile_program
 
     cfg = _tiny_cfg()
     fam = resolve_family(cfg)

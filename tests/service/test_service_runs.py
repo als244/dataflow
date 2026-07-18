@@ -36,9 +36,9 @@ def _cfg_dict(cfg):
 def rig(tmp_path_factory):
     """Real daemon (2 GiB slab) + a registered tiny-llama step program
     + the parallel in-process reference pieces."""
-    from dataflow.training.families import resolve_family
-    from dataflow.training.models.llama3 import ShapedLlamaConfig
-    from dataflow.training.planning import plan_program
+    from dataflow_training.model_families.families import resolve_family
+    from dataflow_training.model_families.llama3 import ShapedLlamaConfig
+    from dataflow_training.lowering.planning import plan_program
 
     tmp = tmp_path_factory.mktemp("svc_runs")
     sock = str(tmp / "runs.sock")
@@ -163,9 +163,9 @@ def test_cancel_mid_run_leaves_healthy_daemon(rig):
     """Boundary-cancel during a real run: CANCELLED surfaces, partial
     state stays resident, and the very next run succeeds."""
     from dataflow.core.jsonio import program_to_dict as p2d
-    from dataflow.training.models.llama3 import ShapedLlamaConfig
-    from dataflow.training.planning import plan_program
-    from dataflow.training.families import resolve_family
+    from dataflow_training.model_families.llama3 import ShapedLlamaConfig
+    from dataflow_training.lowering.planning import plan_program
+    from dataflow_training.model_families.families import resolve_family
 
     big = dataclasses.replace(ShapedLlamaConfig.tiny(),
                               n_layers=8, seq_len=2048, batch=2,

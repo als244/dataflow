@@ -8,8 +8,8 @@ from dataflow.runtime.device.fake import FakeBackend
 from dataflow.runtime.placement import PlacementRecorder, compute_placement
 from dataflow.runtime.pool import BufferPool
 from dataflow.runtime.slab import SlabAllocator
-from dataflow.training.planning import plan_program
-from dataflow.training.models.llama3 import ShapedLlamaConfig, build_shaped_llama3
+from dataflow_training.lowering.planning import plan_program
+from dataflow_training.model_families.llama3 import ShapedLlamaConfig, build_shaped_llama3
 
 KB = 1024
 

@@ -19,7 +19,7 @@ torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
     pytest.skip("no CUDA device", allow_module_level=True)
 
-from dataflow.training.testing.gradcheck import (  # noqa: E402
+from dataflow_training.testing.gradcheck import (  # noqa: E402
     isolated_block_compare,
 )
 
@@ -45,7 +45,7 @@ EXCL_HOT_MAX = 3e-2
 def tiny_ragged_cfg(family: str):
     import importlib
 
-    mod = importlib.import_module(f"dataflow.training.models.{family}")
+    mod = importlib.import_module(f"dataflow_training.model_families.{family}")
     cfg_cls = next(v for k, v in vars(mod).items()
                    if k.startswith("Shaped") and k.endswith("Config"))
     cfg = cfg_cls.tiny()

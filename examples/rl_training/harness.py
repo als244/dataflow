@@ -38,12 +38,12 @@ from dataflow.core import save_program
 from dataflow.runtime import Engine
 from dataflow.runtime.device.cuda import CudaBackend
 from dataflow.runtime.device.fake import FakeBackend
-from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME, torch_view
-from dataflow.tasks.kernels import resolve_kernels
-from dataflow.tasks import ops
-from dataflow.training.families import family as family_of
-from dataflow.training.planning import plan_program
-from dataflow.training.testing.gradcheck import rel_l2
+from dataflow.runtime.interop import TORCH_DTYPE_BY_NAME, torch_view
+from dataflow_training.kernels import resolve_kernels
+from dataflow_training.blocks import ops
+from dataflow_training.model_families.families import family as family_of
+from dataflow_training.lowering.planning import plan_program
+from dataflow_training.testing.gradcheck import rel_l2
 
 from builder import build_rl_program
 from rl_ops import RLHeadLoss, rl_loss_reference
@@ -117,7 +117,7 @@ def make_artifacts(adapter, out_path: Path, *, seed=11, reward_seed=100):
     adv = torch.randn(dims.tokens, generator=g, device="cuda")
 
     m_bytes = {}
-    from dataflow.tasks.layouts import PackedLayout  # noqa: F401
+    from dataflow_training.blocks.layouts import PackedLayout  # noqa: F401
     for i in range(cfg.n_layers):
         fields = adapter.meta_fields(dims, i, captured)
         if fields:

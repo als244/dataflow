@@ -14,8 +14,8 @@ from __future__ import annotations
 
 import inspect
 
-from dataflow.tasks.kernels import registry as R
-from dataflow.tasks import kernels as K   # noqa: F401  (imports register all)
+from dataflow_training.kernels import registry as R
+from dataflow_training import kernels as K   # noqa: F401  (imports register all)
 
 HEADER = """# Kernel registry
 
@@ -59,7 +59,7 @@ def _doc(entry) -> str:
 def main() -> None:
     resolved = {}
     try:
-        from dataflow.tasks.kernels import resolve_kernels
+        from dataflow_training.kernels import resolve_kernels
 
         resolved = resolve_kernels().describe()
     except Exception:

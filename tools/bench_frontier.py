@@ -265,7 +265,7 @@ def render(cells, presets, devs, modes, labels) -> str:
 
 
 def main() -> None:
-    from dataflow.training.families import load_plugins
+    from dataflow_training.model_families.families import load_plugins
 
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)

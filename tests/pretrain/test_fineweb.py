@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 import torch
 
-from dataflow.pretrain import fineweb
+from dataflow_training.data import fineweb
 
 
 @pytest.fixture(scope="module")

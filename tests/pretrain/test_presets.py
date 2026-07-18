@@ -3,10 +3,10 @@ the locked token budget, cfg_dict round-trip, and that every preset lowers
 (planning of the full ladder is exercised by the runs / scaling tool)."""
 import pytest
 
-from dataflow.pretrain import presets as P
-from dataflow.training.families import resolve_family
-from dataflow.training.models.llama3 import ShapedLlamaConfig
-from dataflow.training.planning import plan_program
+from dataflow_training.run import presets as P
+from dataflow_training.model_families.families import resolve_family
+from dataflow_training.model_families.llama3 import ShapedLlamaConfig
+from dataflow_training.lowering.planning import plan_program
 
 GIB = 1024**3
 

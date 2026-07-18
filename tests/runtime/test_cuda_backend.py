@@ -10,8 +10,8 @@ if cudart.cudaGetDeviceCount()[0] != cudart.cudaError_t.cudaSuccess or cudart.cu
 from dataflow.runtime import Engine  # noqa: E402
 from dataflow.runtime.device.cuda import CudaBackend  # noqa: E402
 from dataflow.runtime.device.cuda_spin import SpinKernel, make_spin_resolver  # noqa: E402
-from dataflow.training.planning import plan_program, simulate_program  # noqa: E402
-from dataflow.training.models.llama3 import ShapedLlamaConfig, build_shaped_llama3  # noqa: E402
+from dataflow_training.lowering.planning import plan_program, simulate_program  # noqa: E402
+from dataflow_training.model_families.llama3 import ShapedLlamaConfig, build_shaped_llama3  # noqa: E402
 
 pytestmark = pytest.mark.gpu
 
@@ -123,7 +123,7 @@ def test_slab_flush_preserves_pending_poison_guard():
 
     from dataflow.runtime.device.cuda_spin import SpinKernel
     from dataflow.runtime.pool import BufferPool
-    from dataflow.tasks.interop import torch_view
+    from dataflow.runtime.interop import torch_view
 
     backend = CudaBackend()
     compute = backend.create_stream("compute")

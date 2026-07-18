@@ -20,10 +20,10 @@ def quiet_log(*args, **kwargs):
 
 
 def one_daemon_run(steps: int) -> list[float]:
-    from dataflow.pretrain.driver import daemon_client, run_engine
-    from dataflow.pretrain.fineweb import make_stream
-    from dataflow.pretrain.presets import qwen3_smoke_preset
-    from dataflow.pretrain.recipe import Recipe
+    from dataflow_training.run.driver import daemon_client, run_engine
+    from dataflow_training.data.fineweb import make_stream
+    from dataflow_training.run.presets import qwen3_smoke_preset
+    from dataflow_training.run.recipe import Recipe
 
     cfg = qwen3_smoke_preset()
     recipe = Recipe(peak_lr=3e-4, min_lr=3e-5, warmup_steps=2,

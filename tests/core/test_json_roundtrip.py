@@ -7,7 +7,7 @@ from dataflow.core import (
     save_program,
     validate_program,
 )
-from dataflow.training.models.llama3 import ShapedLlamaConfig, build_shaped_llama3
+from dataflow_training.model_families.llama3 import ShapedLlamaConfig, build_shaped_llama3
 
 
 def test_roundtrip_equality(tmp_path):
@@ -61,7 +61,7 @@ def test_comm_groups_roundtrip_and_validation():
     assert all("comm_groups" not in td
                for td in program_to_dict(program)["tasks"])
 
-    from dataflow.training.shaped_program import (
+    from dataflow_training.lowering.shaped_program import (
         ShapedHardware,
         build_shaped_program,
         roofline_block_kind_spec,

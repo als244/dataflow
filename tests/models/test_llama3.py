@@ -7,10 +7,10 @@ torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
     pytest.skip("no CUDA device", allow_module_level=True)
 
-from dataflow.tasks import ops  # noqa: E402
-from dataflow.tasks.layouts import LlamaDims  # noqa: E402
-from dataflow.training.models.llama3 import ShapedLlamaConfig  # noqa: E402
-from dataflow.training.testing.gradcheck import (  # noqa: E402
+from dataflow_training.blocks import ops  # noqa: E402
+from dataflow_training.blocks.layouts import LlamaDims  # noqa: E402
+from dataflow_training.model_families.llama3 import ShapedLlamaConfig  # noqa: E402
+from dataflow_training.testing.gradcheck import (  # noqa: E402
     check_block_backward,
     check_model_step,
     rel_l2,

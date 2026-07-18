@@ -16,9 +16,9 @@ from dataclasses import dataclass, field
 
 import torch
 
-from dataflow.tasks import ops
-from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME
-from dataflow.tasks.layouts import (
+from dataflow_training.blocks import ops
+from dataflow.runtime.interop import TORCH_DTYPE_BY_NAME
+from dataflow_training.blocks.layouts import (
     Dsv3Dims,
     Dsv32Dims,
     LlamaDims,
@@ -33,19 +33,19 @@ from dataflow.tasks.layouts import (
     olmoe_weight_layout,
     weight_layout,
 )
-from dataflow.tasks.base_blocks import AdamWHyper
-from dataflow.tasks.modules.dsa_reference import (
+from dataflow_training.blocks.base_blocks import AdamWHyper
+from dataflow_training.blocks.modules.dsa_reference import (
     dsa_attention_rows_reference,
     dsa_selection_mask_reference,
     dsa_index_scores_reference,
     dsa_indexer_kl_reference,
     dsa_sparse_attention_reference,
 )
-from dataflow.tasks.modules.mla_reference import (
+from dataflow_training.blocks.modules.mla_reference import (
     mla_attention_reference,
     mla_qkv_reference,
 )
-from dataflow.tasks.modules.moe.reference import moe_mlp_reference, moe_topk_reference
+from dataflow_training.blocks.modules.moe.reference import moe_mlp_reference, moe_topk_reference
 
 Leaves = dict[str, torch.Tensor]
 
@@ -164,7 +164,7 @@ class GoldenLlama3:
         the muon recipe routes them to adamw by construction. Gradients
         round through their grad STORAGE dtype; slots live at the opt
         dtype (adamw m+v, muon m, sgd none, frozen nothing at all)."""
-        from dataflow.tasks.optim import reference_field_step
+        from dataflow_training.blocks.optim import reference_field_step
 
         ns = obj if obj in ("embed", "head") else None
         layer = int(obj.split("_")[1]) if obj.startswith("block_") else None
@@ -205,7 +205,7 @@ class GoldenOlmoe(GoldenLlama3):
     packed-leaf handling and the exact AdamW replica). Block =
     qwen3-shaped attention with FULL-ROW qk-norm (one RMSNorm over the
     whole q/k rows) + the MoE SwiGLU tail composed from
-    ``dataflow.tasks.modules.moe.reference``.
+    ``dataflow_training.blocks.modules.moe.reference``.
 
     Aux load-balance loss: the AUTOGRAD OBJECTIVE is CE + sum of
     per-layer aux terms (f detached) — reproducing the runtime's
@@ -299,7 +299,7 @@ class GoldenDsv3(GoldenOlmoe):
         """Record this layer's per-expert assignment counts (detached) for
         the noaux router-bias speed rule applied at optimizer time.
         Inherited by every noaux-family golden (dsv32, glm52)."""
-        from dataflow.tasks.modules.moe.reference import router_counts_reference
+        from dataflow_training.blocks.modules.moe.reference import router_counts_reference
 
         if not hasattr(self, "_pending_counts"):
             self._pending_counts = []

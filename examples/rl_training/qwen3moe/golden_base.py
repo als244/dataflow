@@ -16,9 +16,9 @@ from dataclasses import dataclass, field
 
 import torch
 
-from dataflow.tasks import ops
-from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME
-from dataflow.tasks.layouts import (
+from dataflow_training.blocks import ops
+from dataflow.runtime.interop import TORCH_DTYPE_BY_NAME
+from dataflow_training.blocks.layouts import (
     LlamaDims,
     OlmoeDims,
     PackedLayout,
@@ -29,8 +29,8 @@ from dataflow.tasks.layouts import (
     qwen3moe_weight_layout,
     weight_layout,
 )
-from dataflow.tasks.base_blocks import AdamWHyper
-from dataflow.tasks.modules.moe.reference import moe_mlp_reference
+from dataflow_training.blocks.base_blocks import AdamWHyper
+from dataflow_training.blocks.modules.moe.reference import moe_mlp_reference
 
 Leaves = dict[str, torch.Tensor]
 
@@ -149,7 +149,7 @@ class GoldenLlama3:
         the muon recipe routes them to adamw by construction. Gradients
         round through their grad STORAGE dtype; slots live at the opt
         dtype (adamw m+v, muon m, sgd none, frozen nothing at all)."""
-        from dataflow.tasks.optim import reference_field_step
+        from dataflow_training.blocks.optim import reference_field_step
 
         ns = obj if obj in ("embed", "head") else None
         layer = int(obj.split("_")[1]) if obj.startswith("block_") else None
@@ -190,7 +190,7 @@ class GoldenOlmoe(GoldenLlama3):
     packed-leaf handling and the exact AdamW replica). Block =
     qwen3-shaped attention with FULL-ROW qk-norm (one RMSNorm over the
     whole q/k rows) + the MoE SwiGLU tail composed from
-    ``dataflow.tasks.modules.moe.reference`` (routing modes,
+    ``dataflow_training.blocks.modules.moe.reference`` (routing modes,
     smallest-index tie-break, fp32 combine, shared-expert and aux-loss
     semantics all pinned there).
 
@@ -264,7 +264,7 @@ class GoldenQwen3Moe(GoldenOlmoe):
     inherited unchanged). The block differs only in attention: qwen3's
     PER-HEAD qk-norm (one shared ``(head_dim,)`` weight for q and one for
     k, applied over head_dim-wide rows) with GQA and rope 1e6. The MoE
-    tail is composed from ``dataflow.tasks.modules.moe.reference`` with
+    tail is composed from ``dataflow_training.blocks.modules.moe.reference`` with
     ``topk_then_softmax`` (norm_topk_prob=true) and NO shared expert."""
 
     dims: Qwen3MoeDims  # re-typed; position and (lack of) default inherited

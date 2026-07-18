@@ -1,5 +1,5 @@
 """Ladder 1 for the pluggable MoE module: every op fwd AND bwd pinned
-against dataflow.tasks.modules.moe.reference + autograd, then the full tail
+against dataflow_training.blocks.modules.moe.reference + autograd, then the full tail
 (stages + moe_mlp_tail_bwd) against moe_mlp_reference — family-independent.
 
 Pinned contracts:
@@ -31,9 +31,9 @@ if not torch.cuda.is_available():  # pragma: no cover
 
 pytestmark = pytest.mark.gpu
 
-from dataflow.tasks import ops
-from dataflow.tasks.kernels import KernelCtx, resolve_kernels
-from dataflow.tasks.modules.moe import (
+from dataflow_training.blocks import ops
+from dataflow_training.kernels import KernelCtx, resolve_kernels
+from dataflow_training.blocks.modules.moe import (
     MOE_SHARED_STAGES,
     MOE_STAGES,
     MoESpec,
@@ -45,7 +45,7 @@ from dataflow.tasks.modules.moe import (
     moe_topk_reference,
     moe_weight_specs,
 )
-from dataflow.training.testing.gradcheck import rel_l2
+from dataflow_training.testing.gradcheck import rel_l2
 
 MODES = ("topk_then_softmax", "softmax_then_topk")
 _MOE_OPS = (
@@ -552,8 +552,8 @@ def test_spec_validation():
 
 
 def test_topk_sigmoid_noaux_kernel_vs_reference_and_semantics():
-    from dataflow.tasks.kernels import KernelCtx, resolve_kernels
-    from dataflow.tasks.modules.moe.reference import moe_topk_reference
+    from dataflow_training.kernels import KernelCtx, resolve_kernels
+    from dataflow_training.blocks.modules.moe.reference import moe_topk_reference
 
     K = resolve_kernels()
     kctx = KernelCtx()
@@ -617,8 +617,8 @@ def test_topk_sigmoid_noaux_kernel_vs_reference_and_semantics():
 
 
 def test_router_bwd_sigmoid_vs_autograd():
-    from dataflow.tasks.kernels import KernelCtx, resolve_kernels
-    from dataflow.tasks.modules.moe.reference import moe_topk_reference
+    from dataflow_training.kernels import KernelCtx, resolve_kernels
+    from dataflow_training.blocks.modules.moe.reference import moe_topk_reference
 
     K = resolve_kernels()
     kctx = KernelCtx()
@@ -649,8 +649,8 @@ def test_router_bwd_sigmoid_vs_autograd():
 
 
 def test_seq_aux_grad_vs_autograd():
-    from dataflow.tasks.kernels import KernelCtx, resolve_kernels
-    from dataflow.tasks.modules.moe.reference import (
+    from dataflow_training.kernels import KernelCtx, resolve_kernels
+    from dataflow_training.blocks.modules.moe.reference import (
         moe_seq_aux_loss_reference,
         moe_topk_reference,
     )
@@ -699,7 +699,7 @@ def test_bias_update_rule_per_step_counts():
     """The V3 sign rule as the moe bwd tail applies it: reading the
     persistent Aux counts (the STEP aggregate) and nudging the bias in W —
     once, on the last round (the grammar hands the Aux input only there)."""
-    from dataflow.tasks.modules.moe.spec import MoESpec, moe_aux_layout
+    from dataflow_training.blocks.modules.moe.spec import MoESpec, moe_aux_layout
 
     class CountsDims:
         moe = MoESpec(n_experts=4, top_k=2, d_ff_expert=8,
@@ -724,8 +724,8 @@ def test_bias_update_rule_per_step_counts():
 
 
 def test_moe_mlp_reference_ungated_shared_and_noaux_mode():
-    from dataflow.tasks.modules.moe.reference import moe_mlp_reference
-    from dataflow.tasks.modules.moe.spec import MoESpec
+    from dataflow_training.blocks.modules.moe.reference import moe_mlp_reference
+    from dataflow_training.blocks.modules.moe.spec import MoESpec
 
     torch.manual_seed(7)
     t, d, e, k, f, fs = 24, 32, 8, 2, 16, 16

@@ -10,13 +10,13 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from dataflow.pretrain.sharding import (
+from dataflow_training.distributed.sharding import (
     layer_fields_by_root,
     tp_mlp_shards,
     tp_view,
 )
-from dataflow.training.lowering import fill_weight_fields
-from dataflow.training.models.llama3 import (
+from dataflow_training.lowering.emit import fill_weight_fields
+from dataflow_training.model_families.llama3 import (
     ShapedLlamaConfig,
     family_layouts,
     tp_fill_slices,

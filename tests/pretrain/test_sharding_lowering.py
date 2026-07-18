@@ -10,9 +10,9 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from dataflow.core.jsonio import program_to_dict
-from dataflow.pretrain.fleet import lower_with_group
-from dataflow.pretrain.presets import preset
-from dataflow.pretrain.sharding import (
+from dataflow_training.distributed.fleet import lower_with_group
+from dataflow_training.run.presets import preset
+from dataflow_training.distributed.sharding import (
     ParallelConfig,
     layer_fields_by_root,
     zero1_halves,
@@ -109,7 +109,7 @@ def test_programs_json_serializable_and_plain_unchanged():
 
 
 def test_tp_lowering_params_sizes_and_serialization():
-    from dataflow.pretrain.sharding import tp_mlp_shards
+    from dataflow_training.distributed.sharding import tp_mlp_shards
 
     plan = tp_mlp_shards(layer_fields_by_root(CFG), "dp", 2)
     plan.consumable("tp")
@@ -157,9 +157,9 @@ def test_tp_lowering_params_sizes_and_serialization():
 def test_runtime_o_layout_matches_lowered_size():
     """The AdamW block sizes its O layout from the SAME update_regions
     the lowering used — assert the contract holds field by field."""
-    from dataflow.pretrain.sharding import update_regions
-    from dataflow.tasks.layouts import opt_state_layout
-    from dataflow.training.models.llama3 import family_layouts
+    from dataflow_training.distributed.sharding import update_regions
+    from dataflow_training.blocks.layouts import opt_state_layout
+    from dataflow_training.model_families.llama3 import family_layouts
 
     plan, (r0, _) = two_rank_builds()
     dims, fl = family_layouts(CFG)
