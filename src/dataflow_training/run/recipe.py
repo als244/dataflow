@@ -41,7 +41,7 @@ class Recipe:
             warmup_steps=self.warmup_steps, total_steps=self.total_steps,
         )
 
-    def lr_at(self, step: int) -> float:
+    def lr(self, step: int) -> float:
         """Absolute LR for the 0-indexed optimizer ``step`` (both backends)."""
         return self.schedule()(step)
 
@@ -60,7 +60,7 @@ class Recipe:
     def hyper_spec(self) -> dict:
         """JSON-able hyper for the wire resolver spec
         (``register_program(resolver={..., "hyper": recipe.hyper_spec()})``);
-        ``bridge.resolver_for`` rebuilds an ``AdamWHyper`` + ``LRSchedule``
+        the registered resolver build rebuilds an ``AdamWHyper`` + ``LRSchedule``
         from it. Kept in lock-step with ``base_hyper``."""
         return {
             "lr": self.peak_lr,

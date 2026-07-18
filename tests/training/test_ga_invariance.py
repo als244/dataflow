@@ -72,7 +72,7 @@ def run_partitioned(cfg, valid_rows, *, steps: int, seed: int = 7):
     across however many rounds the config partitions them into. Returns
     ({W_i: {field: cpu tensor}}, loss_0_0 scalar)."""
     fam = resolve_family(cfg)
-    dims = fam.dims_of(cfg)
+    dims = fam.derive_dims(cfg)
     program = fam.lower(replace(cfg, num_steps=steps))
     program = replace(program, final_locations={
         **program.final_locations, "loss_0_0": "backing"})

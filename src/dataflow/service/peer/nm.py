@@ -422,7 +422,7 @@ class NetworkManager:
             out[rec.name] = rec.handle
         return out
 
-    def comm_of(self, name: str):
+    def lookup_comm(self, name: str):
         with self.groups.lock:
             rec = self.groups.groups.get(name)
         if rec is None or not rec.ready or rec.error is not None:
@@ -656,7 +656,7 @@ class NetworkManager:
                     self.record_bw(link, "rdma", float(msg["gbps"]))
                 continue
             if kind == "COLL":
-                comm = self.comm_of(msg["group"])
+                comm = self.lookup_comm(msg["group"])
                 if comm is not None:
                     comm.deliver(msg, payload or b"")
                 continue

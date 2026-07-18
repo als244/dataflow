@@ -132,7 +132,7 @@ def _ctx_tensors(cl) -> dict[str, torch.Tensor]:
 def check_block_backward(dims, *, family=None, seed: int = 0, tol: float = 3e-2) -> CheckReport:
     """Ladder level 2 for the transformer block (fwd/bwd/recompute/accum).
 
-    ``family`` is a `dataflow_training.model_families.families.Family`; defaults to llama3
+    ``family`` is a `dataflow_training.model_families.families.ModelFamily`; defaults to llama3
     (back-compat for existing callers passing bare LlamaDims)."""
     from dataflow_training.kernels import KernelCtx, resolve_kernels
 
@@ -156,7 +156,7 @@ def check_block_backward(dims, *, family=None, seed: int = 0, tol: float = 3e-2)
 
     # ONE materialized Segments handed to BOTH sides (bypassing launch, this
     # gate supplies the varlen metadata the engine prologue normally would)
-    seg = Segments.of_dims(dims).on("cuda")
+    seg = Segments.from_dims(dims).on("cuda")
 
     # our forward with saved context
     a = _ctx_tensors(family.activation_layout(dims))
@@ -248,7 +248,7 @@ def reference_model_step(cfg, values, *, seq_lens=None,
     from dataflow_training.model_families.families import resolve_family
 
     fam = resolve_family(cfg)
-    dims = fam.dims_of(cfg)
+    dims = fam.derive_dims(cfg)
     if model is None:
         model = bridges.build_reference_model(cfg)
     bridges.load_reference_init(model, cfg, dims,
@@ -427,7 +427,7 @@ def isolated_block_compare(cfg, isolate, *, seed: int = 0,
     from dataflow_training.lowering.planning import plan_program
 
     fam = resolve_family(cfg)
-    dims = fam.dims_of(cfg)
+    dims = fam.derive_dims(cfg)
     program = fam.lower(cfg)
     keep = {o.id for t in program.tasks for o in t.outputs
             if o.id.startswith("y_")}
@@ -696,7 +696,7 @@ def check_model_step(
         cfg = dc_replace(cfg, aux_coef=0.0)
 
     fam = resolve_family(cfg)
-    dims = fam.dims_of(cfg)
+    dims = fam.derive_dims(cfg)
     program = fam.lower(cfg, recompute_levels=recompute_levels)
     # retain the gradient slabs: dW ids in final_locations survive pool
     # recycling after the optimizer consumes them, enabling the direct

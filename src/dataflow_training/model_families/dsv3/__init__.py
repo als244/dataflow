@@ -8,7 +8,7 @@ registry thunk in ``..families``.
 """
 from .model import (  # noqa: F401
     ShapedDsv3Config,
-    dims_of_dsv3,
+    derive_dims,
     family_layouts,
     initial_values_dsv3,
     lower_dsv3,

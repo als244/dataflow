@@ -314,7 +314,7 @@ def gen_page(name: str, preset: str, record: bool,
     cls = fam.config_type
     cfg = dataclasses.replace(getattr(cls, preset)(),
                               seq_len=seq_len, batch=batch)
-    dims = fam.dims_of(cfg)
+    dims = fam.derive_dims(cfg)
     prog = fam.lower(cfg)
     resolver = fam.build_resolver(dims)
     sizes = prog.object_sizes()
@@ -331,7 +331,7 @@ def gen_page(name: str, preset: str, record: bool,
                 # trace at TINY dims: sequences are dims-invariant per
                 # task kind; one trace per family, shared by its pages
                 tiny_cfg = cls.tiny()
-                tiny_dims = fam.dims_of(tiny_cfg)
+                tiny_dims = fam.derive_dims(tiny_cfg)
                 kern_seqs = record_kernel_seqs(
                     fam, tiny_cfg, tiny_dims, fam.lower(tiny_cfg))
             except Exception as exc:

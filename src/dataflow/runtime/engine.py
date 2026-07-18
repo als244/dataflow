@@ -112,7 +112,7 @@ class Session:
     # multiplies the scratch cache by the number of steps
     streams: tuple | None = None
 
-    def streams_for(self) -> tuple:
+    def ensure_streams(self) -> tuple:
         if self.streams is None:
             self.streams = (
                 self.backend.create_stream("compute"),
@@ -121,7 +121,7 @@ class Session:
             )
         return self.streams
 
-    def pool_for(
+    def ensure_pool(
         self, program: Program, *, placed: bool = False, vmm: bool = False
     ) -> "BufferPool":
         caps = {}
@@ -203,7 +203,7 @@ class Engine:
         initial_buffers = dict(initial_buffers or {})
 
         if self.session is not None:
-            compute, h2d_stream, d2h_stream = self.session.streams_for()
+            compute, h2d_stream, d2h_stream = self.session.ensure_streams()
         else:
             compute = self.backend.create_stream("compute")
             h2d_stream = self.backend.create_stream("h2d")
@@ -223,7 +223,7 @@ class Engine:
         if self.session is not None:
             if self.session.backend is not self.backend:
                 raise ValueError("session backend differs from engine backend")
-            pool = self.session.pool_for(
+            pool = self.session.ensure_pool(
                 program, placed=placement is not None, vmm=vmm,
             )
         else:

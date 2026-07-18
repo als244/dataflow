@@ -58,9 +58,9 @@ def to_glm52_state_dict(cfg, get_bytes) -> dict:
     (kind-dispatched: gdl / gml leaders with idx fields, gmf followers
     without)."""
     from dataflow_training.blocks.layouts import embed_weight_layout, head_weight_layout
-    from .model import _weight_layout_for, dims_of_glm52
+    from .model import kind_weight_layout, derive_dims
 
-    dims = dims_of_glm52(cfg)
+    dims = derive_dims(cfg)
     sd: dict[str, torch.Tensor] = {}
     ew = embed_weight_layout(dims).unpack_tensor(get_bytes("W_embed"))
     sd["embed.weight"] = ew["w"].clone()
@@ -70,7 +70,7 @@ def to_glm52_state_dict(cfg, get_bytes) -> dict:
     for i in range(cfg.n_layers):
         p = f"blocks.{i}"
         kind = dims.kinds[i]                       # gdl | gml | gmf
-        w = _weight_layout_for(dims, kind).unpack_tensor(get_bytes(f"W_{i}"))
+        w = kind_weight_layout(dims, kind).unpack_tensor(get_bytes(f"W_{i}"))
         sd[f"{p}.attn_norm.weight"] = w["attn_norm_w"].clone()
         sd[f"{p}.attn.w_q_a.weight"] = transposed(w["w_q_a"])
         sd[f"{p}.attn.q_a_norm.weight"] = w["q_a_norm_w"].clone()

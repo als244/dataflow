@@ -76,7 +76,7 @@ register(
 )
 
 
-def _segments_of(cu_seqlens):
+def rebuild_segments(cu_seqlens):
     """Rebuild the round's Segments from the conv kernel's cu_seqlens (device
     int tensor); None = one sequence. Eager fallback only (tiny-scale
     correctness path), so the device->host read is acceptable."""
@@ -86,14 +86,14 @@ def _segments_of(cu_seqlens):
 
 
 def _eager_fwd(kctx, x, w, out, cu_seqlens):
-    out.copy_(ops.causal_conv1d_silu_reference(x, w, segments=_segments_of(cu_seqlens)))
+    out.copy_(ops.causal_conv1d_silu_reference(x, w, segments=rebuild_segments(cu_seqlens)))
 
 
 def _eager_bwd(kctx, x, dy, w, dx_out, dw_out, cu_seqlens):
     with torch.enable_grad():
         x_l = x.detach().requires_grad_()
         w_l = w.detach().requires_grad_()
-        y = ops.causal_conv1d_silu_reference(x_l, w_l, segments=_segments_of(cu_seqlens))
+        y = ops.causal_conv1d_silu_reference(x_l, w_l, segments=rebuild_segments(cu_seqlens))
     dx, dw = torch.autograd.grad(y, (x_l, w_l), grad_outputs=dy)
     dx_out.copy_(dx)
     dw_out.copy_(dw.to(dw_out.dtype))

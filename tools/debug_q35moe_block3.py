@@ -39,7 +39,7 @@ def main() -> int:
 
     cfg = ShapedQwen35MoeConfig.tiny()
     fam = resolve_family(cfg)
-    dims = fam.dims_of(cfg)
+    dims = fam.derive_dims(cfg)
     program = fam.lower(cfg)
     keep = {o.id for t in program.tasks for o in t.outputs
             if o.id.startswith("y_")}

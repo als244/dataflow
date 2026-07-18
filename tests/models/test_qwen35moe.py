@@ -31,9 +31,9 @@ def _tiny_cfg(**over):
 
 
 def _tiny_dims(cfg=None):
-    from dataflow_training.model_families.qwen35moe import dims_of_qwen35moe
+    from dataflow_training.model_families.qwen35moe import derive_dims
 
-    return dims_of_qwen35moe(cfg if cfg is not None else _tiny_cfg())
+    return derive_dims(cfg if cfg is not None else _tiny_cfg())
 
 
 # --- golden self-consistency -----------------------------------------------------
@@ -162,13 +162,13 @@ def _run(engine_kwargs=None, resolver_wrapper=None, program=None, seed=7):
     backend = CudaBackend()
     values = fam.initial_values(prog, cfg, backend, seed=seed)
     dry = Engine(FakeBackend()).execute(prog, initial_buffers=values)
-    resolver = fam.build_resolver(fam.dims_of(cfg))
+    resolver = fam.build_resolver(fam.derive_dims(cfg))
     if resolver_wrapper is not None:
         resolver = resolver_wrapper(resolver, backend)
     from dataflow_training.data.segments import uniform_segments
     result = Engine(backend, **(engine_kwargs or {})).execute(
         prog, resolver=resolver, initial_buffers=values, pool_prewarm=dry.pool_demand,
-        run_args={"segments": uniform_segments(fam.dims_of(cfg), prog)},
+        run_args={"segments": uniform_segments(fam.derive_dims(cfg), prog)},
     )
     # mask alignment-padding gaps (8-byte A_log/dt_bias fields at tiny
     # scale — the qwen35 padding artifact; see test_qwen35_math._run35)
@@ -178,7 +178,7 @@ def _run(engine_kwargs=None, resolver_wrapper=None, program=None, seed=7):
         qwen35moe_lin_weight_layout,
     )
 
-    dims = fam.dims_of(cfg)
+    dims = fam.derive_dims(cfg)
 
     def masked(flat, layout):
         if layout is None:
@@ -274,7 +274,7 @@ def test_qwen35moe_measured_costs_replan_still_golden():
     fam = resolve_family(cfg)
     program = fam.lower(cfg)
     backend = CudaBackend()
-    profiles = profile_program(program, fam.build_resolver(fam.dims_of(cfg)), backend, soak_seconds=0)
+    profiles = profile_program(program, fam.build_resolver(fam.derive_dims(cfg)), backend, soak_seconds=0)
     measured = apply_measured_costs(program, profiles)
     assert all("measured" in t.metadata for t in measured.tasks)
 

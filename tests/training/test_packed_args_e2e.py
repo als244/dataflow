@@ -91,7 +91,7 @@ def test_packed_mode_materializes_positions_once(monkeypatch):
 
     monkeypatch.setattr(Segments, "on", counting_on)
     result = Engine(backend).execute(
-        planned.program, resolver=fam.build_resolver(fam.dims_of(cfg)),
+        planned.program, resolver=fam.build_resolver(fam.derive_dims(cfg)),
         initial_buffers=values, pool_prewarm=dry.pool_demand,
         run_args=RA)
     # one round -> one distinct segmentation -> a single materialization

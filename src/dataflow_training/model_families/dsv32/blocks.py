@@ -186,7 +186,7 @@ class Dsv32ProfileFill(MoEProfileFill):
                 lo_of = torch.empty(d.tokens, dtype=torch.long, device="cuda")
                 lo = 0
                 # profiler seed data: dims-derived (uniform) per-seq lengths
-                for L in ops.Segments.of_dims(d).lengths:
+                for L in ops.Segments.from_dims(d).lengths:
                     lo_of[lo:lo + L] = lo
                     lo += L
                 idx.copy_(torch.maximum(rows - offs,
@@ -597,17 +597,17 @@ class _WarmupKLMixin:
             a = self.cl.views(self._in(ctx, 0))
             x = torch_view(self._in(ctx, 1), (d.tokens, d.d_model),
                            torch.bfloat16)
-            w = self.wl_for(ctx.task).views(self._in(ctx, 2))
+            w = self.task_weight_layout(ctx.task).views(self._in(ctx, 2))
             dw = None
             accum = False
             for m in ctx.task.mutates:
                 if m.startswith("dW_"):
-                    dw = self.gl_for(ctx.task).views(ctx.mutates[m])
+                    dw = self.task_grad_layout(ctx.task).views(ctx.mutates[m])
                     accum = True
             if dw is None:
                 for j, o in enumerate(ctx.task.outputs):
                     if o.id.startswith("dW_"):
-                        dw = self.gl_for(ctx.task).views(self._out(ctx, j))
+                        dw = self.task_grad_layout(ctx.task).views(self._out(ctx, j))
             aux_temp = self._aux_temp_state(ctx) or {}
             lv, lcreate = None, False
             for j, o in enumerate(ctx.task.outputs):
@@ -736,7 +736,7 @@ def build_dsv32_resolver(
             "in dense mode would train nothing"
         )
     def _opt_layout(d, task, size):
-        layer = AdamWStep.layer_of(task)
+        layer = AdamWStep.parse_layer(task)
         if d.kinds[layer] == "dense":
             return dsv32_dense_weight_layout(d, layer=layer), None
         return dsv32_moe_weight_layout(d, layer=layer), None
@@ -771,7 +771,7 @@ def build_dsv32_resolver(
         "head_loss": HeadLoss(dims, kernels),
         "embed_bwd": EmbedBwd(dims, kernels),
         "optimizer_block": AdamWStep(
-            dims, kernels, hyper, layout_for=_opt_layout,
+            dims, kernels, hyper, resolve_layout=_opt_layout,
         ),
         "optimizer_embed": opt_embed,
         "optimizer_head": opt_head,

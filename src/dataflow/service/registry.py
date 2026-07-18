@@ -13,9 +13,6 @@ Workloads register at import time (the daemon default-loads
 register more). Unknown kinds fail loudly, naming what IS registered.
 The engine never learns family/model vocabulary — that all lives
 behind the build callables.
-
-(The lookup keeps the historical name ``resolver_for`` until the
-repo-wide rename batch.)
 """
 from __future__ import annotations
 
@@ -40,7 +37,7 @@ def registered_kinds() -> list[str]:
     return sorted(_BUILDS)
 
 
-def resolver_for(spec: dict):
+def lookup_resolver(spec: dict):
     """Resolve a registered kind's build over ``spec`` (cached by the
     spec's canonical JSON — builds are pure functions of their spec)."""
     kind = spec.get("kind")

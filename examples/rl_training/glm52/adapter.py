@@ -5,7 +5,7 @@ from dataclasses import replace
 
 import torch
 
-from dataflow_training.blocks.modules.dsa_reference import dsa_mask_from_idx
+from dataflow_training.blocks.modules.dsa_forms import dsa_mask_from_idx
 from dataflow_training.blocks.layouts import glm52_aux_temp_layout
 from dataflow_training.model_families.glm52 import ShapedGlm52Config
 
@@ -69,7 +69,7 @@ def pin(golden, captured):
 def prep_layer(golden, i):
     d = golden.dims
     golden._layer_ptr = i
-    lead = d.leader_of(i)
+    lead = d.leader_index(i)
     golden._group_mask = dsa_mask_from_idx(
         golden.saved["sel"][lead].cuda(), d, d.tokens)
     golden._group_scores = None

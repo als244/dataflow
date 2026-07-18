@@ -214,8 +214,8 @@ def build_qwen3_resolver(
         "embed_bwd": EmbedBwd(dims, kernels),
         "optimizer_block": AdamWStep(
             dims, kernels, hyper,
-            layout_for=lambda d, task, size: (
-                qwen3_weight_layout(d, layer=AdamWStep.layer_of(task)), None,
+            resolve_layout=lambda d, task, size: (
+                qwen3_weight_layout(d, layer=AdamWStep.parse_layer(task)), None,
             ),
         ),
         "optimizer_embed": AdamWStep(dims, kernels, hyper, kind="embed"),

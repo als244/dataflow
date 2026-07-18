@@ -69,7 +69,7 @@ def install(server) -> None:
                                "release second-writer audit")
         dest = a.get("as_id") or oid
         store.acquire_leases([oid])
-        src_ptr = store.ptr_of(rec) if store.slab is not None else None
+        src_ptr = store.host_ptr(rec) if store.slab is not None else None
         try:
             send_id = m.start_send(
                 a["peer_id"], dest, store.view(rec),

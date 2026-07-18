@@ -67,7 +67,7 @@ def run_step(cfg, seed=7, *, steps_in_program=1, recompute_levels=None,
     dW_0_0's fields when ``pin_dw0`` — gradient-level observation without
     optimizer/bf16-weight-quantum masking)."""
     fam = resolve_family(cfg)
-    dims = fam.dims_of(cfg)
+    dims = fam.derive_dims(cfg)
     program = fam.lower(replace(cfg, num_steps=steps_in_program),
                         recompute_levels=recompute_levels)
     if pin_dw0:
@@ -106,9 +106,9 @@ def run_step(cfg, seed=7, *, steps_in_program=1, recompute_levels=None,
     if pin_dw0:
         from dataflow_training.blocks.layouts import grad_layout
         for li in (0, 1):
-            gl = grad_layout(fl.layers[li].weights, fam.dims_of(cfg).dtypes,
+            gl = grad_layout(fl.layers[li].weights, fam.derive_dims(cfg).dtypes,
                              layer=li,
-                             opt_policy=getattr(fam.dims_of(cfg),
+                             opt_policy=getattr(fam.derive_dims(cfg),
                                                 "opt_policy", None))
             grec = result.objects.get(f"dW_0_{li}")
             gslot = grec.backing or grec.fast
@@ -132,7 +132,7 @@ def run_step(cfg, seed=7, *, steps_in_program=1, recompute_levels=None,
                 f.name: torch_view(aslot.buffer, f.shape,
                                    TORCH_DTYPE_BY_NAME[f.dtype],
                                    offset_bytes=f.offset_bytes).clone().cpu()
-                for f in moe_aux_layout(fam.dims_of(cfg), fam.dims_of(cfg).moe).fields}
+                for f in moe_aux_layout(fam.derive_dims(cfg), fam.derive_dims(cfg).moe).fields}
     result.close()
     for buf in values.values():
         backend.free(buf)

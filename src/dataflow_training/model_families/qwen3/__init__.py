@@ -7,7 +7,7 @@ solely by its registry thunk in ``..families``.
 """
 from .model import (  # noqa: F401
     ShapedQwen3Config,
-    dims_of_qwen3,
+    derive_dims,
     initial_values_qwen3,
     lower_qwen3,
 )

@@ -147,7 +147,7 @@ class BlockFwd(_Base):
         es, kctx = self._stream_ctx(ctx)
         with torch.cuda.stream(es):
             x = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
-            w = self.wl_for(ctx.task).views(self._in(ctx, 1))
+            w = self.task_weight_layout(ctx.task).views(self._in(ctx, 1))
             y = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
             a = None
             if self.emit_context:
@@ -156,11 +156,11 @@ class BlockFwd(_Base):
                 # planning while keeping the metadata)
                 for j, o in enumerate(ctx.task.outputs[1:], start=1):
                     if o.id.startswith("A_"):
-                        a = self.cl_for(ctx.task).views(self._out(ctx, j))
+                        a = self.task_context_layout(ctx.task).views(self._out(ctx, j))
                         break
             extras = self._aux_temp_state(ctx) or {}
             extras["seg"] = self._attn_meta(ctx)
-            extras["lin"] = self.linears(self.layer_of(ctx.task))
+            extras["lin"] = self.linears(self.parse_layer(ctx.task))
             aux_counts = self._aux_counts_state(ctx)
             if aux_counts is not None:
                 extras["aux_counts"] = aux_counts
@@ -336,11 +336,11 @@ class BlockRecompute(BlockFwd):
         es, kctx = self._stream_ctx(ctx)
         with torch.cuda.stream(es):
             x = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
-            w = self.wl_for(ctx.task).views(self._in(ctx, 1))
-            a = self.cl_for(ctx.task).views(self._out(ctx, 0))
+            w = self.task_weight_layout(ctx.task).views(self._in(ctx, 1))
+            a = self.task_context_layout(ctx.task).views(self._out(ctx, 0))
             extras = self._aux_temp_state(ctx) or {}
             extras["seg"] = self._attn_meta(ctx)
-            extras["lin"] = self.linears(self.layer_of(ctx.task))
+            extras["lin"] = self.linears(self.parse_layer(ctx.task))
             # no tp extras: recompute stops at the last context-emitting
             # stage (up_proj), which is shard-transparent — the sliced
             # weight/context views carry the width; no collective runs
@@ -475,22 +475,22 @@ class BlockBwd(_Base):
         es, kctx = self._stream_ctx(ctx)
         with torch.cuda.stream(es):
             dy = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
-            a = self.cl_for(ctx.task).views(self._in(ctx, 1))
+            a = self.task_context_layout(ctx.task).views(self._in(ctx, 1))
             x = torch_view(self._in(ctx, 2), (d.tokens, d.d_model), torch.bfloat16)
-            w = self.wl_for(ctx.task).views(self._in(ctx, 3))
+            w = self.task_weight_layout(ctx.task).views(self._in(ctx, 3))
             accum = bool(ctx.task.mutates) and ctx.task.mutates[0].startswith("dW_")
             if accum:
-                dw = self.gl_for(ctx.task).views(ctx.mutates[ctx.task.mutates[0]])
+                dw = self.task_grad_layout(ctx.task).views(ctx.mutates[ctx.task.mutates[0]])
                 dx = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
             else:
                 dw = None
                 for j, o in enumerate(ctx.task.outputs[1:], start=1):
                     if o.id.startswith("dW_"):
-                        dw = self.gl_for(ctx.task).views(self._out(ctx, j))
+                        dw = self.task_grad_layout(ctx.task).views(self._out(ctx, j))
                         break
                 dx = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
             a = {**a, "_seg": self._attn_meta(ctx),
-                 "lin": self.linears(self.layer_of(ctx.task))}
+                 "lin": self.linears(self.parse_layer(ctx.task))}
             aux_counts = self._aux_counts_state(ctx)
             if aux_counts is not None:
                 a["aux_counts"] = aux_counts

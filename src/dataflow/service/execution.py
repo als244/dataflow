@@ -149,7 +149,7 @@ def store_buffer(store, rec):
     from dataflow.runtime.device.cuda import Buffer
 
     return Buffer(id=f"store:{rec.id}", location="backing",
-                  size_bytes=rec.size_bytes, ptr=store.ptr_of(rec),
+                  size_bytes=rec.size_bytes, ptr=store.host_ptr(rec),
                   raw=None)
 
 

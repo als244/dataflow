@@ -1,6 +1,6 @@
 """dsv32 adapter: DSA index selection (every layer computes its own —
 no sharing) + MoE routing. Selection pinned by intercepting
-dsa_topk_reference at its single true site (tasks.modules.dsa_reference — the goldens' selection helper calls through it); routing via the
+dsa_topk_reference at its single true site (blocks.modules.dsa_forms — the goldens' selection helper calls through it); routing via the
 route_ids kwarg. train_indexer=False: selections are data."""
 from dataclasses import replace
 from unittest.mock import patch
@@ -28,8 +28,8 @@ def make_golden(dims, n_layers, leaves):
 
 
 def _refs():
-    import dataflow_training.blocks.modules.dsa_reference as dref
-    import dataflow_training.blocks.modules.moe.reference as mref
+    import dataflow_training.blocks.modules.dsa_forms as dref
+    import dataflow_training.blocks.modules.moe.forms as mref
 
     return dref, mref
 

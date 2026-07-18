@@ -30,7 +30,7 @@ from dataflow_training.blocks.layouts import (
 )
 from dataflow_training.blocks.modules.moe.spec import MoESpec, moe_aux_layout, moe_aux_temp_layout
 
-from ...lowering.emit import FamilyLayouts, LayerLayout, apply_exact_sizes, initial_values_from_layouts, size_of_factory
+from ...lowering.emit import FamilyLayouts, LayerLayout, apply_exact_sizes, initial_values_from_layouts, object_size_factory
 from ...lowering.shaped_program import BF16, LayerKindSpec, ShapedHardware, build_shaped_program
 
 
@@ -115,7 +115,7 @@ class ShapedOlmoeConfig:
                    grad_accum_rounds=grad_accum_rounds, num_steps=num_steps)
 
 
-def moe_spec_of(cfg: ShapedOlmoeConfig) -> MoESpec:
+def derive_moe_spec(cfg: ShapedOlmoeConfig) -> MoESpec:
     return MoESpec(
         n_experts=cfg.n_experts, top_k=cfg.top_k, d_ff_expert=cfg.d_ff_expert,
         routing_mode=cfg.routing_mode, aux_coef=cfg.aux_coef,
@@ -123,7 +123,7 @@ def moe_spec_of(cfg: ShapedOlmoeConfig) -> MoESpec:
     )
 
 
-def dims_of_olmoe(cfg: ShapedOlmoeConfig) -> OlmoeDims:
+def derive_dims(cfg: ShapedOlmoeConfig) -> OlmoeDims:
     return OlmoeDims(
         opt_policy=cfg.opt_policy,
         d_model=cfg.d_model,
@@ -137,13 +137,13 @@ def dims_of_olmoe(cfg: ShapedOlmoeConfig) -> OlmoeDims:
         rope_base=cfg.rope_base,
         dtypes=getattr(cfg, "dtypes", None) or DTypePolicy(),
         seq_lens=getattr(cfg, "seq_lens", None),
-        moe=moe_spec_of(cfg),
+        moe=derive_moe_spec(cfg),
     )
 
 
 def _kind_spec(cfg: ShapedOlmoeConfig, hw: ShapedHardware) -> LayerKindSpec:
     """One MoE-attention kind. FLOPs = active params; bytes = full stack."""
-    dims = dims_of_olmoe(cfg)
+    dims = derive_dims(cfg)
     wl = olmoe_weight_layout(dims, layer=0)
     cl = olmoe_activation_layout(dims)
     t, d, seq = cfg.tokens, cfg.d_model, cfg.seq_len
@@ -217,7 +217,7 @@ def build_shaped_olmoe(
 
 
 def family_layouts(cfg: ShapedOlmoeConfig) -> tuple[OlmoeDims, FamilyLayouts]:
-    dims = dims_of_olmoe(cfg)
+    dims = derive_dims(cfg)
     cl = olmoe_activation_layout(dims)
     return dims, FamilyLayouts(
         layers=[LayerLayout(kind="moe",
@@ -247,7 +247,7 @@ def lower_olmoe(
     shaped = build_shaped_olmoe(
         cfg, hw=hw, recompute_levels=recompute_levels, fast_memory_capacity=fast_memory_capacity,
     )
-    return apply_exact_sizes(shaped, "olmoe-exact", size_of=size_of_factory(dims, fl))
+    return apply_exact_sizes(shaped, "olmoe-exact", object_size=object_size_factory(dims, fl))
 
 
 def initial_values_olmoe(program: Program, cfg: ShapedOlmoeConfig, backend, *, seed: int = 0, into=None):

@@ -228,7 +228,7 @@ def _param_specs(dims, names_shapes, ns: str | None = None,
     return [(n, s, policy.for_field(key(n), layer).param) for n, s in names_shapes]
 
 
-def _policy_of(dims) -> DTypePolicy:
+def resolve_policy(dims) -> DTypePolicy:
     return getattr(dims, "dtypes", None) or DTypePolicy()
 
 
@@ -519,7 +519,7 @@ class Dsv3Dims:
     are the ONE shared decoupled k_rope per token; latent RMSNorm then
     -> n_heads * (qk_nope_dim + v_head_dim). Per-head attention dims:
     qk = nope + rope, v = v_head_dim (flash runs at shared head_dim=qk
-    with zero-padded v — exact; see tasks/mla_reference.py). rope 1e4 on
+    with zero-padded v — exact; see blocks/modules/mla_forms.py). rope 1e4 on
     rope dims only. First ``first_k_dense`` layers use a dense SwiGLU FFN
     (d_ff aliases d_ff_dense for the shared dense stages); the rest are
     MoE per ``moe`` (sigmoid_noaux_tc, ungated shared expert).
@@ -560,7 +560,7 @@ class Dsv3Dims:
     # highest-priority per-field override on top of this.
     opt_policy: object = "adamw"
     # per-layer chain kinds ("dense"/"moe" here), one entry per layer —
-    # populated by dims_of_* (dims alone don't know n_layers). DATA, indexed.
+    # populated by the family derive_dims (dims alone don't know n_layers). DATA, indexed.
     kinds: tuple[str, ...] = ()
 
 
@@ -699,10 +699,10 @@ class Glm52Dims(Dsv32Dims):
 
     indexer_types: tuple[str, ...] = ()
 
-    def role_of(self, layer: int) -> str:
+    def layer_role(self, layer: int) -> str:
         return self.indexer_types[layer]
 
-    def leader_of(self, layer: int) -> int:
+    def leader_index(self, layer: int) -> int:
         i = layer
         while self.indexer_types[i] != "full":
             i -= 1
@@ -880,7 +880,7 @@ class Qwen35Dims:
     # highest-priority per-field override on top of this.
     opt_policy: object = "adamw"
     # per-layer chain kinds ("lin"/"full" here), one entry per layer —
-    # populated by dims_of_* (dims alone don't know n_layers). DATA, indexed.
+    # populated by the family derive_dims (dims alone don't know n_layers). DATA, indexed.
     kinds: tuple[str, ...] = ()
 
 

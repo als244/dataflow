@@ -24,7 +24,7 @@ Flat directory; every tool runs from the repo root as
 | `verify_family.py` | one-command family correctness: canonical ladder + canon audit ([extending.md](../docs/extending.md) §8) |
 | `engine_gate.py` | real-GPU synthetic execution vs simulator prediction |
 | `pressure_correctness.py` | PressureFit plan legality regression |
-| `golden_path.py` | CPU-only end-to-end: shaped program → plan → sim → webapp exports |
+| `export_program.py` | CPU-only end-to-end: shaped program → plan → sim → webapp exports |
 
 ## Run analysis & export
 | tool | purpose |

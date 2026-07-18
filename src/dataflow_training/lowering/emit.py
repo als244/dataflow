@@ -9,14 +9,14 @@ are family-invariant once the family declares its layouts:
                     W_0 and W_1 different bytes; heterogeneous families
                     differ by kind), plus the embed/head tables and any
                     special init distributions (qwen3.5's A_log/dt_bias).
-    size_of_factory the shared object-id grammar (W_{i} / dW_{s}_{i} /
+    object_size_factory the shared object-id grammar (W_{i} / dW_{s}_{i} /
                     O_{i} / A_{s}_{r}_{i} / *_embed / *_head) -> bytes.
     initial_values_from_layouts
                     per-field typed init (norm weights ones, N(0, 0.02)
                     draws, specials), optimizer state zeroed, token ids.
 
 No family writes this logic itself — a family lowering module is
-``dims_of`` + a ``FamilyLayouts`` declaration + two thin wrappers
+``derive_dims`` + a ``FamilyLayouts`` declaration + two thin wrappers
 (docs/extending.md §4).
 """
 from __future__ import annotations
@@ -66,7 +66,7 @@ class FamilyLayouts:
         return len(self.layers)
 
 
-def size_of_factory(dims, fl: FamilyLayouts, opt_update_regions=None,
+def object_size_factory(dims, fl: FamilyLayouts, opt_update_regions=None,
                     opt_slice_by_root=None):
     """Exact bytes for every object id the shaped builder emits. dW and O
     are sized from their OWN layouts (field-mirrored at grad/opt dtypes);
@@ -88,7 +88,7 @@ def size_of_factory(dims, fl: FamilyLayouts, opt_update_regions=None,
     our = opt_update_regions or {}
     slices = opt_slice_by_root or {}
 
-    def o_bytes_for(root, default_bytes):
+    def opt_bytes(root, default_bytes):
         sl = slices.get(root)
         if sl is None:
             return default_bytes
@@ -104,7 +104,7 @@ def size_of_factory(dims, fl: FamilyLayouts, opt_update_regions=None,
     aux_i = [ll.aux.total_bytes if ll.aux is not None else None
              for ll in fl.layers]
     op = getattr(dims, "opt_policy", None)
-    o_i = [o_bytes_for(
+    o_i = [opt_bytes(
                f"W_{i}",
                opt_state_layout(wl_i[i], p, layer=i, opt_policy=op,
                                 update_regions=our.get(f"W_{i}"))
@@ -112,16 +112,16 @@ def size_of_factory(dims, fl: FamilyLayouts, opt_update_regions=None,
            for i in range(n)]
     dw_e = grad_layout(fl.embed, p, ns=fl.embed_ns, opt_policy=op).total_bytes
     dw_h = grad_layout(fl.head, p, ns="head", opt_policy=op).total_bytes
-    o_e = o_bytes_for(
+    o_e = opt_bytes(
         "W_embed",
         opt_state_layout(fl.embed, p, ns=fl.embed_ns, opt_policy=op,
                          update_regions=our.get("W_embed")).total_bytes)
-    o_h = o_bytes_for(
+    o_h = opt_bytes(
         "W_head",
         opt_state_layout(fl.head, p, ns="head", opt_policy=op,
                          update_regions=our.get("W_head")).total_bytes)
 
-    def size_of(oid: str) -> int | None:
+    def object_size(oid: str) -> int | None:
         if oid.startswith("A_"):            # A_{s}_{r}_{i}
             return a_i[int(oid.rsplit("_", 1)[1])]
         if oid.startswith("AuxTemp_") and m_i is not None:  # AuxTemp_{s}_{r}_{i}
@@ -148,23 +148,23 @@ def size_of_factory(dims, fl: FamilyLayouts, opt_update_regions=None,
             return wl_i[int(oid.split("_")[1])].total_bytes
         return None
 
-    return size_of
+    return object_size
 
 
 def apply_exact_sizes(
-    shaped: Program, lowering_tag: str, *, size_of,
+    shaped: Program, lowering_tag: str, *, object_size,
 ) -> Program:
     """Rewrite a shaped program's object sizes to packed-layout truth and
     stamp optimizer tasks with their step index — shared by every family.
-    ``size_of(object_id) -> bytes | None`` is the family's size map
-    (``size_of_factory``)."""
+    ``object_size(object_id) -> bytes | None`` is the family's size map
+    (``object_size_factory``)."""
 
     def fix_obj(o: ObjectSpec) -> ObjectSpec:
-        size = size_of(o.id)
+        size = object_size(o.id)
         return o if size is None else replace(o, size_bytes=size, tensor=None)
 
     def fix_out(o: OutputSpec) -> OutputSpec:
-        size = size_of(o.id)
+        size = object_size(o.id)
         return o if size is None else replace(o, size_bytes=size, tensor=None)
 
     def fix_task(t: TaskSpec, step: int) -> TaskSpec:
@@ -173,7 +173,7 @@ def apply_exact_sizes(
             params["step"] = step
         return replace(t, outputs=tuple(fix_out(o) for o in t.outputs), block_params=params)
 
-    def step_of(task_id: str) -> int:
+    def parse_step(task_id: str) -> int:
         # optimizer ids: optimizer_embed_{s} / optimizer_{s}_{i} /
         # optimizer_head_{s}
         parts = task_id.split("_")
@@ -187,7 +187,7 @@ def apply_exact_sizes(
             options=(
                 RecomputeOption(
                     level=0,
-                    saved_bytes=size_of(rw.object_id) or 0,
+                    saved_bytes=object_size(rw.object_id) or 0,
                     recompute_us=0.0, label="save",
                 ),
             ) + tuple(o for o in rw.options if o.level != 0),
@@ -208,7 +208,7 @@ def apply_exact_sizes(
             if o.id.startswith("O_") and o.size_bytes == 0}
     for task in shaped.tasks:
         for out in task.outputs:
-            if out.id.startswith("dW_") and (size_of(out.id) or 0) == 0:
+            if out.id.startswith("dW_") and (object_size(out.id) or 0) == 0:
                 dead.add(out.id)
     if dead:
         objs = tuple(o for o in objs if o.id not in dead)
@@ -237,7 +237,7 @@ def apply_exact_sizes(
         return True
 
     tasks = tuple(
-        scrub(fix_task(t, step_of(t.id)) if t.group == "optimizer"
+        scrub(fix_task(t, parse_step(t.id)) if t.group == "optimizer"
               else fix_task(t, 0))
         for t in shaped.tasks
     )

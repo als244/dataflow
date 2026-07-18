@@ -12,7 +12,7 @@ torch = pytest.importorskip("torch")
 
 from dataflow_training.blocks.layouts import Qwen3Dims, qwen3_activation_layout  # noqa: E402
 from dataflow_training.model_families.qwen3.blocks import Qwen3BlockFwd  # noqa: E402
-from dataflow_training.model_families.qwen3 import dims_of_qwen3, lower_qwen3  # noqa: E402
+from dataflow_training.model_families.qwen3 import derive_dims, lower_qwen3  # noqa: E402
 from dataflow_training.model_families.qwen3 import ShapedQwen3Config  # noqa: E402
 
 CFG = ShapedQwen3Config(
@@ -24,7 +24,7 @@ CFG = ShapedQwen3Config(
 # --- CPU: staged authoring + lowering structure ------------------------------
 
 def test_qwen3_stage_context_completeness():
-    dims = dims_of_qwen3(CFG)
+    dims = derive_dims(CFG)
     declared = {f.name for f in qwen3_activation_layout(dims).fields}
     emitted = Qwen3BlockFwd.context_fields_emitted()
     assert declared == emitted, declared ^ emitted
@@ -99,7 +99,7 @@ def test_qwen3_block_backward():
     from dataflow_training.model_families.families import family
     from dataflow_training.testing.gradcheck import check_block_backward
 
-    check_block_backward(dims_of_qwen3(CFG), family=family("qwen3")).assert_ok()
+    check_block_backward(derive_dims(CFG), family=family("qwen3")).assert_ok()
 
 
 

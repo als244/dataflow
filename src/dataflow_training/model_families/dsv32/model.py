@@ -42,7 +42,7 @@ from dataflow_training.blocks.layouts import (
 )
 from dataflow_training.blocks.modules.moe.spec import MoESpec, moe_aux_layout
 
-from ...lowering.emit import FamilyLayouts, LayerLayout, apply_exact_sizes, initial_values_from_layouts, size_of_factory
+from ...lowering.emit import FamilyLayouts, LayerLayout, apply_exact_sizes, initial_values_from_layouts, object_size_factory
 from ...lowering.shaped_program import BF16, LayerKindSpec, ShapedHardware, build_shaped_program
 
 _DSV32_DTYPES = DTypePolicy(overrides=(
@@ -228,7 +228,7 @@ class ShapedDsv32Config:
     glm51 = glm5
 
 
-def moe_spec_of(cfg: ShapedDsv32Config) -> MoESpec:
+def derive_moe_spec(cfg: ShapedDsv32Config) -> MoESpec:
     return MoESpec(
         n_experts=cfg.n_experts, top_k=cfg.top_k, d_ff_expert=cfg.d_ff_expert,
         routing_mode="sigmoid_noaux_tc", aux_coef=cfg.aux_coef,
@@ -255,7 +255,7 @@ def _sparse_opt_policy(cfg):
                           "idx_k_ln_b", "w_idx_w"))
 
 
-def dims_of_dsv32(cfg: ShapedDsv32Config) -> Dsv32Dims:
+def derive_dims(cfg: ShapedDsv32Config) -> Dsv32Dims:
     # dense warm-up: freezing is an OPTIMIZER POLICY — every field
     # defaults to "frozen" (zero grad storage, zero opt state; the
     # lowering prunes empty dW/O objects and purposeless optimizer/
@@ -280,7 +280,7 @@ def dims_of_dsv32(cfg: ShapedDsv32Config) -> Dsv32Dims:
         seq_lens=getattr(cfg, "seq_lens", None),
         kinds=tuple("dense" if i < cfg.first_k_dense else "moe"
                     for i in range(cfg.n_layers)),
-        moe=moe_spec_of(cfg),
+        moe=derive_moe_spec(cfg),
         index_n_heads=cfg.index_n_heads, index_head_dim=cfg.index_head_dim,
         index_topk=cfg.index_topk, sparse_mode=cfg.sparse_mode,
         train_indexer=cfg.train_indexer,
@@ -288,7 +288,7 @@ def dims_of_dsv32(cfg: ShapedDsv32Config) -> Dsv32Dims:
 
 
 def _kind_specs(cfg: ShapedDsv32Config, hw: ShapedHardware) -> dict[str, LayerKindSpec]:
-    dims = dims_of_dsv32(cfg)
+    dims = derive_dims(cfg)
     t, d, seq, h = cfg.tokens, cfg.d_model, cfg.seq_len, cfg.n_heads
     qk = cfg.qk_head_dim
     sbar = seq / 2.0
@@ -384,12 +384,12 @@ def _warmup_plan(dims, n_layers):
     contributes its own KL."""
     from ...lowering.freeze_plan import derive_freeze_plan
 
-    def fields_of(i):
+    def field_views(i):
         wl = (dsv32_dense_weight_layout(dims) if dims.kinds[i] == "dense"
               else dsv32_moe_weight_layout(dims))
         return [f.name for f in wl.fields]
 
-    return derive_freeze_plan(dims, n_layers, fields_of,
+    return derive_freeze_plan(dims, n_layers, field_views,
                               objective="indexer_kl")
 
 
@@ -402,7 +402,7 @@ def build_shaped_dsv32(
     name: str | None = None,
 ):
     hw = hw or ShapedHardware()
-    dims = dims_of_dsv32(cfg)
+    dims = derive_dims(cfg)
     # each layer's metadata is self-contained (its own M object); no
     # cross-layer sharing — glm52 is the family that passes aux_shared
     return build_shaped_program(
@@ -420,7 +420,7 @@ _WEIGHT_BUILDERS = {"dense": dsv32_dense_weight_layout, "moe": dsv32_moe_weight_
 
 
 def family_layouts(cfg: ShapedDsv32Config) -> tuple[Dsv32Dims, FamilyLayouts]:
-    dims = dims_of_dsv32(cfg)
+    dims = derive_dims(cfg)
     ctx = {
         "dense": dsv32_dense_activation_layout(dims),
         "moe": dsv32_moe_activation_layout(dims),
@@ -463,7 +463,7 @@ def lower_dsv32(
         cfg, hw=hw, recompute_levels=recompute_levels, fast_memory_capacity=fast_memory_capacity,
     )
     return apply_exact_sizes(shaped, "dsv32-exact",
-                             size_of=size_of_factory(dims, fl))
+                             object_size=object_size_factory(dims, fl))
 
 
 def initial_values_dsv32(program: Program, cfg: ShapedDsv32Config, backend, *, seed: int = 0, into=None):

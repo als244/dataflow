@@ -326,7 +326,7 @@ class DsaAttention(nn.Module):
     def _indexer_kl(self, h1, q_lora, q_full, k_full, cos, sin, causal,
                     mask):
         """The engine's indexer training objective, replicated exactly
-        (tasks/modules/dsa_reference.py): L_I = sum_t KL(p_t || sigma_t)
+        (blocks/modules/dsa_forms.py): L_I = sum_t KL(p_t || sigma_t)
         over the selection's live set. The KL TARGET p is this layer's
         head-summed masked attention probabilities, L1-renormalized,
         DETACHED; the indexer INPUT is detached (h1/q_lora), so the

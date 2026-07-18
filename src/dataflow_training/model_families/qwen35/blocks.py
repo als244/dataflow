@@ -563,7 +563,7 @@ def _opt_block_layout(d, task, w_size):
     """optimizer_block spans BOTH layer kinds: derive the layer from the
     mutated W_{i}, pick the kind's layout at that layer's dtype sub-policy
     (the AdamWStep size assert stays as the tripwire)."""
-    layer = AdamWStep.layer_of(task)
+    layer = AdamWStep.parse_layer(task)
     build = (
         qwen35_attn_weight_layout if d.kinds[layer] == "full"
         else qwen35_lin_weight_layout
@@ -601,8 +601,8 @@ def build_qwen35_resolver(
         "gattn_bwd": Qwen35AttnBlockBwd(dims, kernels),
         "head_loss": HeadLoss(dims, kernels),
         "embed_bwd": EmbedBwd(dims, kernels),
-        "optimizer_block": AdamWStep(dims, kernels, hyper, layout_for=_opt_block_layout),
-        "optimizer_embed": AdamWStep(dims, kernels, hyper, layout_for=_opt_embed_layout),
+        "optimizer_block": AdamWStep(dims, kernels, hyper, resolve_layout=_opt_block_layout),
+        "optimizer_embed": AdamWStep(dims, kernels, hyper, resolve_layout=_opt_embed_layout),
         "optimizer_head": AdamWStep(dims, kernels, hyper, kind="head"),  # untied only
     }
 

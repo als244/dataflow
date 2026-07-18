@@ -11,7 +11,7 @@ from dataflow.runtime.device.cuda import CudaBackend  # noqa: E402
 from dataflow.runtime.device.fake import FakeBackend  # noqa: E402
 from dataflow.runtime.interop import torch_view  # noqa: E402
 from dataflow_training.model_families.llama3.blocks import build_resolver  # noqa: E402
-from dataflow_training.model_families.llama3 import dims_of, initial_values, lower_llama3  # noqa: E402
+from dataflow_training.model_families.llama3 import derive_dims, initial_values, lower_llama3  # noqa: E402
 from dataflow_training.lowering.planning import plan_program  # noqa: E402
 from dataflow_training.run.profiling import apply_measured_costs, profile_program  # noqa: E402
 from dataflow_training.model_families.llama3 import ShapedLlamaConfig  # noqa: E402
@@ -27,7 +27,7 @@ CAP = 8 * 1024 * 1024  # tight: forces offload/prefetch traffic
 
 
 def _run(engine_kwargs=None, resolver_wrapper=None, program_transform=None, seed=7):
-    dims = dims_of(CFG)
+    dims = derive_dims(CFG)
     program = lower_llama3(CFG)
     planned = plan_program(program, fast_memory_capacity=CAP)
     prog = planned.program
@@ -104,7 +104,7 @@ def test_interleaving_stress_changes_nothing():
 def test_measured_costs_replan_still_golden():
     """Profile every unique task, write measured runtimes+workspace back,
     re-plan on measured costs — the plan changes, the math must not."""
-    dims = dims_of(CFG)
+    dims = derive_dims(CFG)
     program = lower_llama3(CFG)
     backend = CudaBackend()
     profiles = profile_program(program, build_resolver(dims), backend, soak_seconds=0)

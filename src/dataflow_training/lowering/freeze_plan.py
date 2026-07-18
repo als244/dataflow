@@ -140,7 +140,7 @@ class FreezePlan:
 def derive_freeze_plan(
     dims,
     n_layers: int,
-    fields_of: Callable[[int], Sequence[str]],
+    layer_fields: Callable[[int], Sequence[str]],
     *,
     embed_fields: Sequence[str] = ("w",),
     head_fields: Sequence[str] = ("w", "final_norm_w"),
@@ -153,7 +153,7 @@ def derive_freeze_plan(
     CE objective): the fast path that leaves existing programs
     byte-identical.
 
-    ``fields_of(layer)`` names the layer's weight fields (the family's
+    ``layer_fields(layer)`` names the layer's weight fields (the family's
     weight layout); embed/head fields resolve through their ns-prefixed
     policy keys exactly as the optimizer executes them. For local
     objectives, ``loss_contributors`` defaults to every layer (families
@@ -167,7 +167,7 @@ def derive_freeze_plan(
     trainable = []          # per layer: any trainable field?
     fully_frozen = []
     for i in range(n_layers):
-        names = list(fields_of(i))
+        names = list(layer_fields(i))
         rules = [not frozen(nm, i) for nm in names]
         trainable.append(any(rules))
         fully_frozen.append(not any(rules))
@@ -218,7 +218,7 @@ def derive_freeze_plan(
         recv_dy.append(recv)
         emit.append(recv)
         if trainable[i]:
-            all_train = all(not frozen(nm, i) for nm in fields_of(i))
+            all_train = all(not frozen(nm, i) for nm in layer_fields(i))
             regimes.append("train" if all_train else "partial")
         else:
             regimes.append("passthrough" if recv else "truncated")

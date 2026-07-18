@@ -36,7 +36,7 @@ from dataflow_training.blocks.layouts import (
     sliced_layout,
     weight_layout,
 )
-from ...lowering.emit import FamilyLayouts, LayerLayout, apply_exact_sizes, initial_values_from_layouts, size_of_factory
+from ...lowering.emit import FamilyLayouts, LayerLayout, apply_exact_sizes, initial_values_from_layouts, object_size_factory
 from ...lowering.shaped_program import ShapedHardware, build_shaped_program, roofline_block_kind_spec
 
 
@@ -146,7 +146,7 @@ def build_shaped_llama3(
     hw = hw or ShapedHardware()
     from ...lowering.freeze_plan import derive_freeze_plan
 
-    d = dims_of(cfg)
+    d = derive_dims(cfg)
     plan = derive_freeze_plan(
         d, cfg.n_layers,
         lambda i: [f.name for f in weight_layout(d, layer=i).fields],
@@ -161,7 +161,7 @@ def build_shaped_llama3(
     )
 
 
-def dims_of(cfg: ShapedLlamaConfig) -> LlamaDims:
+def derive_dims(cfg: ShapedLlamaConfig) -> LlamaDims:
     return LlamaDims(
         opt_policy=cfg.opt_policy,
         d_model=cfg.d_model,
@@ -190,7 +190,7 @@ def family_layouts(cfg: ShapedLlamaConfig, tp_view: dict | None = None
     shard shape. Grad/opt layouts, exact sizes, and init offsets all
     derive from these layouts, so the transform lands everywhere by
     construction."""
-    dims = dims_of(cfg)
+    dims = derive_dims(cfg)
     cl = activation_layout(dims)
     view = tp_view or {}
     layers = []
@@ -226,7 +226,7 @@ def lower_llama3(
         cfg, hw=hw, recompute_levels=recompute_levels, fast_memory_capacity=fast_memory_capacity,
     )
     dims, fl = family_layouts(cfg)
-    return apply_exact_sizes(shaped, "llama3-exact", size_of=size_of_factory(dims, fl))
+    return apply_exact_sizes(shaped, "llama3-exact", object_size=object_size_factory(dims, fl))
 
 
 def tp_fill_slices(cfg: ShapedLlamaConfig, tp_view: dict) -> dict:
@@ -234,7 +234,7 @@ def tp_fill_slices(cfg: ShapedLlamaConfig, tp_view: dict) -> dict:
     tp-sharded fields DRAW at the full single-GPU shape (keeping the
     generator stream byte-aligned with a plain run) and write only
     the rank's slice."""
-    dims = dims_of(cfg)
+    dims = derive_dims(cfg)
     out: dict = {}
     for root, slices in tp_view.items():
         layer = int(root.split("_")[1])

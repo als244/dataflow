@@ -54,8 +54,8 @@ def test_full_scale_presets_lower():
         # dM objects exist exactly for multi-member groups
         dm = {o.id for t in p.tasks for o in t.outputs if o.id.startswith("dAuxTemp_")}
         cfg = ctor(seq_len=128)
-        from dataflow_training.model_families.glm52 import dims_of_glm52
-        dims = dims_of_glm52(cfg)
+        from dataflow_training.model_families.glm52 import derive_dims
+        dims = derive_dims(cfg)
         multi = [ld for ld in dims.leaders() if len(dims.group_members(ld)) > 1]
         assert len(dm) == len(multi)
         # follower fwds consume their producer's M
@@ -85,9 +85,9 @@ def test_dense_warmup_and_frozen_indexer_modes():
     # dW at all; leaders' dW is indexer-only; dW_head/dW_embed and the
     # embed_bwd + frozen optimizer tasks are pruned outright.
     from dataflow_training.blocks.layouts import dsv32_dense_weight_layout, grad_layout
-    from dataflow_training.model_families.glm52 import dims_of_glm52
+    from dataflow_training.model_families.glm52 import derive_dims
 
-    wdims = dims_of_glm52(rep(ShapedGlm52Config.tiny(), sparse_mode=False))
+    wdims = derive_dims(rep(ShapedGlm52Config.tiny(), sparse_mode=False))
     idx_dw = grad_layout(dsv32_dense_weight_layout(wdims), wdims.dtypes,
                          layer=0, opt_policy=wdims.opt_policy).total_bytes
     dws = {k: v for k, v in sizes.items() if k.startswith("dW_")}

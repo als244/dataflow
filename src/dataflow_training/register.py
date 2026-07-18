@@ -101,7 +101,7 @@ def build_model_family_resolver(spec: dict):
 
     fam = family(spec["family"])
     cfg = fam.config_type(**spec["cfg"])
-    dims = fam.dims_of(cfg)
+    dims = fam.derive_dims(cfg)
     hyper = spec.get("hyper")
     inner = (fam.build_resolver(dims, build_hyper(hyper)) if hyper
              else fam.build_resolver(dims))

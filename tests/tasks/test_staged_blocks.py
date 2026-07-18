@@ -9,12 +9,12 @@
 """
 from dataflow_training.model_families.llama3.blocks import BlockFwd
 from dataflow_training.blocks.layouts import activation_layout
-from dataflow_training.model_families.llama3 import dims_of
+from dataflow_training.model_families.llama3 import derive_dims
 from dataflow_training.model_families.llama3 import ShapedLlamaConfig
 
 
 def test_stage_context_completeness():
-    dims = dims_of(ShapedLlamaConfig.tiny())
+    dims = derive_dims(ShapedLlamaConfig.tiny())
     declared = {f.name for f in activation_layout(dims).fields}
     emitted = BlockFwd.context_fields_emitted()
     assert declared == emitted, declared ^ emitted

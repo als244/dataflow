@@ -43,8 +43,8 @@ def test_cfg_dict_round_trip_matches_dims():
     for name in P.LADDER_NAMES:
         cfg = P.preset(name)
         rebuilt = ShapedLlamaConfig(**P.cfg_dict(cfg))
-        d1 = resolve_family(cfg).dims_of(cfg)
-        d2 = resolve_family(rebuilt).dims_of(rebuilt)
+        d1 = resolve_family(cfg).derive_dims(cfg)
+        d2 = resolve_family(rebuilt).derive_dims(rebuilt)
         for attr in ("d_model", "n_heads", "n_kv_heads", "d_ff",
                      "vocab_size", "tokens", "seq_len"):
             assert getattr(d1, attr) == getattr(d2, attr)

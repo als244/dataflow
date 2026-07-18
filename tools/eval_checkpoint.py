@@ -72,7 +72,7 @@ def main() -> int:
     from dataflow_training.model_families.families import resolve_family
 
     fam = resolve_family(cfg)
-    dims = fam.dims_of(cfg)
+    dims = fam.derive_dims(cfg)
     model = bridges.build_reference_model(cfg)
     bridges.load_reference_init(model, cfg, dims, payload)
     model.eval()

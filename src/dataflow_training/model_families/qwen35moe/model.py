@@ -34,7 +34,7 @@ from dataflow_training.blocks.layouts import (
 )
 from dataflow_training.blocks.modules.moe.spec import MoESpec, moe_aux_layout, moe_aux_temp_layout
 
-from ...lowering.emit import FamilyLayouts, LayerLayout, apply_exact_sizes, initial_values_from_layouts, size_of_factory
+from ...lowering.emit import FamilyLayouts, LayerLayout, apply_exact_sizes, initial_values_from_layouts, object_size_factory
 from ..qwen35.model import _a_log_init, _dt_bias_init
 from ...lowering.shaped_program import BF16, LayerKindSpec, ShapedHardware, build_shaped_program
 
@@ -104,7 +104,7 @@ class ShapedQwen35MoeConfig:
         # lin-kind count (30/40 layers); roofline seed only — per-kind specs
         # carry layout-exact sizes
         d, f, fs = self.d_model, self.d_ff_expert, self.d_ff_shared
-        dims = dims_of_qwen35moe(self)
+        dims = derive_dims(self)
         attn = (
             d * dims.qkvz_dim + d * dims.ba_dim
             + dims.conv_dim * self.lin_conv_kernel + dims.value_dim * d
@@ -149,7 +149,7 @@ class ShapedQwen35MoeConfig:
                    grad_accum_rounds=grad_accum_rounds, num_steps=num_steps)
 
 
-def moe_spec_of(cfg: ShapedQwen35MoeConfig) -> MoESpec:
+def derive_moe_spec(cfg: ShapedQwen35MoeConfig) -> MoESpec:
     return MoESpec(
         n_experts=cfg.n_experts, top_k=cfg.top_k, d_ff_expert=cfg.d_ff_expert,
         routing_mode=cfg.routing_mode, aux_coef=cfg.aux_coef,
@@ -158,7 +158,7 @@ def moe_spec_of(cfg: ShapedQwen35MoeConfig) -> MoESpec:
     )
 
 
-def dims_of_qwen35moe(cfg: ShapedQwen35MoeConfig) -> Qwen35MoeDims:
+def derive_dims(cfg: ShapedQwen35MoeConfig) -> Qwen35MoeDims:
     return Qwen35MoeDims(
         opt_policy=cfg.opt_policy,
         d_model=cfg.d_model, n_layers=cfg.n_layers,
@@ -175,14 +175,14 @@ def dims_of_qwen35moe(cfg: ShapedQwen35MoeConfig) -> Qwen35MoeDims:
         kinds=tuple(
             "full" if (i + 1) % cfg.full_attention_interval == 0 else "lin"
             for i in range(cfg.n_layers)),
-        moe=moe_spec_of(cfg),
+        moe=derive_moe_spec(cfg),
     )
 
 
 def _kind_specs(cfg: ShapedQwen35MoeConfig, hw: ShapedHardware) -> dict[str, LayerKindSpec]:
     """Two LayerKindSpecs. MoE roofline convention: FLOPs from ACTIVE
     params (top-k + shared), weight BYTES from the FULL expert stack."""
-    dims = dims_of_qwen35moe(cfg)
+    dims = derive_dims(cfg)
     t, d, seq = cfg.tokens, cfg.d_model, cfg.seq_len
     f, fs, k = cfg.d_ff_expert, cfg.d_ff_shared, cfg.top_k
     moe_active = (
@@ -250,7 +250,7 @@ def build_shaped_qwen35moe(
     name: str | None = None,
 ):
     hw = hw or ShapedHardware()
-    dims = dims_of_qwen35moe(cfg)
+    dims = derive_dims(cfg)
     label = name or (
         f"qwen35moe-shaped-{cfg.n_layers}L-d{cfg.d_model}-s{cfg.seq_len}-b{cfg.batch}"
         f"-r{cfg.grad_accum_rounds}-steps{cfg.num_steps}"
@@ -278,7 +278,7 @@ _WEIGHT_BUILDERS = {"lin": qwen35moe_lin_weight_layout, "full": qwen35moe_attn_w
 
 
 def family_layouts(cfg: ShapedQwen35MoeConfig) -> tuple[Qwen35MoeDims, FamilyLayouts]:
-    dims = dims_of_qwen35moe(cfg)
+    dims = derive_dims(cfg)
     ctx = {
         "lin": qwen35moe_lin_activation_layout(dims),
         "full": qwen35moe_attn_activation_layout(dims),
@@ -316,7 +316,7 @@ def lower_qwen35moe(
     shaped = build_shaped_qwen35moe(
         cfg, hw=hw, recompute_levels=recompute_levels, fast_memory_capacity=fast_memory_capacity,
     )
-    return apply_exact_sizes(shaped, "qwen35moe-exact", size_of=size_of_factory(dims, fl))
+    return apply_exact_sizes(shaped, "qwen35moe-exact", object_size=object_size_factory(dims, fl))
 
 
 def initial_values_qwen35moe(program: Program, cfg: ShapedQwen35MoeConfig, backend, *, seed: int = 0, into=None):

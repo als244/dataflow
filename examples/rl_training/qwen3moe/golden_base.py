@@ -30,7 +30,7 @@ from dataflow_training.blocks.layouts import (
     weight_layout,
 )
 from dataflow_training.blocks.base_blocks import AdamWHyper
-from dataflow_training.blocks.modules.moe.reference import moe_mlp_reference
+from dataflow_training.blocks.modules.moe.forms import moe_mlp_reference
 
 Leaves = dict[str, torch.Tensor]
 
@@ -109,7 +109,7 @@ class GoldenLlama3:
         materialization per forward, read as fields thereafter."""
         if segments is not None:
             return segments
-        return ops.Segments.of_dims(self.dims).on(device)
+        return ops.Segments.from_dims(self.dims).on(device)
 
     def block_forward(self, x: torch.Tensor, w: Leaves, segments=None) -> torch.Tensor:
         d = self.dims
@@ -190,7 +190,7 @@ class GoldenOlmoe(GoldenLlama3):
     packed-leaf handling and the exact AdamW replica). Block =
     qwen3-shaped attention with FULL-ROW qk-norm (one RMSNorm over the
     whole q/k rows) + the MoE SwiGLU tail composed from
-    ``dataflow_training.blocks.modules.moe.reference`` (routing modes,
+    ``dataflow_training.blocks.modules.moe.forms`` (routing modes,
     smallest-index tie-break, fp32 combine, shared-expert and aux-loss
     semantics all pinned there).
 
@@ -264,7 +264,7 @@ class GoldenQwen3Moe(GoldenOlmoe):
     inherited unchanged). The block differs only in attention: qwen3's
     PER-HEAD qk-norm (one shared ``(head_dim,)`` weight for q and one for
     k, applied over head_dim-wide rows) with GQA and rope 1e6. The MoE
-    tail is composed from ``dataflow_training.blocks.modules.moe.reference`` with
+    tail is composed from ``dataflow_training.blocks.modules.moe.forms`` with
     ``topk_then_softmax`` (norm_topk_prob=true) and NO shared expert."""
 
     dims: Qwen3MoeDims  # re-typed; position and (lack of) default inherited

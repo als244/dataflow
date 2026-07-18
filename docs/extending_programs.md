@@ -111,7 +111,7 @@ backward tasks then bind to the exact same battle-tested executables
 from dataflow.training.families import family
 
 fam = family("glm52")
-resolver = fam.build_resolver(fam.dims_of(cfg))     # cfg: a family config
+resolver = fam.build_resolver(fam.derive_dims(cfg))     # cfg: a family config
                                                      # matching your dims
 ```
 

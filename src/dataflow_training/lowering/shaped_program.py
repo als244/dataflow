@@ -238,7 +238,7 @@ def build_shaped_program(
                                    # broadcast instead of the replicated
                                    # allreduce+update (ZeRO-1 style); O
                                    # sizes shrink at exact-size time via
-                                   # size_of_factory's opt_update_regions
+                                   # object_size_factory's opt_update_regions
     tp_params=None,                # {object_root -> {field -> slice}}
                                    # (sharding.tp_view derived): fwd/
                                    # recompute/bwd tasks of listed layers

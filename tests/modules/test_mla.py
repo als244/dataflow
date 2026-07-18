@@ -91,8 +91,8 @@ def test_padded_v_attention_is_exact():
     assert rel_l2(gv2, gv) < 1e-5
 
 
-def test_mla_reference_shapes_and_grads_flow():
-    from dataflow_training.blocks.modules.mla_reference import mla_block_reference
+def test_mla_forms_shapes_and_grads_flow():
+    from dataflow_training.blocks.modules.mla_forms import mla_block_reference
 
     d = _Dims()
     w = _weights(d)
@@ -113,7 +113,7 @@ def test_mla_shared_k_rope_broadcast_gradient():
     Verified by comparing against a variant with independent per-head
     copies whose grads are summed."""
     from dataflow_training.blocks import ops
-    from dataflow_training.blocks.modules.mla_reference import mla_attention_reference
+    from dataflow_training.blocks.modules.mla_forms import mla_attention_reference
 
     d = _Dims()
     w = _weights(d, seed=3)
@@ -132,10 +132,10 @@ def test_mla_shared_k_rope_broadcast_gradient():
     assert rope_cols.abs().sum() > 0
 
 
-def test_mla_reference_ragged_packing_matches_per_sequence():
+def test_mla_forms_ragged_packing_matches_per_sequence():
     from dataclasses import replace
 
-    from dataflow_training.blocks.modules.mla_reference import mla_block_reference
+    from dataflow_training.blocks.modules.mla_forms import mla_block_reference
 
     d_packed = _Dims(tokens=96, seq_len=None, seq_lens=(64, 32))
     w = _weights(d_packed, seed=5)
@@ -199,8 +199,8 @@ def _block_state(dims, wl, seed):
 def _golden_block(x_ref, leaves, dims, kind, route_ids=None, segments=None):
     """Autograd block: MLA attention (reference) + dense-or-moe tail."""
     from dataflow_training.blocks import ops
-    from dataflow_training.blocks.modules.mla_reference import mla_attention_reference
-    from dataflow_training.blocks.modules.moe.reference import moe_mlp_reference
+    from dataflow_training.blocks.modules.mla_forms import mla_attention_reference
+    from dataflow_training.blocks.modules.moe.forms import moe_mlp_reference
 
     h1 = ops.rmsnorm_reference(x_ref, leaves["attn_norm_w"])
     attn = mla_attention_reference(h1, leaves, dims, segments)
@@ -257,7 +257,7 @@ def test_dsv3_block_ladder2(kind):
     # ONE materialized Segments handed to fwd/recompute (extras) and bwd
     # (a["_seg"]) — standing in for the engine's run-prologue that normally
     # sets it (always-varlen attention needs cu/positions/max_len)
-    seg = Segments.of_dims(dims).on("cuda")
+    seg = Segments.from_dims(dims).on("cuda")
     meta_views = None
     extras = {"seg": seg}
     if kind == "moe":

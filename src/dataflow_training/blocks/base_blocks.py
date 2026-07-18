@@ -101,7 +101,7 @@ class _Base:
         return grad_layout(self.wl, self.dims.dtypes)
 
     @staticmethod
-    def layer_of(task) -> int | None:
+    def parse_layer(task) -> int | None:
         """Layer index of a block-scoped task, derived from its W_{i}
         object (inputs for fwd/recompute/bwd, mutates for the optimizer).
         None for loose tasks (embed/head/loss)."""
@@ -126,8 +126,8 @@ class _Base:
         return {name: tuple(int(x) for x in sl)
                 for name, sl in tp.items()}
 
-    def wl_for(self, task) -> PackedLayout:
-        wl = self._weight_layout(self.layer_of(task))
+    def task_weight_layout(self, task) -> PackedLayout:
+        wl = self._weight_layout(self.parse_layer(task))
         slices = self.tp_slices(task)
         return sliced_layout(wl, slices) if slices else wl
 
@@ -148,9 +148,9 @@ class _Base:
         return resolve_linears(self.LINEAR_FIELDS, layer,
                                self.dtype_policy(), self.kernels)
 
-    def gl_for(self, task) -> PackedLayout:
-        layer = self.layer_of(task)
-        return grad_layout(self.wl_for(task), self.dims.dtypes,
+    def task_grad_layout(self, task) -> PackedLayout:
+        layer = self.parse_layer(task)
+        return grad_layout(self.task_weight_layout(task), self.dims.dtypes,
                            layer=layer,
                            opt_policy=getattr(self.dims, "opt_policy", None))
 
@@ -158,7 +158,7 @@ class _Base:
     def cl(self) -> PackedLayout:
         return activation_layout(self.dims)
 
-    def cl_for(self, task) -> PackedLayout:
+    def task_context_layout(self, task) -> PackedLayout:
         """The task's saved-context layout: under a tensor-parallel
         block param the activations tied to sharded weights narrow to
         the same slice."""
@@ -211,7 +211,7 @@ class _Base:
         acc.wanted = lambda name: name in dw
         return acc
 
-    def _round_of(self, ctx) -> str:
+    def parse_round(self, ctx) -> str:
         parts = ctx.task.id.rsplit("_", 3)
         return parts[2] if len(parts) >= 3 else "0"
 
@@ -224,7 +224,7 @@ class _Base:
         ``seg.cu`` / ``seg.positions`` / ``seg.max_len`` as attributes,
         never rebuilding a device tensor mid-round. Round parsed from
         the task id ({s}_{r})."""
-        r = self._round_of(ctx)
+        r = self.parse_round(ctx)
         from ..data.segments import resolve_segments
 
         # run_args are OPAQUE to the engine: the workload resolves its
@@ -463,7 +463,7 @@ class AdamWStep(_Base):  # name kept for resolver back-compat; see OptimizerStep
     storage dtypes (fp32 in registers regardless — the kernels are
     dtype-generic); padding gaps are never touched. ``kind`` selects the
     llama-shaped default layout ("block" | "embed" | "head");
-    ``layout_for(dims, task, w_size_bytes) -> (PackedLayout, ns)`` overrides
+    ``resolve_layout(dims, task, w_size_bytes) -> (PackedLayout, ns)`` overrides
     it for families whose optimizer key spans several layouts (qwen3's own
     block layout, qwen3.5's per-kind blocks / tied embed). The chosen
     layout's total_bytes must equal the W buffer size — a mismatch is a
@@ -472,7 +472,7 @@ class AdamWStep(_Base):  # name kept for resolver back-compat; see OptimizerStep
 
     hyper: AdamWHyper = AdamWHyper()
     kind: str = "block"
-    layout_for: object = None
+    resolve_layout: object = None
     # per-field update overrides: {field_name: fn(kctx, kernels, w_view,
     # g_view)} — the field SKIPS AdamW math entirely (no m/v read, no
     # decay). First customer: DeepSeek-V3's non-gradient router bias,
@@ -482,9 +482,9 @@ class AdamWStep(_Base):  # name kept for resolver back-compat; see OptimizerStep
 
     def _layouts(self, task, w_size: int):
         d = self.dims
-        layer = self.layer_of(task)
-        if self.layout_for is not None:
-            wl_, ns = self.layout_for(d, task, w_size)
+        layer = self.parse_layer(task)
+        if self.resolve_layout is not None:
+            wl_, ns = self.resolve_layout(d, task, w_size)
         elif self.kind == "embed":
             wl_, ns = embed_weight_layout(d), "embed"
         elif self.kind == "head":

@@ -90,7 +90,7 @@ def _eager_topk(kctx, scores, idx_out):
             idx_out[r0:r1, kk:].copy_(order[:, kk - 1:kk].to(idx_out.dtype))
 
 
-def _mask_for(idx, lo, hi, rows_lo, rows_hi):
+def build_selection_mask(idx, lo, hi, rows_lo, rows_hi):
     """{0,-inf} (R, L) mask for query rows [rows_lo, rows_hi) of the
     sequence [lo, hi): scatter selections then re-add causal."""
     device = idx.device
@@ -117,7 +117,7 @@ def _eager_sparse_attn_fwd(kctx, q, kf, vp, idx, out, lse_out, *,
     for lo, hi in seq_bounds:
         for r0 in range(lo, hi, _ROW_CHUNK):
             r1 = min(r0 + _ROW_CHUNK, hi)
-            m = _mask_for(idx, lo, hi, r0, r1)                       # (R, L)
+            m = build_selection_mask(idx, lo, hi, r0, r1)                       # (R, L)
             lg = torch.einsum("rhd,shd->hrs", q3[r0:r1].float(),
                               k3[lo:hi].float()) * scale
             lg = lg + m.unsqueeze(0)
@@ -154,7 +154,7 @@ def _eager_sparse_attn_bwd(kctx, d_attn, q, kf, vp, idx, lse,
                              dtype=torch.float32, device=q.device)
         for r0 in range(lo, hi, _ROW_CHUNK):
             r1 = min(r0 + _ROW_CHUNK, hi)
-            m = _mask_for(idx, lo, hi, r0, r1)
+            m = build_selection_mask(idx, lo, hi, r0, r1)
             lg = torch.einsum("rhd,shd->hrs", q3[r0:r1].float(), kseq) * scale
             p = torch.exp(lg + m.unsqueeze(0) - lse[:, r0:r1].unsqueeze(-1))
             da = da3[r0:r1].float()
@@ -787,7 +787,7 @@ def _eager_probs_sum(kctx, q, kf, idx, lse, p_out, *,
     for lo, hi in seq_bounds:
         length = hi - lo
         p_slice = p_out[lo:hi, lo:hi] if p_out.shape[0] != length else p_out
-        m = _mask_for(idx, lo, hi, lo, hi)
+        m = build_selection_mask(idx, lo, hi, lo, hi)
         acc = torch.zeros(length, length, device=q.device)
         for hh in range(n_heads):
             lg = (q3[lo:hi, hh].float() @ k3[lo:hi, hh].float().T) * scale

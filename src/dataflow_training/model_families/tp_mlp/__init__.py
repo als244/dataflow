@@ -13,7 +13,7 @@ from .model import (  # noqa: F401
     TpMlpDims,
     TpMlpFwd,
     build_tp_mlp_resolver,
-    dims_of_tp_mlp,
+    derive_dims,
     full_width_draws,
     initial_values_tp_mlp,
     lower_tp_mlp,

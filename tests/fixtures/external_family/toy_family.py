@@ -9,7 +9,7 @@ public surfaces the way ``examples/`` do:
 - ``lowering.shaped_program.build_shaped_program`` + ``LayerKindSpec``
   for the standard chain grammar (family-invariant task/object ids);
 - ``lowering.emit`` helpers (``FamilyLayouts``/``LayerLayout``/
-  ``apply_exact_sizes``/``size_of_factory``/``initial_values_from_layouts``)
+  ``apply_exact_sizes``/``object_size_factory``/``initial_values_from_layouts``)
   for packed-byte truth + seeded init;
 - ``blocks.layouts`` (``PackedLayout``/``DTypePolicy``, the embed/head
   table layouts) and ``blocks.base_blocks`` templates (``EmbedFwd``/
@@ -39,13 +39,13 @@ from dataflow_training.lowering.emit import (
     LayerLayout,
     apply_exact_sizes,
     initial_values_from_layouts,
-    size_of_factory,
+    object_size_factory,
 )
 from dataflow_training.lowering.shaped_program import (
     LayerKindSpec,
     build_shaped_program,
 )
-from dataflow_training.model_families.families import Family, register_family
+from dataflow_training.model_families.families import ModelFamily, register_family
 
 
 @dataclass(frozen=True)
@@ -164,7 +164,7 @@ def lower_toy(cfg: ToyConfig, recompute_levels=None):
         recompute_levels=recompute_levels,
     )
     return apply_exact_sizes(shaped, "toyfam-exact",
-                             size_of=size_of_factory(dims, toy_layouts(dims)))
+                             object_size=object_size_factory(dims, toy_layouts(dims)))
 
 
 def toy_initial_values(program, cfg: ToyConfig, backend, *, seed: int = 0,
@@ -328,18 +328,18 @@ def build_toy_resolver(dims: ToyDims, hyper=None):
         "head_loss": HeadLoss(dims, kernels),
         "embed_bwd": EmbedBwd(dims, kernels),
         "optimizer_block": OptimizerStep(dims, kernels, hyper,
-                                         layout_for=toy_optimizer_layout),
+                                         resolve_layout=toy_optimizer_layout),
         "optimizer_embed": OptimizerStep(dims, kernels, hyper, kind="embed"),
         "optimizer_head": OptimizerStep(dims, kernels, hyper, kind="head"),
     }
     return ToyResolver(table)
 
 
-def toy_family() -> Family:
-    return Family(
+def toy_family() -> ModelFamily:
+    return ModelFamily(
         name="toyfam",
         config_type=ToyConfig,
-        dims_of=toy_dims,
+        derive_dims=toy_dims,
         lower=lower_toy,
         initial_values=toy_initial_values,
         build_resolver=build_toy_resolver,

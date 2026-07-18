@@ -9,7 +9,7 @@ exists. A family plugs in through five points (docs/extending.md):
      the family's ffn-norm stage;
   3. the block backward's ``_mlp_bwd`` delegates to ``stages.moe_mlp_tail_bwd``
      (+ the ``MoEProfileFill`` mixin for profiling);
-  4. the family golden composes ``reference.moe_mlp_reference``;
+  4. the family golden composes ``forms.moe_mlp_reference``;
   5. the family Dims carries ``moe: MoESpec``.
 
 Kernel implementations live in ``dataflow_training.kernels.moe_*`` (registry
@@ -17,7 +17,7 @@ families with eager fallbacks; dispatch/combine are the future
 expert-parallelism all-to-all seam).
 
 Import shape: ``spec`` is torch-free and imported EAGERLY (the layouts /
-lowering layer composes it without torch); ``reference``/``stages`` import
+lowering layer composes it without torch); ``forms``/``stages`` import
 torch and resolve LAZILY through module ``__getattr__``.
 """
 from .spec import (  # noqa: F401  (torch-free)
@@ -28,9 +28,9 @@ from .spec import (  # noqa: F401  (torch-free)
 )
 
 _LAZY = {
-    "moe_topk_reference": "reference",
-    "moe_aux_loss_reference": "reference",
-    "moe_mlp_reference": "reference",
+    "moe_topk_reference": "forms",
+    "moe_aux_loss_reference": "forms",
+    "moe_mlp_reference": "forms",
     "MOE_STAGES": "stages",
     "MOE_SHARED_STAGES": "stages",
     "MoEProfileFill": "stages",

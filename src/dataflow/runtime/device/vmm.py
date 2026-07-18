@@ -296,7 +296,7 @@ class VmmArena:
         self._va_cursor = base
         self._va_block_end = base + self.va_bytes
 
-    def _va_for(self, span: int) -> int:
+    def reserve_va(self, span: int) -> int:
         recycled = self._free_vas.get(span)
         if recycled:
             return recycled.pop()
@@ -330,7 +330,7 @@ class VmmArena:
             self._live[id(buf)] = buf
             return buf
         handle = self._obtain_handle(span)
-        va = self._va_for(span)
+        va = self.reserve_va(span)
         self._map(va, span, handle)
         self.used_bytes += span
         self.peak_used_bytes = max(self.peak_used_bytes, self.used_bytes)

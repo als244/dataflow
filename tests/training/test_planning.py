@@ -49,7 +49,7 @@ def test_recompute_fires_under_starved_interconnect():
     """With PCIe too slow to hide offload round-trips, the planner must
     choose recompute and beat the save-all pressurefit plan. (At healthy
     PCIe the same config correctly chooses zero recompute — transfers hide
-    under compute; verified in tools/golden_path.py runs.)"""
+    under compute; verified in tools/export_program.py runs.)"""
     from dataflow_training.lowering.shaped_program import ShapedHardware
 
     cfg = ShapedLlamaConfig.llama3_8b()

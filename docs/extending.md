@@ -227,12 +227,12 @@ under the adamw default, fewer or none for sgdm/sgd/muon; never a flat
 view; see §6), and `OptimizerStep` updates per field through typed
 views, dispatching each field's step rule per that same policy. Embed/head tables are
 policy-addressed `"embed.w"` / `"head.w"`; a heterogeneous family's
-optimizer resolves its layout per task (`layout_for`, size-verified).
+optimizer resolves its layout per task (`resolve_layout`, size-verified).
 Policies can be DEPTH-DEPENDENT (`layer_overrides`: first matching
 layer-set wins, its sub-policy owns that layer); per-layer dtypes mean
 per-layer packed sizes, so layouts resolve per layer everywhere — block
 executables derive their layer from the task's `W_{i}` object
-(`_Base.layer_of`). Mixed-policy E2E gates:
+(`_Base.parse_layer`). Mixed-policy E2E gates:
 `tests/training/test_dtype_policy_e2e.py`.
 
 ## 4. Lower it (`training/`)
@@ -252,7 +252,7 @@ Lowering emits the bare task chain plus the pieces planning needs:
   `roofline_block_kind_spec`). Sizes + initial values are generic too
   (`training/lowering.py`): declare a `FamilyLayouts` (which packed
   layout backs each weight object, per layer; init specials) and call
-  `size_of_factory` / `initial_values_from_layouts`. ONE module per
+  `object_size_factory` / `initial_values_from_layouts`. ONE module per
   family holds all of it — config, kind specs, dims mapping, layouts
   declaration (`training/models/llama3.py` / `qwen3.py` / `qwen35.py`,
   ~130-230 lines each, pure declarations).
@@ -404,16 +404,16 @@ through `tasks/optim.py`:
   default is pinned byte-stable by the lowering tripwires + every
   family ladder.
 
-## 7. The Family contract, registration, and validation
+## 7. The ModelFamily contract, registration, and validation
 
-A family IS its `Family` record (`training/families.py`) — five typed
+A family IS its `ModelFamily` record (`training/families.py`) — five typed
 callables plus the config type, each field a `typing.Protocol` with the
 exact signature documented in its docstring:
 
 | field | contract (see the Protocol docstring for the full text) |
 |---|---|
-| `config_type` | frozen dataclass with preset classmethods (`tiny()` at minimum; `mini`/real-scale for benching); carries the standard knobs (`dtypes`, `opt_policy`, `optimizer_placement`) which `dims_of` forwards into the Dims |
-| `dims_of: DimsOfFn` | cfg -> Dims; incompatible knob combinations raise HERE, at build time |
+| `config_type` | frozen dataclass with preset classmethods (`tiny()` at minimum; `mini`/real-scale for benching); carries the standard knobs (`dtypes`, `opt_policy`, `optimizer_placement`) which `derive_dims` forwards into the Dims |
+| `derive_dims: DeriveDimsFn` | cfg -> Dims; incompatible knob combinations raise HERE, at build time |
 | `lower: LowerFn` | cfg -> Program; MUST keep the task/object naming shape `<prefix>_{step}_{round}_{layer}` / `A_ dW_ W_ O_ M_ dM_`; accepts `recompute_levels=` for planner re-lowering |
 | `initial_values: InitialValuesFn` | (program, cfg, backend, seed) -> pinned host tensors; generation ORDER is part of golden comparability |
 | `build_resolver: BuildResolverFn` | dims -> callable `task -> executable` (with `.launch(ctx)`); must resolve planner-inserted recompute tasks (key by compute key, never task id) |
@@ -451,11 +451,11 @@ What adding a family (e.g. Qwen3) actually touches, in order:
    the `LayerKindSpec`(s) into `build_shaped_program`, the config->dims
    mapping, and the `FamilyLayouts` into the generic lowering (§4). The
    recompute `build_variant` is just the builder re-invoked with levels.
-   The config carries the standard knobs and `dims_of` FORWARDS them
+   The config carries the standard knobs and `derive_dims` FORWARDS them
    into the Dims: `dtypes` (§3) and `opt_policy` (§6) — a family that
    forgets the `opt_policy=cfg.opt_policy` forward silently pins its
    users to adamw (the Dims default).
-5. `training/families.py` — register the `Family` entry
+5. `training/families.py` — register the `ModelFamily` entry
    (`resolve_family` dispatches on config type; configs must NOT subclass
    another family's config).
 6. `tools/bench_train.py` `CONFIGS` — named presets: `tiny` (ladder
@@ -486,7 +486,7 @@ embeddings) added to the machinery — reuse, don't reinvent:
   `kind_of=` to `build_shaped_program`. Task IDs stay uniform
   (`block_fwd_{s}_{r}_{i}`); only the compute keys differ per kind, so
   the train loop/NVTX/window-oracle regexes need nothing. Lowering sizes
-  per-layer via `apply_exact_sizes(..., size_of=)`. The `Family` entry
+  per-layer via `apply_exact_sizes(..., object_size=)`. The `ModelFamily` entry
   omits the gradcheck bundle (its fields default to None) and the
   per-kind ladder-2 tests live in the family's own test module.
 - **Tied embeddings**: a config flag (`tied_embeddings=True`). The chain
@@ -537,7 +537,7 @@ embeddings) added to the machinery — reuse, don't reinvent:
   an M-object (never recomputed — see §2); the indexer's KL loss is
   gradient-injected like MoE aux (golden autograds it, runtime reports CE
   only); dense warm-up and frozen-indexer ablations are config knobs
-  validated in `dims_of`; absorbed/MQA execution and FlashMLA live behind
+  validated in `derive_dims`; absorbed/MQA execution and FlashMLA live behind
   registry capability flags (`caps["flash_mla"]`).
 
 The family test module's canonical ladder (copy the newest family's —

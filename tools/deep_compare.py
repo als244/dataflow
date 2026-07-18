@@ -106,7 +106,7 @@ def main() -> int:
         cfg = replace(cfg, seq_lens=ragged_partition(cfg))
 
     fam = resolve_family(cfg)
-    dims = fam.dims_of(cfg)
+    dims = fam.derive_dims(cfg)
     program = fam.lower(cfg)
     keep = {o.id for t in program.tasks for o in t.outputs
             if o.id.startswith(("dW", "y_", "dy_"))}

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from ..optim import OPTIMIZERS, hyper_for, resolve_opt_policy
+from ..optim import OPTIMIZERS, resolve_hyper, resolve_opt_policy
 
 
 def field_key(ns: str | None, name: str) -> str:
@@ -37,7 +37,7 @@ def update_fields(block, ctx, kctx, wl, gl, ol, ns,
     by the caller's post-update broadcast)."""
     step = run_step(ctx)
     op = resolve_opt_policy(getattr(block.dims, "opt_policy", None))
-    layer = block.layer_of(ctx.task)
+    layer = block.parse_layer(ctx.task)
     # lr schedule: pure function of the step index; scales lr AND
     # muon_lr, applied AFTER per-field hyper overrides
     sched = block.hyper.schedule
@@ -62,7 +62,7 @@ def update_fields(block, ctx, kctx, wl, gl, ol, ns,
                                       f.shape)]
         if opt.name == "frozen":
             continue            # frozen: no grad storage, no update
-        hp = hyper_for(op, field_key(ns, f.name), layer, block.hyper)
+        hp = resolve_hyper(op, field_key(ns, f.name), layer, block.hyper)
         if sched_scale != 1.0:
             hp = replace(hp, lr=hp.lr * sched_scale,
                          muon_lr=(hp.muon_lr * sched_scale

@@ -128,7 +128,7 @@ def test_engine_matches_reference_ragged(name):
     recipe = smoke_recipe()
     stream = make_stream(total)
     fam = resolve_family(cfg)
-    dims = fam.dims_of(cfg)
+    dims = fam.derive_dims(cfg)
 
     # ---- reference: per-sequence forward, global denominator -------
     from dataflow.runtime.device.cuda import CudaBackend

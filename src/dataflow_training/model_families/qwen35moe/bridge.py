@@ -49,11 +49,11 @@ def to_qwen35moe_state_dict(cfg, get_bytes) -> dict:
         qwen35moe_attn_weight_layout,
         qwen35moe_lin_weight_layout,
     )
-    from .model import dims_of_qwen35moe
+    from .model import derive_dims
 
     if cfg.tied_embeddings:
         raise NotImplementedError("qwen35moe is untied (the 35B config)")
-    dims = dims_of_qwen35moe(cfg)
+    dims = derive_dims(cfg)
     sd: dict[str, torch.Tensor] = {}
     ew = embed_weight_layout(dims).unpack_tensor(get_bytes("W_embed"))
     sd["embed.weight"] = ew["w"].clone()

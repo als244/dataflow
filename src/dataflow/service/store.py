@@ -183,12 +183,12 @@ class Store:
 
         return bytes_view(self.slab.ptr + rec.extent.offset, rec.size_bytes)
 
-    def ptr_of(self, rec: ObjectRecord) -> int:
+    def host_ptr(self, rec: ObjectRecord) -> int:
         """Absolute host address of a resident (real mode) — consumed
         by the bridge (family fills, engine adoption in S1.2)."""
         if self.slab is None:
             raise ServiceError("BAD_REQUEST",
-                               "ptr_of requires a real (pinned) boot")
+                               "host_ptr requires a real (pinned) boot")
         return self.slab.ptr + rec.extent.offset
 
     # ---- create/write ----

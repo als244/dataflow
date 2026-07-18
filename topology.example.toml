@@ -5,7 +5,7 @@
 # tooling needs lives in that file; the codebase names no hosts,
 # addresses, or filesystem paths.
 
-# Host the conductor (tools/pretrain_dp.py, fleet tests) runs on.
+# Host the conductor (tools/train_fleet.py, fleet tests) runs on.
 # Must name one of the [hosts.*] entries, and that entry must be
 # local (no `ssh` key).
 conductor = "alpha"

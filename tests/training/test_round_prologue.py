@@ -104,7 +104,7 @@ def test_round_prologue_engine_e2e():
     from dataflow_training.blocks.base_blocks import RoundPrologue
     from dataflow.runtime.interop import torch_view
     from dataflow_training.model_families.llama3.blocks import build_resolver
-    from dataflow_training.lowering.emit import apply_exact_sizes, size_of_factory
+    from dataflow_training.lowering.emit import apply_exact_sizes, object_size_factory
     from dataflow_training.model_families.llama3 import family_layouts, initial_values
     from dataflow_training.lowering.planning import plan_program
 
@@ -112,7 +112,7 @@ def test_round_prologue_engine_e2e():
     dims, fl = family_layouts(cfg)
     shaped = build_with_prologue(cfg)
     program = apply_exact_sizes(shaped, "llama3-exact",
-                                size_of=size_of_factory(dims, fl))
+                                object_size=object_size_factory(dims, fl))
     # pin the LAST round's marker so its bytes survive to readback
     program = replace(program, final_locations={
         **program.final_locations, "current_round_0_1": "backing"})

@@ -42,9 +42,9 @@ def to_qwen35_state_dict(cfg, get_bytes) -> dict:
         qwen35_attn_weight_layout,
         qwen35_lin_weight_layout,
     )
-    from .model import dims_of_qwen35
+    from .model import derive_dims
 
-    dims = dims_of_qwen35(cfg)
+    dims = derive_dims(cfg)
     sd: dict[str, torch.Tensor] = {}
     if cfg.tied_embeddings:
         ew = head_weight_layout(dims).unpack_tensor(get_bytes("W_embed"))

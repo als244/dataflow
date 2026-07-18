@@ -60,7 +60,7 @@ def main() -> int:
           f"aux_coef={cfg.aux_coef}")
 
     fam = resolve_family(cfg)
-    dims = fam.dims_of(cfg)
+    dims = fam.derive_dims(cfg)
     print(f"dims: tokens={dims.tokens} "
           f"seq_len={getattr(dims, 'seq_len', '<absent>')} "
           f"seq_lens={getattr(dims, 'seq_lens', '<absent>')}")

@@ -72,7 +72,7 @@ def test_daemon_packed_args_bit_equal(tmp_path):
     planned = plan_program(fam.lower(cfg),
                            fast_memory_capacity=64 * 1024 * 1024)
     prog = planned.program
-    dims = fam.dims_of(cfg)
+    dims = fam.derive_dims(cfg)
 
     backend = CudaBackend()
     values = fam.initial_values(prog, cfg, backend, seed=11)

@@ -6,7 +6,7 @@ import pytest
 
 from dataflow.service.registry import (
     registered_kinds,
-    resolver_for,
+    lookup_resolver,
 )
 from dataflow.service.wire import ServiceError
 from dataflow_training.model_families.families import build_init_program, family
@@ -29,7 +29,7 @@ def test_register_all_resolves_every_family():
     assert "model_family" in registered_kinds()
     for name in FAMILIES:
         spec = canonical_spec(name, smoke_cfg_dict(name))
-        resolver = resolver_for(spec)
+        resolver = lookup_resolver(spec)
         fam = family(name)
         cfg = fam.config_type(**spec["cfg"])
         program = fam.lower(cfg)
@@ -48,8 +48,8 @@ def test_register_all_resolves_every_family():
 def test_unknown_kind_is_loud():
     register_all()
     with pytest.raises(ServiceError) as e:
-        resolver_for({"kind": "nonsense"})
+        lookup_resolver({"kind": "nonsense"})
     assert "model_family" in str(e.value)
     with pytest.raises(ServiceError) as e:
-        resolver_for({"family": "llama3"})   # no kind at all
+        lookup_resolver({"family": "llama3"})   # no kind at all
     assert "kind" in str(e.value)

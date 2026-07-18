@@ -128,7 +128,7 @@ def test_opt_state_layout_slots_follow_policy():
     from dataflow_training.model_families.families import resolve_family as _rf
     from dataflow_training.model_families.llama3 import ShapedLlamaConfig
 
-    dims = _rf(ShapedLlamaConfig.tiny()).dims_of(ShapedLlamaConfig.tiny())
+    dims = _rf(ShapedLlamaConfig.tiny()).derive_dims(ShapedLlamaConfig.tiny())
     wl = weight_layout(dims)
     base = opt_state_layout(wl, dims.dtypes)                # all adamw
     assert {f.name.split("_", 1)[0] for f in base.fields} == {"m", "v"}
@@ -211,7 +211,7 @@ def test_mixed_policy_model_step_vs_hand_replica():
                                   ("wo", "sgd")))
     cfg = replace(ShapedLlamaConfig.tiny(), opt_policy=policy)
     fam = resolve_family(cfg)
-    dims = fam.dims_of(cfg)
+    dims = fam.derive_dims(cfg)
     planned = plan_program(retain_grad_slabs(fam.lower(cfg)),
                            fast_memory_capacity=64 * 1024 * 1024)
     backend = CudaBackend()
@@ -306,7 +306,7 @@ def test_muon_recipe_string_model_step_vs_hand_replica():
 
     cfg = replace(ShapedLlamaConfig.tiny(), opt_policy="muon")
     fam = resolve_family(cfg)
-    dims = fam.dims_of(cfg)
+    dims = fam.derive_dims(cfg)
     assert resolve_opt_policy(dims.opt_policy).for_field(
         "wq", None, (2, 2)) == "muon"
     planned = plan_program(retain_grad_slabs(fam.lower(cfg)),
@@ -392,7 +392,7 @@ def test_layer_indexed_policy_sizes_and_model_step():
                        layer_overrides=(((0,), "sgd"),))
     cfg = replace(ShapedLlamaConfig.tiny(), opt_policy=policy)
     fam = resolve_family(cfg)
-    dims = fam.dims_of(cfg)
+    dims = fam.derive_dims(cfg)
     prog = fam.lower(cfg)
     o_sizes = {o.id: o.size_bytes for o in prog.initial_objects
                if o.id.startswith("O_") and o.id[2:].isdigit()}
@@ -502,7 +502,7 @@ def test_hyper_overrides_and_schedule_model_step():
                                            total_steps=100))
     cfg = replace(ShapedLlamaConfig.tiny(), opt_policy=policy)
     fam = resolve_family(cfg)
-    dims = fam.dims_of(cfg)
+    dims = fam.derive_dims(cfg)
     planned = plan_program(retain_grad_slabs(fam.lower(cfg)),
                            fast_memory_capacity=64 * 1024 * 1024)
     backend = CudaBackend()

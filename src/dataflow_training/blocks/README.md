@@ -12,7 +12,7 @@ never imports the simulator.
 | `base_blocks.py` | family-NEUTRAL executables: `_Base`, embed fwd/bwd, `HeadLoss`, the optimizer-step dispatch (`AdamWStep`) |
 | `adamw/` | the optimizer-step comm variants, one per file: `dp` (plain allreduce + standalone), `shards` (field-snapped regions + owner broadcast), `rs` (byte-equal reduce_scatter/all_gather), over the shared `update` core |
 | `models/` | one module per model family (`<family>_blocks.py`): stages, backwards, resolver. `models/llama3_blocks.py` also hosts the `Block*` templates every family subclasses (their default STAGES are llama's) |
-| `modules/` | shared building-block modules: the pluggable `moe/` package, `dsa_reference.py`, `mla_reference.py` |
+| `modules/` | shared building-block modules: the pluggable `moe/` package, `dsa_forms.py`, `mla_forms.py` |
 | `kernels/` | the registry op implementations (eager/triton/aten/fla) |
 | `layouts.py`, `ops.py`, `optim.py`, `interop.py` | packed layouts + dims, eager op library, optimizer defs/policies, torch-buffer interop |
 

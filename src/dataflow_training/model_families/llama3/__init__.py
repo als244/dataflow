@@ -10,7 +10,7 @@ from .model import (  # noqa: F401
     ShapedHardware,
     ShapedLlamaConfig,
     build_shaped_llama3,
-    dims_of,
+    derive_dims,
     family_layouts,
     initial_values,
     lower_llama3,

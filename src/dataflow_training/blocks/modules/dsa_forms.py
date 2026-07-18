@@ -1,6 +1,6 @@
 """DSA (DeepSeek Sparse Attention) — REFERENCE forms only (DeepSeek-V3.2).
 
-NOT a task/executable: pure-autograd anchors (like mla_reference.py) for
+NOT a task/executable: pure-autograd anchors (like mla_forms.py) for
 the lightning indexer, top-k selection, sparse-core attention, and the
 indexer's KL training loss. Runtime executables live in dsv32_blocks.py.
 
@@ -55,7 +55,7 @@ def dsa_index_scores_reference(
     d = dims
     t = h1.shape[0]
     hi, di, rope = d.index_n_heads, d.index_head_dim, d.qk_rope_dim
-    seg = segments if segments is not None else ops.Segments.of_dims(d).on(h1.device)
+    seg = segments if segments is not None else ops.Segments.from_dims(d).on(h1.device)
     pos = seg.positions
 
     q = (q_lora_n @ w["w_idx_q"]).view(t, hi, di)
@@ -86,7 +86,7 @@ def _causal_mask(dims, t: int, device, segments=None) -> torch.Tensor:
     """(t, t) additive mask: 0 on/below the per-sequence causal diagonal,
     -inf above it AND across sequence boundaries. ``segments`` (None derives
     from ``dims``) supplies the per-sequence token counts."""
-    seg = segments if segments is not None else ops.Segments.of_dims(dims)
+    seg = segments if segments is not None else ops.Segments.from_dims(dims)
     lens = seg.lengths
     m = torch.full((t, t), float("-inf"), device=device)
     lo = 0
@@ -145,7 +145,7 @@ def dsa_sparse_attention_reference(
     d = dims
     t = q_full.shape[0]
     h, qk = d.n_heads, d.qk_head_dim
-    seg = segments if segments is not None else ops.Segments.of_dims(d)
+    seg = segments if segments is not None else ops.Segments.from_dims(d)
     lens = seg.lengths
     outs = []
     lo = 0
@@ -204,7 +204,7 @@ def dsa_attention_rows_reference(q_full: torch.Tensor, k_full: torch.Tensor,
     ``segments`` (None derives from ``dims``) supplies the per-sequence
     token counts."""
     h, qk = d.n_heads, d.qk_head_dim
-    seg = segments if segments is not None else ops.Segments.of_dims(d)
+    seg = segments if segments is not None else ops.Segments.from_dims(d)
     with torch.no_grad():
         p = torch.zeros(t, t, device=q_full.device)
         scale = qk ** -0.5

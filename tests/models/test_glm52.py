@@ -38,9 +38,9 @@ def _tiny_cfg(**over):
 
 
 def _tiny_dims(cfg=None):
-    from dataflow_training.model_families.glm52 import dims_of_glm52
+    from dataflow_training.model_families.glm52 import derive_dims
 
-    return dims_of_glm52(cfg if cfg is not None else _tiny_cfg())
+    return derive_dims(cfg if cfg is not None else _tiny_cfg())
 
 
 # --- golden self-consistency -----------------------------------------------------
@@ -93,12 +93,12 @@ def test_glm52_partial_ownership_lowering_rejected():
     import dataclasses
     import unittest.mock as mock
 
-    from dataflow_training.model_families.glm52 import dims_of_glm52, lower_glm52
+    from dataflow_training.model_families.glm52 import derive_dims, lower_glm52
 
     cfg = _tiny_cfg()
-    part = dataclasses.replace(dims_of_glm52(cfg).moe, expert_ids=(0, 1, 2))
+    part = dataclasses.replace(derive_dims(cfg).moe, expert_ids=(0, 1, 2))
     with pytest.raises(NotImplementedError):
-        with mock.patch("dataflow_training.model_families.glm52.model.moe_spec_of", return_value=part):
+        with mock.patch("dataflow_training.model_families.glm52.model.derive_moe_spec", return_value=part):
             lower_glm52(cfg)
 
 
@@ -169,7 +169,7 @@ def test_glm52_ga2_matches_reference():
 
     cfg = _tiny_cfg(grad_accum_rounds=2)
     fam = resolve_family(cfg)
-    dims = fam.dims_of(cfg)
+    dims = fam.derive_dims(cfg)
     planned = plan_program(fam.lower(cfg),
                            fast_memory_capacity=16 * 1024 * 1024)
     backend = CudaBackend()
@@ -262,13 +262,13 @@ def _run(engine_kwargs=None, program=None, seed=7, resolver_wrapper=None):
     from dataflow_training.data.segments import uniform_segments
 
     dry = Engine(FakeBackend()).execute(prog, initial_buffers=values)
-    resolver = fam.build_resolver(fam.dims_of(cfg))
+    resolver = fam.build_resolver(fam.derive_dims(cfg))
     if resolver_wrapper is not None:
         resolver = resolver_wrapper(resolver, backend)
     result = Engine(backend, **(engine_kwargs or {})).execute(
         prog, resolver=resolver,
         initial_buffers=values, pool_prewarm=dry.pool_demand,
-        run_args={"segments": uniform_segments(fam.dims_of(cfg), prog)},
+        run_args={"segments": uniform_segments(fam.derive_dims(cfg), prog)},
     )
     out = {}
     for obj_id in ["W_embed", "W_head"] + [f"W_{i}" for i in range(cfg.n_layers)]:
@@ -319,7 +319,7 @@ def test_glm52_measured_costs_replan_still_golden():
     fam = resolve_family(cfg)
     program = fam.lower(cfg)
     backend = CudaBackend()
-    resolver = fam.build_resolver(fam.dims_of(cfg))
+    resolver = fam.build_resolver(fam.derive_dims(cfg))
     profiles = profile_program(program, resolver, backend, soak_seconds=0)
     # the policy-frozen router bias puts these families on the
     # frozen-fingerprint signature path: apply needs the same resolver
@@ -424,7 +424,7 @@ def test_glm52_dense_warmup_freeze_and_movement():
 
     cfg = _tiny_cfg(sparse_mode=False)
     fam = resolve_family(cfg)
-    dims = fam.dims_of(cfg)
+    dims = fam.derive_dims(cfg)
     planned = plan_program(fam.lower(cfg), fast_memory_capacity=64 * 1024 * 1024)
     backend = CudaBackend()
     values = fam.initial_values(planned.program, cfg, backend, seed=13)

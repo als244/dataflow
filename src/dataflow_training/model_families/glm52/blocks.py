@@ -127,7 +127,7 @@ class Glm52AuxTempState:
                     buf_of[int(oid.rsplit("_", 1)[1])] = self._in(ctx, j)
         if layout.fields and layer in buf_of:
             st["aux_temp"] = layout.views(buf_of[layer])
-        producer = d.leader_of(layer)
+        producer = d.leader_index(layer)
         if (getattr(d, "sparse_mode", True)
                 and producer != layer and producer in buf_of):
             # the shared selection: dsa_idx is the FIRST field (offset 0)
@@ -186,7 +186,7 @@ class Glm52ProfileFill(Dsv32ProfileFill):
                 lo_of = torch.empty(d.tokens, dtype=torch.long, device="cuda")
                 lo = 0
                 # profiler seed data: dims-derived (uniform) per-seq lengths
-                for L in ops.Segments.of_dims(d).lengths:
+                for L in ops.Segments.from_dims(d).lengths:
                     lo_of[lo:lo + L] = lo
                     lo += L
                 idx.copy_(torch.maximum(rows - offs,
@@ -673,7 +673,7 @@ def build_glm52_resolver(
     }
 
     def _opt_layout(d, task, size):
-        layer = AdamWStep.layer_of(task)
+        layer = AdamWStep.parse_layer(task)
         return _WL[d.kinds[layer]](d, layer=layer), None
 
     if dims.sparse_mode:
@@ -712,7 +712,7 @@ def build_glm52_resolver(
         "head_loss": HeadLoss(dims, kernels),
         "embed_bwd": EmbedBwd(dims, kernels),
         "optimizer_block": AdamWStep(
-            dims, kernels, hyper, layout_for=_opt_layout,
+            dims, kernels, hyper, resolve_layout=_opt_layout,
         ),
         "optimizer_embed": opt_embed,
         "optimizer_head": opt_head,

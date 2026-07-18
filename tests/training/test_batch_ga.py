@@ -14,7 +14,7 @@ from dataflow.runtime.device.fake import FakeBackend  # noqa: E402
 from dataflow.runtime.interop import torch_view  # noqa: E402
 from dataflow_training.model_families.llama3.blocks import build_resolver  # noqa: E402
 from dataflow_training.blocks import ops  # noqa: E402
-from dataflow_training.model_families.llama3 import dims_of, initial_values, lower_llama3  # noqa: E402
+from dataflow_training.model_families.llama3 import derive_dims, initial_values, lower_llama3  # noqa: E402
 from dataflow_training.lowering.planning import plan_program  # noqa: E402
 from dataflow_training.model_families.llama3 import ShapedLlamaConfig  # noqa: E402
 from dataflow_training.testing.gradcheck import rel_l2  # noqa: E402
@@ -51,7 +51,7 @@ def test_batch_ga_model_step_matches_reference():
     from dataflow_training.blocks.base_blocks import AdamWHyper
     from dataflow_training.testing.gradcheck import EngineFinalBytes
 
-    dims = dims_of(CFG)
+    dims = derive_dims(CFG)
     program = lower_llama3(CFG)
     planned = plan_program(program, fast_memory_capacity=10 * 1024 * 1024)  # tight
 

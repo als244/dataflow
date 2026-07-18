@@ -14,7 +14,7 @@ routing_mode string):
       the per-round token count = logits rows, f = counts/(T*K) detached.
 
 Semantics pinned by tests/modules/test_moe.py against
-``dataflow_training.blocks.modules.moe.reference``: fp32 routing math from bf16 logits;
+``dataflow_training.blocks.modules.moe.forms``: fp32 routing math from bf16 logits;
 tie-break = SMALLEST expert index in both modes (torch.topk's CUDA
 tie-break picks the larger index — that is why the eager path is
 sort-based, not topk-based).
@@ -41,7 +41,7 @@ _MODE_ID = {"topk_then_softmax": 0, "softmax_then_topk": 1}
 
 
 def _eager_topk_softmax(kctx, logits, route_w_out, route_ids_out, *, top_k, mode):
-    from ..blocks.modules.moe.reference import moe_topk_reference
+    from ..blocks.modules.moe.forms import moe_topk_reference
 
     w, ids = moe_topk_reference(logits, top_k, mode)
     route_w_out.copy_(w.to(route_w_out.dtype))
@@ -100,7 +100,7 @@ register("moe_aux_lb_grad", "eager", deterministic=True, allocates="torch",
 
 def _eager_topk_sigmoid_noaux(kctx, logits, bias, route_w_out, route_ids_out, *,
                               top_k, n_group, topk_group, routed_scaling):
-    from ..blocks.modules.moe.reference import moe_topk_reference
+    from ..blocks.modules.moe.forms import moe_topk_reference
 
     w, ids = moe_topk_reference(
         logits, top_k, "sigmoid_noaux_tc", bias=bias.float(),

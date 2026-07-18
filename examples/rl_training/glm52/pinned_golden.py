@@ -19,14 +19,14 @@ from dataclasses import dataclass
 import torch
 
 from dataflow_training.blocks import ops
-from dataflow_training.blocks.modules.dsa_reference import (
+from dataflow_training.blocks.modules.dsa_forms import (
     dsa_index_scores_reference,
     dsa_mask_from_idx,
     dsa_sparse_attention_reference,
     dsa_topk_reference,
 )
-from dataflow_training.blocks.modules.mla_reference import mla_qkv_reference
-from dataflow_training.blocks.modules.moe.reference import moe_mlp_reference, moe_topk_reference
+from dataflow_training.blocks.modules.mla_forms import mla_qkv_reference
+from dataflow_training.blocks.modules.moe.forms import moe_mlp_reference, moe_topk_reference
 
 from golden_base import GoldenGlm52
 
@@ -52,13 +52,13 @@ class RlGlm52(GoldenGlm52):
         q_lora, q_full, k_full, v_pad = mla_qkv_reference(h1, w, d)
 
         if self.saved is not None:
-            if d.role_of(i) == "full":
+            if d.layer_role(i) == "full":
                 sel = self.saved["sel"][i].to(x.device)
                 self._group_mask = dsa_mask_from_idx(sel, d, t)
                 self._group_scores = None  # frozen: no indexer autograd
             mask = self._group_mask
         else:
-            if d.role_of(i) == "full":
+            if d.layer_role(i) == "full":
                 scores = dsa_index_scores_reference(
                     h1.detach(), q_lora.detach(), w, d)
                 if not getattr(d, "train_indexer", True):

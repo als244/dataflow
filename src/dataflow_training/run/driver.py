@@ -100,7 +100,7 @@ class ReferenceAdamW:
 
     def step(self, opt_step: int) -> None:
         r = self.recipe
-        lr = r.lr_at(opt_step)          # = peak * schedule.scale(opt_step + 1)
+        lr = r.lr(opt_step)          # = peak * schedule.scale(opt_step + 1)
         bc = opt_step + 1               # 1-indexed bias correction (engine parity)
         for p in self.params:
             if p.grad is None:
@@ -183,7 +183,7 @@ class ReferenceMuon:
 
     def step(self, opt_step: int) -> None:
         r = self.recipe
-        lr = r.lr_at(opt_step)
+        lr = r.lr(opt_step)
         bc = opt_step + 1
         for par in self.adamw_params:
             if par.grad is None:
@@ -234,7 +234,7 @@ def run_reference(cfg, recipe: Recipe, stream, steps: int, *, seed: int = 11,
     from dataflow_training.model_families.families import resolve_family
 
     fam = resolve_family(cfg)
-    dims = fam.dims_of(cfg)
+    dims = fam.derive_dims(cfg)
     backend = CudaBackend()
     values = fam.initial_values(fam.lower(cfg), cfg, backend, seed=seed)
     model = bridges.build_reference_model(cfg, device=device)
@@ -305,7 +305,7 @@ def run_reference(cfg, recipe: Recipe, stream, steps: int, *, seed: int = 11,
         res.tok_per_s.append(tokens_per_step(cfg) / dt)
         if step % log_every == 0 or step == steps - 1:
             log(f"[reference] step {step:4d}/{steps}  loss {step_loss:.4f}"
-                f"  lr {recipe.lr_at(step):.2e}  {tokens_per_step(cfg) / dt:.0f} tok/s")
+                f"  lr {recipe.lr(step):.2e}  {tokens_per_step(cfg) / dt:.0f} tok/s")
     del model, opt
     torch.cuda.empty_cache()
     return res
@@ -518,7 +518,7 @@ def run_engine(client, cfg, recipe: Recipe, stream, steps: int, *,
         res.tok_per_s.append(tokens_per_step(cfg) / dt)
         if step % log_every == 0 or step == steps - 1:
             log(f"[engine {budget_gib:g}GiB] step {step:4d}/{steps}  "
-                f"loss {step_loss:.4f}  lr {recipe.lr_at(step):.2e}  "
+                f"loss {step_loss:.4f}  lr {recipe.lr(step):.2e}  "
                 f"{tokens_per_step(cfg) / dt:.0f} tok/s")
         step_next = step + 1
         if checkpoint_every and step_next % checkpoint_every == 0 \

@@ -143,7 +143,7 @@ def drive_pair(clients, members, group_backend: str) -> list:
     for r in runs:
         assert r.err is None, r.err
         assert r.out.get("state") == "done", r.out
-    dims = tp.dims_of_tp_mlp(CFG)
+    dims = tp.derive_dims(CFG)
     wl = tp.tp_weight_layout(dims)
     out = []
     for client in clients:

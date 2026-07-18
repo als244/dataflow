@@ -29,7 +29,7 @@ from dataflow_training.blocks.optim import freeze
 from dataflow_training.lowering.freeze_plan import FreezePlan, derive_freeze_plan
 from dataflow_training.model_families.llama3 import (
     ShapedLlamaConfig,
-    dims_of,
+    derive_dims,
     lower_llama3,
 )
 from dataflow_training.testing.gradcheck import check_model_step
@@ -39,7 +39,7 @@ FIELDS = ("attn_norm_w", "wq", "wk", "wv", "wo", "ffn_norm_w",
 
 
 def _plan(cfg):
-    d = dims_of(cfg)
+    d = derive_dims(cfg)
     return derive_freeze_plan(
         d, cfg.n_layers, lambda i: FIELDS,
         tied_embeddings=bool(getattr(cfg, "tied_embeddings", False)))
@@ -164,7 +164,7 @@ def assert_frozen_model_step(cfg, *, frozen_prefixes, tol=3e-2, seed=0):
     )
 
     fam = resolve_family(cfg)
-    dims = fam.dims_of(cfg)
+    dims = fam.derive_dims(cfg)
     planned = plan_program(fam.lower(cfg), fast_memory_capacity=_CAP)
     backend = CudaBackend()
     values = fam.initial_values(planned.program, cfg, backend, seed=seed)
@@ -271,7 +271,7 @@ def test_model_step_truncated_ga2():
                 opt_policy=freeze(layers=(0,), embed=True))
     frozen = ("embed.", "blocks.0.")
     fam = resolve_family(cfg)
-    dims = fam.dims_of(cfg)
+    dims = fam.derive_dims(cfg)
     planned = plan_program(fam.lower(cfg), fast_memory_capacity=_CAP)
     backend = CudaBackend()
     values = fam.initial_values(planned.program, cfg, backend, seed=0)
@@ -341,7 +341,7 @@ def test_model_step_pair_freeze():
     cfg = _tiny(opt_policy=freeze(pairs=(("wo", 0), ("w1", 1))))
     prog = lower_llama3(cfg)
     sizes = prog.object_sizes()
-    d = dims_of(cfg)
+    d = derive_dims(cfg)
     for i in (0, 1):
         want = grad_layout(weight_layout(d, layer=i), d.dtypes, layer=i,
                            opt_policy=d.opt_policy).total_bytes
@@ -395,12 +395,12 @@ def test_train_indexer_unified_into_policy():
     )
     from dataflow_training.model_families.dsv32 import (
         ShapedDsv32Config,
-        dims_of_dsv32,
+        derive_dims as derive_dims_dsv32,
         lower_dsv32,
     )
 
     cfg = dataclasses.replace(ShapedDsv32Config.tiny(), train_indexer=False)
-    dims = dims_of_dsv32(cfg)
+    dims = derive_dims_dsv32(cfg)
     gl = grad_layout(dsv32_dense_weight_layout(dims), dims.dtypes, layer=0,
                      opt_policy=dims.opt_policy)
     names = {f.name for f in gl.fields}

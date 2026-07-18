@@ -52,7 +52,7 @@ class Segments:
         return cls(tuple(b - a for a, b in zip(cu, cu[1:])))
 
     @classmethod
-    def of_dims(cls, d) -> "Segments":
+    def from_dims(cls, d) -> "Segments":
         """The round's segmentation implied by a dims config (host):
         explicit ``seq_lens`` when ragged, else ``batch`` uniform
         ``seq_len`` sequences. Materialize with ``.on(device)``."""
@@ -123,7 +123,7 @@ def uniform_segments(dims, program) -> dict:
     the first consuming task. Round key is the task id's ``{s}_{r}_{i}``
     middle field (matches resolve_segments), a superset of block rounds; extra
     keys are harmless."""
-    seg = Segments.of_dims(dims)
+    seg = Segments.from_dims(dims)
     rounds = set()
     for t in program.tasks:
         parts = t.id.rsplit("_", 3)
@@ -157,7 +157,7 @@ def resolve_segments(ctx, dims, round_key) -> "Segments":
             host = Segments.from_boundaries(wire[round_key])
         else:
             host = rv.setdefault("segments_uniform_host",
-                                 Segments.of_dims(dims))
+                                 Segments.from_dims(dims))
     if getattr(ctx.backend, "physical", False):
         # dedup by VALUE (Segments hashes on lengths): equal partitions
         # share one device copy — id()-keyed dedup is a trap here (the

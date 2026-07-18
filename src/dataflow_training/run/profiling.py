@@ -54,8 +54,8 @@ def _signature(task: TaskSpec, sizes: dict[str, int],
             and task.compute_block_key.endswith("_bwd"):
         try:
             ex = resolver(task)
-            gl = ex.gl_for(task)
-            wl = ex.wl_for(task)
+            gl = ex.task_grad_layout(task)
+            wl = ex.task_weight_layout(task)
             if len(gl.fields) < len(wl.fields):
                 fp = tuple(f.name for f in gl.fields)
         except Exception:

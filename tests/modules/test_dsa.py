@@ -65,7 +65,7 @@ def test_index_scores_vs_hand_loop():
     """The einsum'd reference against a literal per-(t,s,j) loop of the
     paper's formula (1) at tiny size — rope-first, LN, scale chain."""
     from dataflow_training.blocks import ops
-    from dataflow_training.blocks.modules.dsa_reference import _LN_EPS, dsa_index_scores_reference
+    from dataflow_training.blocks.modules.dsa_forms import _LN_EPS, dsa_index_scores_reference
 
     d = _Dims(tokens=32, seq_len=32)
     w = _idx_weights(d, seed=1)
@@ -77,7 +77,7 @@ def test_index_scores_vs_hand_loop():
 
     # hand loop
     t, hi, di, rope = d.tokens, d.index_n_heads, d.index_head_dim, d.qk_rope_dim
-    pos = ops.Segments.of_dims(d).on(h1.device).positions
+    pos = ops.Segments.from_dims(d).on(h1.device).positions
     q = (q_lora_n @ w["w_idx_q"]).view(t, hi, di)
     q_pe = ops.rope_fwd(q[..., :rope].reshape(t, hi * rope).contiguous(),
                         pos, hi, rope, d.rope_base).view(t, hi, rope)
@@ -109,7 +109,7 @@ def test_topk_padding_is_mask_safe_and_tie_rule_consistent():
     prefixes stay mask-suppressed to exactly the causal prefix), the
     LIVE-set correctness under total ties, and runtime-kernel vs
     reference AGREEMENT (both sides one rule)."""
-    from dataflow_training.blocks.modules.dsa_reference import (
+    from dataflow_training.blocks.modules.dsa_forms import (
         _causal_mask,
         dsa_mask_from_idx,
         dsa_topk_reference,
@@ -140,7 +140,7 @@ def test_mask_form_equals_gather_form_fwd_and_bwd():
     optimized gather kernels rely on)."""
     torch.manual_seed(3)
     t, h, qk, k_sel = 64, 2, 24, 16
-    from dataflow_training.blocks.modules.dsa_reference import (
+    from dataflow_training.blocks.modules.dsa_forms import (
         _causal_mask,
         dsa_mask_from_idx,
         dsa_topk_reference,
@@ -178,7 +178,7 @@ def test_mask_form_equals_gather_form_fwd_and_bwd():
 
 
 def test_indexer_kl_grad_is_softmax_minus_p_and_inputs_detached():
-    from dataflow_training.blocks.modules.dsa_reference import (
+    from dataflow_training.blocks.modules.dsa_forms import (
         _causal_mask,
         dsa_index_scores_reference,
         dsa_indexer_kl_reference,
@@ -227,7 +227,7 @@ def test_indexer_kl_grad_is_softmax_minus_p_and_inputs_detached():
 def test_index_scores_ragged_packing_matches_per_sequence():
     from dataclasses import replace
 
-    from dataflow_training.blocks.modules.dsa_reference import dsa_index_scores_reference
+    from dataflow_training.blocks.modules.dsa_forms import dsa_index_scores_reference
 
     d = _Dims(tokens=96, seq_len=None, seq_lens=(64, 32))
     w = _idx_weights(d, seed=7)
@@ -269,7 +269,7 @@ def _mla_pad_tensors(d, seed):
 
 def test_dsa_kernels_vs_references_and_autograd():
     from dataflow_training.blocks import ops
-    from dataflow_training.blocks.modules.dsa_reference import (
+    from dataflow_training.blocks.modules.dsa_forms import (
         _causal_mask,
         dsa_mask_from_idx,
         dsa_sparse_attention_reference,
@@ -289,7 +289,7 @@ def test_dsa_kernels_vs_references_and_autograd():
     assert torch.equal(idx.long(), ref_idx)
 
     mask = dsa_mask_from_idx(ref_idx, d, t)
-    bounds = tuple(ops.Segments.of_dims(d).bounds)
+    bounds = tuple(ops.Segments.from_dims(d).bounds)
     qf, kf, vp = _mla_pad_tensors(d, seed=12)
 
     ref_out = dsa_sparse_attention_reference(qf, kf, vp, mask, d)
@@ -346,7 +346,7 @@ def test_dsa_index_bwd_vs_autograd():
              ).to(torch.bfloat16).requires_grad_()
     wts = (torch.randn(t, hi, generator=g, device="cuda") * 0.2
            ).float().requires_grad_()
-    bounds = tuple(ops.Segments.of_dims(d).bounds)
+    bounds = tuple(ops.Segments.from_dims(d).bounds)
 
     # autograd of the score formula with an injected upstream d_scores
     q3 = q_idx.view(t, hi, di).float()
@@ -406,15 +406,15 @@ def _dsv32_dims(**over):
 def _golden_dsv32_block(x_ref, leaves, dims, kind, sel_idx=None, route_ids=None,
                         segments=None):
     from dataflow_training.blocks import ops
-    from dataflow_training.blocks.modules.dsa_reference import (
+    from dataflow_training.blocks.modules.dsa_forms import (
         dsa_index_scores_reference,
         dsa_indexer_kl_reference,
         dsa_mask_from_idx,
         dsa_sparse_attention_reference,
         dsa_topk_reference,
     )
-    from dataflow_training.blocks.modules.mla_reference import mla_qkv_reference
-    from dataflow_training.blocks.modules.moe.reference import moe_mlp_reference
+    from dataflow_training.blocks.modules.mla_forms import mla_qkv_reference
+    from dataflow_training.blocks.modules.moe.forms import moe_mlp_reference
 
     d = dims
     t = x_ref.shape[0]
@@ -440,7 +440,7 @@ def _golden_dsv32_block(x_ref, leaves, dims, kind, sel_idx=None, route_ids=None,
         scale = qk ** -0.5
         q3 = q_full.detach().float()
         k3 = k_full.detach().float()
-        lens = (segments if segments is not None else ops.Segments.of_dims(d)).lengths
+        lens = (segments if segments is not None else ops.Segments.from_dims(d)).lengths
         lo = 0
         for L in lens:
             hi = lo + L
@@ -512,7 +512,7 @@ def test_dsv32_block_ladder2(kind):
     y = torch.empty_like(x)
     # ONE materialized Segments handed to fwd/recompute (extras) and bwd
     # (a["_seg"]) — the engine run-prologue that normally sets it
-    seg = Segments.of_dims(dims).on("cuda")
+    seg = Segments.from_dims(dims).on("cuda")
     # the layer's M object: ALL never-recompute metadata in one layout
     m_l = dsv32_aux_temp_layout(dims, kind)
     meta_views = {f.name: torch.empty(f.shape, dtype=TORCH_DTYPE_BY_NAME[f.dtype],
@@ -594,7 +594,7 @@ def test_absorbed_op_matches_expanded_reference():
         n_heads=h, d_qk=d_qk, d_v=d_v, seq_bounds=((0, t),),
     )
     # reference: expand kv per head and run the pinned expanded path
-    from dataflow_training.blocks.modules.dsa_reference import dsa_mask_from_idx, dsa_sparse_attention_reference
+    from dataflow_training.blocks.modules.dsa_forms import dsa_mask_from_idx, dsa_sparse_attention_reference
 
     class _D:
         n_heads, qk_head_dim, v_head_dim = h, d_qk, d_v

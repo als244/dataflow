@@ -117,7 +117,7 @@ def main() -> int:
     import dataclasses
 
     fam = resolve_family(cfg)
-    dims = fam.dims_of(cfg)
+    dims = fam.derive_dims(cfg)
     program = fam.lower(cfg)
     # drop the optimizer tasks and RETAIN the gradient slabs: dW ids in
     # final_locations are terminal placement constraints — everything

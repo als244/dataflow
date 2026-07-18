@@ -103,7 +103,7 @@ class GoldenLlama3:
         materialization per forward, read as fields thereafter."""
         if segments is not None:
             return segments
-        return ops.Segments.of_dims(self.dims).on(device)
+        return ops.Segments.from_dims(self.dims).on(device)
 
     def block_forward(self, x: torch.Tensor, w: Leaves, segments=None) -> torch.Tensor:
         d = self.dims

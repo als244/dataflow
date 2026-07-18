@@ -17,7 +17,7 @@ STUB = textwrap.dedent('''
     config type — the minimum a plugin must do."""
     from dataclasses import dataclass
 
-    from dataflow_training.model_families.families import Family, register_family
+    from dataflow_training.model_families.families import ModelFamily, register_family
     from dataflow_training.model_families.llama3 import ShapedLlamaConfig, lower_llama3
     from dataflow_training.run.bench_presets import register_bench_config
 
@@ -27,13 +27,13 @@ STUB = textwrap.dedent('''
         pass
 
 
-    def _stub() -> Family:
+    def _stub() -> ModelFamily:
         from dataflow_training.model_families.families import family
 
         base = family("llama3")
-        return Family(
+        return ModelFamily(
             name="stubfam", config_type=ShapedStubConfig,
-            dims_of=base.dims_of, lower=lower_llama3,
+            derive_dims=base.derive_dims, lower=lower_llama3,
             initial_values=base.initial_values,
             build_resolver=base.build_resolver,
         )
@@ -119,9 +119,9 @@ def test_validate_family_reports_broken_surface():
 
     def _broken():
         base = F.family("llama3")
-        return F.Family(
+        return F.ModelFamily(
             name="brokenfam", config_type=dict,  # not a dataclass, no tiny()
-            dims_of=base.dims_of, lower=base.lower,
+            derive_dims=base.derive_dims, lower=base.lower,
             initial_values=base.initial_values,
             build_resolver=base.build_resolver,
         )

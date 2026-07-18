@@ -4,13 +4,13 @@ This guide explains how multi-daemon training works end to end: the
 communication layer, the sharding API that expresses *who owns what*,
 the parallelism configurations built on it, and how checkpointing and
 resume behave for each. Everything here is driven from
-`tools/pretrain_dp.py` and configured by `topology.toml` — no machine
+`tools/train_fleet.py` and configured by `topology.toml` — no machine
 facts live in code.
 
 ## 1. The pieces
 
 **Daemons and the conductor.** Every GPU runs one `dataflowd` daemon.
-A *conductor* (the driver process, `pretrain_dp.py`) launches
+A *conductor* (the driver process, `train_fleet.py`) launches
 daemons over the hosts in `topology.toml`, registers a per-rank
 program with each, feeds token rounds, and drives lockstep steps.
 Daemons never talk to the conductor's Python state — everything
@@ -74,7 +74,7 @@ which is exactly what the fleet warm-up does.
 ### Plain data parallelism (default)
 
 ```
-python tools/pretrain_dp.py train --preset l3_1b --steps 1000 \
+python tools/train_fleet.py train --preset l3_1b --steps 1000 \
     --rounds 6,2 --out results/pretrain/run.json
 ```
 
@@ -179,7 +179,7 @@ continue reproduces training exactly.
 ### Fleet checkpoints
 
 ```
-python tools/pretrain_dp.py train ... \
+python tools/train_fleet.py train ... \
     --checkpoint-every 100 \
     --checkpoint-redundancy 2 \
     --checkpoint-keep-last 3 \
@@ -219,7 +219,7 @@ every host after each new one lands.
 ### Resume
 
 ```
-python tools/pretrain_dp.py train ... --resume auto --out results/pretrain/myrun.json
+python tools/train_fleet.py train ... --resume auto --out results/pretrain/myrun.json
 ```
 
 `--resume auto` picks the newest *complete* checkpoint for the run
@@ -292,7 +292,7 @@ python -m pytest -q
 **Rung 2 — single-GPU training sanity.**
 
 ```
-python tools/pretrain_run.py smoke --steps 20
+python tools/train_solo.py smoke --steps 20
 ```
 
 (one engine, one GPU, real fineweb tokens — no fleet machinery).
@@ -311,7 +311,7 @@ python -m pytest -m fleet -q \
 world 2 (`--group` of two members), then the full node:
 
 ```
-python tools/pretrain_dp.py train --preset l3_125m --steps 60 \
+python tools/train_fleet.py train --preset l3_125m --steps 60 \
     --group node --backend nccl --rounds 1,1,1,1,1,1,1,1 \
     --out results/pretrain/node_smoke.json
 ```
@@ -323,7 +323,7 @@ handshake, link probes, and warm-up dance run automatically.
 **Rung 5 — the real run, sharded + checkpointed.**
 
 ```
-python tools/pretrain_dp.py train --preset l3_1b --steps 1000 \
+python tools/train_fleet.py train --preset l3_1b --steps 1000 \
     --group node --backend nccl --rounds 1,1,1,1,1,1,1,1 \
     --opt-shard zero1rs \
     --checkpoint-every 100 --checkpoint-keep-last 3 \

@@ -1,7 +1,7 @@
 """Multi-head Latent Attention (MLA, DeepSeek-V3) — REFERENCE forms only.
 
 NOT a task/executable: this is the pure-autograd correctness anchor
-(parallel to tasks/moe/reference.py) that goldens and ladders compose.
+(parallel to moe/forms.py) that goldens and ladders compose.
 The runtime executables live in dsv3_blocks.py as staged BlockFwd/
 BlockBwd classes like every other family.
 
@@ -52,7 +52,7 @@ def mla_qkv_reference(
     t = h1.shape[0]
     h, nope, rope, v = d.n_heads, d.qk_nope_dim, d.qk_rope_dim, d.v_head_dim
     qk = nope + rope
-    seg = segments if segments is not None else ops.Segments.of_dims(dims).on(h1.device)
+    seg = segments if segments is not None else ops.Segments.from_dims(dims).on(h1.device)
     pos = seg.positions
 
     # q stack
@@ -92,7 +92,7 @@ def mla_attention_reference(
     t = h1.shape[0]
     h, v = d.n_heads, d.v_head_dim
     qk = d.qk_nope_dim + d.qk_rope_dim
-    seg = segments if segments is not None else ops.Segments.of_dims(dims).on(h1.device)
+    seg = segments if segments is not None else ops.Segments.from_dims(dims).on(h1.device)
     _, q_full, k_full, v_pad = mla_qkv_reference(h1, w, dims, seg)
     attn = ops.attention_reference(
         q_full.reshape(t, h * qk), k_full.reshape(t, h * qk),

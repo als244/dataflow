@@ -2,7 +2,7 @@
 ``src/`` (tests/fixtures/external_family/toy_family.py) loads through the
 plugin seam, lowers a structurally clean program, passes the structural
 contract validator, and composes with the SERVICE path — registration +
-``resolver_for`` build an executable for every task the family emits.
+``lookup_resolver`` build an executable for every task the family emits.
 
 CPU-only: resolution builds executables, never launches them; no CUDA
 imports at module scope (dataflow imports live inside the tests, the
@@ -73,7 +73,7 @@ def test_external_family_composes_with_service_path(monkeypatch):
 
         import toy_family
 
-        from dataflow.service.registry import resolver_for
+        from dataflow.service.registry import lookup_resolver
         from dataflow_training.register import register_all
 
         assert "model_family" in register_all()
@@ -81,7 +81,7 @@ def test_external_family_composes_with_service_path(monkeypatch):
         cfg = toy_family.ToyConfig.tiny()
         spec = {"kind": "model_family", "family": "toyfam",
                 "cfg": dataclasses.asdict(cfg)}
-        resolver = resolver_for(spec)
+        resolver = lookup_resolver(spec)
 
         # every task of the family's lowered program resolves to an
         # executable (resolution only — nothing launches on CPU), and the

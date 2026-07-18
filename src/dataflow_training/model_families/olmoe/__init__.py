@@ -8,7 +8,7 @@ registry thunk in ``..families``.
 """
 from .model import (  # noqa: F401
     ShapedOlmoeConfig,
-    dims_of_olmoe,
+    derive_dims,
     family_layouts,
     initial_values_olmoe,
     lower_olmoe,

@@ -7,8 +7,8 @@ Produces, under --out (default examples/):
     <name>.summary.json            makespan / peak-fast / chosen recompute levels
 
 Usage:
-    python tools/golden_path.py --config tiny --fast-gib 0.0006
-    python tools/golden_path.py --config 8b --fast-gib 16 --recompute
+    python tools/export_program.py --config tiny --fast-gib 0.0006
+    python tools/export_program.py --config 8b --fast-gib 16 --recompute
 """
 from __future__ import annotations
 

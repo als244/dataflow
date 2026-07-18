@@ -1,3 +1,4 @@
 """Shared building-block modules used by several families: the
-pluggable MoE package (spec/stages/reference) and the DSA/MLA
-reference implementations that anchor their kernel families."""
+pluggable MoE package (spec/stages/forms) and the DSA/MLA
+forms modules (pure-autograd anchors) that anchor their kernel
+families."""

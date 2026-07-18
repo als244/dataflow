@@ -16,9 +16,9 @@ from ..bridge_common import load_state_dict_strict, transposed
 
 def reference_qwen3_config(cfg) -> Qwen3Config:
     """Build the isolated reference config from a ``ShapedQwen3Config``."""
-    from .model import dims_of_qwen3
+    from .model import derive_dims
 
-    dims = dims_of_qwen3(cfg)
+    dims = derive_dims(cfg)
     return Qwen3Config(
         n_layers=cfg.n_layers, d_model=cfg.d_model, n_heads=cfg.n_heads,
         n_kv_heads=cfg.n_kv_heads, head_dim=cfg.head_dim, d_ff=cfg.d_ff,
@@ -37,9 +37,9 @@ def to_qwen3_state_dict(cfg, get_bytes) -> dict:
         head_weight_layout,
         qwen3_weight_layout,
     )
-    from .model import dims_of_qwen3
+    from .model import derive_dims
 
-    dims = dims_of_qwen3(cfg)
+    dims = derive_dims(cfg)
     sd: dict[str, torch.Tensor] = {}
     ew = embed_weight_layout(dims).unpack_tensor(get_bytes("W_embed"))
     sd["embed.weight"] = ew["w"].clone()

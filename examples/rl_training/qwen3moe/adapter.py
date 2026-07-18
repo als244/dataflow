@@ -24,7 +24,7 @@ def make_golden(dims, n_layers, leaves):
 def capture(golden, tokens):
     # qwen3moe delegates routing to moe_mlp_reference; intercept the
     # topk INSIDE the moe reference module
-    import dataflow_training.blocks.modules.moe.reference as ref
+    import dataflow_training.blocks.modules.moe.forms as ref
     real = ref.moe_topk_reference
     rec = []
 

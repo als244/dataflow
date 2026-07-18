@@ -148,7 +148,7 @@ def resolve_resume(run_dir: Path, resume: str, log) -> dict:
     return json.loads(mf.read_text())
 
 
-def save_plan_for(parallels, world: int,
+def save_plan(parallels, world: int,
                   opt_shard: str | None = None) -> dict:
     """The SavePlan (Shein's design): who saves what, derived from
     the ownership algebra. Data objects (tokens/targets/losses) are
@@ -360,12 +360,12 @@ def lower_with_group(cfg, dp_group: str, recompute_levels=None,
         dp_group=dp_group, recompute_levels=recompute_levels,
         shard_params=shard_params,
         tp_params=tp_params)
-    from dataflow_training.lowering.emit import apply_exact_sizes, size_of_factory
+    from dataflow_training.lowering.emit import apply_exact_sizes, object_size_factory
 
     dims, fl = family_layouts(cfg, tp_view=rank_view)
     return apply_exact_sizes(
         shaped, "llama3-exact",
-        size_of=size_of_factory(dims, fl, opt_update_regions=opt_regions,
+        object_size=object_size_factory(dims, fl, opt_update_regions=opt_regions,
                                 opt_slice_by_root=opt_slices))
 
 
@@ -556,7 +556,7 @@ def run_fleet_dp(global_cfg, recipe: Recipe, stream, steps: int, *,
     if checkpoint_every:
         ck = {"every": int(checkpoint_every),
               "dir": Path(checkpoint_dir) / run_name, "run": run_name,
-              "save_plan": save_plan_for(parallels, world,
+              "save_plan": save_plan(parallels, world,
                                          opt_shard=opt_shard),
               "redundancy": int(checkpoint_redundancy),
               "keep_last": int(checkpoint_keep_last),
@@ -861,7 +861,7 @@ def fleet_loop(ranks, gspec, recipe, stream, steps, *, budgets, seed,
         res.tok_per_s.append(tokens_step / dt)
         if step % log_every == 0 or step == steps - 1:
             log(f"[fleet] step {step:4d}/{steps}  loss {step_loss:.4f}  "
-                f"lr {recipe.lr_at(step):.2e}  {tokens_step / dt:.0f} tok/s"
+                f"lr {recipe.lr(step):.2e}  {tokens_step / dt:.0f} tok/s"
                 f"  ({dt:.2f}s)")
         if prof_stop is not None and step == prof_stop:
             for rank in ranks:

@@ -198,7 +198,7 @@ def test_e2e_mini_vmm_matches_static():
         vocab_size=512, seq_len=64, batch=2,
     )
     fam = resolve_family(cfg)
-    dims = fam.dims_of(cfg)
+    dims = fam.derive_dims(cfg)
     planned = plan_program(fam.lower(cfg), fast_memory_capacity=64 * MB)
 
     final = {}

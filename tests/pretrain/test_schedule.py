@@ -45,7 +45,7 @@ def test_recipe_hyper_spec_matches_base_hyper():
     assert abs(h.schedule.min_lr_frac - spec["schedule"]["min_lr_frac"]) < 1e-12
 
 
-def test_lr_at_delegates_to_schedule():
+def test_lr_delegates_to_schedule():
     r = Recipe(peak_lr=2e-4, min_lr=2e-5, warmup_steps=10, total_steps=100)
     for step in (0, 5, 9, 10, 50, 99):
-        assert r.lr_at(step) == r.schedule()(step)
+        assert r.lr(step) == r.schedule()(step)

@@ -31,7 +31,7 @@ from dataflow_training.distributed.sharding import (  # noqa: E402
 from dataflow.service import EngineClient, EngineConfig, Server  # noqa: E402
 from dataflow_training.model_families.llama3 import (  # noqa: E402
     ShapedLlamaConfig,
-    dims_of,
+    derive_dims,
     family_layouts,
 )
 from dataflow_training.lowering.planning import plan_program  # noqa: E402
@@ -188,7 +188,7 @@ def run_config(tmp_path, label: str, zero1rs: bool) -> dict:
 def test_zero1rs_bitwise_equals_plain_dp(tmp_path):
     cfg = make_cfg()
     rs_params = zero1rs_block_params(layer_fields_by_root(cfg),
-                                     dims_of(cfg), 2)
+                                     derive_dims(cfg), 2)
     assert rs_params, "no root is rs-eligible — gate is vacuous"
 
     plain = run_config(tmp_path, "plain", zero1rs=False)

@@ -8,7 +8,7 @@ registry thunk in ``..families``.
 """
 from .model import (  # noqa: F401
     ShapedQwen3MoeConfig,
-    dims_of_qwen3moe,
+    derive_dims,
     initial_values_qwen3moe,
     lower_qwen3moe,
 )

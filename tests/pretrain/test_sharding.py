@@ -293,11 +293,11 @@ def test_zero1rs_block_params_sizing():
     from dataflow_training.blocks.layouts import opt_state_slice_layout
     from dataflow_training.model_families.llama3 import (
         ShapedLlamaConfig,
-        dims_of,
+        derive_dims,
     )
 
     cfg = ShapedLlamaConfig.tiny()
-    dims = dims_of(cfg)
+    dims = derive_dims(cfg)
     fbr = layer_fields_by_root(cfg)
     totals = {}
     for world in (2, 3, 4, 8):
@@ -341,11 +341,11 @@ def test_zero1rs_eligibility_rejections():
     from dataflow_training.blocks.optim import OptPolicy
     from dataflow_training.model_families.llama3 import (
         ShapedLlamaConfig,
-        dims_of,
+        derive_dims,
     )
 
     cfg = ShapedLlamaConfig.tiny()
-    dims = dims_of(cfg)
+    dims = derive_dims(cfg)
     fbr = layer_fields_by_root(cfg)
     n_layers = cfg.n_layers
     all_roots = set(fbr)

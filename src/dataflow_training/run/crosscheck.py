@@ -24,7 +24,7 @@ from .recipe import Recipe
 
 def flat_recipe(lr: float, weight_decay: float, steps: int) -> Recipe:
     """Constant-LR recipe: warmup 0 and min == peak collapse the cosine, so
-    ``lr_at(step) == lr`` for every step — matching a schedule-less
+    ``recipe.lr(step) == lr`` for every step — matching a schedule-less
     ``AdamWHyper(lr=lr)`` on the golden side."""
     return Recipe(peak_lr=lr, min_lr=lr, warmup_steps=0,
                   total_steps=max(steps, 1), weight_decay=weight_decay)
@@ -169,7 +169,7 @@ def moe_golden_gate(cfg_off, golden_cls, bridge_mod, *, alpha: float,
     assert getattr(cfg_off, "bias_update_speed", 0.0) == 0.0, (
         "cfg_off is the LBL-OFF leg (bias rule off too)")
     fam = resolve_family(cfg_off)
-    dims = fam.dims_of(cfg_off)
+    dims = fam.derive_dims(cfg_off)
     backend = CudaBackend()
     values = fam.initial_values(fam.lower(cfg_off), cfg_off, backend, seed=11)
     gb = get_bytes_from_values(values)
@@ -199,7 +199,7 @@ def moe_golden_gate(cfg_off, golden_cls, bridge_mod, *, alpha: float,
 
         # -- LBL-ON leg (fresh witnesses from the same bytes) -------------------
         cfg_on = replace(cfg_off, aux_coef=alpha)
-        dims_on = resolve_family(cfg_on).dims_of(cfg_on)
+        dims_on = resolve_family(cfg_on).derive_dims(cfg_on)
         golden_on = golden_cls.from_packed_bytes(
             dims_on, cfg_on.n_layers, gb("W_embed"),
             [gb(f"W_{i}") for i in range(cfg_on.n_layers)], gb("W_head"),
@@ -224,7 +224,7 @@ def moe_golden_gate(cfg_off, golden_cls, bridge_mod, *, alpha: float,
         # -- BIAS-ON leg (noaux families: the sign-rule update, both sides) ----
         if bias_speed is not None:
             cfg_b = replace(cfg_off, bias_update_speed=bias_speed)
-            dims_b = resolve_family(cfg_b).dims_of(cfg_b)
+            dims_b = resolve_family(cfg_b).derive_dims(cfg_b)
             golden_b = golden_cls.from_packed_bytes(
                 dims_b, cfg_b.n_layers, gb("W_embed"),
                 [gb(f"W_{i}") for i in range(cfg_b.n_layers)], gb("W_head"),

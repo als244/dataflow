@@ -173,7 +173,7 @@ class MoESpec:
     def is_partial(self) -> bool:
         return self.n_local_experts != self.n_experts
 
-    def local_slot_of(self) -> dict[int, int]:
+    def local_slots(self) -> dict[int, int]:
         """global expert id -> local weight slot (identity when not partial)."""
         ids = self.expert_ids or tuple(range(self.n_experts))
         return {e: j for j, e in enumerate(ids)}

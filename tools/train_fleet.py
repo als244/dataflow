@@ -1,12 +1,12 @@
 """Fleet DP pretraining: the data-parallel twin of
-tools/pretrain_run.py. Trains a ladder preset across a topology
+tools/train_solo.py. Trains a ladder preset across a topology
 group's hosts (topology.toml — see topology.example.toml) with
 weighted round distribution and compares the curve against a recorded
 single-box run.
 
-    python tools/pretrain_dp.py train --preset l3_1b --steps 1000 \
+    python tools/train_fleet.py train --preset l3_1b --steps 1000 \
         --rounds 6,2 --out results/pretrain/l3_1b_dp.json
-    python tools/pretrain_dp.py compare \
+    python tools/train_fleet.py compare \
         --a results/pretrain/l3_1b_engine_14gib.json \
         --b results/pretrain/l3_1b_dp.json
 """

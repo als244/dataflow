@@ -72,7 +72,7 @@ class TpMlpDims:
     tokens: int
 
 
-def dims_of_tp_mlp(cfg: TpMlpConfig) -> TpMlpDims:
+def derive_dims(cfg: TpMlpConfig) -> TpMlpDims:
     if cfg.d_ff % cfg.world:
         raise ValueError(f"d_ff {cfg.d_ff} not divisible by world "
                          f"{cfg.world}")
@@ -101,7 +101,7 @@ def tp_saved_layout(dims: TpMlpDims):
 
 
 def lower_tp_mlp(cfg: TpMlpConfig) -> Program:
-    dims = dims_of_tp_mlp(cfg)
+    dims = derive_dims(cfg)
     wl = tp_weight_layout(dims)
     al = tp_saved_layout(dims)
     td_bytes = dims.t * dims.d * 2
@@ -167,7 +167,7 @@ def initial_values_tp_mlp(program: Program, cfg: TpMlpConfig, backend,
 
     from dataflow.runtime.interop import torch_view
 
-    dims = dims_of_tp_mlp(cfg)
+    dims = derive_dims(cfg)
     wl = tp_weight_layout(dims)
     full = full_width_draws(cfg, seed)
     lo = cfg.rank * dims.ffs
@@ -309,12 +309,12 @@ def build_tp_mlp_resolver(dims: TpMlpDims, hyper=None, kernels=None):
 
 
 def tp_mlp_family():
-    from dataflow_training.model_families.families import Family
+    from dataflow_training.model_families.families import ModelFamily
 
-    return Family(
+    return ModelFamily(
         name="tp_mlp",
         config_type=TpMlpConfig,
-        dims_of=dims_of_tp_mlp,
+        derive_dims=derive_dims,
         lower=lower_tp_mlp,
         initial_values=initial_values_tp_mlp,
         build_resolver=build_tp_mlp_resolver,

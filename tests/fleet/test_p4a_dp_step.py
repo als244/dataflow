@@ -31,7 +31,7 @@ from dataflow_training.data.segments import uniform_segments  # noqa: E402
 from dataflow.service import EngineClient, EngineConfig, Server  # noqa: E402
 from dataflow.runtime.interop import TORCH_DTYPE_BY_NAME, torch_view  # noqa: E402
 from dataflow_training.model_families.families import resolve_family  # noqa: E402
-from dataflow_training.lowering.emit import apply_exact_sizes, size_of_factory  # noqa: E402
+from dataflow_training.lowering.emit import apply_exact_sizes, object_size_factory  # noqa: E402
 from dataflow_training.model_families.llama3 import (  # noqa: E402
     ShapedLlamaConfig,
     family_layouts,
@@ -70,7 +70,7 @@ def lower_with_group(cfg, dp_group):
         dp_group=dp_group)
     dims, fl = family_layouts(cfg)
     return apply_exact_sizes(shaped, "llama3-exact",
-                             size_of=size_of_factory(dims, fl))
+                             object_size=object_size_factory(dims, fl))
 
 
 def master_tokens():
@@ -95,7 +95,7 @@ def single_box_reference():
     same global denominator. Returns {W_id: {field: cpu tensor}}."""
     cfg = dp_cfg(2)
     fam = resolve_family(cfg)
-    dims = fam.dims_of(cfg)
+    dims = fam.derive_dims(cfg)
     program = fam.lower(cfg)
     planned = plan_program(program, fast_memory_capacity=96 * 1024 * 1024)
     backend = CudaBackend()

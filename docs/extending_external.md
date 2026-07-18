@@ -16,8 +16,8 @@ and both now have registration functions.
 
 The API surface a family implements is TYPED and VALIDATED:
 
-- `dataflow.training.families.Family` — the registration record. Its
-  fields are `typing.Protocol`s with documented signatures (`DimsOfFn`,
+- `dataflow.training.families.ModelFamily` — the registration record. Its
+  fields are `typing.Protocol`s with documented signatures (`DeriveDimsFn`,
   `LowerFn`, `InitialValuesFn`, `BuildResolverFn`, `GoldenFn` — see
   their docstrings in `families.py` for the exact contracts, including
   the task-naming shape `lower` must keep and what the golden class
@@ -28,7 +28,7 @@ The API surface a family implements is TYPED and VALIDATED:
 - Custom OPTIMIZERS register through
   `dataflow.tasks.optim.register_optimizer` (state slots + step rule;
   per-field assignment via the config's `opt_policy` — extending.md §6);
-  your family's `dims_of` must forward `opt_policy=cfg.opt_policy`.
+  your family's `derive_dims` must forward `opt_policy=cfg.opt_policy`.
 - `validate_family("mymodel")` structurally checks the whole surface in
   seconds — config presets, lowering + task-naming shape, resolver
   coverage of every emitted task, golden class members — before any
@@ -38,21 +38,21 @@ Write one module that registers your family at import time:
 
 ```python
 # mypkg/dataflow_plugin.py
-from dataflow.training.families import Family, register_family
+from dataflow.training.families import ModelFamily, register_family
 from dataflow.training.presets import register_bench_config
 
 from .mymodel_training import (        # your code, structured like a
     ShapedMyModelConfig,               # builtin training/<family>.py
-    dims_of_mymodel, lower_mymodel, initial_values_mymodel,
+    derive_dims, lower_mymodel, initial_values_mymodel,
 )
 from .mymodel_blocks import build_mymodel_resolver   # your blocks
 
 
-def _mymodel() -> Family:
-    return Family(
+def _mymodel() -> ModelFamily:
+    return ModelFamily(
         name="mymodel",
         config_type=ShapedMyModelConfig,
-        dims_of=dims_of_mymodel,
+        derive_dims=derive_dims,
         lower=lower_mymodel,
         initial_values=initial_values_mymodel,
         build_resolver=build_mymodel_resolver,
@@ -136,7 +136,7 @@ move into your package:
 | `tasks/kernels/<op>.py` | `mypkg/mymodel_kernels.py` | `from dataflow.tasks.kernels.registry import register, none, internal` — the decorator ABI is public; your fused impls join the same kernel-set stamp |
 | `tasks/models/<family>_blocks.py` | `mypkg/mymodel_blocks.py` | subclass `BlockFwd`/`BlockRecompute`/`BlockBwd` from `dataflow.tasks.models.llama3_blocks` (or a closer builtin family); STAGES grammar, MetaState mixins, ProfileFill — all inherited machinery |
 | `models/<family>_reference.py` | `mypkg/mymodel_reference.py` | subclass a builtin golden or compose `dataflow.tasks.ops.*_reference` |
-| `training/<family>.py` | `mypkg/mymodel_training.py` | `build_shaped_program`, `LayerKindSpec`, `MetaShare`, `FamilyLayouts`, `size_of_factory`, `initial_values_from_layouts` — the whole lowering toolkit is importable |
+| `training/<family>.py` | `mypkg/mymodel_training.py` | `build_shaped_program`, `LayerKindSpec`, `MetaShare`, `FamilyLayouts`, `object_size_factory`, `initial_values_from_layouts` — the whole lowering toolkit is importable |
 | `training/families.py` entry | the plugin module above | `register_family` |
 | `tools/bench_train.py` CONFIGS | the plugin module above | `register_bench_config` |
 | `tests/models/test_<family>.py` | `mypkg/tests/test_mymodel.py` | copy the NEWEST builtin family's module as the template; `check_block_backward` / `check_model_step` import from `dataflow.training.testing.gradcheck` |

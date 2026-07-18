@@ -1,6 +1,6 @@
 """DeepSeek-V3 family: config + declarations over the generic machinery.
 
-MLA attention (tasks/mla_reference.py conventions; compressed-latent ctx)
+MLA attention (blocks/modules/mla_forms.py conventions; compressed-latent ctx)
 + hybrid depth: ``first_k_dense`` dense-SwiGLU layers, then MoE layers
 with sigmoid_noaux_tc routing (group-limited biased selection, raw-
 sigmoid renormalized weights x routed_scaling, NON-GRADIENT balance bias
@@ -46,7 +46,7 @@ from dataflow_training.blocks.layouts import (
 from dataflow_training.blocks.optim import freeze
 from dataflow_training.blocks.modules.moe.spec import MoESpec, moe_aux_layout, moe_aux_temp_layout
 
-from ...lowering.emit import FamilyLayouts, LayerLayout, apply_exact_sizes, initial_values_from_layouts, size_of_factory
+from ...lowering.emit import FamilyLayouts, LayerLayout, apply_exact_sizes, initial_values_from_layouts, object_size_factory
 from ...lowering.shaped_program import BF16, LayerKindSpec, ShapedHardware, build_shaped_program
 
 _DSV3_DTYPES = DTypePolicy(overrides=(
@@ -209,7 +209,7 @@ class ShapedDsv3Config:
     kimi_k27 = kimi_k2
 
 
-def moe_spec_of(cfg: ShapedDsv3Config) -> MoESpec:
+def derive_moe_spec(cfg: ShapedDsv3Config) -> MoESpec:
     return MoESpec(
         n_experts=cfg.n_experts, top_k=cfg.top_k, d_ff_expert=cfg.d_ff_expert,
         routing_mode="sigmoid_noaux_tc", aux_coef=cfg.aux_coef,
@@ -221,7 +221,7 @@ def moe_spec_of(cfg: ShapedDsv3Config) -> MoESpec:
     )
 
 
-def dims_of_dsv3(cfg: ShapedDsv3Config) -> Dsv3Dims:
+def derive_dims(cfg: ShapedDsv3Config) -> Dsv3Dims:
     return Dsv3Dims(
         opt_policy=freeze(cfg.opt_policy, fields=("w_router_bias",)),
         d_model=cfg.d_model, n_heads=cfg.n_heads,
@@ -233,14 +233,14 @@ def dims_of_dsv3(cfg: ShapedDsv3Config) -> Dsv3Dims:
         tokens=cfg.tokens, seq_len=cfg.seq_len, rope_base=cfg.rope_base,
         dtypes=getattr(cfg, "dtypes", None) or _DSV3_DTYPES,
         seq_lens=getattr(cfg, "seq_lens", None),
-        moe=moe_spec_of(cfg),
+        moe=derive_moe_spec(cfg),
         kinds=tuple("dense" if i < cfg.first_k_dense else "moe"
                     for i in range(cfg.n_layers)),
     )
 
 
 def _kind_specs(cfg: ShapedDsv3Config, hw: ShapedHardware) -> dict[str, LayerKindSpec]:
-    dims = dims_of_dsv3(cfg)
+    dims = derive_dims(cfg)
     t, d, seq, h = cfg.tokens, cfg.d_model, cfg.seq_len, cfg.n_heads
     qk = cfg.qk_head_dim
     mla_active = (
@@ -315,7 +315,7 @@ def build_shaped_dsv3(
     name: str | None = None,
 ):
     hw = hw or ShapedHardware()
-    dims = dims_of_dsv3(cfg)
+    dims = derive_dims(cfg)
     from ...lowering.freeze_plan import derive_freeze_plan
 
     dims_fp, fl_fp = family_layouts(cfg)
@@ -338,7 +338,7 @@ _WEIGHT_BUILDERS = {"dense": dsv3_dense_weight_layout, "moe": dsv3_moe_weight_la
 
 
 def family_layouts(cfg: ShapedDsv3Config) -> tuple[Dsv3Dims, FamilyLayouts]:
-    dims = dims_of_dsv3(cfg)
+    dims = derive_dims(cfg)
     ctx = {
         "dense": dsv3_dense_activation_layout(dims),
         "moe": dsv3_moe_activation_layout(dims),
@@ -378,7 +378,7 @@ def lower_dsv3(
     shaped = build_shaped_dsv3(
         cfg, hw=hw, recompute_levels=recompute_levels, fast_memory_capacity=fast_memory_capacity,
     )
-    return apply_exact_sizes(shaped, "dsv3-exact", size_of=size_of_factory(dims, fl))
+    return apply_exact_sizes(shaped, "dsv3-exact", object_size=object_size_factory(dims, fl))
 
 
 def initial_values_dsv3(program: Program, cfg: ShapedDsv3Config, backend, *, seed: int = 0, into=None):

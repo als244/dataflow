@@ -193,7 +193,7 @@ def main() -> None:
     for bs, rounds in combos:
         cfg = make_config(bs, rounds, args.seq_len)
         fam = resolve_family(cfg)
-        dims = fam.dims_of(cfg)
+        dims = fam.derive_dims(cfg)
 
         def build(levels=None, cfg=cfg, fam=fam):
             return replace(

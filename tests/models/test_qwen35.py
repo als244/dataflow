@@ -151,9 +151,9 @@ def test_conv_and_l2norm_helpers_match_references():
 
 
 def _tiny_dims():
-    from dataflow_training.model_families.qwen35 import ShapedQwen35Config, dims_of_qwen35
+    from dataflow_training.model_families.qwen35 import ShapedQwen35Config, derive_dims
 
-    return dims_of_qwen35(ShapedQwen35Config.tiny())
+    return derive_dims(ShapedQwen35Config.tiny())
 
 
 # block-level ladder retired with the golden models: block math is
@@ -291,13 +291,13 @@ def _run35(engine_kwargs=None, resolver_wrapper=None, program=None, seed=7):
     backend = CudaBackend()
     values = fam.initial_values(prog, cfg, backend, seed=seed)
     dry = Engine(FakeBackend()).execute(prog, initial_buffers=values)
-    resolver = fam.build_resolver(fam.dims_of(cfg))
+    resolver = fam.build_resolver(fam.derive_dims(cfg))
     if resolver_wrapper is not None:
         resolver = resolver_wrapper(resolver, backend)
     from dataflow_training.data.segments import uniform_segments
     result = Engine(backend, **(engine_kwargs or {})).execute(
         prog, resolver=resolver, initial_buffers=values, pool_prewarm=dry.pool_demand,
-        run_args={"segments": uniform_segments(fam.dims_of(cfg), prog)},
+        run_args={"segments": uniform_segments(fam.derive_dims(cfg), prog)},
     )
     # readback masks the layouts' alignment-padding gaps: the bwd tasks write
     # FIELDS, adamw updates the whole flat buffer (padding included, from
@@ -312,7 +312,7 @@ def _run35(engine_kwargs=None, resolver_wrapper=None, program=None, seed=7):
         qwen35_lin_weight_layout,
     )
 
-    dims = fam.dims_of(cfg)
+    dims = fam.derive_dims(cfg)
 
     def masked(flat, layout):
         if layout is None:  # bare table (untied W_embed): no padding gaps
@@ -401,7 +401,7 @@ def test_qwen35_measured_costs_replan_still_golden():
     fam = resolve_family(cfg)
     program = fam.lower(cfg)
     backend = CudaBackend()
-    profiles = profile_program(program, fam.build_resolver(fam.dims_of(cfg)), backend, soak_seconds=0)
+    profiles = profile_program(program, fam.build_resolver(fam.derive_dims(cfg)), backend, soak_seconds=0)
     measured = apply_measured_costs(program, profiles)
     assert all("measured" in t.metadata for t in measured.tasks)
 

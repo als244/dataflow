@@ -47,10 +47,10 @@ def _llama_cfg(**over):
 
 
 def test_mixed_policy_layout_shapes():
-    from dataflow_training.model_families.llama3 import dims_of
+    from dataflow_training.model_families.llama3 import derive_dims
     from dataflow_training.blocks.layouts import grad_layout, opt_state_layout, weight_layout
 
-    dims = dims_of(_llama_cfg())
+    dims = derive_dims(_llama_cfg())
     wl = weight_layout(dims)
     assert wl.field("attn_norm_w").dtype == "fp32"
     assert wl.field("wq").dtype == "bf16"
@@ -65,9 +65,9 @@ def test_mixed_policy_layout_shapes():
 
 
 def test_llama_block_ladder2_mixed_policy():
-    from dataflow_training.model_families.llama3 import dims_of
+    from dataflow_training.model_families.llama3 import derive_dims
 
-    check_block_backward(dims_of(_llama_cfg())).assert_ok()
+    check_block_backward(derive_dims(_llama_cfg())).assert_ok()
 
 
 def test_llama_model_step_mixed_policy():

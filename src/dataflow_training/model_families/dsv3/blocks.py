@@ -11,7 +11,7 @@ family (embed/head/loss/optimizer reused verbatim). Two kinds:
   expert counts (see tasks/moe/stages.py) and the optimizer applies the
   sign rule via ``update_specials``.
 
-MLA conventions (pinned in tasks/mla_reference.py + tests): two low-rank
+MLA conventions (pinned in blocks/modules/mla_forms.py + tests): two low-rank
 stacks with mid-stack RMSNorm; decoupled rope (per-head q_rope, ONE
 shared k_rope per token); flash at shared head_dim = qk with ZERO-PADDED
 v (exact); ctx saves the COMPRESSED pre-norm latents (q_a, kv_a) +
@@ -376,7 +376,7 @@ def build_dsv3_resolver(
     from functools import partial
 
     def _opt_layout(d, task, size):
-        layer = AdamWStep.layer_of(task)
+        layer = AdamWStep.parse_layer(task)
         if d.kinds[layer] == "dense":
             return dsv3_dense_weight_layout(d, layer=layer), None
         return dsv3_moe_weight_layout(d, layer=layer), None
@@ -393,7 +393,7 @@ def build_dsv3_resolver(
         "head_loss": HeadLoss(dims, kernels),
         "embed_bwd": EmbedBwd(dims, kernels),
         "optimizer_block": AdamWStep(
-            dims, kernels, hyper, layout_for=_opt_layout,
+            dims, kernels, hyper, resolve_layout=_opt_layout,
         ),
         "optimizer_embed": AdamWStep(dims, kernels, hyper, kind="embed"),
         "optimizer_head": AdamWStep(dims, kernels, hyper, kind="head"),

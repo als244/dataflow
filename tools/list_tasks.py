@@ -58,7 +58,7 @@ def main() -> None:
     for name in F._FAMILIES:
         fam = F.family(name)
         cfg = fam.config_type.tiny()
-        dims = fam.dims_of(cfg)
+        dims = fam.derive_dims(cfg)
         # force recompute levels so recompute keys appear? rc tasks are
         # planner-inserted; derive their keys from the fwd keys instead
         prog = fam.lower(cfg)

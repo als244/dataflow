@@ -83,7 +83,7 @@ def routing_fields(dims, ids, weights) -> dict:
 def make_artifacts(adapter, out_path: Path, *, seed=11, reward_seed=100):
     cfg = adapter.make_cfg()
     fam = family_of(adapter.name)
-    dims = fam.dims_of(cfg)
+    dims = fam.derive_dims(cfg)
     backend = CudaBackend()
     prog = plan_program(fam.lower(cfg), fast_memory_capacity=1 << 30).program
     values = fam.initial_values(prog, cfg, backend, seed=seed)
@@ -174,7 +174,7 @@ def build_values(prog, fam, cfg, artifacts, backend, steps):
 def reference_train(adapter, artifacts, *, steps, mode):
     cfg = adapter.make_cfg()
     fam = family_of(adapter.name)
-    dims = fam.dims_of(cfg)
+    dims = fam.derive_dims(cfg)
     wb = artifacts["w_bytes"]
     leaves = [wb["W_embed"].cuda(),
               [wb[f"W_{i}"].cuda() for i in range(cfg.n_layers)]]
@@ -236,7 +236,7 @@ def run(adapter, *, loss="ppo", steps=3, device_gib=2.0, out_dir=None):
 
     cfg = adapter.make_cfg()
     fam = family_of(adapter.name)
-    dims = fam.dims_of(cfg)
+    dims = fam.derive_dims(cfg)
 
     prog = build_rl_program(fam, cfg, steps=steps)
     save_program(prog, out / "program.json")

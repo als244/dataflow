@@ -24,7 +24,7 @@ from dataflow_training.blocks.layouts import (
     qwen35_lin_activation_layout,
     qwen35_lin_weight_layout,
 )
-from ...lowering.emit import FamilyLayouts, LayerLayout, apply_exact_sizes, initial_values_from_layouts, size_of_factory
+from ...lowering.emit import FamilyLayouts, LayerLayout, apply_exact_sizes, initial_values_from_layouts, object_size_factory
 from ...lowering.shaped_program import LayerKindSpec, ShapedHardware, build_shaped_program
 
 
@@ -121,7 +121,7 @@ class ShapedQwen35Config:
                    grad_accum_rounds=grad_accum_rounds, num_steps=num_steps)
 
 
-def dims_of_qwen35(cfg: ShapedQwen35Config) -> Qwen35Dims:
+def derive_dims(cfg: ShapedQwen35Config) -> Qwen35Dims:
     return Qwen35Dims(
         opt_policy=cfg.opt_policy,
         d_model=cfg.d_model, n_layers=cfg.n_layers,
@@ -144,7 +144,7 @@ def _kind_specs(cfg: ShapedQwen35Config, hw: ShapedHardware) -> dict[str, LayerK
     """Two LayerKindSpecs with layout-exact sizes and roofline cost seeds."""
     import math
 
-    dims = dims_of_qwen35(cfg)
+    dims = derive_dims(cfg)
     t, d, seq, ff = cfg.tokens, cfg.d_model, cfg.seq_len, cfg.d_ff
 
     def spec(prefix, wl, cl, mm_params, attn_flops, attn_bytes, extra_mem_bytes):
@@ -208,7 +208,7 @@ def build_shaped_qwen35(
     name: str | None = None,
 ):
     hw = hw or ShapedHardware()
-    dims = dims_of_qwen35(cfg)
+    dims = derive_dims(cfg)
     label = name or (
         f"qwen35-shaped-{cfg.n_layers}L-d{cfg.d_model}-s{cfg.seq_len}-b{cfg.batch}"
         f"-r{cfg.grad_accum_rounds}-steps{cfg.num_steps}"
@@ -250,7 +250,7 @@ def _dt_bias_init(n, gen):
 
 
 def family_layouts(cfg: ShapedQwen35Config):
-    dims = dims_of_qwen35(cfg)
+    dims = derive_dims(cfg)
     ctx = {
         "lin": qwen35_lin_activation_layout(dims),
         "full": qwen35_attn_activation_layout(dims),
@@ -280,7 +280,7 @@ def lower_qwen35(
         cfg, hw=hw, recompute_levels=recompute_levels, fast_memory_capacity=fast_memory_capacity,
     )
     dims, fl = family_layouts(cfg)
-    return apply_exact_sizes(shaped, "qwen35-exact", size_of=size_of_factory(dims, fl))
+    return apply_exact_sizes(shaped, "qwen35-exact", object_size=object_size_factory(dims, fl))
 
 
 def initial_values_qwen35(program: Program, cfg: ShapedQwen35Config, backend, *, seed: int = 0, into=None):

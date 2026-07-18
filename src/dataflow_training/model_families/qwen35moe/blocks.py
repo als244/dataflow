@@ -128,7 +128,7 @@ class Qwen35MoeAttnBlockBwd(MoEAuxTempState, MoEProfileFill, Qwen35AttnBlockBwd)
 def _opt_block_layout(d, task, w_size):
     """optimizer_block spans BOTH kinds: pick by the layer's kind (the
     AdamWStep size assert stays as the tripwire)."""
-    layer = AdamWStep.layer_of(task)
+    layer = AdamWStep.parse_layer(task)
     build = (
         qwen35moe_attn_weight_layout if d.kinds[layer] == "full"
         else qwen35moe_lin_weight_layout
@@ -153,7 +153,7 @@ def build_qwen35moe_resolver(
         "gattnmoe_bwd": Qwen35MoeAttnBlockBwd(dims, kernels),
         "head_loss": HeadLoss(dims, kernels),
         "embed_bwd": EmbedBwd(dims, kernels),
-        "optimizer_block": AdamWStep(dims, kernels, hyper, layout_for=_opt_block_layout),
+        "optimizer_block": AdamWStep(dims, kernels, hyper, resolve_layout=_opt_block_layout),
         "optimizer_embed": AdamWStep(dims, kernels, hyper, kind="embed"),
         "optimizer_head": AdamWStep(dims, kernels, hyper, kind="head"),
     }

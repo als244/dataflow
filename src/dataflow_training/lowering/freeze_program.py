@@ -32,7 +32,7 @@ from dataclasses import replace
 from dataflow.core import OutputSpec, Program, TaskSpec, TensorMeta
 
 
-def _sri_of(task_id: str) -> tuple[int, int, int]:
+def parse_sri(task_id: str) -> tuple[int, int, int]:
     parts = task_id.split("_")            # block_bwd_{s}_{r}_{i} etc.
     return int(parts[-3]), int(parts[-2]), int(parts[-1])
 
@@ -51,7 +51,7 @@ def _ce_frozen_form(program: Program, plan) -> Program:
 
     for t in program.tasks:
         if t.id.startswith("block_bwd_"):
-            s, r, i = _sri_of(t.id)
+            s, r, i = parse_sri(t.id)
             if not plan.emit_bwd[i]:
                 drop_tasks.add(t.id)
                 dead.update(o.id for o in t.outputs)
@@ -60,7 +60,7 @@ def _ce_frozen_form(program: Program, plan) -> Program:
             # object. Stripping outputs from kept tasks would break the
             # positional launch contract (outputs[0] IS the dx buffer).
         elif t.id.startswith("block_recompute_"):
-            s, r, i = _sri_of(t.id)
+            s, r, i = parse_sri(t.id)
             if not plan.save_ctx[i]:
                 drop_tasks.add(t.id)
         elif t.id.startswith("embed_bwd") and not plan.embed_trainable:
@@ -71,7 +71,7 @@ def _ce_frozen_form(program: Program, plan) -> Program:
     ctx_dead: set[str] = set()
     for t in program.tasks:
         if t.id.startswith("block_fwd_"):
-            s, r, i = _sri_of(t.id)
+            s, r, i = parse_sri(t.id)
             if not plan.save_ctx[i]:
                 ctx_dead.update(o.id for o in t.outputs
                                 if o.id.startswith("A_"))
@@ -120,7 +120,7 @@ def _indexer_kl_form(program: Program, plan) -> Program:
         if not t.id.startswith("block_bwd_"):
             tasks.append(t)
             continue
-        s, r, i = _sri_of(t.id)
+        s, r, i = parse_sri(t.id)
         lid = f"loss_{s}_{r}"
         inputs = tuple(x for x in t.inputs if x not in dead_objects)
         outputs = tuple(o for o in t.outputs if o.id not in dead_objects)

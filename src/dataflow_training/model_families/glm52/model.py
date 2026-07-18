@@ -60,7 +60,7 @@ from dataflow_training.blocks.layouts import (
 )
 from dataflow_training.blocks.modules.moe.spec import MoESpec, moe_aux_layout
 
-from ...lowering.emit import FamilyLayouts, LayerLayout, apply_exact_sizes, initial_values_from_layouts, size_of_factory
+from ...lowering.emit import FamilyLayouts, LayerLayout, apply_exact_sizes, initial_values_from_layouts, object_size_factory
 from ...lowering.shaped_program import (
     BF16,
     LayerKindSpec,
@@ -244,7 +244,7 @@ class ShapedGlm52Config:
                    grad_accum_rounds=grad_accum_rounds, num_steps=num_steps)
 
 
-def moe_spec_of(cfg: ShapedGlm52Config) -> MoESpec:
+def derive_moe_spec(cfg: ShapedGlm52Config) -> MoESpec:
     return MoESpec(
         n_experts=cfg.n_experts, top_k=cfg.top_k, d_ff_expert=cfg.d_ff_expert,
         routing_mode="sigmoid_noaux_tc", aux_coef=cfg.aux_coef,
@@ -271,7 +271,7 @@ def _sparse_opt_policy(cfg):
                           "idx_k_ln_b", "w_idx_w"))
 
 
-def dims_of_glm52(cfg: ShapedGlm52Config) -> Glm52Dims:
+def derive_dims(cfg: ShapedGlm52Config) -> Glm52Dims:
     types = tuple(cfg.indexer_types)
     if len(types) != cfg.n_layers:
         raise ValueError(f"indexer_types has {len(types)} entries for "
@@ -312,7 +312,7 @@ def dims_of_glm52(cfg: ShapedGlm52Config) -> Glm52Dims:
         kinds=tuple("gdl" if i < cfg.first_k_dense
                     else ("gml" if types[i] == "full" else "gmf")
                     for i in range(cfg.n_layers)),
-        moe=moe_spec_of(cfg),
+        moe=derive_moe_spec(cfg),
         index_n_heads=cfg.index_n_heads, index_head_dim=cfg.index_head_dim,
         index_topk=cfg.index_topk, sparse_mode=cfg.sparse_mode,
         train_indexer=cfg.train_indexer,
@@ -323,13 +323,13 @@ def dims_of_glm52(cfg: ShapedGlm52Config) -> Glm52Dims:
 _LEADER_WEIGHTS = {"gdl": dsv32_dense_weight_layout, "gml": dsv32_moe_weight_layout}
 
 
-def _weight_layout_for(dims: Glm52Dims, kind: str):
+def kind_weight_layout(dims: Glm52Dims, kind: str):
     if kind == "gmf":
         return dsv3_moe_weight_layout(dims)
     return _LEADER_WEIGHTS[kind](dims)
 
 
-def _activation_layout_for(dims: Glm52Dims, kind: str):
+def kind_activation_layout(dims: Glm52Dims, kind: str):
     # selection-object grammar: no dsa_idx anywhere (S object) and the
     # routing pack lives in the per-layer SEL object (moe kinds)
     from dataflow_training.blocks.modules.moe.spec import moe_context_specs
@@ -347,7 +347,7 @@ def _activation_layout_for(dims: Glm52Dims, kind: str):
 
 
 def _kind_specs(cfg: ShapedGlm52Config, hw: ShapedHardware) -> dict[str, LayerKindSpec]:
-    dims = dims_of_glm52(cfg)
+    dims = derive_dims(cfg)
     t, d, seq, h = cfg.tokens, cfg.d_model, cfg.seq_len, cfg.n_heads
     qk = cfg.qk_head_dim
     sbar = seq / 2.0
@@ -412,15 +412,15 @@ def _kind_specs(cfg: ShapedGlm52Config, hw: ShapedHardware) -> dict[str, LayerKi
     )
     moe_traffic = BF16 * t * k * (3 * f + 2 * d)
     return {
-        "gdl": spec("gdl", True, _weight_layout_for(dims, "gdl"),
-                    _activation_layout_for(dims, "gdl"), 3 * cfg.d_ff_dense * d, 0.0,
+        "gdl": spec("gdl", True, kind_weight_layout(dims, "gdl"),
+                    kind_activation_layout(dims, "gdl"), 3 * cfg.d_ff_dense * d, 0.0,
                     aux_temp_bytes=glm52_aux_temp_layout(dims, "gdl").total_bytes),
-        "gml": spec("gml", True, _weight_layout_for(dims, "gml"),
-                    _activation_layout_for(dims, "gml"), moe_active, moe_traffic,
+        "gml": spec("gml", True, kind_weight_layout(dims, "gml"),
+                    kind_activation_layout(dims, "gml"), moe_active, moe_traffic,
                     aux_temp_bytes=glm52_aux_temp_layout(dims, "gml").total_bytes,
                     aux_bytes=moe_aux_layout(dims, dims.moe).total_bytes),
-        "gmf": spec("gmf", False, _weight_layout_for(dims, "gmf"),
-                    _activation_layout_for(dims, "gmf"), moe_active, moe_traffic,
+        "gmf": spec("gmf", False, kind_weight_layout(dims, "gmf"),
+                    kind_activation_layout(dims, "gmf"), moe_active, moe_traffic,
                     aux_temp_bytes=glm52_aux_temp_layout(dims, "gmf").total_bytes,
                     aux_bytes=moe_aux_layout(dims, dims.moe).total_bytes),
     }
@@ -446,10 +446,10 @@ def _warmup_plan(dims, n_layers):
     from ...lowering.freeze_plan import derive_freeze_plan
 
     contributors = tuple(i for i in range(n_layers)
-                         if dims.leader_of(i) == i)
+                         if dims.leader_index(i) == i)
     return derive_freeze_plan(
         dims, n_layers,
-        lambda i: [f.name for f in _weight_layout_for(dims, dims.kinds[i]).fields],
+        lambda i: [f.name for f in kind_weight_layout(dims, dims.kinds[i]).fields],
         objective="indexer_kl", loss_contributors=contributors,
     )
 
@@ -463,7 +463,7 @@ def build_shaped_glm52(
     name: str | None = None,
 ):
     hw = hw or ShapedHardware()
-    dims = dims_of_glm52(cfg)
+    dims = derive_dims(cfg)
     shares = [
         AuxShare(producer=ld, consumers=dims.group_members(ld)[1:],
                   # frozen indexer => no KL anywhere => no dM chain
@@ -487,11 +487,11 @@ def build_shaped_glm52(
 
 
 def family_layouts(cfg: ShapedGlm52Config) -> tuple[Glm52Dims, FamilyLayouts]:
-    dims = dims_of_glm52(cfg)
+    dims = derive_dims(cfg)
     return dims, FamilyLayouts(
         layers=[LayerLayout(kind=dims.kinds[i],
-                            weights=_weight_layout_for(dims, dims.kinds[i]),
-                            activations=_activation_layout_for(dims, dims.kinds[i]),
+                            weights=kind_weight_layout(dims, dims.kinds[i]),
+                            activations=kind_activation_layout(dims, dims.kinds[i]),
                             aux_temp=glm52_aux_temp_layout(dims, dims.kinds[i]),
                             aux=(moe_aux_layout(dims, dims.moe)
                                  if dims.kinds[i] != "gdl" else None))
@@ -522,16 +522,16 @@ def lower_glm52(
         cfg, hw=hw, recompute_levels=recompute_levels,
         fast_memory_capacity=fast_memory_capacity,
     )
-    base_size = size_of_factory(dims, fl)
+    base_size = object_size_factory(dims, fl)
     t_tokens = dims.tokens
     dm_cols = dims.index_topk if dims.sparse_mode else cfg.seq_len
 
-    def size_of(oid: str):
+    def object_size(oid: str):
         if oid.startswith("dAuxTemp_"):
             return 4 * t_tokens * dm_cols
         return base_size(oid)
 
-    return apply_exact_sizes(shaped, "glm52-exact", size_of=size_of)
+    return apply_exact_sizes(shaped, "glm52-exact", object_size=object_size)
 
 
 def initial_values_glm52(program: Program, cfg: ShapedGlm52Config, backend, *, seed: int = 0, into=None):

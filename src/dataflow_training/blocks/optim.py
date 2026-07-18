@@ -300,7 +300,7 @@ class MuonRecipePolicy:
 MUON_RECIPE = MuonRecipePolicy()
 
 
-def hyper_for(policy, key: str, layer: int | None, base):
+def resolve_hyper(policy, key: str, layer: int | None, base):
     """Per-(layer, field) effective hyper: route through
     layer_overrides to the owning sub-policy, apply its first-matching
     hyper_overrides dict via dataclasses.replace. Schedule scaling is
@@ -336,7 +336,7 @@ def reference_field_step(dims, hyper, *, ns, layer, name, w, state,
     """GOLDEN-side per-field optimizer step — mirrors AdamWStep.launch's
     policy dispatch exactly: the same ns-prefixed policy key (that
     namespacing is what routes embed/head to adamw under the muon
-    recipe), the same hyper_for overrides, the same schedule scaling.
+    recipe), the same resolve_hyper overrides, the same schedule scaling.
 
     ``state`` is the field's slot dict; slots are created lazily at the
     opt dtype per the resolved rule. adamw runs the eager reference
@@ -353,7 +353,7 @@ def reference_field_step(dims, hyper, *, ns, layer, name, w, state,
     rule = pol.for_field(key, layer, tuple(w.shape))
     if rule == "frozen":
         return
-    hp = hyper_for(pol, key, layer, hyper)
+    hp = resolve_hyper(pol, key, layer, hyper)
     sched = getattr(hyper, "schedule", None)
     if sched is not None:
         s = sched.scale(step)

@@ -19,7 +19,7 @@ from dataflow_training.blocks.layouts import (
     qwen3_activation_layout,
     qwen3_weight_layout,
 )
-from ...lowering.emit import FamilyLayouts, LayerLayout, apply_exact_sizes, initial_values_from_layouts, size_of_factory
+from ...lowering.emit import FamilyLayouts, LayerLayout, apply_exact_sizes, initial_values_from_layouts, object_size_factory
 from ...lowering.shaped_program import ShapedHardware, build_shaped_program, roofline_block_kind_spec
 
 
@@ -128,7 +128,7 @@ def build_shaped_qwen3(
     )
 
 
-def dims_of_qwen3(cfg: ShapedQwen3Config) -> Qwen3Dims:
+def derive_dims(cfg: ShapedQwen3Config) -> Qwen3Dims:
     return Qwen3Dims(
         opt_policy=cfg.opt_policy,
         d_model=cfg.d_model,
@@ -145,7 +145,7 @@ def dims_of_qwen3(cfg: ShapedQwen3Config) -> Qwen3Dims:
 
 
 def family_layouts(cfg: ShapedQwen3Config) -> tuple[Qwen3Dims, FamilyLayouts]:
-    dims = dims_of_qwen3(cfg)
+    dims = derive_dims(cfg)
     cl = qwen3_activation_layout(dims)
     return dims, FamilyLayouts(
         layers=[LayerLayout(kind="block",
@@ -168,7 +168,7 @@ def lower_qwen3(
         cfg, hw=hw, recompute_levels=recompute_levels, fast_memory_capacity=fast_memory_capacity,
     )
     dims, fl = family_layouts(cfg)
-    return apply_exact_sizes(shaped, "qwen3-exact", size_of=size_of_factory(dims, fl))
+    return apply_exact_sizes(shaped, "qwen3-exact", object_size=object_size_factory(dims, fl))
 
 
 def initial_values_qwen3(program: Program, cfg: ShapedQwen3Config, backend, *, seed: int = 0, into=None):

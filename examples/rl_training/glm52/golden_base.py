@@ -34,18 +34,18 @@ from dataflow_training.blocks.layouts import (
     weight_layout,
 )
 from dataflow_training.blocks.base_blocks import AdamWHyper
-from dataflow_training.blocks.modules.dsa_reference import (
+from dataflow_training.blocks.modules.dsa_forms import (
     dsa_attention_rows_reference,
     dsa_selection_mask_reference,
     dsa_index_scores_reference,
     dsa_indexer_kl_reference,
     dsa_sparse_attention_reference,
 )
-from dataflow_training.blocks.modules.mla_reference import (
+from dataflow_training.blocks.modules.mla_forms import (
     mla_attention_reference,
     mla_qkv_reference,
 )
-from dataflow_training.blocks.modules.moe.reference import moe_mlp_reference
+from dataflow_training.blocks.modules.moe.forms import moe_mlp_reference
 
 Leaves = dict[str, torch.Tensor]
 
@@ -124,7 +124,7 @@ class GoldenLlama3:
         materialization per forward, read as fields thereafter."""
         if segments is not None:
             return segments
-        return ops.Segments.of_dims(self.dims).on(device)
+        return ops.Segments.from_dims(self.dims).on(device)
 
     def block_forward(self, x: torch.Tensor, w: Leaves, segments=None) -> torch.Tensor:
         d = self.dims
@@ -205,7 +205,7 @@ class GoldenOlmoe(GoldenLlama3):
     packed-leaf handling and the exact AdamW replica). Block =
     qwen3-shaped attention with FULL-ROW qk-norm (one RMSNorm over the
     whole q/k rows) + the MoE SwiGLU tail composed from
-    ``dataflow_training.blocks.modules.moe.reference``.
+    ``dataflow_training.blocks.modules.moe.forms``.
 
     Aux load-balance loss: the AUTOGRAD OBJECTIVE is CE + sum of
     per-layer aux terms (f detached) — reproducing the runtime's
@@ -274,7 +274,7 @@ class GoldenOlmoe(GoldenLlama3):
 class GoldenDsv3(GoldenOlmoe):
     """Golden DeepSeek-V3 reference. Extends GoldenOlmoe (CE + aux
     objective, CE-only reported loss, AdamW replica) with: MLA attention
-    (tasks mla_reference forms), MIXED depth (first_k_dense dense-SwiGLU
+    (mla_forms conventions), MIXED depth (first_k_dense dense-SwiGLU
     layers, MoE rest — kind inferred per layer), sigmoid_noaux_tc routing
     with the UNGATED shared expert, V3's sequence-wise aux, and the
     balance-bias step rule applied EXACTLY like the runtime: counts
@@ -299,7 +299,7 @@ class GoldenDsv3(GoldenOlmoe):
         """Record this layer's per-expert assignment counts (detached) for
         the noaux router-bias speed rule applied at optimizer time.
         Inherited by every noaux-family golden (dsv32, glm52)."""
-        from dataflow_training.blocks.modules.moe.reference import router_counts_reference
+        from dataflow_training.blocks.modules.moe.forms import router_counts_reference
 
         if not hasattr(self, "_pending_counts"):
             self._pending_counts = []
@@ -463,7 +463,7 @@ class GoldenGlm52(GoldenDsv3):
             g["psum"] = p if g["psum"] is None else g["psum"] + p
             g["n"] += 1
             return torch.zeros((), device=q_full.device)
-        n = len(d.group_members(d.leader_of(i)))
+        n = len(d.group_members(d.leader_index(i)))
         return dsa_indexer_kl_reference(scores, mask, p) / n
 
     def block_forward(
@@ -482,7 +482,7 @@ class GoldenGlm52(GoldenDsv3):
         # IndexShare: the group LEADER computes scores + the mode's mask
         # once and caches them; every member (leader included) reads the
         # shared pair below
-        if d.role_of(i) == "full":
+        if d.layer_role(i) == "full":
             self._group_scores, self._group_mask = \
                 self._leader_selection(h1, q_lora, w, t, x.device, seg)
             if not getattr(d, "sparse_mode", True):

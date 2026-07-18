@@ -116,7 +116,7 @@ def install(server) -> None:
                                separators=(",", ":")).encode()
         prog_id = "p-" + hashlib.sha256(canonical).hexdigest()[:12]
         program = execution.parse_program(pd)
-        registry.resolver_for(a["resolver"])          # validate + cache
+        registry.lookup_resolver(a["resolver"])          # validate + cache
         report = _binding_report(program)
         cap = {
             "backing_bytes_needed": sum(s.size_bytes
@@ -249,7 +249,7 @@ def install(server) -> None:
         # run_args pass through OPAQUE: packed metadata (segments /
         # wire seq_lens / the uniform default) is the workload's own
         # concern, resolved by its tasks
-        resolver = registry.resolver_for(entry.resolver_spec)
+        resolver = registry.lookup_resolver(entry.resolver_spec)
         run_args = args
         nm = getattr(server, "nm", None)
         group_handles = nm.group_handles() if nm is not None else None

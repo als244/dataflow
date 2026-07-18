@@ -16,9 +16,9 @@ from ..bridge_common import assert_state_dict_byte_identical, load_state_dict_st
 
 def reference_config(cfg) -> Llama3Config:
     """Build the isolated reference config from a ``ShapedLlamaConfig``."""
-    from .model import dims_of
+    from .model import derive_dims
 
-    dims = dims_of(cfg)
+    dims = derive_dims(cfg)
     return Llama3Config(
         n_layers=cfg.n_layers, d_model=cfg.d_model, n_heads=cfg.n_heads,
         n_kv_heads=cfg.n_kv_heads, d_ff=cfg.d_ff, vocab_size=cfg.vocab_size,
@@ -84,6 +84,6 @@ def load_reference_init(model, cfg, dims, get_bytes) -> Llama3:
 
 def to_reference_state_dict(cfg, get_bytes) -> dict:
     """Uniform-name alias for the generic gate runners."""
-    from .model import dims_of
+    from .model import derive_dims
 
-    return to_state_dict(dims_of(cfg), cfg.n_layers, get_bytes)
+    return to_state_dict(derive_dims(cfg), cfg.n_layers, get_bytes)

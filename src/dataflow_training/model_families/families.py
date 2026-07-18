@@ -4,7 +4,7 @@ correctness authority is the isolated reference twin (reference_models/).
 
 The train loop, gradcheck harness, and sweep tools dispatch through
 ``resolve_family(cfg)`` instead of importing a family's modules directly —
-adding a family means one `Family` entry here (docs/extending.md §6), not
+adding a family means one `ModelFamily` entry here (docs/extending.md §6), not
 edits across the harnesses.
 
 Golden classes resolve lazily (models is the layer ABOVE training; the
@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import Callable, Protocol
 
 
-class DimsOfFn(Protocol):
+class DeriveDimsFn(Protocol):
     """cfg -> the family's Dims object (validated: layer-0/pattern rules,
     incompatible knob combinations raise here, at build time)."""
 
@@ -60,7 +60,7 @@ class ModelFamily:
 
     name: str
     config_type: type          # a frozen dataclass with preset classmethods
-    dims_of: DimsOfFn
+    derive_dims: DeriveDimsFn
     lower: LowerFn
     initial_values: InitialValuesFn
     build_resolver: BuildResolverFn
@@ -106,7 +106,7 @@ class Model:
 
     @property
     def dims(self):
-        return self.family.dims_of(self.cfg)
+        return self.family.derive_dims(self.cfg)
 
     def lower(self, **kw):
         return self.family.lower(self.cfg, **kw)
@@ -125,21 +125,17 @@ class Model:
         return bridges.build_reference_model(self.cfg, device=device)
 
 
-# The historical name stays importable until the repo-wide rename batch
-# (call sites migrate incrementally; new code says ModelFamily).
-Family = ModelFamily
 
-
-def _llama3() -> Family:
+def _llama3() -> ModelFamily:
     from dataflow_training.blocks.layouts import activation_layout, weight_layout
     from dataflow_training.model_families.llama3.blocks import BlockBwd, BlockFwd, BlockRecompute, build_resolver
-    from .llama3 import dims_of, initial_values, lower_llama3
+    from .llama3 import derive_dims, initial_values, lower_llama3
     from .llama3 import ShapedLlamaConfig
 
-    return Family(
+    return ModelFamily(
         name="llama3",
         config_type=ShapedLlamaConfig,
-        dims_of=dims_of,
+        derive_dims=derive_dims,
         lower=lower_llama3,
         initial_values=initial_values,
         build_resolver=build_resolver,
@@ -153,7 +149,7 @@ def _llama3() -> Family:
     )
 
 
-def _qwen3() -> Family:
+def _qwen3() -> ModelFamily:
     from dataflow_training.blocks.layouts import qwen3_activation_layout, qwen3_weight_layout
     from dataflow_training.model_families.qwen3.blocks import (
         Qwen3BlockBwd,
@@ -161,13 +157,13 @@ def _qwen3() -> Family:
         Qwen3BlockRecompute,
         build_qwen3_resolver,
     )
-    from .qwen3 import dims_of_qwen3, initial_values_qwen3, lower_qwen3
+    from .qwen3 import derive_dims, initial_values_qwen3, lower_qwen3
     from .qwen3 import ShapedQwen3Config
 
-    return Family(
+    return ModelFamily(
         name="qwen3",
         config_type=ShapedQwen3Config,
-        dims_of=dims_of_qwen3,
+        derive_dims=derive_dims,
         lower=lower_qwen3,
         initial_values=initial_values_qwen3,
         build_resolver=build_qwen3_resolver,
@@ -181,17 +177,17 @@ def _qwen3() -> Family:
     )
 
 
-def _qwen35() -> Family:
+def _qwen35() -> ModelFamily:
     from dataflow_training.model_families.qwen35.blocks import build_qwen35_resolver
     from .qwen35 import initial_values_qwen35, lower_qwen35
-    from .qwen35 import ShapedQwen35Config, dims_of_qwen35
+    from .qwen35 import ShapedQwen35Config, derive_dims
 
     # heterogeneous (lin/full kinds) — the per-kind block ladders live in
     # tests/models/test_qwen35.py, so no generic gradcheck bundle here
-    return Family(
+    return ModelFamily(
         name="qwen35",
         config_type=ShapedQwen35Config,
-        dims_of=dims_of_qwen35,
+        derive_dims=derive_dims,
         lower=lower_qwen35,
         initial_values=initial_values_qwen35,
         build_resolver=build_qwen35_resolver,
@@ -200,17 +196,17 @@ def _qwen35() -> Family:
     )
 
 
-def _olmoe() -> Family:
+def _olmoe() -> ModelFamily:
     from dataflow_training.model_families.olmoe.blocks import build_olmoe_resolver
-    from .olmoe import ShapedOlmoeConfig, dims_of_olmoe, initial_values_olmoe, lower_olmoe
+    from .olmoe import ShapedOlmoeConfig, derive_dims, initial_values_olmoe, lower_olmoe
 
     # MoE family — the block ladder needs the aux-loss term in the
     # reference objective, so it lives in tests/models/test_olmoe.py
     # rather than the generic check_block_backward harness
-    return Family(
+    return ModelFamily(
         name="olmoe",
         config_type=ShapedOlmoeConfig,
-        dims_of=dims_of_olmoe,
+        derive_dims=derive_dims,
         lower=lower_olmoe,
         initial_values=initial_values_olmoe,
         build_resolver=build_olmoe_resolver,
@@ -219,21 +215,21 @@ def _olmoe() -> Family:
     )
 
 
-def _qwen35moe() -> Family:
+def _qwen35moe() -> ModelFamily:
     from dataflow_training.model_families.qwen35moe.blocks import build_qwen35moe_resolver
     from .qwen35moe import (
         ShapedQwen35MoeConfig,
-        dims_of_qwen35moe,
+        derive_dims,
         initial_values_qwen35moe,
         lower_qwen35moe,
     )
 
     # heterogeneous MoE (linmoe/gattnmoe kinds) — per-kind ladders live in
     # tests/models/test_qwen35moe.py
-    return Family(
+    return ModelFamily(
         name="qwen35moe",
         config_type=ShapedQwen35MoeConfig,
-        dims_of=dims_of_qwen35moe,
+        derive_dims=derive_dims,
         lower=lower_qwen35moe,
         initial_values=initial_values_qwen35moe,
         build_resolver=build_qwen35moe_resolver,
@@ -242,21 +238,21 @@ def _qwen35moe() -> Family:
     )
 
 
-def _qwen3moe() -> Family:
+def _qwen3moe() -> ModelFamily:
     from dataflow_training.model_families.qwen3moe.blocks import build_qwen3moe_resolver
     from .qwen3moe import (
         ShapedQwen3MoeConfig,
-        dims_of_qwen3moe,
+        derive_dims,
         initial_values_qwen3moe,
         lower_qwen3moe,
     )
 
     # MoE family (aux objective) — block ladder lives in
     # tests/models/test_qwen3moe.py (no gradcheck bundle)
-    return Family(
+    return ModelFamily(
         name="qwen3moe",
         config_type=ShapedQwen3MoeConfig,
-        dims_of=dims_of_qwen3moe,
+        derive_dims=derive_dims,
         lower=lower_qwen3moe,
         initial_values=initial_values_qwen3moe,
         build_resolver=build_qwen3moe_resolver,
@@ -265,21 +261,21 @@ def _qwen3moe() -> Family:
     )
 
 
-def _dsv3() -> Family:
+def _dsv3() -> ModelFamily:
     from dataflow_training.model_families.dsv3.blocks import build_dsv3_resolver
     from .dsv3 import (
         ShapedDsv3Config,
-        dims_of_dsv3,
+        derive_dims,
         initial_values_dsv3,
         lower_dsv3,
     )
 
     # MLA + hybrid dense/MoE depth + sigmoid_noaux_tc — block ladder lives
     # in tests/modules/test_mla.py, family ladder in tests/models/test_dsv3.py
-    return Family(
+    return ModelFamily(
         name="dsv3",
         config_type=ShapedDsv3Config,
-        dims_of=dims_of_dsv3,
+        derive_dims=derive_dims,
         lower=lower_dsv3,
         initial_values=initial_values_dsv3,
         build_resolver=build_dsv3_resolver,
@@ -288,21 +284,21 @@ def _dsv3() -> Family:
     )
 
 
-def _dsv32() -> Family:
+def _dsv32() -> ModelFamily:
     from dataflow_training.model_families.dsv32.blocks import build_dsv32_resolver
     from .dsv32 import (
         ShapedDsv32Config,
-        dims_of_dsv32,
+        derive_dims,
         initial_values_dsv32,
         lower_dsv32,
     )
 
     # dsv3 + DSA (lightning indexer, sparse mode) — ladders in
     # tests/modules/test_dsa.py + tests/models/test_dsv32.py
-    return Family(
+    return ModelFamily(
         name="dsv32",
         config_type=ShapedDsv32Config,
-        dims_of=dims_of_dsv32,
+        derive_dims=derive_dims,
         lower=lower_dsv32,
         initial_values=initial_values_dsv32,
         build_resolver=build_dsv32_resolver,
@@ -311,10 +307,10 @@ def _dsv32() -> Family:
     )
 
 
-def _glm52() -> Family:
+def _glm52() -> ModelFamily:
     from .glm52 import (
         ShapedGlm52Config,
-        dims_of_glm52,
+        derive_dims,
         initial_values_glm52,
         lower_glm52,
     )
@@ -323,10 +319,10 @@ def _glm52() -> Family:
 
     # IndexShare: cross-layer selection via M/dM objects — ladder in
     # tests/models/test_glm52.py + tests/models/test_glm52_lowering.py
-    return Family(
+    return ModelFamily(
         name="glm52",
         config_type=ShapedGlm52Config,
-        dims_of=dims_of_glm52,
+        derive_dims=derive_dims,
         lower=lower_glm52,
         initial_values=initial_values_glm52,
         build_resolver=build_glm52_resolver,
@@ -335,7 +331,7 @@ def _glm52() -> Family:
     )
 
 
-_FAMILIES: dict[str, Callable[[], Family]] = {
+_FAMILIES: dict[str, Callable[[], ModelFamily]] = {
     "llama3": _llama3,
     "qwen3": _qwen3,
     "qwen35": _qwen35,
@@ -346,13 +342,13 @@ _FAMILIES: dict[str, Callable[[], Family]] = {
     "dsv32": _dsv32,
     "glm52": _glm52,
 }
-_cache: dict[str, Family] = {}
+_cache: dict[str, ModelFamily] = {}
 
 
-def register_family(name: str, thunk: Callable[[], Family]) -> None:
+def register_family(name: str, thunk: Callable[[], ModelFamily]) -> None:
     """Register a model family from OUTSIDE the dataflow package.
 
-    ``thunk`` is a zero-arg callable returning a ``Family`` (lazy, so
+    ``thunk`` is a zero-arg callable returning a ``ModelFamily`` (lazy, so
     registration is import-cheap). External families become visible to
     ``family()`` / ``resolve_family()`` and thereby to every tool
     (bench_train, best_config, bench_frontier, verify_family). See
@@ -416,9 +412,9 @@ def validate_family(name: str, *, preset: str = "tiny") -> list[str]:
         return problems
     cfg = method()
     try:
-        dims = fam.dims_of(cfg)
+        dims = fam.derive_dims(cfg)
     except Exception as exc:
-        return problems + [f"dims_of raised: {exc!r}"]
+        return problems + [f"derive_dims raised: {exc!r}"]
     try:
         prog = fam.lower(cfg)
     except Exception as exc:
@@ -447,13 +443,13 @@ def validate_family(name: str, *, preset: str = "tiny") -> list[str]:
     return problems
 
 
-def family(name: str) -> Family:
+def family(name: str) -> ModelFamily:
     if name not in _cache:
         _cache[name] = _FAMILIES[name]()
     return _cache[name]
 
 
-def resolve_family(cfg) -> Family:
+def resolve_family(cfg) -> ModelFamily:
     """Dispatch on the shaped-config type — EXACT type first, then
     isinstance. Exact-first makes it safe for an external family to
     subclass a builtin config (docs/extending_external.md); builtin

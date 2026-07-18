@@ -27,7 +27,7 @@ from dataclasses import replace
 import torch
 
 from dataflow.runtime.interop import TORCH_DTYPE_BY_NAME, torch_view
-from ..optim import OPTIMIZERS, hyper_for, resolve_opt_policy
+from ..optim import OPTIMIZERS, resolve_hyper, resolve_opt_policy
 from .update import field_key, run_step
 
 
@@ -59,11 +59,11 @@ def launch(block, ctx, es, kctx, wl, gl, ol, ns,
         es.wait_event(summed)
     step = run_step(ctx)
     op = resolve_opt_policy(getattr(block.dims, "opt_policy", None))
-    layer = block.layer_of(ctx.task)
+    layer = block.parse_layer(ctx.task)
     first = wl.fields[0]
     opt = OPTIMIZERS[op.for_field(field_key(ns, first.name), layer,
                                   first.shape)]
-    hp = hyper_for(op, field_key(ns, first.name), layer, block.hyper)
+    hp = resolve_hyper(op, field_key(ns, first.name), layer, block.hyper)
     # a deviation here is policy drift between plan time and run time
     # — refuse rather than train wrong
     if opt.name != "adamw":
@@ -73,7 +73,7 @@ def launch(block, ctx, es, kctx, wl, gl, ol, ns,
     for f in wl.fields[1:]:
         if op.for_field(field_key(ns, f.name), layer, f.shape) \
                 != opt.name \
-                or hyper_for(op, field_key(ns, f.name), layer,
+                or resolve_hyper(op, field_key(ns, f.name), layer,
                              block.hyper) != hp:
             raise RuntimeError(
                 f"{ctx.task.id}: rs shard needs one optimizer story "

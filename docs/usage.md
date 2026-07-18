@@ -8,7 +8,7 @@ import torch
 from dataclasses import replace
 from dataflow.runtime.device.cuda import CudaBackend
 from dataflow.tasks.models.llama3_blocks import build_resolver
-from dataflow.training.llama3_lowering import dims_of, lower_llama3
+from dataflow.training.llama3_lowering import derive_dims, lower_llama3
 from dataflow.training.planning import plan_program
 from dataflow.training.profiling import apply_measured_costs, cached_pcie, load_or_profile
 from dataflow.training.shaped_llama3 import ShapedLlamaConfig
@@ -30,7 +30,7 @@ program = replace(lower_llama3(cfg),
 
 # 3. task costs, measured and disk-cached (keyed by task signatures +
 #    kernel set + device, so a kernel swap re-measures instead of lying)
-profiles = load_or_profile(program, build_resolver(dims_of(cfg)), backend)
+profiles = load_or_profile(program, build_resolver(derive_dims(cfg)), backend)
 planned = plan_program(apply_measured_costs(program, profiles),
                        fast_memory_capacity=16 * 1024**3,
                        recompute=True,
