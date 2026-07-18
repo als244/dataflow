@@ -2,7 +2,7 @@
 
 GENERATED — regenerate with `python tools/list_models.py >
 docs/builtin_models.md` after adding a family or preset. Families
-register in `training/families.py`; presets are classmethods on each
+register in `dataflow_training/model_families/families.py`; presets are classmethods on each
 family's Shaped config (external families: docs/extending_external.md).
 
 Params are computed from the lowered weight layouts at each preset's

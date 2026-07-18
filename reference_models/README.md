@@ -1,9 +1,14 @@
-# `reference_models/` — isolated ground-truth models
+# `reference_models/` — the truth tree
 
-Plain, idiomatic PyTorch (`nn.Module` + autograd) implementations used as the
-**correctness ground truth** for the pretraining parity study. The engine
-must reproduce these models' loss curves from a byte-identical initialization
-on the identical data stream.
+Plain, idiomatic PyTorch (`nn.Module` + autograd) implementations that
+are the **correctness ground truth** for the whole project: the third
+universe of the split (engine `dataflow` / workload `dataflow_training`
+/ truth `reference_models` — docs/architecture.md). The engine must
+reproduce these models' loss curves from a byte-identical
+initialization on the identical data stream; that comparison — its
+instrument ladder, calibrated bands, and gotcha catalog — is the
+per-family equivalence bar, and its methodology lives in
+[docs/correctness_compare.md](../docs/correctness_compare.md).
 
 ## Contract
 
@@ -13,10 +18,18 @@ on the identical data stream.
   MLA, DSA) are reimplemented in each file, redundantly and on purpose. A
   second, from-scratch implementation catches bugs a shared codebase would
   hide (including bugs in the engine's own hand-written reference ops).
+  Nothing in `src/` may import this package either (rule R1,
+  `tests/test_import_boundaries.py`) — the workload's bridges import IT,
+  never the reverse.
 - **Reads like a normal model.** Standard modules, standard autograd — no
   packed layouts, no manual backward, no engine concepts. `(B, T)` int tokens
   (each row an independent causal sequence); `forward -> (B, T, vocab)`;
   `loss(tokens, targets) -> mean CE (fp32)`; optional `grad_checkpoint`.
+- **Varlen-native.** Packed mixed-length rounds are first-class: pass
+  `seq_lens` with a `(1, sum(seq_lens))` packed row and the model applies
+  per-sequence positions and a block-diagonal causal mask — the twin of
+  the engine's always-varlen attention + `Segments` wire contract, so
+  ragged parity gates compare exactly, never approximately.
 - **Numeric conventions match the engine** (so curves track within bf16
   kernel-order noise, not a divergent fp32 model): bf16 weights/activations
   with fp32 reductions for RMSNorm / RoPE / softmax / attention logits / CE /
@@ -35,6 +48,11 @@ on the identical data stream.
 | `dsv3.py` | MLA (latent attention) + MoE (`sigmoid_noaux_tc`) + shared |
 | `dsv32.py` | MLA + DSA (sparse attention) + MoE + shared |
 | `glm52.py` | MLA + DSA (IndexShare) + MoE + shared |
+
+Every registered model family carries a twin (`ModelFamily.twin_module`
+points here) — a family without one cannot take the full correctness
+treatment, and adding a family includes adding its twin
+(docs/extending.md §3).
 
 ## MoE load-balancing loss (optional)
 
@@ -58,10 +76,6 @@ Uniform routing gives `L_layer = 1`; imbalance pushes it above 1. The shared
 expert (where present) has no router and is excluded. `model.load_balance_loss()`
 returns the summed per-layer term from the most recent forward.
 
-Note (grad-accum): this computes the LBL from ONE forward's counts (exact at
-`grad_accum_rounds=1`). Accumulating counts across the grad-accum rounds and
-applying the LBL once per step is a planned refinement (engine + driver).
-
 ## Weight orientation (for a parity bridge)
 
 Projections are `nn.Linear` with weight `(out, in)`; the engine stores packed
@@ -70,15 +84,20 @@ and LM-head tables are `(vocab, d)` and load directly; 1-D norm gains directly;
 a depthwise conv is `(D, W) -> (D, 1, W)`. Raw-parameter tensors (expert
 stacks everywhere; per-file choices like qwen3moe's router or dsv32's shared
 expert) are already in the engine orientation and load directly.
-`dataflow.pretrain.bridges` has one bridge module per family (all nine); every
-family is gate-checked against its golden from a byte-identical init
-(state_dict byte-identity + forward + training-curve agreement,
-`tests/pretrain/test_reference_*.py`) and against the ENGINE SERVICE over a
-few steps (`tests/pretrain/test_engine_parity_families.py`).
+`dataflow_training.model_families.bridges` re-exports one bridge module per
+family (`model_families/<family>/bridge.py`, all nine); every family is
+gate-checked against its twin from a byte-identical init (state_dict
+byte-identity + forward + training-curve agreement) and against the ENGINE
+SERVICE over real fineweb steps
+(`tests/dataflow_training/models/test_engine_vs_reference.py`,
+`tests/dataflow_training/pretrain/test_engine_parity_families.py`).
 
 ## Import
 
 `reference_models/` lives at the repo root (outside the installed `src/`
-tree). The root `conftest.py` puts the repo root on `sys.path` for tests;
-scripts under `dataflow.pretrain` bootstrap the same path, so
-`import reference_models` works when run from the repo root.
+tree) — isolation is physical, not just conventional. The root
+`conftest.py` puts the repo root on `sys.path` for tests; the workload's
+`model_families` package init arms the same path before its bridge
+modules import, so `import reference_models` works when run from the
+repo root. Suites whose SUBJECT is a twin itself live in
+`tests/reference_models/` (see its README).

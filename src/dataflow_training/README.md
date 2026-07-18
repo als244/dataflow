@@ -1,73 +1,86 @@
-# dataflow.training — lowering, planning, profiling, testing
+# dataflow_training — the workload package
 
-**Purpose.** Turn model definitions into executable programs and keep them
-honest: lowering (structure + exact sizes), planning via dataflow_sim
-(PressureFit + recompute — the ONLY layer importing the simulator),
-measurement (profiling), and the correctness harness (gradcheck).
+The WORKLOAD side of the engine/workload split: model families and
+their block executables, the shared block/kernel libraries, lowering +
+planning (the `dataflow_sim` dependency lives here), data streaming,
+the run drivers, and the distributed conductor. It builds programs and
+registers the resolvers that execute them; the engine (`dataflow`)
+runs them without ever importing this package. The seam is specified
+in [docs/program_contract.md](../../docs/program_contract.md).
 
-## Modules
+## Public API surface
 
-- `shaped_llama3.py` — llama3-shaped program generator (structure, naming,
-  grad-accum mutation pattern, recompute variants + rewrites). Sizes are
-  analytic; used for planning/parity work at any scale.
-  `optimizer_placement="interleaved"` (default) emits each optimizer task
-  at its gradient's final mutation inside the last backward round —
-  `"tail"` restores the legacy end-of-chain order, which drains 1.5–2 s of
-  GPU-idle PCIe per step.
-- `llama3_lowering.py` — execution-grade lowering: shaped structure with
-  sizes rewritten to the tasks layer's packed layouts (`lower_llama3`), plus
-  `initial_values()` filling pinned buffers with real weights/data.
-- `planning.py` — `plan_program(program, fast_memory_capacity=, recompute=,
-  build_variant=, preplace="task0")` wraps `apply_pressurefit_policy` +
-  `plan_with_recompute`; `simulate_program` runs the simulator. Swapping the
-  policy happens here and only here. `preplace="task0"` (the runtime
-  default; the sim's own default stays "greedy") keeps t=0 pre-placement to
-  task 0's inputs so head uploads are planned, charged, overlappable
-  transfers instead of a silent synchronous setup copy.
-- `profiling.py` — `profile_program` measures per-unique-task runtime (CUDA
-  events, thermal-soaked, distribution-checked) and workspace
-  (torch-allocator peak delta); `apply_measured_costs` writes them back.
-  USE THE CACHES: `load_or_profile` (keyed by task signatures + kernel set
-  + env + device) and `cached_pcie` — re-measuring per run makes plans
-  non-reproducible (bandwidth noise flips recompute choices). Final
-  planning always runs on measured costs.
-- `train_loop.py` — `train(annotated, cfg, backend, steps=, placement_mode=
-  "static")`: one annotated chain replayed per optimizer step; Session-owned
-  slab/pools; static placement dry-run + packing by default. The report
-  carries `step_wall_s` (FULL step: fill + execute + readback — quote wall
-  tok/s, makespan-only numbers flatter the seam), `placement_escapes`, and
-  `pressure_evictions` (both 0 in healthy runs).
-- `families.py` — the model-family registry: `resolve_family(cfg)` maps a
-  shaped config to its lowering, dims, resolver, golden, and gradcheck
-  bundle. The train loop, gradcheck, and sweep tools dispatch through it;
-  adding a family is one entry here (docs/extending.md §6). Families:
-  llama3 (`shaped_llama3` + `llama3_lowering`), qwen3 (`shaped_qwen3` +
-  `qwen3_lowering` — qk-norm, decoupled head_dim, vocab 151,936).
-- `replay.py` — `replay_gap_pct`: re-simulate with measured durations as
-  overrides; isolates scheduling fidelity from cost-model error.
-- `testing/gradcheck.py` — the correctness ladder: `check_block_backward`
-  (vs autograd through the golden block; recompute-equivalence; accumulation
-  semantics) and `check_model_step` (full annotated program through the real
-  engine vs the golden model: loss, final params, optimizer state).
+What each subpackage exposes and what tools/tests actually import:
 
-## The E2E recipe (what the model-step gate runs)
+- **`model_families`** — `families.py` is the registry:
+  `ModelFamily` / `Model`, `family(name)`, `resolve_family(cfg)`,
+  `register_family`, `load_plugins`, `validate_family`, and
+  `build_init_program` (init-as-program). One package per family
+  (`llama3/`, `qwen3/`, `qwen35/`, `olmoe/`, `qwen3moe/`,
+  `qwen35moe/`, `dsv3/`, `dsv32/`, `glm52/`), each with `model.py`
+  (config, dims, lowering, seeded init), `blocks.py` (executables +
+  resolver), `bridge.py` (packed bytes -> the `reference_models` twin),
+  `presets.py` (study/smoke shapes). `bridges.py` re-exports the
+  uniform bridge pair (`build_reference_model`, `load_reference_init`);
+  `init_policy.py` the init-rule vocabulary.
+- **`register`** — the ONE hookup into the engine service:
+  `register_all()` registers resolver kind `"model_family"`;
+  `canonical_spec(family, cfg_dict, hyper)` builds the wire spec.
+- **`blocks`** — shared executable library: `base_blocks.py`
+  (family-neutral `EmbedFwd`/`HeadLoss`/`EmbedBwd`/`OptimizerStep` +
+  `AdamWHyper`, `RoundPrologue`), `layouts.py` (`PackedLayout`,
+  `DTypePolicy`, `grad_layout`, `opt_state_layout`, embed/head table
+  layouts), `optim.py` (optimizer defs, `OptPolicy`,
+  `register_optimizer`, `freeze`, `LRSchedule`), `ops.py`,
+  `linear.py`, `modules/` (the pluggable MoE package, `dsa_forms`,
+  `mla_forms`), `adamw/` (optimizer-step comm variants, one file
+  each: `dp`, `shards`, `rs` over the shared `update` core).
+- **`kernels`** — the registry op implementations
+  (`resolve_kernels`, `registry.py` ABI; one file per op family).
+- **`lowering`** — config -> executable program:
+  `shaped_program.build_shaped_program` + `LayerKindSpec` (the
+  family-generic chain grammar), `emit.py` (`FamilyLayouts`,
+  `LayerLayout`, `apply_exact_sizes`, `object_size_factory`,
+  `initial_values_from_layouts`), `planning.py` (`plan_program`,
+  `simulate_program` — the dataflow_sim boundary), `freeze_plan.py` /
+  `freeze_program.py`, `replay.py` (`replay_gap_pct`).
+- **`data`** — `segments.py` (`Segments`, `resolve_segments`,
+  `uniform_segments` — the varlen value object), `fineweb.py`
+  (deterministic token stream), `packing.py`.
+- **`run`** — drivers and study plumbing: `driver.py`
+  (`daemon_client`, `init_model`, `run_engine`, `run_reference`,
+  `plan_at_budget`), `presets.py` (locked training config +
+  cross-family preset re-exports, `resolve_preset`, `cfg_dict`,
+  `resolver_family`), `bench_presets.py` (`register_bench_config`),
+  `recipe.py` (`Recipe`), `profiling.py` (`profile_program`,
+  `load_or_profile`, `apply_measured_costs`, `cached_pcie`),
+  `parity.py`, `schedule.py`, `scaling.py`, `crosscheck.py`.
+- **`distributed`** — `topology.py`, `fleet.py`, `sharding.py`,
+  `hostops.py` (the multi-box conductor `tools/train_fleet.py` drives).
+- **`testing`** — `gradcheck.py` (`check_block_backward`,
+  `check_model_step`), `block_forms.py`.
 
-```python
-program = lower_llama3(cfg)                          # exact sizes
-profiles = load_or_profile(program, resolver, be)    # measure (disk-cached)
-measured = apply_measured_costs(program, profiles)
-planned = plan_program(measured, fast_memory_capacity=cap)
-values = initial_values(planned.program, cfg, be)
-dry = Engine(FakeBackend()).execute(planned.program, initial_buffers=values)
-result = Engine(be).execute(planned.program, resolver=build_resolver(dims),
-                            initial_buffers=values, pool_prewarm=dry.pool_demand)
-```
+## Dependency arrows
 
-## Invariants the tests enforce
+- `dataflow_training` -> **`dataflow` public surfaces only** (rule R2,
+  `tests/test_import_boundaries.py`): `dataflow.core.*`,
+  `dataflow.runtime.*` (the ABIs — `TaskContext`, `torch_view`, device
+  backends), `dataflow.service` (Server/EngineConfig/EngineClient for
+  rigs), `dataflow.service.client`, `dataflow.service.registry`
+  (`register_program_resolver`), `dataflow.service.wire`.
+- `dataflow_training` -> **`dataflow_sim`**: only under `lowering`
+  (planning/replay), and lazily in-function everywhere it appears
+  (rule R4) — importing the workload without the simulator installed
+  works until you plan.
+- `dataflow_training` -> **torch** (blocks, kernels, data, run).
+- Nothing imports this package from the engine side (rule R1), and the
+  truth tree (`reference_models/`) imports nothing from anywhere —
+  the bridges here import IT.
 
-- **Plan-invariance**: different budgets/recompute plans ⇒ identical math.
-- **Poison-on-free** (`Engine(poison_on_free=True)`): freed buffers filled
-  with NaN pattern; any use-after-release explodes loudly.
-- **Interleaving stress**: random device delays before each task ⇒ identical
-  results (event-ordering correctness).
-- **Measured-cost replanning** changes the plan, never the math.
+## Extending
+
+Adding a family — builtin or external — is three files
+(model/blocks/bridge) + one twin + one registry line:
+[docs/extending.md](../../docs/extending.md),
+[docs/extending_external.md](../../docs/extending_external.md).
+Custom (non-family) programs: [docs/extending_programs.md](../../docs/extending_programs.md).

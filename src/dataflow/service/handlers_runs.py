@@ -322,7 +322,7 @@ def install(server) -> None:
                     makespan_us=rec.makespan_us)
             out = rec.status()
             out["fetched"] = rec.fetched
-            if args.get("trace") and tr is not None:
+            if (a.get("trace") or args.get("trace")) and tr is not None:
                 from dataflow.runtime.trace import trace_to_dict
 
                 out["trace"] = trace_to_dict(tr)

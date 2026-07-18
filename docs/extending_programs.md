@@ -26,9 +26,9 @@ Notes:
 
 - **The engine is name-agnostic.** Task/object ids are free-form at this
   level; the `<prefix>_{step}_{round}_{layer}` shape is a convention of
-  the TRAINING WRAPPERS (`train()` loss readback, NVTX renaming, window
-  analyzers), not the engine. Keep the shape if you want those tools;
-  ignore it if you drive `Engine.execute` yourself.
+  the TRAINING WRAPPERS (the drivers' loss/data readback, NVTX renaming,
+  window analyzers), not the engine. Keep the shape if you want those
+  tools; ignore it if you drive `Engine.execute` yourself.
 - **Recompute planning is standard-training only.** The planner's greedy
   selection assumes the family chain grammar and a `build_variant` that
   re-lowers from a config. In a custom program YOU are responsible for
@@ -57,7 +57,7 @@ objects = [
 tasks = [
     TaskSpec(
         id="block_recompute_0_0_0",
-        inputs=("x_ckpt_0", "W_0", "M_0_0_0"),
+        inputs=("x_ckpt_0", "W_0", "AuxTemp_0_0_0"),
         outputs=("A_0_0_0",),
         mutates=(),
         runtime_us=1800.0,              # hand-set, or profile (below)
@@ -66,7 +66,7 @@ tasks = [
     ),
     ...
 ]
-prog = Program(name="my-rl-step", tasks=tasks, objects=objects,
+prog = Program(name="my-rl-step", tasks=tasks, initial_objects=objects,
                fast_memory_capacity=..., bandwidth_to_slow=..., ...)
 ```
 
@@ -108,7 +108,7 @@ backward tasks then bind to the exact same battle-tested executables
 (stage grammar, MetaState, in-place kernels, determinism contract):
 
 ```python
-from dataflow.training.families import family
+from dataflow_training.model_families.families import family
 
 fam = family("glm52")
 resolver = fam.build_resolver(fam.derive_dims(cfg))     # cfg: a family config
@@ -127,7 +127,8 @@ Motivating scenario: an inference engine generated the rollout and
 saved, per layer, an **activation checkpoint** (the block INPUT
 `x_ckpt_i`), plus the **routing pack** and (for sparse-attention
 models) the **index selection** — i.e. exactly the never-recompute
-`M_{s}_{r}_{i}` objects of the metadata grammar. Training then:
+`AuxTemp_{s}_{r}_{i}` objects of the aux grammar (extending.md §2).
+Training then:
 
 1. takes a reward signal + the last block's output,
 2. computes an RL loss at the head (the one genuinely custom op),
@@ -139,9 +140,10 @@ models) the **index selection** — i.e. exactly the never-recompute
 
 Why this is a small program, not a new subsystem: step 3 is the builtin
 `BlockRecompute` + `BlockBwd` pair, bound through the family resolver;
-the M objects arrive as INITIAL objects (`location="backing"`, values
-from the inference engine) instead of being produced by forward tasks —
-the recompute path already treats them as given (`meta_ready`); and
+the AuxTemp objects arrive as INITIAL objects (`location="backing"`,
+values from the inference engine) instead of being produced by forward
+tasks — the recompute path consumes them VERBATIM as inputs, never
+re-deriving a selection; and
 PressureFit handles the streaming of weights + checkpoints under
 whatever device budget you set, which is the whole appeal of running RL
 training on a small-memory box.
@@ -150,12 +152,12 @@ Program skeleton (one step; loop outside, or emit S steps with
 `final_locations` restored for replay):
 
 ```
-objects: W_i, O_i (from trainer checkpoint)  x_ckpt_i, M_i (from inference)
+objects: W_i, O_i (from trainer checkpoint)  x_ckpt_i, AuxTemp_i (from inference)
          reward, y_last                       A_i, dW_i, dx chain, loss
 tasks:   rl_head_loss(y_last, reward, W_head) -> dy, loss     [custom op]
          for i = L-1 .. 0:
-             block_recompute_i(x_ckpt_i, W_i, M_i) -> A_i     [builtin]
-             block_bwd_i(dy_i, A_i, M_i, W_i, x_ckpt_i)
+             block_recompute_i(x_ckpt_i, W_i, AuxTemp_i) -> A_i    [builtin]
+             block_bwd_i(dy_i, A_i, AuxTemp_i, W_i, x_ckpt_i)
                  -> dx_i, creates/mutates dW_i                [builtin]
              optimizer_i(dW_i) mutates W_i, O_i               [builtin]
 ```
@@ -178,12 +180,14 @@ to hand-write.
 
 ## What you give up vs. the standard flow
 
-- `train()` (loss readback, ga-round accounting) — drive
-  `Engine.execute` in your own loop, read results through object views.
+- The training drivers (`dataflow_training/run/driver.py` — loss
+  readback, ga-round accounting, checkpoint/resume) — drive
+  `Engine.execute` (or the service `run` verb) in your own loop, read
+  results through object views.
 - The replay contract — unless you keep the boundary invariant
   (`final_locations` == initial locations for persistent objects), each
   step needs its own annotated program.
 - The recompute PLANNER — you place recompute tasks yourself (above).
-- Bench tools keyed on presets (`bench_train`/`bench_frontier`) — time
+- Bench tools keyed on presets (`bench_frontier`/`best_config`) — time
   your own loop; PressureFit's sim makespan still gives you the
   prediction side, and the webapp renders your annotated program.

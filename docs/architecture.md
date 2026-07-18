@@ -1,64 +1,152 @@
 # Architecture
 
 The standing map of the codebase; per-layer contracts live in each
-subpackage's README.
+package's README, and the workload<->engine seam is specified in
+[program_contract.md](program_contract.md).
 
 ## What this project is
 
-A CPU–GPU dataflow runtime realizing the model demonstrated by
-the webapp simulator (webapp/): programs are linear chains
-of tasks over named objects; each task declares input / mutated / output
-objects; after a task completes, annotated directives fire — **release**
-(free fast memory), **offload** (async copy fast→backing, then free),
+A CPU–GPU dataflow runtime realizing the model demonstrated by the
+webapp simulator: programs are linear chains of tasks over named
+objects; each task declares input / mutated / output objects; after a
+task completes, annotated directives fire — **release** (free fast
+memory), **offload** (async copy fast→backing, then free),
 **prefetch** (async copy backing→fast, admitted only when destination
-capacity is reservable). A policy (PressureFit) plus a recompute planner
-choose those annotations so that a memory-constrained execution approaches
-unconstrained-memory throughput by overlapping transfers with compute.
+capacity is reservable). A policy (PressureFit) plus a recompute
+planner choose those annotations so that a memory-constrained
+execution approaches unconstrained-memory throughput by overlapping
+transfers with compute.
 
-The first workload is memory-constrained single-GPU DNN training, but the
-runtime layers are workload-agnostic.
+The first workload is memory-constrained DNN training (single-GPU and
+small fleets), but the engine layers are workload-agnostic.
 
-## Layers
+## The three universes
 
 ```
-src/dataflow/
-├── core/        # L0 program IR + validation + JSON + sim converters
-├── runtime/     # L1 generic engine (object table, byte ledger, pools,
-│                #    dispatcher, transfer engines, trace)
-│   └── device/  #    DeviceBackend interface + fake (virtual clock) + cuda
-├── tasks/       # L2 executable library (ops -> blocks, composer-planned
-│                #    workspaces; torch/Triton first, native later)
-├── training/    # L3 lowering, planning via dataflow_sim, profiling,
-│                #    gradcheck/testing helpers
-└── models/      # L4 declarative model definitions + golden torch references
+src/dataflow/                ENGINE — executes programs, no model vocabulary
+├── core/                    L0 program IR + validation + JSON + sim converters
+├── runtime/                 L1 generic engine (object table, ledger, pools,
+│   └── device/                 dispatcher, transfers, trace; DeviceBackend
+│                               interface + fake (virtual clock) + cuda)
+└── service/                 the persistent daemon (dataflowd): store slab,
+                             wire protocol, runs, snapshots, peers, and the
+                             RESOLVER REGISTRY (the one workload seam)
+
+src/dataflow_training/       WORKLOAD — builds programs, registers resolvers
+├── model_families/          one package per family (model/blocks/bridge/
+│                            presets) + the family registry + twin bridges
+├── blocks/                  shared executables, packed layouts, optimizers,
+│                            moe/dsa/mla modules, adamw comm variants
+├── kernels/                 registry op implementations (eager/triton/…)
+├── lowering/                shaped programs, exact sizes, freeze plans,
+│                            PressureFit planning (the dataflow_sim consumer)
+├── data/                    segments (varlen), fineweb stream, packing
+├── run/                     drivers (reference + engine service), presets,
+│                            recipes, profiling
+├── distributed/             topology, fleet conductor, sharding
+└── testing/                 gradcheck harnesses
+
+reference_models/            TRUTH — isolated pure-torch twins (repo root,
+                             torch-only, no dataflow imports, no cross-
+                             imports; the per-family equivalence bar)
+
+tools/                       CLIs over both packages (dataflowd, train_solo,
+tests/                       train_fleet, bench_frontier, verify_family, …);
+                             tests mirror the split (tests/dataflow/,
+                             tests/dataflow_training/, tests/reference_models/)
 ```
 
-Import rules (enforced by `tests/test_import_boundaries.py`):
+Tools and tests sit OUTSIDE all three packages and may cross the seam;
+the packages themselves may not.
 
-- `core` imports nothing heavy (stdlib only at import time; its sim
-  converters import `dataflow_sim` lazily inside functions).
-- `runtime` never imports torch/jax/`dataflow_sim`; cuda bindings only inside
-  `runtime/device/cuda.py`.
-- `tasks` is the only layer importing torch/triton; it never imports the sim.
-- `training` is the only layer importing `dataflow_sim` (planning,
-  verification, webapp export are *consumers* of the sim, never the reverse).
+## Import rules, as enforced
+
+`tests/test_import_boundaries.py` enforces the layering two ways:
+runtime checks (fresh interpreter per check, so prior imports cannot
+mask a transitive leak) and a static AST scan of every import
+statement.
+
+Runtime checks:
+
+- `dataflow.core` imports nothing heavy (no torch/jax/cuda/
+  dataflow_sim at import time).
+- `dataflow.runtime` never imports torch, jax, or `dataflow_sim`
+  (torch enters only through the cuda device backend and
+  `runtime/interop.py`, which callers import explicitly).
+- `dataflow_training.blocks` never pulls in `dataflow_sim`.
+
+Static rules:
+
+- **R1 — the engine is blind.** No module under `src/dataflow` imports
+  `dataflow_training` or `reference_models`. The engine never sees the
+  workload or the truth tree.
+- **R2 — the workload uses public engine surfaces only.** Modules
+  under `src/dataflow_training` import `dataflow` only through:
+  `dataflow.core.*`, `dataflow.runtime.*` (the ABIs),
+  `dataflow.service` itself (Server/EngineConfig/EngineClient for
+  rigs), `dataflow.service.client`, `dataflow.service.registry`
+  (`register_program_resolver`), and `dataflow.service.wire`
+  (`ServiceError`).
+- **R3 — tools stay near package roots**, with documented looseness:
+  tools may import `dataflow` itself and anything under the
+  `dataflow.core`/`dataflow.runtime`/`dataflow.service` subtrees, and
+  `dataflow_training` at most two levels deep
+  (`dataflow_training.x.y`) — deeper only inside
+  `dataflow_training.model_families` (family packages) and
+  `dataflow_training.blocks`. This is the tightest rule the current
+  tools pass; the gap to the "package-root public exports only" ideal
+  is accepted, not aspired away.
+- **R4 — the simulator is optional everywhere but planning.** No
+  module under `src/` imports `dataflow_sim` at module top level
+  except under `dataflow_training.lowering` (tools and tests are
+  exempt by scope). Lazy in-function imports are allowed — that is how
+  `dataflow.core.convert` keeps the simulator optional.
+
+Accepted static-scan limitation: `from dataflow.service import X` is
+judged by the module (`dataflow.service`), so pulling a non-exported
+submodule through an allowed package would pass the scan; the allowed
+packages re-export their public surface, so the rule tracks the real
+contract.
+
+## The dataflow_sim dependency map
+
+`dataflow_sim` (the sibling simulator repo) is consumed, never the
+reverse:
+
+- `dataflow_training/lowering/planning.py` — THE planning boundary:
+  `plan_program` (PressureFit + `plan_with_recompute`),
+  `simulate_program`; all sim imports in-function.
+- `dataflow_training/lowering/replay.py` — `replay_gap_pct`
+  re-simulates with measured durations (in-function import).
+- `dataflow.core.convert` — schema converters (`to_sim_chain`,
+  `to_webapp_program`), lazily imported so `dataflow.core` stays
+  dependency-free.
+- tools (`export_program`, `export_measured_run`, `trace_real_run`)
+  and the parity/convert tests import it directly (out of R4's scope).
 
 ## End-to-end flow
 
 ```
 ShapedConfig (family + shapes)
-  → training.lower_<family>()    objects (layout-exact sizes) + tasks (block
-                                 keys, declared costs) + recompute rewrites
-  → profile pass                 measured runtimes + workspace (disk-cached),
-                                 measured PCIe (disk-cached) → measured costs
-  → dataflow.training.planning   PressureFit + plan_with_recompute
-                                 (dataflow_sim; preplace="task0")
-  → annotated core Program       directives joined back; static placement
-                                 packed + proven against physical VRAM
-  → train()                      one chain replayed per optimizer step
-                                 (Session-persistent slab/pools/streams)
-  → trace / report               real + wall tok/s vs sim; webapp exports
+  → fam.lower(cfg)                  model_families/<fam>/model.py via
+                                    lowering/shaped_program + emit:
+                                    exact-size objects + tasks + rewrites
+  → profile pass                    run/profiling: measured runtimes +
+                                    workspace + PCIe (disk-cached)
+  → lowering/planning               PressureFit + plan_with_recompute
+                                    (dataflow_sim; preplace="task0")
+  → annotated core Program          directives joined back; static placement
+                                    packed + proven against physical VRAM
+  → dataflowd                       register once (resolver_spec kind
+                                    "model_family"), init-as-program seeds
+                                    W/O in the store, run() per step —
+                                    state persists between runs
+  → trace / report                  real + wall tok/s vs sim; webapp exports
 ```
+
+Drivers: `tools/train_solo.py` (single box, reference-vs-engine
+parity + scaling), `tools/train_fleet.py` (data-parallel fleet),
+`tools/bench_frontier.py` (throughput sweeps).
 
 ## Simulator semantics the runtime reproduces
 
@@ -82,13 +170,17 @@ parity gates pin):
 Every layer sits behind a standing gate:
 
 - engine-vs-sim parity on the fake backend, exact
-  (`tests/runtime/test_parity_vs_sim.py`);
+  (`tests/dataflow/runtime/test_parity_vs_sim.py`);
 - real-GPU synthetic execution vs the simulator's prediction
   (`tools/engine_gate.py`);
 - per-op / per-block / per-model correctness ladders
-  (`tests/modules/`, `tests/models/`; `tools/verify_family.py`
-  audits the canon per family);
+  (`tests/dataflow_training/modules/`, `tests/dataflow_training/models/`;
+  `tools/verify_family.py` audits the canon per family) against the
+  isolated twins in `reference_models/`
+  ([correctness_compare.md](correctness_compare.md));
 - engine stress — poison-on-free, interleaving, measured-cost replan
-  (`tests/runtime/test_engine_stress.py`);
+  (`tests/dataflow/runtime/test_engine_stress.py`);
+- the layering rules themselves (`tests/test_import_boundaries.py`)
+  and the external-family plugin gate (`tests/test_external_family.py`);
 - measured benchmark sweeps with per-cell provenance
   (`docs/benchmarking.md`).

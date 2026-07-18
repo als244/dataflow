@@ -4,7 +4,7 @@ correctness authority is the isolated reference twin (reference_models/).
 
 The train loop, gradcheck harness, and sweep tools dispatch through
 ``resolve_family(cfg)`` instead of importing a family's modules directly —
-adding a family means one `ModelFamily` entry here (docs/extending.md §6), not
+adding a family means one `ModelFamily` entry here (docs/extending.md §7), not
 edits across the harnesses.
 
 Golden classes resolve lazily (models is the layer ABOVE training; the
@@ -25,8 +25,8 @@ class DeriveDimsFn(Protocol):
 
 class LowerFn(Protocol):
     """cfg -> Program. Task/object ids MUST keep the repo naming shape
-    ``<prefix>_{step}_{round}_{layer}`` / ``A_ dW_ W_ O_ M_ dM_`` — the
-    planner, train loop, and analyzers key on it. Accepts
+    ``<prefix>_{step}_{round}_{layer}`` / ``A_ dW_ W_ O_ Aux_ AuxTemp_``
+    — the planner, drivers, and analyzers key on it. Accepts
     ``recompute_levels=`` so the planner can re-lower variants."""
 
     def __call__(self, cfg, recompute_levels=None) -> object: ...

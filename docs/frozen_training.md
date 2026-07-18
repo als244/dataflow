@@ -13,11 +13,11 @@ they receive simply has fewer/smaller objects and tasks.
 Freezing is part of the OPTIMIZER POLICY (`opt_policy` on any Shaped
 config): a field whose resolved rule is `"frozen"` gets no gradient
 storage, no optimizer state, and no update. The `freeze()` composer in
-`dataflow.tasks.optim` is the front door:
+`dataflow_training.blocks.optim` is the front door:
 
 ```python
 from dataclasses import replace
-from dataflow.tasks.optim import freeze
+from dataflow_training.blocks.optim import freeze
 
 # whole layers (classic frozen-prefix / continued-pretraining shape)
 cfg = replace(cfg, opt_policy=freeze(layers=range(0, 16)))
@@ -55,7 +55,7 @@ Three cooperating layers, each consuming the same policy oracle
    objects with holes. Every consumer (the backward's grad views, the
    optimizer's views, the lowering's byte accounting) derives from the
    same call, so offsets agree everywhere by construction.
-2. **The FreezePlan analyzer** (`training/freeze_plan.py`):
+2. **The FreezePlan analyzer** (`dataflow_training/lowering/freeze_plan.py`):
    `derive_freeze_plan` classifies each layer —
    `train` / `partial` / `passthrough` (fully frozen, something below
    still trains) / `truncated` (fully frozen, NOTHING below trains) —
@@ -69,7 +69,7 @@ returns `None` on default policies, so unfrozen programs are
 byte-identical), and the DSA families derive CE plans in sparse mode
 too, so structural freezes compose with sparse attention.
 
-3. **The surgery** (`training/freeze_program.py`, dispatched by
+3. **The surgery** (`dataflow_training/lowering/freeze_program.py`, dispatched by
    `build_shaped_program(freeze=plan)`): drops truncated layers'
    backward AND recompute tasks, their saved contexts (A) and
    recompute rewrites, and `embed_bwd` when the embedding is frozen.
@@ -114,7 +114,7 @@ frozen, so default-policy signatures and their caches are untouched.
 
 ## 5. Verification
 
-`tests/training/test_freeze_plan.py` gates the analyzer (every freeze
+`tests/dataflow_training/training/test_freeze_plan.py` gates the analyzer (every freeze
 axis), the composer precedence, and four end-to-end engine-vs-golden
 model steps: truncated prefix, pass-through, fleet-partial fields, and
 grad accumulation. The goldens honor the same policy through their
@@ -146,7 +146,7 @@ configuration, not a separate system:
   quantity being optimized.
 - dW/O collapse to the indexer fields (a few MiB per model), and the
   saved context trims to the objective's inputs
-  (`DSA_WARMUP_CTX_FIELDS` in `tasks/layouts.py`: the compressed
+  (`DSA_WARMUP_CTX_FIELDS` in `dataflow_training/blocks/layouts.py`: the compressed
   latents, norms rstds, and lse the KL backward re-derives everything
   from). At the documentation shape this takes glm52-mini's per-round
   A from ~195 GiB to ~7.4 GiB; the recompute boundary shortens to the
@@ -155,8 +155,8 @@ configuration, not a separate system:
   consumes saved selections verbatim) is the same mechanism: the knob
   composes `freeze(base=cfg.opt_policy, fields=<indexer fields>)` onto
   the policy — the five idx fields vanish from dW/O — while remaining
-  the compute switch (no KL backward, no dM chain). There is no other
-  freezing mechanism anywhere.
+  the compute switch (no KL backward, no dAuxTemp chain). There is no
+  other freezing mechanism anywhere.
 - Everything above about freezing applies unchanged: frozen embedding
   and head hold their bytes but own no gradients, optimizer tasks
   exist only for the indexer-bearing layers, and the goldens train the
@@ -164,11 +164,12 @@ configuration, not a separate system:
 
 ## 7. Benchmarking frozen configurations
 
-`tools/bench_train.py` exposes the common shapes directly:
-`--freeze-layers N` (pass-through prefix), `--freeze-layers N
---freeze-embed` (truncated prefix), `--freeze-head`. Frozen backward
-signatures re-profile automatically (the freeze fingerprint); unfrozen
-signatures hit the existing cache.
+Freezing rides the CONFIG (`opt_policy=freeze(...)`), so every driver
+and bench tool that takes a config runs frozen shapes with no dedicated
+flags — build the preset, `replace(cfg, opt_policy=freeze(...))`, and
+plan/profile/run as usual. Frozen backward signatures re-profile
+automatically (the freeze fingerprint, §4); unfrozen signatures hit
+the existing cache.
 
 Generated per-preset references (task graph, object tables, measured
 kernel sequences): `docs/models/<family>/<preset>_16x4K.md`.
