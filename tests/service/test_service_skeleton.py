@@ -87,6 +87,29 @@ def test_unknown_op_error_envelope(daemon):
         assert ei.value.code == "UNKNOWN_OP"
 
 
+def test_register_program_requires_resolver_kind(daemon):
+    """The resolver registry dispatches on resolver_spec["kind"]: a
+    spec without one — and an unregistered kind — are refused loudly,
+    naming what IS registered (register_all provides model_family)."""
+    from dataflow.core.jsonio import program_to_dict
+    from dataflow.core.program import Program
+    from dataflow_training.register import register_all
+
+    register_all()
+    prog = program_to_dict(Program(name="empty"))
+    sock, _ = daemon
+    with EngineClient(sock, client_name="t4b") as c:
+        with pytest.raises(ServiceError) as ei:
+            c.register_program(prog, resolver={"cfg": {}})
+        assert ei.value.code == "BAD_REQUEST"
+        assert "kind" in ei.value.message
+        assert "model_family" in ei.value.message
+        with pytest.raises(ServiceError) as ei:
+            c.register_program(prog, resolver={"kind": "not_registered"})
+        assert ei.value.code == "BAD_REQUEST"
+        assert "model_family" in ei.value.message
+
+
 def test_events_ring_and_since_seq(daemon):
     sock, server = daemon
     with EngineClient(sock, client_name="t5") as c:

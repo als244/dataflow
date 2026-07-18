@@ -8,7 +8,7 @@ over the topology's data-plane addresses, registers PER-RANK programs
 (same model, per-rank grad_accum_rounds = the weighted round split of
 the ORIGINAL global config; the dp group baked into optimizer tasks),
 performs the WARM-UP + RE-SEED + RE-PUT dance (kernel loads must
-precede any parked collective; family_init_all refills token buffers
+precede any parked collective; the init program refills token buffers
 too — findings), creates the group, then drives lockstep steps: each
 rank gets ITS SLICE of the original stream's rounds, all runs fire
 concurrently, per-round losses (each Sum(nll)/GLOBAL_valid) sum across
@@ -36,7 +36,7 @@ from dataflow_training.lowering.shaped_program import (
     roofline_block_kind_spec,
 )
 
-from ..run.driver import RunResult
+from ..run.driver import RunResult, init_model
 from .hostops import (
     daemon_paths,
     fetch_file,
@@ -696,16 +696,16 @@ def fleet_loop(ranks, gspec, recipe, stream, steps, *, budgets, seed,
                                               parallel=par,
                                               zero1rs_world=zero1rs_world))
         prog_dict = program_to_dict(planned.program)
-        resolver = {"family": "llama3", "cfg": cfg_dict(rank.cfg),
+        resolver = {"kind": "model_family", "family": "llama3",
+                    "cfg": cfg_dict(rank.cfg),
                     "hyper": recipe.hyper_spec()}
-        fill = {"kind": "family_init_all", "family": "llama3",
-                "cfg": cfg_dict(rank.cfg), "seed": seed}
+        init_kwargs = {"seed": seed}
         if zero1rs_world is not None:
-            fill["object_sizes"] = {
+            init_kwargs["object_sizes"] = {
                 s.id: s.size_bytes
                 for s in planned.program.initial_objects
                 if s.id.startswith("O_")}
-            o_bytes = sum(fill["object_sizes"].values())
+            o_bytes = sum(init_kwargs["object_sizes"].values())
             log(f"[fleet] {rank.name}: byte-equal sharded optimizer "
                 f"state {o_bytes / 1024 ** 3:.2f} GiB")
         if par is not None and par.plan is not None:
@@ -714,21 +714,21 @@ def fleet_loop(ranks, gspec, recipe, stream, steps, *, budgets, seed,
             prefixes = ("O_", "W_") if narrowed else ("O_",)
             if narrowed:
                 view = tp_view(par.plan, par.rank)
-                fill["tp_view"] = {
+                init_kwargs["tp_view"] = {
                     root: {f: list(sl) for f, sl in per.items()}
                     for root, per in view.items()}
             # the daemon must allocate THIS RANK's shrunken objects —
             # send the registered program's own sizes
-            fill["object_sizes"] = {
+            init_kwargs["object_sizes"] = {
                 s.id: s.size_bytes
                 for s in planned.program.initial_objects
                 if s.id.startswith(prefixes)}
-            o_bytes = sum(b for oid, b in fill["object_sizes"].items()
+            o_bytes = sum(b for oid, b in init_kwargs["object_sizes"].items()
                           if oid.startswith("O_"))
             log(f"[fleet] {rank.name}: sharded optimizer state "
                 f"{o_bytes / 1024 ** 3:.2f} GiB"
                 + (" (tp: sharded weights too)" if narrowed else ""))
-        rank.client.materialize_group(fill)
+        init_model(rank.client, "llama3", cfg_dict(rank.cfg), **init_kwargs)
         put_rank_rounds(rank, stream, 0, r_global)
         reg = rank.client.register_program(prog_dict, resolver=resolver)
         missing = reg["bindings"]["missing_inputs"]
@@ -776,7 +776,8 @@ def fleet_loop(ranks, gspec, recipe, stream, steps, *, budgets, seed,
             log(f"[fleet] {rank.name}: restored checkpoint @ step "
                 f"{start_step}")
         else:
-            rank.client.materialize_group(fill)
+            init_model(rank.client, "llama3", cfg_dict(rank.cfg),
+                       **init_kwargs)
             put_rank_rounds(rank, stream, 0, r_global)
             log(f"[fleet] {rank.name}: warm-up done, re-seeded")
 

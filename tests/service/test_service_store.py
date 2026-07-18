@@ -1,7 +1,7 @@
 """S1.1 gates: allocator, object CRUD over the wire (binary frames both
 directions), groups/hierarchy/reserved names, duplicate+lineage,
 protect/wipe, queries — CPU (fake slab). GPU: real pinned boot +
-family_init_all byte-identity vs initial_values.
+init-program byte-identity vs initial_values.
 """
 from __future__ import annotations
 
@@ -215,13 +215,19 @@ def test_query_backing_usage(daemon):
 @pytest.mark.skipif(
     not __import__("torch").cuda.is_available(), reason="needs CUDA")
 def test_real_boot_family_init_byte_identity(tmp_path):
-    """Real pinned slab + family_init_all == initial_values bytes."""
+    """Real pinned slab: the init PROGRAM persists initial objects
+    byte-identical to in-process initial_values (init-as-program
+    replaced the retired materialize_group verb)."""
+    from dataflow_training.register import register_all
+
+    register_all()      # in-process Server shares this registry
     sock, server, _ = _boot(tmp_path, "real", fake=False,
                             slab_backing_gib=2.0)
     try:
         from dataflow.runtime.device.cuda import CudaBackend
         from dataflow.runtime.interop import torch_view
         from dataflow_training.model_families.families import family
+        from dataflow_training.run.driver import init_model
 
         fam = family("llama3")
         cfg = fam.config_type.tiny()
@@ -230,10 +236,8 @@ def test_real_boot_family_init_byte_identity(tmp_path):
                     "d_ff": cfg.d_ff, "vocab_size": cfg.vocab_size,
                     "seq_len": cfg.seq_len, "batch": cfg.batch}
         with EngineClient(sock, client_name="gpu") as c:
-            r = c.materialize_group({"kind": "family_init_all",
-                                     "family": "llama3", "cfg": cfg_dict,
-                                     "seed": 7})
-            assert "W_0" in r["created"] and "O_0" in r["created"]
+            created = init_model(c, "llama3", cfg_dict, seed=7)
+            assert "W_0" in created and "O_0" in created
 
             ref_cfg = fam.config_type(**cfg_dict)
             prog = fam.lower(ref_cfg)

@@ -35,8 +35,12 @@ from dataflow_training.model_families.llama3 import (  # noqa: E402
     family_layouts,
 )
 from dataflow_training.lowering.planning import plan_program  # noqa: E402
+from dataflow_training.register import register_all  # noqa: E402
+from dataflow_training.run.driver import init_model  # noqa: E402
 
 pytestmark = pytest.mark.fleet
+
+register_all()          # in-process Server rigs share this registry
 
 T_STEP = 128
 SEQ = 32
@@ -125,24 +129,24 @@ def run_config(tmp_path, label: str, zero1rs: bool) -> dict:
                                  zero1rs_world=2 if zero1rs else None),
                 fast_memory_capacity=96 * 1024 * 1024)
             progs.append(planned.program)
-            fill = {"kind": "family_init_all", "family": "llama3",
-                    "cfg": cfg_dict(cfg), "seed": SEED}
+            init_kwargs = {"seed": SEED}
             if zero1rs:
-                fill["object_sizes"] = {
+                init_kwargs["object_sizes"] = {
                     s.id: s.size_bytes
                     for s in planned.program.initial_objects
                     if s.id.startswith("O_")}
-            client.materialize_group(fill)
+            init_model(client, "llama3", cfg_dict(cfg), **init_kwargs)
             put_step(client, cfg, rank, 0)
             reg = client.register_program(
                 program_to_dict(planned.program),
-                resolver={"family": "llama3", "cfg": cfg_dict(cfg)})
+                resolver={"kind": "model_family", "family": "llama3",
+                          "cfg": cfg_dict(cfg)})
             assert not reg["bindings"]["missing_inputs"]
             prog_ids.append(reg["prog_id"])
             warm = client.run(reg["prog_id"],
                               args={"step": 0, "valid_rows": T_STEP})
             assert warm.get("state") == "done", warm
-            client.materialize_group(fill)
+            init_model(client, "llama3", cfg_dict(cfg), **init_kwargs)
             put_step(client, cfg, rank, 0)
         ca._call("create_peer_group",
                  {"name": "dp", "members": [f"{label}-a", f"{label}-b"],

@@ -23,6 +23,7 @@ sys.path.insert(0, str(_ROOT))
 from dataflow_training.run import parity, presets as P
 from dataflow_training.run.driver import (
     daemon_client,
+    init_model,
     run_engine,
     run_reference,
 )
@@ -42,9 +43,9 @@ def _log(msg: str) -> None:
 
 
 def _init_bytes_identical(cfg, client, seed: int) -> bool:
-    """The daemon's family_init_all(seed) (already materialized in the store)
-    must byte-match the in-process initial_values(seed) the reference bridged
-    from. Call AFTER materialize_group, BEFORE any run()."""
+    """The daemon's init program (already run, objects in the store) must
+    byte-match the in-process initial_values(seed) the reference bridged
+    from. Call AFTER init_model, BEFORE any run()."""
     import numpy as np
     import torch
 
@@ -82,8 +83,7 @@ def cmd_smoke(args) -> int:
     with daemon_client(slab_gib=args.slab, log=_log) as client:
         # seed the store, then check the daemon's init byte-matches the
         # reference's (before any run() mutates the weights)
-        client.materialize_group({"kind": "family_init_all", "family": "llama3",
-                                  "cfg": P.cfg_dict(cfg), "seed": 11})
+        init_model(client, "llama3", P.cfg_dict(cfg), seed=11)
         identical = _init_bytes_identical(cfg, client, seed=11)
         _log(f"init byte-identity (daemon vs reference): {identical}")
         eng = run_engine(client, cfg, recipe, stream, steps,

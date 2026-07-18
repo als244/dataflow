@@ -313,6 +313,42 @@ def run_reference(cfg, recipe: Recipe, stream, steps: int, *, seed: int = 11,
 
 # ================================ engine =====================================
 
+def init_model(client, family_name: str, cfg_dict: dict, *,
+               seed: int = 0, object_sizes: dict | None = None,
+               tp_view: dict | None = None, prog_id: str | None = None):
+    """INIT IS A PROGRAM: build the family's one-task init program,
+    register + run it through the ordinary verbs, and let the daemon's
+    final-object capture persist every initial object (W_/O_/Aux_/data)
+    into the store. Replaces the retired materialize_group verb; the
+    bytes match in-process ``initial_values`` exactly (same code path).
+    Returns the created object ids."""
+    from dataflow.core.jsonio import program_to_dict
+    from dataflow_training.model_families.families import (
+        build_init_program,
+        family,
+    )
+    from dataflow_training.register import canonical_spec
+
+    fam = family(family_name)
+    cfg = fam.config_type(**cfg_dict)
+    program = build_init_program(fam, cfg, seed=seed,
+                                 object_sizes=object_sizes,
+                                 tp_view=tp_view)
+    pid = prog_id or f"init-{family_name}-{seed}"
+    reg = client.register_program(program_to_dict(program),
+                                  resolver=canonical_spec(family_name,
+                                                          cfg_dict),
+                                  name=pid)
+    missing = reg["bindings"]["missing_inputs"]
+    if missing:
+        raise RuntimeError(f"init program has unbound inputs: {missing}")
+    out = client.run(reg["prog_id"], args={})
+    if out.get("state") != "done":
+        raise RuntimeError(f"init run failed: {out}")
+    client.unregister_program(reg["prog_id"])
+    return [o.id for t in program.tasks for o in t.outputs]
+
+
 @contextmanager
 def daemon_client(slab_gib: float = 100.0, *, socket: str | None = None,
                   device: int = 0, attach: bool = False, log=print,
@@ -334,6 +370,9 @@ def daemon_client(slab_gib: float = 100.0, *, socket: str | None = None,
             c.close()
         return
 
+    from dataflow_training.register import register_all
+
+    register_all()          # in-process server shares this registry
     sock = socket or f"/tmp/pretrain-dataflowd-{os.getpid()}.sock"
     log(f"[daemon] booting in-process dataflowd slab={slab_gib} GiB dev={device}")
     t0 = time.perf_counter()
@@ -414,10 +453,10 @@ def run_engine(client, cfg, recipe: Recipe, stream, steps: int, *,
     prog_dict = program_to_dict(planned.program)
     cd = cfg_dict(cfg)
     fam = resolver_family(cfg)
-    resolver = {"family": fam, "cfg": cd, "hyper": recipe.hyper_spec()}
+    resolver = {"kind": "model_family", "family": fam, "cfg": cd,
+                "hyper": recipe.hyper_spec()}
 
-    client.materialize_group({"kind": "family_init_all", "family": fam,
-                              "cfg": cd, "seed": seed})
+    init_model(client, fam, cd, seed=seed)
     R = cfg.grad_accum_rounds
     valid_by_step: dict[int, int] = {}
 

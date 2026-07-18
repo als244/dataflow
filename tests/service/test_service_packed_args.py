@@ -94,6 +94,10 @@ def test_daemon_packed_args_bit_equal(tmp_path):
         res.close()
     session.close()
 
+    from dataflow_training.register import register_all
+    from dataflow_training.run.driver import init_model
+
+    register_all()      # in-process Server shares this registry
     sock = str(tmp_path / "pa.sock")
     server = Server(EngineConfig(socket_path=sock, fake=False,
                                  slab_backing_gib=1.0))
@@ -106,11 +110,10 @@ def test_daemon_packed_args_bit_equal(tmp_path):
             time.sleep(0.01)
     try:
         with EngineClient(sock, client_name="packedargs") as c:
-            c.materialize_group({"kind": "family_init_all",
-                                 "family": "llama3",
-                                 "cfg": _cfg_dict(cfg), "seed": 11})
+            init_model(c, "llama3", _cfg_dict(cfg), seed=11)
             reg = c.register_program(program_to_dict(prog),
-                                     resolver={"family": "llama3",
+                                     resolver={"kind": "model_family",
+                                               "family": "llama3",
                                                "cfg": _cfg_dict(cfg)})
             daemon = []
             for k, (lens, valid) in enumerate(STEPS):

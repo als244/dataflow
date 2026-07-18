@@ -20,7 +20,7 @@ from dataflow_training.run.presets import (  # noqa: E402
     resolver_family,
     smoke_preset,
 )
-from dataflow_training.run.driver import daemon_client  # noqa: E402
+from dataflow_training.run.driver import daemon_client, init_model  # noqa: E402
 from dataflow_training.data.fineweb import make_stream  # noqa: E402
 from dataflow_training.run.recipe import Recipe  # noqa: E402
 from dataflow_training.model_families.families import resolve_family  # noqa: E402
@@ -61,10 +61,9 @@ def test_same_daemon_rerun_bitwise(tmp_path):
     planned = plan_program(fam.lower(cfg),
                            fast_memory_capacity=4 << 30)
     cd = cfg_dict(cfg)
-    fill = {"kind": "family_init_all", "family": resolver_family(cfg),
-            "cfg": cd, "seed": 11}
+    fam_name = resolver_family(cfg)
     with daemon_client(slab_gib=4.0, log=print) as client:
-        client.materialize_group(fill)
+        init_model(client, fam_name, cd, seed=11)
         stream = make_stream(cfg.tokens)
         for r in range(cfg.grad_accum_rounds):
             tok, tgt = stream(r)
@@ -72,12 +71,13 @@ def test_same_daemon_rerun_bitwise(tmp_path):
             client.put_object(f"targets_0_{r}", tgt.numpy().tobytes())
         reg = client.register_program(
             program_to_dict(planned.program),
-            resolver={"family": resolver_family(cfg), "cfg": cd,
+            resolver={"kind": "model_family", "family": fam_name, "cfg": cd,
                       "hyper": recipe.hyper_spec()})
         assert not reg["bindings"]["missing_inputs"]
         first = run_steps(client, cfg, reg["prog_id"],
                           make_stream(cfg.tokens))
-        client.materialize_group(fill)      # re-init: same seed, same bytes
+        # re-init: same seed, same bytes
+        init_model(client, fam_name, cd, seed=11)
         second = run_steps(client, cfg, reg["prog_id"],
                            make_stream(cfg.tokens))
     assert first == second, (

@@ -250,8 +250,11 @@ def tp_fill_slices(cfg: ShapedLlamaConfig, tp_view: dict) -> dict:
 
 def initial_values(program: Program, cfg: ShapedLlamaConfig, backend, *,
                    seed: int = 0, into=None, tp_view: dict | None = None):
+    from dataflow_training.model_families.init_policy import build_init_policy
+
     dims, fl = family_layouts(cfg, tp_view=tp_view)
     slices_by_root = tp_fill_slices(cfg, tp_view) if tp_view else None
     return initial_values_from_layouts(program, dims, fl, backend,
                                        seed=seed, into=into,
+                                       init_policy=build_init_policy(getattr(cfg, 'init_policy', None)),
                                        tp_slices_by_root=slices_by_root)

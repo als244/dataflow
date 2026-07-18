@@ -173,4 +173,8 @@ def lower_qwen3(
 
 def initial_values_qwen3(program: Program, cfg: ShapedQwen3Config, backend, *, seed: int = 0, into=None):
     dims, fl = family_layouts(cfg)
-    return initial_values_from_layouts(program, dims, fl, backend, seed=seed, into=into)
+    from dataflow_training.model_families.init_policy import build_init_policy
+
+    return initial_values_from_layouts(
+        program, dims, fl, backend, seed=seed, into=into,
+        init_policy=build_init_policy(getattr(cfg, "init_policy", None)))

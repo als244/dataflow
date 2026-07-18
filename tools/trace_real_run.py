@@ -96,6 +96,7 @@ def capture_run(client, cfg, recipe, stream, steps: int, *,
     trace (last step), losses}."""
     from dataflow.core.jsonio import program_to_dict
     from dataflow_training.run.presets import cfg_dict, resolver_family
+    from dataflow_training.run.driver import init_model
     from dataflow_training.model_families.families import resolve_family
     from dataflow_training.lowering.planning import plan_program
 
@@ -104,14 +105,13 @@ def capture_run(client, cfg, recipe, stream, steps: int, *,
     planned = plan_program(bare,
                            fast_memory_capacity=int(budget_gib * 1024 ** 3))
     cd = cfg_dict(cfg)
-    client.materialize_group({"kind": "family_init_all",
-                              "family": resolver_family(cfg),
-                              "cfg": cd, "seed": seed})
+    init_model(client, resolver_family(cfg), cd, seed=seed)
     R = cfg.grad_accum_rounds
     valid0 = put_step_rounds(client, stream, R, 0)
     reg = client.register_program(
         program_to_dict(planned.program),
-        resolver={"family": resolver_family(cfg), "cfg": cd,
+        resolver={"kind": "model_family",
+                  "family": resolver_family(cfg), "cfg": cd,
                   "hyper": recipe.hyper_spec()})
     missing = reg["bindings"]["missing_inputs"]
     if missing:

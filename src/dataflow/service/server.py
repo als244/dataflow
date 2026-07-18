@@ -491,14 +491,14 @@ class Server:
             if w is not None:
                 w.stop()
                 w.join(timeout=30)
-            from . import bridge
+            from . import execution
 
             nm = getattr(self, "nm", None)
             if nm is not None:
                 nm.stop()          # abort transfers before the slab dies
             # sessions FIRST (their pools free transients through the
             # store), slab after — the reverse order dangles the pools
-            bridge.close_all_sessions(getattr(self, "store", None))
+            execution.close_all_sessions(getattr(self, "store", None))
             if getattr(self, "store", None) is not None \
                     and self.store.slab is not None:
                 self.store.slab.free()

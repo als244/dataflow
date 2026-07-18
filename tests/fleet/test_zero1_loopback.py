@@ -37,8 +37,12 @@ from dataflow_training.distributed.sharding import (  # noqa: E402
 from dataflow.service import EngineClient, EngineConfig, Server  # noqa: E402
 from dataflow_training.model_families.llama3 import ShapedLlamaConfig  # noqa: E402
 from dataflow_training.lowering.planning import plan_program  # noqa: E402
+from dataflow_training.register import register_all  # noqa: E402
+from dataflow_training.run.driver import init_model  # noqa: E402
 
 pytestmark = pytest.mark.fleet
+
+register_all()          # in-process Server rigs share this registry
 
 T_STEP = 128
 SEQ = 32
@@ -127,17 +131,17 @@ def run_config(tmp_path, label: str, parallels) -> dict:
                 lower_with_group(cfg, "dp", parallel=parallels[rank]),
                 fast_memory_capacity=96 * 1024 * 1024)
             progs.append(planned.program)
-            fill = {"kind": "family_init_all", "family": "llama3",
-                    "cfg": cfg_dict(cfg), "seed": SEED}
+            init_kwargs = {"seed": SEED}
             if parallels[rank] is not None:
-                fill["object_sizes"] = {
+                init_kwargs["object_sizes"] = {
                     s.id: s.size_bytes
                     for s in planned.program.initial_objects
                     if s.id.startswith("O_")}
-            client.materialize_group(fill)
+            init_model(client, "llama3", cfg_dict(cfg), **init_kwargs)
             put_step(client, cfg, rank, 0)
             reg = client.register_program(program_to_dict(planned.program),
-                                          resolver={"family": "llama3",
+                                          resolver={"kind": "model_family",
+                                                    "family": "llama3",
                                                     "cfg": cfg_dict(cfg)})
             assert not reg["bindings"]["missing_inputs"]
             prog_id = reg["prog_id"]
@@ -145,7 +149,7 @@ def run_config(tmp_path, label: str, parallels) -> dict:
             warm = client.run(prog_id,
                               args={"step": 0, "valid_rows": T_STEP})
             assert warm.get("state") == "done", warm
-            client.materialize_group(fill)
+            init_model(client, "llama3", cfg_dict(cfg), **init_kwargs)
             put_step(client, cfg, rank, 0)
             out.setdefault("prog_ids", []).append(prog_id)
         ca._call("create_peer_group",

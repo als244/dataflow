@@ -247,9 +247,9 @@ def install(server) -> None:
         annotator behind the backend) — the conductor brackets chosen
         steps; nsys --capture-range=cudaProfilerApi records only the
         bracketed region."""
-        from . import bridge
+        from . import execution
 
-        ann = bridge.get_backend(store).annotator
+        ann = execution.get_backend(store).annotator
         action = args["action"]
         if action == "start":
             ann.start_capture()

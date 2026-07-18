@@ -389,3 +389,46 @@ def resolve_family(cfg) -> Family:
         f"no registered model family for config type {type(cfg).__name__!r} "
         f"(known: {sorted(_FAMILIES)})"
     )
+
+def build_init_program(fam, cfg, *, seed: int = 0,
+                       object_sizes: dict | None = None,
+                       tp_view: dict | None = None):
+    """INIT IS A PROGRAM: one "family_init" task whose OUTPUTS are the
+    training program's initial objects (backing-resident), filled by
+    the family's seeded init inside the task — byte-identical to the
+    in-process ``initial_values`` path by construction. Replaces the
+    retired materialize_group service verb: register + run this
+    program through the ordinary verbs, and the daemon's final-object
+    capture persists every W_/O_/Aux_/data object into the store.
+
+    ``object_sizes`` overrides per-object byte sizes (sharded-optimizer
+    runs shrink O_*); ``tp_view`` selects a per-rank weight view for
+    tensor-parallel fills (families that support it)."""
+    import dataclasses as dc
+
+    from dataflow.core.program import OutputSpec, Program, TaskSpec
+
+    train = fam.lower(cfg)
+    outs = []
+    for spec in train.initial_objects:
+        size = spec.size_bytes
+        if object_sizes and spec.id in object_sizes:
+            size = int(object_sizes[spec.id])
+        outs.append(OutputSpec(id=spec.id, size_bytes=size,
+                               location="backing", role=spec.role,
+                               tensor=spec.tensor))
+    params = {"seed": int(seed)}
+    if tp_view is not None:
+        params["tp_view"] = tp_view
+    task = TaskSpec(
+        id="family_init_0",
+        outputs=tuple(outs),
+        compute_block_key="family_init",
+        block_params=params,
+    )
+    return Program(
+        name=f"{getattr(train, 'name', fam.name)}-init",
+        initial_objects=(),
+        tasks=(task,),
+        final_locations={o.id: "backing" for o in outs},
+    )

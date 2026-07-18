@@ -22,6 +22,8 @@ pytestmark = pytest.mark.skipif(not torch.cuda.is_available(),
 
 from dataflow.core.jsonio import program_to_dict
 from dataflow.service import EngineClient, EngineConfig, Server, ServiceError
+from dataflow_training.register import register_all
+from dataflow_training.run.driver import init_model
 
 
 def _cfg_dict(cfg):
@@ -42,6 +44,7 @@ def rig(tmp_path_factory):
 
     tmp = tmp_path_factory.mktemp("svc_runs")
     sock = str(tmp / "runs.sock")
+    register_all()      # in-process Server shares this registry
     server = Server(EngineConfig(socket_path=sock, fake=False,
                                  slab_backing_gib=2.0))
     t = threading.Thread(target=server.serve_forever, daemon=True)
@@ -58,7 +61,8 @@ def rig(tmp_path_factory):
     planned = plan_program(fam.lower(cfg),
                            fast_memory_capacity=2 * 1024**3)
     prog_dict = program_to_dict(planned.program)
-    resolver_spec = {"family": "llama3", "cfg": _cfg_dict(cfg)}
+    resolver_spec = {"kind": "model_family", "family": "llama3",
+                     "cfg": _cfg_dict(cfg)}
 
     yield {"sock": sock, "server": server, "cfg": cfg, "fam": fam,
            "planned": planned, "prog_dict": prog_dict,
@@ -88,8 +92,7 @@ def test_rebind_two_token_slabs(rig):
     a_t, a_y = _tokens(cfg, seed=1)
     b_t, b_y = _tokens(cfg, seed=2)
     with EngineClient(rig["sock"], client_name="rebind") as c:
-        c.materialize_group({"kind": "family_init_all", "family": "llama3",
-                             "cfg": _cfg_dict(cfg), "seed": 3})
+        init_model(c, "llama3", _cfg_dict(cfg), seed=3)
         for nm, (tt, yy) in (("data/a", (a_t, a_y)),
                              ("data/b", (b_t, b_y))):
             c.put_object(f"{nm}/tok", tt.numpy().tobytes())
@@ -122,8 +125,7 @@ def test_poison_isolation_and_next_run_succeeds(rig):
     # to a wrong-size resident
     toks, tgts = _tokens(cfg, seed=9)
     with EngineClient(rig["sock"], client_name="poison") as c:
-        c.materialize_group({"kind": "family_init_all", "family": "llama3",
-                             "cfg": _cfg_dict(cfg), "seed": 5})
+        init_model(c, "llama3", _cfg_dict(cfg), seed=5)
         c.put_object("tokens_0_0", toks.numpy().tobytes())
         c.put_object("targets_0_0", tgts.numpy().tobytes())
         c.put_object("tiny/wrong", b"xx")
@@ -142,8 +144,7 @@ def test_weights_adopted_not_refilled(rig):
     cfg = rig["cfg"]
     toks, tgts = _tokens(cfg, seed=33)
     with EngineClient(rig["sock"], client_name="adopt") as c:
-        c.materialize_group({"kind": "family_init_all", "family": "llama3",
-                             "cfg": _cfg_dict(cfg), "seed": 21})
+        init_model(c, "llama3", _cfg_dict(cfg), seed=21)
         c.put_object("tokens_0_0", toks.numpy().tobytes())
         c.put_object("targets_0_0", tgts.numpy().tobytes())
         reg = c.register_program(rig["prog_dict"], resolver=rig["resolver"])
@@ -173,7 +174,8 @@ def test_cancel_mid_run_leaves_healthy_daemon(rig):
                               d_ff=1536)
     fam = resolve_family(big)
     planned = plan_program(fam.lower(big), fast_memory_capacity=2 * 1024**3)
-    spec = {"family": "llama3", "cfg": _cfg_dict(big)}
+    spec = {"kind": "model_family", "family": "llama3",
+            "cfg": _cfg_dict(big)}
     toks, tgts = _tokens(big, seed=77)
 
     with EngineClient(rig["sock"], client_name="cancel") as c:
@@ -181,8 +183,7 @@ def test_cancel_mid_run_leaves_healthy_daemon(rig):
         # big config's same-named objects (strict adopt = the design);
         # this test owns the daemon from here — clean slate
         c.wipe("all", force=True)
-        c.materialize_group({"kind": "family_init_all", "family": "llama3",
-                             "cfg": _cfg_dict(big), "seed": 8})
+        init_model(c, "llama3", _cfg_dict(big), seed=8)
         c.put_object("tokens_0_0", toks.numpy().tobytes())
         c.put_object("targets_0_0", tgts.numpy().tobytes())
         reg = c.register_program(p2d(planned.program), resolver=spec)
@@ -225,8 +226,7 @@ def test_transients_visible_and_reclaimed(rig):
     toks, tgts = _tokens(cfg, seed=55)
     with EngineClient(rig["sock"], client_name="transients") as c:
         c.wipe("all", force=True)
-        c.materialize_group({"kind": "family_init_all", "family": "llama3",
-                             "cfg": _cfg_dict(cfg), "seed": 4})
+        init_model(c, "llama3", _cfg_dict(cfg), seed=4)
         c.put_object("tokens_0_0", toks.numpy().tobytes())
         c.put_object("targets_0_0", tgts.numpy().tobytes())
         reg = c.register_program(rig["prog_dict"], resolver=rig["resolver"])

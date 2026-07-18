@@ -34,9 +34,13 @@ import dataflow_training.model_families.tp_mlp as tp  # noqa: E402  (registers)
 from dataflow.core.jsonio import program_to_dict  # noqa: E402
 from dataflow.service import EngineClient, EngineConfig, Server  # noqa: E402
 from dataflow_training.lowering.planning import plan_program  # noqa: E402
+from dataflow_training.register import register_all  # noqa: E402
+from dataflow_training.run.driver import init_model  # noqa: E402
 from dataflow_training.testing.gradcheck import rel_l2  # noqa: E402
 
 pytestmark = pytest.mark.fleet
+
+register_all()          # in-process Server rigs share this registry
 
 SEED = 5
 PA, PB = 29551, 29552
@@ -116,12 +120,11 @@ def drive_pair(clients, members, group_backend: str) -> list:
         cfg_r = replace(CFG, rank=rank)
         planned = plan_program(tp.lower_tp_mlp(cfg_r),
                                fast_memory_capacity=64 * 1024 * 1024)
-        client.materialize_group({"kind": "family_init_all",
-                                  "family": "tp_mlp",
-                                  "cfg": asdict(cfg_r), "seed": SEED})
+        init_model(client, "tp_mlp", asdict(cfg_r), seed=SEED)
         reg = client.register_program(
             program_to_dict(planned.program),
-            resolver={"family": "tp_mlp", "cfg": asdict(cfg_r)})
+            resolver={"kind": "model_family", "family": "tp_mlp",
+                      "cfg": asdict(cfg_r)})
         assert not reg["bindings"]["missing_inputs"]
         prog_ids.append(reg["prog_id"])
         warm = client.run(reg["prog_id"],

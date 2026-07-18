@@ -254,7 +254,8 @@ def apply_exact_sizes(
 
 
 def fill_weight_fields(buf, layout, gen, *, special=None,
-                       tp_slices=None) -> None:
+                       tp_slices=None, policy=None,
+                       layer=None) -> None:
     """Per-FIELD init at each field's OWN storage dtype: N(0, 0.02) draws,
     ``*_norm_w`` fields ones, ``special[name](n, gen)`` overrides (A_log
     etc.). Padding gaps are explicitly zeroed (deterministic bytes for
@@ -268,7 +269,12 @@ def fill_weight_fields(buf, layout, gen, *, special=None,
     import torch
 
     from dataflow.runtime.interop import TORCH_DTYPE_BY_NAME, torch_view
+    from dataflow_training.model_families.init_policy import (
+        DEFAULT_INIT_POLICY,
+    )
 
+    if policy is None:
+        policy = DEFAULT_INIT_POLICY
     end = 0
     u8 = torch_view(buf, (buf.size_bytes,), torch.uint8)
     for f in layout.fields:
@@ -279,28 +285,32 @@ def fill_weight_fields(buf, layout, gen, *, special=None,
         for s in f.shape:
             n *= int(s)
         v = torch_view(buf, (n,), TORCH_DTYPE_BY_NAME[f.dtype], offset_bytes=f.offset_bytes)
-        if f.name.endswith("_norm_w"):
-            v.fill_(1.0)
-        elif special is not None and f.name in special:
+        rule_fill = policy.rule(f.name, layer).build()
+        if (special is not None and f.name in special
+                and not f.name.endswith("_norm_w")):
+            # family init_specials (A_log schedules etc.) outrank the
+            # policy — the historical precedence, norm-ones excepted
             v.copy_(special[f.name](n, gen).to(v.dtype))
         elif tp_slices is not None and f.name in tp_slices:
             dim, lo, hi, full_shape = tp_slices[f.name]
             n_full = 1
             for s in full_shape:
                 n_full *= int(s)
-            draw = (torch.randn(n_full, generator=gen) * 0.02)
-            draw = draw.reshape(full_shape)
+            # shard fields DRAW at full shape through the SAME rule the
+            # plain run uses, so every rank stays byte-aligned with
+            # single-GPU init; only the slice is written
+            draw = rule_fill(n_full, gen).reshape(full_shape)
             part = draw[:, lo:hi] if dim == 1 else draw[lo:hi]
             v.copy_(part.reshape(-1).to(v.dtype))
         else:
-            v.copy_((torch.randn(n, generator=gen) * 0.02).to(v.dtype))
+            v.copy_(rule_fill(n, gen).to(v.dtype))
     if buf.size_bytes > end:
         u8[end:] = 0
 
 
 def initial_values_from_layouts(program: Program, dims, fl: FamilyLayouts,
                                 backend, *, seed: int = 0, into=None,
-                                tp_slices_by_root=None):
+                                tp_slices_by_root=None, init_policy=None):
     """Allocate + fill pinned buffers for every initial object: per-field
     weight init at storage dtypes (``fill_weight_fields``), optimizer state
     zeroed, tokens/targets uniform ints. Returns {object_id: Buffer} for
@@ -332,11 +342,12 @@ def initial_values_from_layouts(program: Program, dims, fl: FamilyLayouts,
             slices = (tp_slices_by_root or {}).get(spec.id)
             fill_weight_fields(buf, fl.layers[layer].weights, gen,
                                special=fl.init_specials,
-                               tp_slices=slices)
+                               tp_slices=slices, policy=init_policy,
+                               layer=layer)
         elif spec.id == "W_embed":
-            fill_weight_fields(buf, fl.embed, gen)
+            fill_weight_fields(buf, fl.embed, gen, policy=init_policy)
         elif spec.id == "W_head":
-            fill_weight_fields(buf, fl.head, gen)
+            fill_weight_fields(buf, fl.head, gen, policy=init_policy)
         elif spec.id.startswith(("O_", "Aux_")):
             torch_view(buf, (spec.size_bytes,), torch.uint8).zero_()
         elif spec.id.startswith(("tokens_", "targets_")):

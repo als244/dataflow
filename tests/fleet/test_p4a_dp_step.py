@@ -42,9 +42,13 @@ from dataflow_training.lowering.shaped_program import (  # noqa: E402
     build_shaped_program,
     roofline_block_kind_spec,
 )
+from dataflow_training.register import register_all  # noqa: E402
+from dataflow_training.run.driver import init_model  # noqa: E402
 from dataflow_training.testing.gradcheck import rel_l2  # noqa: E402
 
 pytestmark = pytest.mark.fleet
+
+register_all()          # in-process Server rigs share this registry
 
 T_STEP = 128
 SEQ = 32
@@ -160,7 +164,8 @@ def test_p4a_two_daemon_dp_step(tmp_path):
     planned = plan_program(lower_with_group(cfg, "dp"),
                            fast_memory_capacity=96 * 1024 * 1024)
     prog_dict = program_to_dict(planned.program)
-    resolver = {"family": "llama3", "cfg": cfg_dict(cfg)}
+    resolver = {"kind": "model_family", "family": "llama3",
+                "cfg": cfg_dict(cfg)}
     tok, tgt = master_tokens()
 
     sa, ca = boot(tmp_path, "dp-a", PA)
@@ -169,9 +174,7 @@ def test_p4a_two_daemon_dp_step(tmp_path):
         ca.peer_connect("dp-b", f"127.0.0.1:{PB}")
         per = T_STEP // 2
         for rank, client in ((0, ca), (1, cb)):
-            client.materialize_group({"kind": "family_init_all",
-                                      "family": "llama3",
-                                      "cfg": cfg_dict(cfg), "seed": SEED})
+            init_model(client, "llama3", cfg_dict(cfg), seed=SEED)
             lo = rank * per
             client.put_object("tokens_0_0",
                               tok[lo:lo + per].numpy().tobytes())
@@ -184,16 +187,14 @@ def test_p4a_two_daemon_dp_step(tmp_path):
         # on the rank-complete P4a artifact) compile + cuModuleLoad
         # every kernel; a FIRST launch during a parked collective
         # deadlocks the device (findings, P4a). Re-seed afterwards —
-        # and RE-PUT the data: family_init_all refills EVERY initial
+        # and RE-PUT the data: the init program refills EVERY initial
         # object, token buffers included (the trap that silently gave
         # both ranks identical seeded tokens on the first attempt).
         for rank, client in ((0, ca), (1, cb)):
             warm = client.run(prog_id,
                               args={"step": 0, "valid_rows": T_STEP})
             assert warm.get("state") == "done", warm
-            client.materialize_group({"kind": "family_init_all",
-                                      "family": "llama3",
-                                      "cfg": cfg_dict(cfg), "seed": SEED})
+            init_model(client, "llama3", cfg_dict(cfg), seed=SEED)
             lo = rank * per
             client.put_object("tokens_0_0",
                               tok[lo:lo + per].numpy().tobytes())

@@ -39,8 +39,11 @@ def main() -> None:
                     help="HCA for the rdma-host transport (e.g. mlx5_1)")
     st.add_argument("--plugin", action="append", default=[],
                     help="module to import before boot (self-registers "
-                         "families via register_family; repeatable — "
+                         "resolver kinds and/or families; repeatable — "
                          "the daemon twin of the tools' --plugin)")
+    st.add_argument("--no-default-workloads", action="store_true",
+                    help="skip the default dataflow_training registration "
+                         "(bare engine daemon; register kinds via --plugin)")
 
     for name in ("status", "stop"):
         s = sub.add_parser(name)
@@ -48,6 +51,13 @@ def main() -> None:
 
     args = p.parse_args()
     if args.cmd == "start":
+        if not args.no_default_workloads:
+            # default workload: model-family programs resolve out of the
+            # box (register_program_resolver("model_family", ...));
+            # --no-default-workloads boots a bare engine
+            from dataflow_training.register import register_all
+
+            register_all()
         if args.plugin:
             from dataflow_training.model_families.families import load_plugins
 

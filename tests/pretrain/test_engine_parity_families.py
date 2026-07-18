@@ -1,5 +1,5 @@
 """Per-family ENGINE-SERVICE-vs-reference few-step parity: the same seeded
-init (``family_init_all`` server-side; the reference bridges the same bytes)
+init (the daemon's init program; the reference bridges the same bytes)
 and the same deterministic fineweb stream through BOTH the pytorch reference
 and an in-process dataflowd — the loss curves must align. This is the direct
 engine leg of each family's cross-check triangle (reference == golden ==

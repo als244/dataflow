@@ -4,7 +4,7 @@ Registry: prog_id -> RegisteredProgram (parsed program, resolver spec,
 cached placement + pool demand). Runs execute ON the dispatcher thread
 (a run occupies it end to end); cancel is a critical-lane flag the
 engine observes at its task-dispatch boundary. All engine/family
-imports live in bridge.py.
+imports live behind the resolver registry (registry.py).
 """
 from __future__ import annotations
 
@@ -76,7 +76,7 @@ class RunRecord:
 def install(server) -> None:
     import threading
 
-    from . import bridge
+    from . import execution, registry
 
     store = server.store
     st = server.state
@@ -115,8 +115,8 @@ def install(server) -> None:
         canonical = json.dumps(pd, sort_keys=True,
                                separators=(",", ":")).encode()
         prog_id = "p-" + hashlib.sha256(canonical).hexdigest()[:12]
-        program = bridge.parse_program(pd)
-        bridge.resolver_for(a["resolver"])          # validate + cache
+        program = execution.parse_program(pd)
+        registry.resolver_for(a["resolver"])          # validate + cache
         report = _binding_report(program)
         cap = {
             "backing_bytes_needed": sum(s.size_bytes
@@ -143,19 +143,30 @@ def install(server) -> None:
         if call.args["prog_id"] not in programs:
             raise ServiceError("UNKNOWN_PROGRAM", call.args["prog_id"])
         del programs[call.args["prog_id"]]
-        released = bridge.close_session(call.args["prog_id"], store)
+        released = execution.close_session(call.args["prog_id"], store)
         return {"ok": True, "session_released": released}
 
-    def profile_program_h(call):
-        a = call.args
-        pd = a["program"]
-        if isinstance(pd, str):
-            pd = json.loads(Path(pd).read_text())
-        return bridge.profile_program(pd, a["resolver"],
-                                      refresh=bool(a.get("refresh")))
 
     def load_plugin(call):
-        return bridge.load_plugin(call.args["spec"])
+        """Import a module (by name or path) so it can register resolver
+        kinds; reports what it registered — generic, no workload
+        vocabulary."""
+        import importlib
+        import importlib.util
+
+        spec = call.args["spec"]
+        before = set(registry.registered_kinds())
+        if "module" in spec:
+            importlib.import_module(spec["module"])
+        elif "path" in spec:
+            mspec = importlib.util.spec_from_file_location(
+                "dataflow_plugin", spec["path"])
+            mod = importlib.util.module_from_spec(mspec)
+            mspec.loader.exec_module(mod)
+        else:
+            raise ServiceError("BAD_REQUEST", "load_plugin needs module|path")
+        after = set(registry.registered_kinds())
+        return {"kinds_registered": sorted(after - before)}
 
     # ------------------------------------------------ run
     def run(call):
@@ -208,10 +219,10 @@ def install(server) -> None:
                 # — advance the version so snapshot dedup stays sound
                 robj.lineage.dirty = True
                 robj.version += 1
-                values[spec.id] = bridge.store_buffer(store, robj)
+                values[spec.id] = execution.store_buffer(store, robj)
 
         if entry.placement is None:
-            entry.placement, entry.pool_demand = bridge.prepare_placement(
+            entry.placement, entry.pool_demand = execution.prepare_placement(
                 program, values)
 
         import os as _os
@@ -238,12 +249,12 @@ def install(server) -> None:
         # run_args pass through OPAQUE: packed metadata (segments /
         # wire seq_lens / the uniform default) is the workload's own
         # concern, resolved by its tasks
-        rf = bridge.resolver_for(entry.resolver_spec)
+        resolver = registry.resolver_for(entry.resolver_spec)
         run_args = args
         nm = getattr(server, "nm", None)
         group_handles = nm.group_handles() if nm is not None else None
-        result, err_kind, err_msg = bridge.execute_run(
-            program, rf[3], values,
+        result, err_kind, err_msg = execution.execute_run(
+            program, resolver, values,
             prog_id=entry.prog_id, store=store,
             placement=entry.placement, pool_demand=entry.pool_demand,
             run_args=run_args, cancel_event=active_cancel,
@@ -291,7 +302,7 @@ def install(server) -> None:
                 if sess is not None and rec.started:
                     sess.run_seconds_total += time.time() - rec.started
 
-            bridge.capture_finals(store, program, values, result,
+            execution.capture_finals(store, program, values, result,
                                   writer=run_id)
             for oid in fetch:
                 data = store.get_bytes(oid) if oid in store.objects else None
@@ -355,8 +366,8 @@ def install(server) -> None:
                  "registered_t": e.registered_t, "runs": e.runs}
                 for e in programs.values()]
 
-    def list_families(conn, args):
-        return bridge.list_families()
+    def list_resolvers(conn, args):
+        return {"kinds": registry.registered_kinds()}
 
     def export_trace(call):
         rec = runs.get(call.args["run_id"])
@@ -371,7 +382,6 @@ def install(server) -> None:
         "register_program": register_program,
         "validate_program": validate_program,
         "unregister_program": unregister_program,
-        "profile_program": profile_program_h,
         "load_plugin": load_plugin,
         "run": run,
         "export_trace": export_trace,
@@ -379,6 +389,6 @@ def install(server) -> None:
     server.fast_handlers.update({
         "run_status": run_status, "list_runs": list_runs,
         "run_events": run_events, "list_programs": list_programs,
-        "list_families": list_families,
+        "list_resolvers": list_resolvers,
     })
     server.critical_handlers["cancel_run"] = cancel_run

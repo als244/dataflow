@@ -29,6 +29,7 @@ if not torch.cuda.is_available():
 from dataflow_training.run import presets as P  # noqa: E402
 from dataflow_training.run.driver import (  # noqa: E402
     daemon_client,
+    init_model,
     run_engine,
     run_reference,
 )
@@ -167,15 +168,14 @@ def test_engine_matches_reference_ragged(name):
         planned = plan_program(fam.lower(cfg),
                                fast_memory_capacity=4 << 30)
         cd = cfg_dict(cfg)
-        client.materialize_group({"kind": "family_init_all",
-                                  "family": resolver_family(cfg),
-                                  "cfg": cd, "seed": 11})
+        init_model(client, resolver_family(cfg), cd, seed=11)
         tok0, tgt0 = stream(0)
         client.put_object("tokens_0_0", tok0.numpy().tobytes())
         client.put_object("targets_0_0", tgt0.numpy().tobytes())
         reg = client.register_program(
             program_to_dict(planned.program),
-            resolver={"family": resolver_family(cfg), "cfg": cd,
+            resolver={"kind": "model_family",
+                      "family": resolver_family(cfg), "cfg": cd,
                       "hyper": recipe.hyper_spec()})
         assert not reg["bindings"]["missing_inputs"]
         eng_losses = []

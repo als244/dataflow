@@ -2,7 +2,7 @@
 ``reference_models`` ``nn.Module`` state_dicts, byte-identical.
 
 Parity invariant #2: the initialization is seeded ONCE by the engine
-(``initial_values`` / the daemon's ``family_init_all``); a bridge loads those
+(``initial_values`` / the daemon's init program); a bridge loads those
 exact bytes into the reference model so the ONLY variable between the two
 training runs is the execution engine.
 

@@ -1,75 +1,12 @@
-"""THE sanctioned seam between the self-contained service core and the
-wider dataflow package (rule: service/ stays self-contained; family
-fills and — in S1.2 — engine execution inherently ARE the wider
-package, so they cross here and only here). Nothing else under
-service/ imports dataflow.* modules.
+"""Engine execution machinery for the service: backend/stream/session
+caches, the run path, placement prep, and final-object capture. All of
+it is workload-AGNOSTIC — programs arrive parsed, resolvers arrive from
+the registry (service/registry.py), buffers are store extents.
 """
 from __future__ import annotations
 
 from .wire import ServiceError
 
-
-def fill_family_objects(store, fill: dict, *, writer: str) -> dict:
-    """materialize_group {"kind": "family_init_all"}: allocate + fill
-    every initial object of a family config, in place, via the
-    family's own seeded init (the refill-identity property makes this
-    byte-equivalent to initial_values).
-
-    ``object_sizes`` ({object_id: bytes}, optional) overrides spec
-    sizes before allocation — sharded-optimizer runs send the
-    registered program's own (shrunken) O sizes so the store objects
-    bind the program exactly. Safe because O init is a bulk zero fill
-    bounded by the spec size, never per-slot offset writes."""
-    if store.slab is None:
-        raise ServiceError("BAD_REQUEST",
-                           "family_init requires a real (pinned) boot")
-    if fill.get("pattern"):
-        raise ServiceError(
-            "BAD_REQUEST",
-            "family_init_all pattern= is deferred: the fill consumes one "
-            "sequential RNG stream over ALL initial objects")
-
-    from dataclasses import replace as dc_replace
-
-    from dataflow.runtime.device.cuda import Buffer
-    from dataflow_training.model_families.families import family as _family
-
-    fam = _family(fill["family"])
-    cfg_obj = fam.config_type(**fill["cfg"])
-    prog = fam.lower(cfg_obj)
-    tp_view = fill.get("tp_view")
-    overrides = fill.get("object_sizes") or {}
-    for oid in overrides:
-        if oid.startswith("O_"):
-            continue            # bulk-zero fill: any size is safe
-        if tp_view is not None and oid.startswith("W_"):
-            continue            # per-rank tp layouts bound the fill
-        raise ServiceError(
-            "BAD_REQUEST",
-            f"object_sizes may only override optimizer state (or, "
-            f"under a tp_view, sharded weights); got {oid!r}")
-    specs = [dc_replace(s, size_bytes=int(overrides[s.id]))
-             if s.id in overrides else s
-             for s in prog.initial_objects]
-    prog = dc_replace(prog, initial_objects=tuple(specs))
-    into = {}
-    for s in specs:
-        rec = store.put(s.id, None, size_bytes=s.size_bytes, writer=writer)
-        into[s.id] = Buffer(id=f"store:{s.id}", location="backing",
-                            size_bytes=s.size_bytes,
-                            ptr=store.ptr_of(rec), raw=None)
-    if tp_view is not None:
-        fam.initial_values(prog, cfg_obj, None,
-                           seed=int(fill.get("seed", 0)), into=into,
-                           tp_view=tp_view)
-    else:
-        fam.initial_values(prog, cfg_obj, None,
-                           seed=int(fill.get("seed", 0)), into=into)
-    return {"created": [s.id for s in specs],
-            "bytes": sum(s.size_bytes for s in specs)}
-
-
-# ===================== S1.2: execution bridge =========================
 # Resolver/program/placement caches + the run path. Everything here
 # imports the wider package; nothing outside bridge.py does.
 
@@ -208,50 +145,6 @@ def parse_program(program_dict: dict):
     return program_from_dict(program_dict)
 
 
-def _hyper_from_spec(h: dict | None):
-    """Rebuild an ``AdamWHyper`` (+ optional ``LRSchedule``) from the wire
-    ``hyper`` dict. Lets a client set LR / weight decay / a cosine schedule
-    via ``register_program(resolver={..., 'hyper': {...}})``; without it the
-    service is stuck at the built-in default (lr=1e-4, no schedule). ``None``
-    -> the family default (unchanged historical behavior)."""
-    from dataflow_training.blocks.base_blocks import AdamWHyper
-
-    h = dict(h or {})
-    sched = h.pop("schedule", None)
-    if sched is not None:
-        from dataflow_training.blocks.optim import LRSchedule
-
-        h["schedule"] = LRSchedule(**sched)
-    return AdamWHyper(**h)
-
-
-def resolver_for(spec: dict):
-    """(family, cfg[, hyper]) -> cached (fam, cfg_obj, dims, resolver).
-
-    The optional ``hyper`` (lr/betas/eps/weight_decay/schedule) overrides the
-    family default so LR schedules ride the resolver channel; it joins the
-    cache key so different hypers don't collide. When absent, the resolver is
-    built exactly as before (byte-identical to plain ``build_resolver(dims)``
-    — the losses-bit-equal path is untouched)."""
-    import json
-
-    from dataflow_training.model_families.families import family as _family
-
-    key = (spec["family"], json.dumps(spec["cfg"], sort_keys=True),
-           json.dumps(spec.get("hyper"), sort_keys=True))
-    hit = _RESOLVERS.get(key)
-    if hit is None:
-        fam = _family(spec["family"])
-        cfg_obj = fam.config_type(**spec["cfg"])
-        dims = fam.dims_of(cfg_obj)
-        hyper = spec.get("hyper")
-        resolver = (fam.build_resolver(dims, _hyper_from_spec(hyper))
-                    if hyper else fam.build_resolver(dims))
-        hit = (fam, cfg_obj, dims, resolver)
-        _RESOLVERS[key] = hit
-    return hit
-
-
 def store_buffer(store, rec):
     from dataflow.runtime.device.cuda import Buffer
 
@@ -316,7 +209,7 @@ def execute_run(program, resolver, values, *, prog_id, store=None,
         )
         return result, None, None
     except CancelledRun as e:
-        _abort_drain(store)
+        abort_drain(store)
         return None, "CANCELLED", str(e)
     except ExecutionError as e:
         # print BEFORE draining: the drain can wedge behind pending
@@ -325,18 +218,18 @@ def execute_run(program, resolver, values, *, prog_id, store=None,
         # the run's real exception was unreadable behind a drain
         # deadlock)
         print(f"[run-failed] {e}", flush=True)
-        _abort_drain(store)
+        abort_drain(store)
         return None, "RUN_FAILED", str(e)
     except Exception as e:  # noqa: BLE001 — daemon survives anything
         import traceback
 
         print(f"[run-failed] {type(e).__name__}: {e}", flush=True)
         traceback.print_exc()
-        _abort_drain(store)
+        abort_drain(store)
         return None, "RUN_FAILED", f"{type(e).__name__}: {e}"
 
 
-def _abort_drain(store=None):
+def abort_drain(store=None):
     """After a cancelled/failed run: the daemon's Session lives on, so
     the dead run's pending completions must not leak into the next
     run (bug found by the cancel gate: "completion for a job that is
@@ -368,43 +261,3 @@ def capture_finals(store, program, values, result, *, writer):
     return captured
 
 
-def profile_program(program_dict: dict, spec: dict, *, refresh: bool):
-    from dataflow_training.run.profiling import load_or_profile
-
-    program = parse_program(program_dict)
-    fam, cfg_obj, dims, resolver = resolver_for(spec)
-    profiles = load_or_profile(program, resolver, get_backend(),
-                               refresh=refresh)
-    return {
-        "profiles": {repr(k): {"runtime_us": p.runtime_us,
-                               "workspace_bytes": p.workspace_bytes}
-                     for k, p in profiles.items()},
-        "n_signatures": len(profiles),
-        "cache_path": None,
-    }
-
-
-def load_plugin(spec: dict):
-    import importlib
-    import importlib.util
-
-    from dataflow_training.model_families import families as fam_mod
-
-    before = set(fam_mod._FAMILIES)
-    if "module" in spec:
-        importlib.import_module(spec["module"])
-    elif "path" in spec:
-        p = spec["path"]
-        mspec = importlib.util.spec_from_file_location("dataflow_plugin", p)
-        mod = importlib.util.module_from_spec(mspec)
-        mspec.loader.exec_module(mod)
-    else:
-        raise ServiceError("BAD_REQUEST", "load_plugin needs module|path")
-    return {"families_registered": sorted(set(fam_mod._FAMILIES) - before)}
-
-
-def list_families():
-    from dataflow_training.model_families import families as fam_mod
-
-    return [{"family": name, "source": "builtin"}
-            for name in sorted(fam_mod._FAMILIES)]

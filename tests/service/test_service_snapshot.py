@@ -20,6 +20,8 @@ pytestmark = pytest.mark.skipif(not torch.cuda.is_available(),
 
 from dataflow.core.jsonio import program_to_dict
 from dataflow.service import EngineClient, EngineConfig, Server, ServiceError
+from dataflow_training.register import register_all
+from dataflow_training.run.driver import init_model
 
 
 def _cfg_dict(cfg):
@@ -38,6 +40,7 @@ def rig(tmp_path_factory):
 
     tmp = tmp_path_factory.mktemp("svc_snap")
     sock = str(tmp / "snap.sock")
+    register_all()      # in-process Server shares this registry
     server = Server(EngineConfig(socket_path=sock, fake=False,
                                  slab_backing_gib=2.0))
     t = threading.Thread(target=server.serve_forever, daemon=True)
@@ -55,7 +58,8 @@ def rig(tmp_path_factory):
                            fast_memory_capacity=2 * 1024**3)
     yield {"sock": sock, "server": server, "cfg": cfg,
            "prog_dict": program_to_dict(planned.program),
-           "resolver": {"family": "llama3", "cfg": _cfg_dict(cfg)},
+           "resolver": {"kind": "model_family", "family": "llama3",
+                        "cfg": _cfg_dict(cfg)},
            "tmp": tmp}
 
     server.state.shutdown_requested.set()
@@ -75,8 +79,7 @@ def _tokens(cfg, seed):
 
 def _fresh_state(c, rig, seed=7):
     c.wipe("all", force=True)
-    c.materialize_group({"kind": "family_init_all", "family": "llama3",
-                         "cfg": rig["resolver"]["cfg"], "seed": seed})
+    init_model(c, "llama3", rig["resolver"]["cfg"], seed=seed)
     toks, tgts = _tokens(rig["cfg"], seed=31)
     c.put_object("tokens_0_0", toks.numpy().tobytes())
     c.put_object("targets_0_0", tgts.numpy().tobytes())

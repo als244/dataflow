@@ -31,8 +31,12 @@ from dataflow.service import EngineClient, EngineConfig, Server  # noqa: E402
 from dataflow.service.wire import ServiceError  # noqa: E402
 from dataflow_training.model_families.llama3 import ShapedLlamaConfig  # noqa: E402
 from dataflow_training.lowering.planning import plan_program  # noqa: E402
+from dataflow_training.register import register_all  # noqa: E402
+from dataflow_training.run.driver import init_model  # noqa: E402
 
 pytestmark = pytest.mark.fleet
+
+register_all()          # in-process Server rigs share this registry
 
 T_STEP = 128
 SEQ = 32
@@ -96,7 +100,8 @@ def train_steps(client, prog_id, cfg, lo: int, hi: int) -> list:
 
 def register(client, cfg, prog_dict) -> str:
     reg = client.register_program(
-        prog_dict, resolver={"family": "llama3", "cfg": cfg_dict(cfg)})
+        prog_dict, resolver={"kind": "model_family", "family": "llama3",
+                             "cfg": cfg_dict(cfg)})
     assert not reg["bindings"]["missing_inputs"]
     return reg["prog_id"]
 
@@ -111,9 +116,7 @@ def test_checkpoint_resume_bitwise(tmp_path):
     # ---- truth daemon: train through, snapshot at the K boundary ----
     ca = boot(tmp_path, "ck-a")
     try:
-        ca.materialize_group({"kind": "family_init_all",
-                              "family": "llama3",
-                              "cfg": cfg_dict(cfg), "seed": SEED})
+        init_model(ca, "llama3", cfg_dict(cfg), seed=SEED)
         put_step(ca, cfg, 0)
         prog_a = register(ca, cfg, prog_dict)
         head = train_steps(ca, prog_a, cfg, 0, K)

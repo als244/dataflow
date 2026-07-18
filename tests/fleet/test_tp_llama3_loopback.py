@@ -42,8 +42,12 @@ from dataflow_training.model_families.llama3 import (  # noqa: E402
     family_layouts,
 )
 from dataflow_training.lowering.planning import plan_program  # noqa: E402
+from dataflow_training.register import register_all  # noqa: E402
+from dataflow_training.run.driver import init_model  # noqa: E402
 
 pytestmark = pytest.mark.fleet
+
+register_all()          # in-process Server rigs share this registry
 
 T_STEP = 128
 SEQ = 32
@@ -96,25 +100,27 @@ def put_full_batch(client, cfg, step: int) -> None:
 
 
 def setup_rank(client, cfg, planned, parallel) -> str:
-    fill = {"kind": "family_init_all", "family": "llama3",
-            "cfg": cfg_dict(cfg), "seed": SEED}
+    init_kwargs = {"seed": SEED}
     if parallel is not None:
         view = tp_view(parallel.plan, parallel.rank)
-        fill["tp_view"] = {root: {f: list(sl) for f, sl in per.items()}
-                           for root, per in view.items()}
-        fill["object_sizes"] = {
+        init_kwargs["tp_view"] = {
+            root: {f: list(sl) for f, sl in per.items()}
+            for root, per in view.items()}
+        init_kwargs["object_sizes"] = {
             s.id: s.size_bytes for s in planned.program.initial_objects
             if s.id.startswith(("O_", "W_"))}
-    client.materialize_group(fill)
+    init_model(client, "llama3", cfg_dict(cfg), **init_kwargs)
     put_full_batch(client, cfg, 0)
     reg = client.register_program(
         program_to_dict(planned.program),
-        resolver={"family": "llama3", "cfg": cfg_dict(cfg)})
+        resolver={"kind": "model_family", "family": "llama3",
+                  "cfg": cfg_dict(cfg)})
     assert not reg["bindings"]["missing_inputs"]
     prog_id = reg["prog_id"]
     warm = client.run(prog_id, args={"step": 0, "valid_rows": T_STEP})
     assert warm.get("state") == "done", warm
-    client.materialize_group(fill)     # warm-up mutated W/O: re-seed
+    # warm-up mutated W/O: re-seed
+    init_model(client, "llama3", cfg_dict(cfg), **init_kwargs)
     put_full_batch(client, cfg, 0)
     return prog_id
 

@@ -228,8 +228,6 @@ class EngineClient:
         return self._call("materialize_object",
                           {"id": oid, "fill": fill}, wait=wait)
 
-    def materialize_group(self, fill: dict, *, wait=True):
-        return self._call("materialize_group", {"fill": fill}, wait=wait)
 
     def release_object(self, oid: str, *, force=False, wait=True):
         return self._call("release_object",
@@ -330,12 +328,6 @@ class EngineClient:
         return self._call("unregister_program", {"prog_id": prog_id},
                           wait=wait)
 
-    def profile_program(self, program, *, resolver: dict,
-                        refresh: bool = False, wait=True):
-        return self._call("profile_program",
-                          {"program": program, "resolver": resolver,
-                           "refresh": refresh}, wait=wait)
-
     def load_plugin(self, spec: dict, *, wait=True):
         return self._call("load_plugin", {"spec": spec}, wait=wait)
 
@@ -411,8 +403,8 @@ class EngineClient:
     def list_programs(self):
         return self._call("list_programs", {})
 
-    def list_families(self):
-        return self._call("list_families", {})
+    def list_resolvers(self):
+        return self._call("list_resolvers", {})
 
     # ---- S1.0 diagnostic ----
     def _debug_hold(self, seconds: float, *, wait: bool = True,

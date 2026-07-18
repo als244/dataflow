@@ -65,9 +65,6 @@ def install(server) -> None:
     def materialize_object(call):
         return _materialize(call.args["id"], call.args["fill"], call)
 
-    def materialize_group(call):
-        return _materialize(None, call.args["fill"], call)
-
     def _materialize(oid, fill, call):
         kind = fill.get("kind")
         if kind == "zeros":
@@ -87,18 +84,13 @@ def install(server) -> None:
                                dtype=np.int32)
             rec = store.put(oid, ids.tobytes(), writer=call.session_id)
             return {"object": rec.info()}
-        if kind == "family_init_all":
-            from . import bridge
-
-            return bridge.fill_family_objects(store, fill,
-                                              writer=call.session_id)
-        if kind == "family_init":
+        if kind in ("family_init_all", "family_init"):
             raise ServiceError(
                 "BAD_REQUEST",
-                "single-object family_init is deferred: the family fill "
-                "consumes one sequential RNG stream, so per-object bytes "
-                "require the full pass — use family_init_all (optionally "
-                "with pattern=)")
+                f"fill kind {kind!r} is retired: the engine no longer "
+                "knows model families. Model/optimizer-state init is a "
+                "program — register + run it through a registered "
+                "resolver kind (dataflow_training.run.driver.init_model)")
         raise ServiceError("BAD_REQUEST", f"unknown fill kind {kind!r}")
 
     def release_object(call):
@@ -154,7 +146,6 @@ def install(server) -> None:
     server.dispatcher.handlers.update({
         "put_object": put_object, "get_object": get_object,
         "materialize_object": materialize_object,
-        "materialize_group": materialize_group,
         "release_object": release_object,
         "protect_object": protect_object,
         "unprotect_object": unprotect_object,
