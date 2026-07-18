@@ -252,7 +252,7 @@ def test_dsv3_block_ladder2(kind):
     }
     y = torch.empty_like(x)
     from dataflow_training.blocks.modules.moe.spec import moe_aux_temp_layout
-    from dataflow.core.segments import Segments
+    from dataflow_training.blocks.segments import Segments
 
     # ONE materialized Segments handed to fwd/recompute (extras) and bwd
     # (a["_seg"]) — standing in for the engine's run-prologue that normally

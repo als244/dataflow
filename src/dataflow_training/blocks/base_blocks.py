@@ -199,19 +199,20 @@ class _Base:
     def _attn_meta(self, ctx):
         """The round's ``Segments`` — the SINGLE varlen descriptor every
         family's fwd/bwd attention + rope reads (models ALWAYS run varlen).
-        Already materialized (``seg.cu`` / ``seg.positions`` device fields,
-        ``seg.max_len`` host int) by the engine's run prologue; stages read
-        them as attributes, never rebuilding a device tensor mid-round.
-        Round parsed from the task id ({s}_{r})."""
-        ra = ctx.run_args or {}
+        Resolved + materialized WORKLOAD-side (segments_for: internal
+        form, wire seq_lens, or the dims-uniform default; device fields
+        built once per run, cached in ctx.run_values); stages read
+        ``seg.cu`` / ``seg.positions`` / ``seg.max_len`` as attributes,
+        never rebuilding a device tensor mid-round. Round parsed from
+        the task id ({s}_{r})."""
         r = self._round_of(ctx)
-        segs = ra.get("segments")
-        if not segs or r not in segs:
-            raise RuntimeError(
-                f"packed metadata missing for round {r!r}: every run must "
-                f"provide run_args['seq_lens'] (the engine prologue then "
-                f"derives run_args['segments'] = {{round: Segments}})")
-        return segs[r]
+        from .segments import segments_for
+
+        # run_args are OPAQUE to the engine: the workload resolves its
+        # own packed metadata — internal Segments, wire seq_lens, or
+        # the dims-uniform default — materialized once per run and
+        # cached in ctx.run_values (segments_for)
+        return segments_for(ctx, self.dims, r)
 
     def _aux_counts_state(self, ctx) -> dict | None:
         """Views of the layer's PERSISTENT Aux object (the per-step +

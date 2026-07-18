@@ -38,64 +38,6 @@ from .trace import Interval, RunTrace, TraceEvent
 from .transfers import TransferDone, TransferEngine, TransferJob
 
 
-def prologue_run_start(run_args: dict, backend) -> dict:
-    """Run-START prologue (family-agnostic): normalize run_args to per-round
-    MATERIALIZED Segments — run_args["segments"] = {round: Segments} with the
-    ``cu`` / ``positions`` device fields built ONCE, before task 0, via a
-    pinned + non_blocking copy (never a pageable H2D mid-round; the
-    hidden-sync rule). Every block/stage downstream reads ``seg.cu`` /
-    ``seg.positions`` / ``seg.max_len`` as fields — no host derivation or
-    per-task device build anywhere.
-
-    Input is EITHER the clean internal form run_args["segments"] = {round:
-    Segments} (host; direct callers build these straight from dims) OR the
-    wire-serializable run_args["seq_lens"] = {round: [0, b1, ..., t]}
-    cumulative boundaries (the daemon/client protocol), converted here.
-    Distinct host Segments materialize once (identity-deduped, so the uniform
-    case — one Segments shared across rounds — makes a single device copy).
-    Host Segments pass through unmaterialized on non-physical backends
-    (planning/sim). Returns an augmented COPY; the caller's dict is
-    untouched."""
-    from dataflow.core.segments import Segments
-
-    segs = run_args.get("segments")
-    if segs is None:
-        # wire form: cumulative boundaries -> Segments (validates from-0)
-        segs = {r: Segments.from_boundaries(b)
-                for r, b in run_args["seq_lens"].items()}
-    if getattr(backend, "physical", False):
-        tgt = f"cuda:{backend.device}"
-        done: dict[int, object] = {}
-
-        def _mat(s):
-            if id(s) not in done:
-                done[id(s)] = s.on(tgt)
-            return done[id(s)]
-
-        segs = {r: _mat(s) for r, s in segs.items()}
-    return {**run_args, "segments": segs}
-
-
-def uniform_segments(dims, program) -> dict:
-    """The standard (unpacked / fixed-shape) path's run_args["segments"]:
-    every round appearing in ``program`` maps to the SAME host ``Segments``
-    implied by ``dims`` (``batch`` uniform ``seq_len`` sequences, or the
-    config's fixed ``seq_lens``) — one shared object, materialized once by the
-    prologue. This is where the non-packed caller (train loop, gradcheck)
-    commits to "every run provides segments". Round key is the task id's
-    ``{s}_{r}_{i}`` middle field (matches _Base._round_of), a superset of
-    block rounds; extra keys are harmless."""
-    from dataflow.core.segments import Segments
-
-    seg = Segments.of_dims(dims)
-    rounds = set()
-    for t in program.tasks:
-        parts = t.id.rsplit("_", 3)
-        if len(parts) >= 3:
-            rounds.add(parts[2])
-    return {r: seg for r in (rounds or {"0"})}
-
-
 class CancelledRun(RuntimeError):
     """Boundary-cancel (engine service): raised between task
     dispatches when the caller's cancel_event is set; unwinds through
@@ -402,10 +344,12 @@ class Engine:
             stats["token_detect_lat"] = 0.0
             stats["token_detect_n"] = 0
             state.stats = stats
-        if run_args and (run_args.get("segments") or run_args.get("seq_lens")):
-            run_args = prologue_run_start(run_args, self.backend)
-        # run_args are read-only from here on; run_values is the run's small
-        # MUTABLE shared state (round-boundary tasks publish into it)
+        # run_args are fully OPAQUE to the engine (its contract): any
+        # structured values (e.g. the workload's packed-round segments)
+        # are interpreted, converted, and materialized by the consuming
+        # tasks themselves. Read-only from here on; run_values is the
+        # run's small MUTABLE shared state (round-boundary tasks
+        # publish into it)
         run_values: dict = {}
         for task_pos, task in enumerate(program.tasks):
             # service boundary-cancel: observed ONLY here, between task

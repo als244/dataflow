@@ -258,7 +258,7 @@ def run(adapter, *, loss="ppo", steps=3, device_gib=2.0, out_dir=None):
             return rl_head
         return base_resolver(task)
 
-    from dataflow.runtime.engine import uniform_segments
+    from dataflow_training.blocks.segments import uniform_segments
 
     dry = Engine(FakeBackend()).execute(planned.program,
                                         initial_buffers=values)

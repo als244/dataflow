@@ -44,7 +44,7 @@ def main() -> int:
     from dataflow.runtime import Engine
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.runtime.device.fake import FakeBackend
-    from dataflow.runtime.engine import uniform_segments
+    from dataflow_training.blocks.segments import uniform_segments
     from dataflow.runtime.interop import torch_view
     from dataflow_training.blocks.modules.moe.spec import moe_aux_layout
     from dataflow_training.model_families.families import resolve_family
@@ -176,7 +176,7 @@ def main() -> int:
           f"logit7={logits[t0, 7]:.6f}")
 
     # ---- engine leg (exact check_model_step invocation) ----
-    from dataflow.runtime.engine import uniform_segments
+    from dataflow_training.blocks.segments import uniform_segments
     run_args = {"segments": uniform_segments(dims, planned.program)}
     seg0 = next(iter(run_args["segments"].values()))
     print(f"engine segments: {seg0}")

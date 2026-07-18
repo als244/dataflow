@@ -146,7 +146,7 @@ def check_block_backward(dims, *, family=None, seed: int = 0, tol: float = 3e-2)
             "bundle); its per-kind block ladders live in its own test module"
         )
 
-    from dataflow.core.segments import Segments
+    from dataflow_training.blocks.segments import Segments
 
     w, x, dy = _random_block_state(dims, family.weight_layout(dims), seed)
     kernels = resolve_kernels()
@@ -421,7 +421,7 @@ def isolated_block_compare(cfg, isolate, *, seed: int = 0,
     from dataflow.runtime import Engine
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.runtime.device.fake import FakeBackend
-    from dataflow.runtime.engine import uniform_segments
+    from dataflow_training.blocks.segments import uniform_segments
     from dataflow.runtime.interop import torch_view
     from dataflow_training.model_families.families import resolve_family
     from dataflow_training.lowering.planning import plan_program
@@ -729,7 +729,7 @@ def check_model_step(
         twin_loss = float(twin.indexer_loss())
 
     if run_args is None:
-        from dataflow.runtime.engine import uniform_segments
+        from dataflow_training.blocks.segments import uniform_segments
 
         run_args = {"segments": uniform_segments(dims, planned.program)}
 

@@ -505,7 +505,7 @@ def test_dsv32_block_ladder2(kind):
     dy = (torch.randn(dims.tokens, dims.d_model, generator=gen, device="cuda") * 0.5).to(torch.bfloat16)
 
     from dataflow_training.blocks.layouts import dsv32_aux_temp_layout
-    from dataflow.core.segments import Segments
+    from dataflow_training.blocks.segments import Segments
 
     a = {f.name: torch.empty(f.shape, dtype=TORCH_DTYPE_BY_NAME[f.dtype], device="cuda")
          for f in cl.fields}

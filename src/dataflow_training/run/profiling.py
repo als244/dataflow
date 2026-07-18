@@ -169,17 +169,22 @@ def profile_program(
     contender = _PcieContender(backend) if contend_pcie else None
     profiles: dict[tuple, TaskProfile] = {}
 
-    # attention blocks read the round's Segments from run_args; the profiler
-    # bypasses the engine prologue, so build + materialize a uniform descriptor
-    # once here (from any block executable's dims — all tasks share dims)
+    # attention blocks resolve the round's Segments workload-side
+    # (segments_for); the profiler drives executables directly, so build
+    # + materialize a uniform descriptor once here (from any block
+    # executable's dims — all tasks share dims)
     _run_args = None
     for _t in program.tasks:
         _d = getattr(resolver(_t), "dims", None)
         if _d is not None:
-            from dataflow.runtime.engine import prologue_run_start, uniform_segments
+            from ..blocks.segments import uniform_segments
 
-            _run_args = prologue_run_start(
-                {"segments": uniform_segments(_d, program)}, backend)
+            segs = uniform_segments(_d, program)
+            if getattr(backend, "physical", False):
+                one = next(iter(segs.values())).on(
+                    f"cuda:{backend.device}")
+                segs = {r: one for r in segs}
+            _run_args = {"segments": segs}
             break
 
     for task in program.tasks:

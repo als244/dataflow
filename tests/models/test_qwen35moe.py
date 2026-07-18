@@ -165,7 +165,7 @@ def _run(engine_kwargs=None, resolver_wrapper=None, program=None, seed=7):
     resolver = fam.build_resolver(fam.dims_of(cfg))
     if resolver_wrapper is not None:
         resolver = resolver_wrapper(resolver, backend)
-    from dataflow.runtime.engine import uniform_segments
+    from dataflow_training.blocks.segments import uniform_segments
     result = Engine(backend, **(engine_kwargs or {})).execute(
         prog, resolver=resolver, initial_buffers=values, pool_prewarm=dry.pool_demand,
         run_args={"segments": uniform_segments(fam.dims_of(cfg), prog)},

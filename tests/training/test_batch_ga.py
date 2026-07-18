@@ -82,7 +82,7 @@ def test_batch_ga_model_step_matches_reference():
                          beta1=hp.beta1, beta2=hp.beta2, eps=hp.eps,
                          weight_decay=hp.weight_decay, step=1)
 
-    from dataflow.runtime.engine import uniform_segments
+    from dataflow_training.blocks.segments import uniform_segments
 
     dry = Engine(FakeBackend()).execute(planned.program, initial_buffers=values)
     result = Engine(backend).execute(

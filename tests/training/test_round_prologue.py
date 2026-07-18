@@ -100,7 +100,7 @@ def test_round_prologue_engine_e2e():
     from dataflow.runtime import Engine
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.runtime.device.fake import FakeBackend
-    from dataflow.runtime.engine import uniform_segments
+    from dataflow_training.blocks.segments import uniform_segments
     from dataflow_training.blocks.base_blocks import RoundPrologue
     from dataflow.runtime.interop import torch_view
     from dataflow_training.model_families.llama3_blocks import build_resolver

@@ -1,8 +1,10 @@
 """Segments: the packed-round value object (per-sequence lengths,
-device cu/positions materialized once by the engine prologue). Owned
-by the ENGINE side: run_args carry it, prologue tasks build it, and
-the runtime's uniform_segments helper constructs it — workload code
-imports it from here (an allowed runtime ABI).
+device cu/positions materialized once per run). WORKLOAD-owned: the
+engine treats run_args as fully opaque (its own contract), so the
+wire seq_lens -> Segments conversion, the device materialization
+(pinned + non_blocking, identity-deduped), and the dims-uniform
+fallback all live here, cached in ctx.run_values by the first
+consuming task (segments_for).
 """
 from __future__ import annotations
 
@@ -111,3 +113,58 @@ class Segments:
             cu=cu_host.to(device, non_blocking=True),
             positions=pos_host.to(device, non_blocking=True),
         )
+
+
+def uniform_segments(dims, program) -> dict:
+    """The standard (unpacked / fixed-shape) path's run_args["segments"]:
+    every round appearing in ``program`` maps to the SAME host ``Segments``
+    implied by ``dims`` (``batch`` uniform ``seq_len`` sequences, or the
+    config's fixed ``seq_lens``) — one shared object, materialized once by
+    the first consuming task. Round key is the task id's ``{s}_{r}_{i}``
+    middle field (matches segments_for), a superset of block rounds; extra
+    keys are harmless."""
+    seg = Segments.of_dims(dims)
+    rounds = set()
+    for t in program.tasks:
+        parts = t.id.rsplit("_", 3)
+        if len(parts) >= 3:
+            rounds.add(parts[2])
+    return {r: seg for r in (rounds or {"0"})}
+
+
+def segments_for(ctx, dims, round_key) -> "Segments":
+    """The round's materialized Segments, resolved from run_args by the
+    FIRST consuming task and cached in ctx.run_values for the rest of
+    the run. Accepts the clean internal form run_args["segments"] =
+    {round: Segments}, the wire form run_args["seq_lens"] = {round:
+    [0, b1, ..., t]} cumulative boundaries, or NOTHING — the uniform
+    partition implied by ``dims`` (the non-packed default the service
+    used to fill engine-side). Device fields build ONCE via a pinned +
+    non_blocking copy (the hidden-sync rule), identity-deduped so the
+    uniform case shares a single device copy across rounds; on
+    non-physical backends (planning/sim) host Segments pass through
+    unmaterialized."""
+    rv = ctx.run_values if ctx.run_values is not None else {}
+    cache = rv.setdefault("segments_materialized", {})
+    if round_key in cache:
+        return cache[round_key]
+    ra = ctx.run_args or {}
+    segs = ra.get("segments")
+    host = segs.get(round_key) if segs else None
+    if host is None:
+        wire = ra.get("seq_lens")
+        if wire and round_key in wire:
+            host = Segments.from_boundaries(wire[round_key])
+        else:
+            host = rv.setdefault("segments_uniform_host",
+                                 Segments.of_dims(dims))
+    if getattr(ctx.backend, "physical", False):
+        # dedup by VALUE (Segments hashes on lengths): equal partitions
+        # share one device copy — id()-keyed dedup is a trap here (the
+        # host intermediate dies and its id gets reused across rounds)
+        by_host = rv.setdefault("segments_materialized_by_host", {})
+        if host not in by_host:
+            by_host[host] = host.on(f"cuda:{ctx.backend.device}")
+        host = by_host[host]
+    cache[round_key] = host
+    return host

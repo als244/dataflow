@@ -216,7 +216,7 @@ def test_glm52_ga2_matches_reference():
             module.last_counts = agg_counts[mod_name]
             module.apply_bias_update(cfg.bias_update_speed)
 
-    from dataflow.runtime.engine import uniform_segments
+    from dataflow_training.blocks.segments import uniform_segments
 
     dry = Engine(FakeBackend()).execute(planned.program,
                                         initial_buffers=values)
@@ -259,7 +259,7 @@ def _run(engine_kwargs=None, program=None, seed=7, resolver_wrapper=None):
 
     backend = CudaBackend()
     values = fam.initial_values(prog, cfg, backend, seed=seed)
-    from dataflow.runtime.engine import uniform_segments
+    from dataflow_training.blocks.segments import uniform_segments
 
     dry = Engine(FakeBackend()).execute(prog, initial_buffers=values)
     resolver = fam.build_resolver(fam.dims_of(cfg))
@@ -447,7 +447,7 @@ def test_glm52_dense_warmup_freeze_and_movement():
                               (values["W_embed"].size_bytes,), torch.uint8).clone()
     head_before = torch_view(values["W_head"],
                              (values["W_head"].size_bytes,), torch.uint8).clone()
-    from dataflow.runtime.engine import uniform_segments
+    from dataflow_training.blocks.segments import uniform_segments
 
     dry = Engine(FakeBackend()).execute(planned.program, initial_buffers=values)
     result = Engine(backend).execute(

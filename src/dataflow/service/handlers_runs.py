@@ -235,17 +235,11 @@ def install(server) -> None:
         st.emit("run_started", run_id=run_id, prog_id=entry.prog_id,
                 args=args)
 
-        # every run provides segments: the wire carries per-round `seq_lens`
-        # (cumulative boundaries) for packed runs, converted by the engine
-        # prologue; a uniform run sends neither, so synthesize the descriptor
-        # from the program's dims here (Segments objects stay in-process — the
-        # wire form is boundaries only)
+        # run_args pass through OPAQUE: packed metadata (segments /
+        # wire seq_lens / the uniform default) is the workload's own
+        # concern, resolved by its tasks
         rf = bridge.resolver_for(entry.resolver_spec)
         run_args = args
-        if not args.get("segments") and not args.get("seq_lens"):
-            from dataflow.runtime.engine import uniform_segments
-
-            run_args = {**args, "segments": uniform_segments(rf[2], program)}
         nm = getattr(server, "nm", None)
         group_handles = nm.group_handles() if nm is not None else None
         result, err_kind, err_msg = bridge.execute_run(

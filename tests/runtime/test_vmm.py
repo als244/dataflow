@@ -188,7 +188,7 @@ def test_e2e_mini_vmm_matches_static():
     kernels, same order; only addresses differ — in-process runs are
     exactly deterministic, so equality is byte equality)."""
     from dataflow.runtime import Engine
-    from dataflow.runtime.engine import uniform_segments
+    from dataflow_training.blocks.segments import uniform_segments
     from dataflow_training.model_families.families import resolve_family
     from dataflow_training.model_families.llama3 import ShapedLlamaConfig
     from dataflow_training.lowering.planning import plan_program

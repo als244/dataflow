@@ -19,9 +19,8 @@ import math
 
 import torch
 
-from dataflow.core.segments import Segments  # noqa: F401  — re-export:
-# the workload-side op library historically owned Segments; the ENGINE
-# owns it now (core), and existing workload imports keep working
+from .segments import Segments  # noqa: F401 — re-export: the round
+# value object lives beside the op library; both are workload-owned
 
 # --- rmsnorm -------------------------------------------------------------------
 
