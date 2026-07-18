@@ -27,7 +27,7 @@ from dataflow_training.run.driver import (
     run_engine,
     run_reference,
 )
-from dataflow_training.data.fineweb import make_stream
+from dataflow_training.data.fineweb import make_doc_stream, make_stream
 from dataflow_training.run.recipe import Recipe
 
 RESULTS = _ROOT / "results" / "pretrain"
@@ -36,6 +36,15 @@ RESULTS = _ROOT / "results" / "pretrain"
 def _recipe(steps: int, *, peak_lr: float = 3e-4) -> Recipe:
     return Recipe(peak_lr=peak_lr, min_lr=peak_lr / 10,
                   warmup_steps=max(1, steps // 10), total_steps=steps)
+
+
+def _stream(cfg, data_mode: str):
+    """The run's token stream: "block" = llm.c fixed windows (uniform
+    rows, EOT flows through); "doc" = doc-aware packed varlen (EOT-split
+    segments, per-round seq_lens — both backends' packed modes)."""
+    if data_mode == "doc":
+        return make_doc_stream(cfg.tokens, cfg.seq_len)
+    return make_stream(cfg.tokens)
 
 
 def _log(msg: str) -> None:
@@ -191,16 +200,33 @@ def cmd_reference(args) -> int:
     from dataclasses import replace
 
     cfg = P.resolve_preset(args.preset)
+    overrides = {}
     if args.opt:
-        cfg = replace(cfg, opt_policy=args.opt)
+        overrides["opt_policy"] = args.opt
+    if args.ga_rounds:
+        overrides["grad_accum_rounds"] = args.ga_rounds
+    if overrides:
+        cfg = replace(cfg, **overrides)
     recipe = _recipe(args.steps, peak_lr=args.peak_lr)
-    stream = make_stream(cfg.tokens)
-    _log(f"REFERENCE-ONLY: {args.preset} opt={getattr(cfg, 'opt_policy', 'adamw')} "
-         f"steps={args.steps} grad_checkpoint={args.grad_checkpoint}")
-    res = run_reference(cfg, recipe, stream, args.steps,
-                        grad_checkpoint=args.grad_checkpoint, log=_log)
+    stream = _stream(cfg, args.data)
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
+    ck_dir = None
+    partial = None
+    if args.checkpoint_every:
+        ck_dir = RESULTS / "checkpoints" / out.stem
+        ck_dir.mkdir(parents=True, exist_ok=True)
+        partial = out.with_name(out.stem + "_partial.json")
+    _log(f"REFERENCE-ONLY: {args.preset} opt={getattr(cfg, 'opt_policy', 'adamw')} "
+         f"steps={args.steps} data={args.data} "
+         f"grad_checkpoint={args.grad_checkpoint} "
+         f"tokens/step={cfg.seq_len * cfg.batch * cfg.grad_accum_rounds} "
+         f"ckpt={args.checkpoint_every or 'off'}")
+    res = run_reference(cfg, recipe, stream, args.steps,
+                        grad_checkpoint=args.grad_checkpoint,
+                        checkpoint_every=args.checkpoint_every,
+                        checkpoint_dir=ck_dir, resume=args.resume,
+                        partial_out=partial, log=_log)
     res.save(out)
     _log(f"saved {out} (final loss {res.losses[-1]:.4f})")
     return 0
@@ -222,13 +248,13 @@ def cmd_engine(args) -> int:
     if overrides:
         cfg = replace(cfg, **overrides)
     recipe = _recipe(args.steps, peak_lr=args.peak_lr)
-    stream = make_stream(cfg.tokens)
+    stream = _stream(cfg, args.data)
     ck_dir = None
     if args.checkpoint_every:
         ck_dir = RESULTS / "checkpoints" / Path(args.out).stem
         ck_dir.mkdir(parents=True, exist_ok=True)
     _log(f"ENGINE-ONLY: {args.preset} opt={getattr(cfg, 'opt_policy', 'adamw')} "
-         f"steps={args.steps} budget={args.budget}GiB "
+         f"steps={args.steps} budget={args.budget}GiB data={args.data} "
          f"tokens/step={cfg.seq_len * cfg.batch * cfg.grad_accum_rounds} "
          f"ckpt={args.checkpoint_every or 'off'}")
     with daemon_client(slab_gib=args.slab, log=_log) as client:
@@ -260,6 +286,9 @@ def main() -> int:
                         "8192-token round)")
     e.add_argument("--checkpoint-every", type=int, default=None)
     e.add_argument("--resume", action="store_true")
+    e.add_argument("--data", choices=["block", "doc"], default="block",
+                   help="block = llm.c fixed windows; doc = EOT-split "
+                        "doc-aware varlen packing")
     e.add_argument("--out", required=True)
     e.set_defaults(fn=cmd_engine)
 
@@ -272,6 +301,13 @@ def main() -> int:
                         "embed/head/norms)")
     r.add_argument("--peak-lr", type=float, default=3e-4)
     r.add_argument("--grad-checkpoint", action="store_true")
+    r.add_argument("--ga-rounds", type=int, default=None,
+                   help="override cfg.grad_accum_rounds (tokens/step scales)")
+    r.add_argument("--checkpoint-every", type=int, default=None)
+    r.add_argument("--resume", action="store_true")
+    r.add_argument("--data", choices=["block", "doc"], default="block",
+                   help="block = llm.c fixed windows; doc = EOT-split "
+                        "doc-aware varlen packing")
     r.add_argument("--out", required=True)
     r.set_defaults(fn=cmd_reference)
 

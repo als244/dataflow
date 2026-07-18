@@ -17,14 +17,15 @@ def quiet_log(*args, **kwargs):
 
 
 def run_family_parity(cfg, *, steps: int = 15, slab_gib: float = 6.0,
-                      budget_gib: float = 4.0) -> None:
+                      budget_gib: float = 4.0, data: str = "block") -> None:
     from dataflow_training.run import parity
     from dataflow_training.run.driver import daemon_client, run_engine, run_reference
-    from dataflow_training.data.fineweb import make_stream
+    from dataflow_training.data.fineweb import make_doc_stream, make_stream
     from dataflow_training.run.recipe import Recipe
 
     recipe = Recipe(peak_lr=3e-4, min_lr=3e-5, warmup_steps=3, total_steps=steps)
-    stream = make_stream(cfg.tokens)
+    stream = (make_doc_stream(cfg.tokens, cfg.seq_len) if data == "doc"
+              else make_stream(cfg.tokens))
 
     ref = run_reference(cfg, recipe, stream, steps, seed=11, log=quiet_log)
     with daemon_client(slab_gib=slab_gib, log=quiet_log) as client:
@@ -50,6 +51,18 @@ def test_gpt2_engine_vs_reference():
     from dataflow_training.run.presets import gpt2_smoke_preset
 
     run_family_parity(gpt2_smoke_preset())
+
+
+@pytest.mark.gpu
+def test_gpt2_docaware_engine_vs_reference():
+    """The doc-aware varlen pipeline end to end: EOT-split rounds, the
+    reference's packed mode vs the engine's run_args seq_lens — the
+    standing gate for the doc-aware data path."""
+    if not torch.cuda.is_available():
+        pytest.skip("no CUDA")
+    from dataflow_training.run.presets import gpt2_smoke_preset
+
+    run_family_parity(gpt2_smoke_preset(), data="doc")
 
 
 @pytest.mark.gpu

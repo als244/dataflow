@@ -226,8 +226,45 @@ def reference_optimizer(model, cfg, recipe: Recipe):
                      f"optimizer (have: adamw, muon)")
 
 
+def save_reference_checkpoint(path, step: int, model, opt, res) -> None:
+    """Atomic torch checkpoint for long reference runs: model + adamw
+    moments (ordered like opt.params) + the curve so far. The data
+    stream is a pure function of the round index and the twin has no
+    dropout, so (states, step) is the complete resume record."""
+    import os
+
+    tmp = str(path) + ".tmp"
+    torch.save({
+        "step": step,
+        "model": model.state_dict(),
+        "opt_mv": [(m, v) for (m, v) in
+                   (opt.state[id(p)] for p in opt.params)],
+        "losses": list(res.losses),
+        "step_wall_s": list(res.step_wall_s),
+        "tok_per_s": list(res.tok_per_s),
+    }, tmp)
+    os.replace(tmp, path)
+
+
+def load_reference_checkpoint(path, model, opt, res) -> int:
+    """Restore a save_reference_checkpoint record; returns the step to
+    resume FROM (the first step not yet run)."""
+    ck = torch.load(path, map_location="cuda", weights_only=False)
+    model.load_state_dict(ck["model"])
+    for p, (m, v) in zip(opt.params, ck["opt_mv"]):
+        sm, sv = opt.state[id(p)]
+        sm.copy_(m)
+        sv.copy_(v)
+    res.losses[:] = ck["losses"]
+    res.step_wall_s[:] = ck["step_wall_s"]
+    res.tok_per_s[:] = ck["tok_per_s"]
+    return int(ck["step"])
+
+
 def run_reference(cfg, recipe: Recipe, stream, steps: int, *, seed: int = 11,
                   device: str = "cuda", grad_checkpoint: bool = False,
+                  checkpoint_every: int | None = None, checkpoint_dir=None,
+                  resume: bool = False, partial_out=None,
                   log=print, log_every: int = 10) -> RunResult:
     """Train ``reference_models.Llama3`` from the engine's seeded init on ``stream``."""
     from dataflow.runtime.device.cuda import CudaBackend
@@ -259,7 +296,19 @@ def run_reference(cfg, recipe: Recipe, stream, steps: int, *, seed: int = 11,
                           "opt_policy": getattr(cfg, "opt_policy", None)
                           or "adamw",
                           "tokens_per_step": tokens_per_step(cfg)})
-    for step in range(steps):
+    ck_path = None
+    if checkpoint_every and checkpoint_dir is not None:
+        from pathlib import Path as _Path
+
+        ck_path = _Path(checkpoint_dir) / "reference_ckpt.pt"
+    start_step = 0
+    if resume:
+        if ck_path is None or not ck_path.exists():
+            raise FileNotFoundError(
+                f"--resume: no reference checkpoint at {ck_path}")
+        start_step = load_reference_checkpoint(ck_path, model, opt, res)
+        log(f"[reference] resumed from step {start_step} ({ck_path})")
+    for step in range(start_step, steps):
         t0 = time.perf_counter()
         opt.zero_grad()
         step_loss = 0.0
@@ -271,21 +320,32 @@ def run_reference(cfg, recipe: Recipe, stream, steps: int, *, seed: int = 11,
         rounds = []
         step_valid = 0
         for r in range(R):
-            tok, tgt = stream(step * R + r)
-            rounds.append((tok, tgt))
-            step_valid += int((tgt >= 0).sum())
-        for tok, tgt in rounds:
+            got = stream(step * R + r)
+            rounds.append(got)
+            step_valid += int((got[1] >= 0).sum())
+        for got in rounds:
+            tok, tgt = got[0], got[1]
+            # doc-aware streams yield (tokens, targets, seq_lens): the
+            # round runs PACKED (one (1, t) row, per-sequence positions,
+            # block-diagonal attention) — the twins' varlen-native mode
+            lens = got[2] if len(got) > 2 else None
             valid_r = int((tgt >= 0).sum())
             scale = valid_r / step_valid
-            tok = tok.to(device, non_blocking=True).view(B, T)
-            tgt = tgt.to(device, non_blocking=True).view(B, T)
+            if lens is not None:
+                tok = tok.to(device, non_blocking=True).view(1, -1)
+                tgt = tgt.to(device, non_blocking=True).view(1, -1)
+                loss_kw = {"seq_lens": lens}
+            else:
+                tok = tok.to(device, non_blocking=True).view(B, T)
+                tgt = tgt.to(device, non_blocking=True).view(B, T)
+                loss_kw = {}
             if aux_coef > 0:
-                loss_r = model.loss(tok, tgt, aux_coef=aux_coef)
+                loss_r = model.loss(tok, tgt, aux_coef=aux_coef, **loss_kw)
                 lbl_r = model.load_balance_loss()
                 ce_r = loss_r - aux_coef * lbl_r
                 (ce_r * scale + aux_coef * lbl_r).backward()
             else:
-                ce_r = model.loss(tok, tgt)
+                ce_r = model.loss(tok, tgt, **loss_kw)
                 (ce_r * scale).backward()
             step_loss += float(ce_r.detach()) * scale
         opt.step(step)
@@ -306,6 +366,10 @@ def run_reference(cfg, recipe: Recipe, stream, steps: int, *, seed: int = 11,
         if step % log_every == 0 or step == steps - 1:
             log(f"[reference] step {step:4d}/{steps}  loss {step_loss:.4f}"
                 f"  lr {recipe.lr(step):.2e}  {tokens_per_step(cfg) / dt:.0f} tok/s")
+        if ck_path is not None and (step + 1) % checkpoint_every == 0:
+            save_reference_checkpoint(ck_path, step + 1, model, opt, res)
+            if partial_out is not None:
+                res.save(partial_out)
     del model, opt
     torch.cuda.empty_cache()
     return res
@@ -459,9 +523,19 @@ def run_engine(client, cfg, recipe: Recipe, stream, steps: int, *,
     init_model(client, fam, cd, seed=seed)
     R = cfg.grad_accum_rounds
     valid_by_step: dict[int, int] = {}
+    lens_by_step: dict[int, dict] = {}
 
     def put_round(step: int, r: int) -> None:
-        tok, tgt = stream(step * R + r)
+        got = stream(step * R + r)
+        tok, tgt = got[0], got[1]
+        if len(got) > 2:
+            # doc-aware round: per-round cumulative boundaries ride
+            # run_args ("seq_lens" wire form, round-keyed) — the
+            # engine's prologue materializes Segments from them
+            bounds = [0]
+            for n in got[2]:
+                bounds.append(bounds[-1] + int(n))
+            lens_by_step.setdefault(step, {})[str(r)] = bounds
         valid_by_step[step] = valid_by_step.get(step, 0) + int((tgt >= 0).sum())
         client.put_object(f"tokens_0_{r}", tok.numpy().tobytes())
         client.put_object(f"targets_0_{r}", tgt.numpy().tobytes())
@@ -505,10 +579,11 @@ def run_engine(client, cfg, recipe: Recipe, stream, steps: int, *,
         # GLOBAL-DENOMINATOR convention: one denominator for every round
         # of the step (scalar valid_rows); per-round loss objects then
         # hold Sum(nll_r)/valid_step, so the STEP loss is their plain sum
-        out = client.run(prog_id,
-                         args={"step": step,
-                               "valid_rows": valid_by_step.pop(step)},
-                         fetch=fetch)
+        run_args = {"step": step, "valid_rows": valid_by_step.pop(step)}
+        lens = lens_by_step.pop(step, None)
+        if lens is not None:
+            run_args["seq_lens"] = lens
+        out = client.run(prog_id, args=run_args, fetch=fetch)
         dt = time.perf_counter() - t0
         if out.get("state") != "done":
             raise RuntimeError(f"run step {step} state={out.get('state')}: {out}")

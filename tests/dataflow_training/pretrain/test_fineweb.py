@@ -81,3 +81,73 @@ def test_read_spans_shard_boundary(corpus):
     assert win.shape == (8,)
     assert np.array_equal(win[:4], corpus.read(n0 - 4, 4))
     assert np.array_equal(win[4:], corpus.read(n0, 4))
+
+
+# ========================= doc-aware packed stream ===========================
+
+def doc_stream(corpus, T=8192, L=1024):
+    return fineweb.DocAwareFinewebStream(corpus, tokens_per_round=T,
+                                         max_seqlen=L)
+
+
+def test_doc_stream_deterministic(corpus):
+    st = doc_stream(corpus)
+    for k in (0, 1, 7, 100):
+        a, b = st(k), st(k)
+        assert torch.equal(a[0], b[0]) and torch.equal(a[1], b[1])
+        assert a[2] == b[2]
+
+
+def test_doc_stream_invariants(corpus):
+    st = doc_stream(corpus)
+    for k in (0, 3, 50, 999):
+        tokens, targets, lens = st(k)
+        assert tokens.shape == (8192,) and targets.shape == (8192,)
+        assert sum(lens) == 8192
+        assert all(1 <= n <= 1024 for n in lens)
+        # EOT never an input; targets in vocab range (EOT allowed — the
+        # doc-final positions PREDICT it)
+        assert int((tokens == fineweb.EOT).sum()) == 0
+        assert int(targets.min()) >= 0 and int(targets.max()) < 50304
+        # a fineweb round of 8192 tokens spans several documents
+        assert len(lens) >= 2
+        assert int((targets == fineweb.EOT).sum()) >= 1
+
+
+def test_doc_stream_matches_raw_reconstruction(corpus):
+    """Independent numpy reconstruction of round 0: inputs are exactly
+    the raw head minus EOTs; each target is its input's raw successor;
+    segment starts are exactly {round edge} + {kept tokens whose raw
+    predecessor is EOT} + max_seqlen chunk points."""
+    T, L = 8192, 1024
+    st = doc_stream(corpus, T, L)
+    tokens, targets, lens = st(0)
+    raw = corpus.read(0, 4 * T)          # ample raw head
+    keep = np.flatnonzero(raw[:-1] != fineweb.EOT)[:T]
+    assert np.array_equal(tokens.numpy(), raw[keep].astype(np.int32))
+    assert np.array_equal(targets.numpy(), raw[keep + 1].astype(np.int32))
+    starts = {0}
+    for j in range(1, T):
+        if raw[keep[j] - 1] == fineweb.EOT:
+            starts.add(j)
+    expect = []
+    edges = sorted(starts) + [T]
+    for lo, hi in zip(edges[:-1], edges[1:]):
+        n = hi - lo
+        while n > L:
+            expect.append(L)
+            n -= L
+        if n:
+            expect.append(n)
+    assert list(lens) == expect
+
+
+def test_doc_stream_rounds_contiguous(corpus):
+    """Consecutive rounds tile the FILTERED corpus with no gap/overlap."""
+    st = doc_stream(corpus, T=4096)
+    t0, _, _ = st(0)
+    t1, _, _ = st(1)
+    raw = corpus.read(0, 4 * 8192)
+    keep = np.flatnonzero(raw != fineweb.EOT)[:8192]
+    both = np.concatenate([t0.numpy(), t1.numpy()])
+    assert np.array_equal(both, raw[keep].astype(np.int32))
