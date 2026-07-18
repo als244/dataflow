@@ -59,6 +59,7 @@ class OlmoeBlockFwd(MoEAuxTempState, MoEProfileFill, BlockFwd):
         # FULL-ROW qk-norm: rmsnorm over (t, q_dim)/(t, kv_dim) rows —
         # no per-head reshape, one rstd per token. Projections write
         # through to ctx (bwd reads PRE-norm qm/km).
+        # linear-triple conversion pending (exemplar: llama3)
         h1, w, a = st["h1"], st["w"], st["a"]
         t = d.tokens
         if a is not None:
@@ -134,6 +135,7 @@ class OlmoeBlockBwd(MoEAuxTempState, MoEProfileFill, BlockBwd):
     def _attn_bwd(self, kctx, dh_mid, a, x, w, acc, norm_bwd, dx_out) -> None:
         # qwen3-shaped attention backward with FULL-ROW norm re-apply:
         # rebuild flash-bwd's q/k from saved pre-norm qm/km + rstds.
+        # linear-triple conversion pending (exemplar: llama3)
         d = self.dims
         K = self.kernels
 

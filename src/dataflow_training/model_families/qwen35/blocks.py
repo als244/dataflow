@@ -90,6 +90,7 @@ class Qwen35LinBlockFwd(BlockFwd):
     def _stage_proj(kctx, K, d, st):
         # write-through: the two projections land directly in the ctx views
         # (768 MB scratch double + copy pass saved at bs32 otherwise)
+        # linear-triple conversion pending (exemplar: llama3)
         h1, w, a = st["h1"], st["w"], st["a"]
         if a is not None:
             qkvz, ba = a["qkvz"], a["ba"]
@@ -151,6 +152,7 @@ class Qwen35LinBlockFwd(BlockFwd):
 
     @staticmethod
     def _stage_norm_out(kctx, K, d, st):
+        # linear-triple conversion pending (exemplar: llama3)
         t = st["x"].shape[0]
         rows = t * d.lin_v_heads
         o2 = st["core_out"].reshape(rows, d.lin_v_head_dim)
@@ -228,6 +230,7 @@ class Qwen35LinBlockBwd(BlockBwd):
     def _attn_bwd(self, kctx, dxo, a, x, w, acc, norm_bwd, dx_out) -> None:
         # DeltaNet part; the shared dense MLP tail already ran via
         # BlockBwd._backward's template (_mlp_bwd, xo plays h_mid).
+        # linear-triple conversion pending (exemplar: llama3)
         # Scratch discipline (bs32 measured 9.5 GiB of task-internal
         # torch scratch): every (t, .) temporary is del'd at its LAST use so
         # the caching allocator can recycle it within the task, and additive
@@ -376,6 +379,7 @@ class Qwen35AttnBlockFwd(BlockFwd):
 
     @staticmethod
     def _stage_qkv_gate(kctx, K, d, st):
+        # linear-triple conversion pending (exemplar: llama3)
         h1, w, a = st["h1"], st["w"], st["a"]
         qg = h1 @ w["wq"]  # ONE doubled GEMM: [Q_all | gate_all] — its two
         qm, gate = qg[:, : d.attn_dim], qg[:, d.attn_dim :]  # ctx fields are
@@ -425,6 +429,7 @@ class Qwen35AttnBlockFwd(BlockFwd):
 
     @staticmethod
     def _stage_gate_o(kctx, K, d, st):
+        # linear-triple conversion pending (exemplar: llama3)
         t = st["x"].shape[0]
         gated = st.pop("attn_out") * torch.sigmoid(st.pop("gate").float()).to(torch.bfloat16)
         a = st["a"]
@@ -491,6 +496,7 @@ class Qwen35AttnBlockBwd(BlockBwd):
         h, kvh, hd = d.n_heads, d.n_kv_heads, d.head_dim
 
         # --- output gate + o projection ---
+        # linear-triple conversion pending (exemplar: llama3)
         sig = torch.sigmoid(a["gate"].float())
         gated = a["attn_out"] * sig.to(torch.bfloat16)
         if acc.wanted("wo"):

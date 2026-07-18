@@ -282,6 +282,7 @@ class _Glm52LeaderKL:
         import torch.nn.functional as F  # noqa: F401
 
         from ..dsv32.blocks import _LN_EPS
+        # linear-triple conversion pending (exemplar: llama3)
 
         K = self.kernels
         t = d.tokens

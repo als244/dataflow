@@ -18,6 +18,7 @@ from . import ops
 from dataflow.runtime.interop import TORCH_DTYPE_BY_NAME, external_stream, torch_view
 from ..kernels import KernelCtx, KernelSet, resolve_kernels
 from .layouts import (
+    DTypePolicy,
     LlamaDims,
     PackedLayout,
     activation_layout,
@@ -29,6 +30,7 @@ from .layouts import (
     sliced_layout,
     weight_layout,
 )
+from .linear import LinearTriple, resolve_linear, resolve_linears
 
 
 
@@ -129,6 +131,23 @@ class _Base:
         slices = self.tp_slices(task)
         return sliced_layout(wl, slices) if slices else wl
 
+    # matrix-parameter fields this executable applies through the linear
+    # seam (blocks/linear.py) — plain class attr, not a dataclass field;
+    # family block classes declare their own list
+    LINEAR_FIELDS = ()
+
+    def dtype_policy(self) -> DTypePolicy:
+        return getattr(self.dims, "dtypes", None) or DTypePolicy()
+
+    def linears(self, layer: int | None) -> dict:
+        """The LINEAR_FIELDS triples at this layer's dtype sub-policy.
+        Launches resolve with the task's layer; direct-invocation callers
+        (unit tests bypassing launch) fall back to layer=None — the outer
+        policy, the same uniform-default convention as the segments
+        metadata."""
+        return resolve_linears(self.LINEAR_FIELDS, layer,
+                               self.dtype_policy(), self.kernels)
+
     def gl_for(self, task) -> PackedLayout:
         layer = self.layer_of(task)
         return grad_layout(self.wl_for(task), self.dims.dtypes,
@@ -187,7 +206,7 @@ class _Base:
                 dw[name].copy_(value.to(dw[name].dtype))
 
         # expensive call sites guard the wgrad GEMM itself:
-        #   if acc.wanted("wq"): acc("wq", h1.T @ dq)
+        #   if acc.wanted("wq"): acc("wq", lin["wq"].wgrad(kctx, h1, dq))
         # frozen fields then skip the COMPUTATION, not just the write
         acc.wanted = lambda name: name in dw
         return acc
@@ -317,6 +336,12 @@ class HeadLoss(_Base):
         return grad_layout(self.hl, self.dims.dtypes, ns="head",
                            opt_policy=getattr(self.dims, "opt_policy", None))
 
+    def head_linear(self) -> LinearTriple:
+        """The projection table's triple: (vocab, d) storage applied
+        transposed; policy addresses it as "head.w" (loose-table ns)."""
+        return resolve_linear("w", None, self.dtype_policy(), self.kernels,
+                              transposed=True, ns="head")
+
     def launch(self, ctx: TaskContext) -> None:
         d = self.dims
         es, kctx = self._stream_ctx(ctx)
@@ -355,6 +380,7 @@ class HeadLoss(_Base):
                 else:
                     norm_rows = int(vr)
             chunk = head_chunk_rows(d.vocab_size)
+            hw = self.head_linear()
             loss_acc = torch.zeros(1, dtype=torch.float32, device=y.device)
             part = torch.empty(1, dtype=torch.float32, device=y.device)
             dnorm_acc = torch.zeros(d.d_model, dtype=torch.float32, device=y.device)
@@ -365,7 +391,7 @@ class HeadLoss(_Base):
                 yn = torch.empty_like(y_c)
                 rstd = torch.empty(hi - lo, dtype=torch.float32, device=y.device)
                 K.rmsnorm_fwd(kctx, y_c, wh["final_norm_w"], yn, rstd)
-                logits = yn @ wh["w"].T                      # (c, V) — chunk scratch
+                logits = hw.fwd(kctx, yn, wh)                # (c, V) — chunk scratch
                 dlogits = torch.empty_like(logits)
                 K.ce_loss_fwd_bwd(
                     kctx, logits, targets[lo:hi], part, dlogits,
@@ -373,13 +399,13 @@ class HeadLoss(_Base):
                 )
                 loss_acc += part
                 if dwh is not None and "w" in dwh:
-                    dw_c = dlogits.T @ yn                    # (V, d)
+                    dw_c = hw.wgrad(kctx, yn, dlogits)       # (V, d)
                     if accum or lo > 0:
                         dwh["w"].add_(dw_c.to(dwh["w"].dtype))
                     else:
                         dwh["w"].copy_(dw_c.to(dwh["w"].dtype))
                     del dw_c
-                dyn = dlogits @ wh["w"]                      # (c, d)
+                dyn = hw.dgrad(kctx, dlogits, wh)            # (c, d)
                 del logits, dlogits
                 K.rmsnorm_bwd(kctx, dyn, y_c, rstd, wh["final_norm_w"], dy[lo:hi], dnorm_c)
                 dnorm_acc += dnorm_c

@@ -63,6 +63,7 @@ def stage_moe_route(kctx, K, d, st):
     # metadata families write the discrete decision into the M views
     # (st["aux_temp"]); ctx families keep the historical a-destination.
     # router_logits is NOT a decision — it stays in the ctx either way.
+    # linear-triple conversion pending (exemplar: llama3)
     aux_temp = st.get("aux_temp")
     dst = aux_temp if aux_temp is not None else a
     if a is not None and "router_logits" in a:
@@ -150,6 +151,7 @@ def stage_moe_experts13(kctx, K, d, st):
 
 def stage_moe_shared(kctx, K, d, st):
     moe, a, w = _spec(d), st["a"], st["w"]
+    # linear-triple conversion pending (exemplar: llama3)
     h2 = st["h2"]
     if a is not None and "s13" in a:
         s13, gate_pre = a["s13"], a["gate_pre"]
@@ -165,6 +167,7 @@ def stage_moe_shared_nogate(kctx, K, d, st):
     """DeepSeek-V3 flavor: plain additive shared expert — no gate
     projection, no gate_pre ctx field (separate stage fn because the
     emitted-fields tuples are STATIC declarations)."""
+    # linear-triple conversion pending (exemplar: llama3)
     a, w = st["a"], st["w"]
     h2 = st["h2"]
     if a is not None and "s13" in a:
@@ -294,6 +297,7 @@ def moe_mlp_tail_bwd(kctx, K, d, dy, a, w, dw, accum, acc, norm_bwd, *, resid_fi
 
     # bf16 residual-stream accumulator + addmm_ joins: the dense tail's
     # convention (dh2 = dx1@w1.T; dh2.addmm_(...)), no fp32 copy at the end
+    # linear-triple conversion pending (exemplar: llama3)
     dh2 = torch.empty((t, d.d_model), dtype=torch.bfloat16, device=dy.device)
     K.moe_dispatch_bwd(kctx, dxp, slot_of, dh2)
     del dxp, slot_of

@@ -48,6 +48,7 @@ from ...blocks.modules.moe.stages import (
 
 def _mla_expand_q(kctx, K, d, q_a_pre, rstd_qa, w, pos):
     """Saved/streamed pre-norm q_a -> per-head roped q_full (t, h*qk)."""
+    # linear-triple conversion pending (exemplar: llama3)
     t = q_a_pre.shape[0]
     h, nope, rope = d.n_heads, d.qk_nope_dim, d.qk_rope_dim
     qk = d.qk_head_dim
@@ -66,6 +67,7 @@ def _mla_expand_kv(kctx, K, d, kv_a_pre, rstd_kva, w, pos):
     """Saved/streamed pre-norm kv_a -> (latent_n, k_full (t,h*qk),
     v (t,h,v)). k_rope is roped from the LAST rope columns and broadcast
     across heads."""
+    # linear-triple conversion pending (exemplar: llama3)
     t = kv_a_pre.shape[0]
     h, nope, rope, v = d.n_heads, d.qk_nope_dim, d.qk_rope_dim, d.v_head_dim
     kvl, qk = d.kv_lora_rank, d.qk_head_dim
@@ -111,6 +113,7 @@ class Dsv3DenseBlockFwd(BlockFwd):
     def _stage_mla_q(kctx, K, d, st):
         h1, w, a = st["h1"], st["w"], st["a"]
         t = d.tokens
+        # linear-triple conversion pending (exemplar: llama3)
         if a is not None and "q_a" in a:
             q_a = a["q_a"]
             torch.matmul(h1, w["w_q_a"], out=q_a)
@@ -136,6 +139,7 @@ class Dsv3DenseBlockFwd(BlockFwd):
     @staticmethod
     def _stage_mla_kv(kctx, K, d, st):
         h1, w, a = st.pop("h1"), st["w"], st["a"]
+        # linear-triple conversion pending (exemplar: llama3)
         t = d.tokens
         if a is not None and "kv_a" in a:
             kv_a = a["kv_a"]
@@ -181,6 +185,7 @@ class Dsv3DenseBlockFwd(BlockFwd):
     def _stage_resid1_norm2(kctx, K, d, st):
         # h_mid = x + attn_out @ wo (ctx write-through); h2 = rmsnorm(h_mid)
         # — wo consumes the TRUE (t, h*v) attention output
+        # linear-triple conversion pending (exemplar: llama3)
         x, w, a = st["x"], st["w"], st["a"]
         attn_out = st.pop("attn_out")
         st.pop("lse", None)
@@ -244,6 +249,7 @@ class Dsv3DenseBlockBwd(BlockBwd):
     def _attn_bwd(self, kctx, dh_mid, a, x, w, acc, norm_bwd, dx_out) -> None:
         # MLA backward: re-expand from the compressed latents, flash-bwd at
         # padded head_dim, chain through both low-rank stacks.
+        # linear-triple conversion pending (exemplar: llama3)
         d = self.dims
         K = self.kernels
         t = d.tokens

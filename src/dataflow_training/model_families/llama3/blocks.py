@@ -18,10 +18,14 @@ profiling harness (the plan's measurement-authoritative workspace policy).
 
 Elementwise/reduction ops dispatch through a pinned kernel registry set
 (``dataflow_training.kernels``; fused Triton by default, eager fallback,
-DATAFLOW_KERNELS=eager to force the baseline). GEMMs (cuBLAS), flash
-attention and embed scatter/gather (aten) stay direct calls. The chosen
-implementations are recorded via ``KernelSet.describe()`` — measured task
-costs are measurements of a specific kernel set.
+DATAFLOW_KERNELS=eager to force the baseline). Matrix-parameter GEMMs go
+through the linear seam (``blocks/linear.py`` LinearFwd/DGrad/WGrad
+triples, ``st["lin"]``/``a["lin"]``): the default bf16 lane makes the
+identical direct cuBLAS calls as before, and per-field dtype lanes plug in
+by policy + kernel registration with no block changes. Flash attention and
+embed scatter/gather (aten) stay direct calls. The chosen implementations
+are recorded via ``KernelSet.describe()`` — measured task costs are
+measurements of a specific kernel set.
 """
 from __future__ import annotations
 
@@ -55,6 +59,12 @@ from dataflow_training.blocks.base_blocks import (
     HeadLoss,
     _Base,
 )
+
+
+# the llama block's matrix-parameter fields — every application goes
+# through the linear seam (blocks/linear.py); norm weights (rmsnorm
+# kernels) and the loose embed/head tables are outside this list
+LLAMA3_LINEAR_FIELDS = ("wq", "wk", "wv", "wo", "w1", "w3", "w2")
 
 
 def tp_group_handle(ctx, task):
@@ -114,7 +124,7 @@ def tp_stage_down_resid(kctx, K, d, st):
     sums it in place (operand contract above), the residual joins
     after. No torch-allocator memory ever touches the wire."""
     comm = st["comm"]
-    torch.matmul(st.pop("s"), st["w"]["w2"], out=st["y"])
+    st["lin"]["w2"].fwd(kctx, st.pop("s"), st["w"], out=st["y"])
     tp_allreduce_inplace(comm.gh, comm.es, st["y"])
     st["y"].add_(st.pop("h_mid"))
 
@@ -124,6 +134,8 @@ class BlockFwd(_Base):
     """Transformer-block forward: runs the STAGES list, writing saved
     context (and metadata) fields through to the ctx buffers."""
     emit_context: bool = True
+
+    LINEAR_FIELDS = LLAMA3_LINEAR_FIELDS  # plain class attr, not a field
 
     def comm_state(self, ctx, es) -> dict:
         """Extras the forward stages need for collectives — nothing
@@ -148,6 +160,7 @@ class BlockFwd(_Base):
                         break
             extras = self._aux_temp_state(ctx) or {}
             extras["seg"] = self._attn_meta(ctx)
+            extras["lin"] = self.linears(self.layer_of(ctx.task))
             aux_counts = self._aux_counts_state(ctx)
             if aux_counts is not None:
                 extras["aux_counts"] = aux_counts
@@ -182,19 +195,18 @@ class BlockFwd(_Base):
     def _stage_qkv_rope(kctx, K, d, st):
         # write-through: rope/GEMM outputs land DIRECTLY in the ctx views
         # when a context is attached — no scratch double + no copy pass
-        h1, w, a = st["h1"], st["w"], st["a"]
-        qm = h1 @ w["wq"]
+        h1, w, a, lin = st["h1"], st["w"], st["a"], st["lin"]
+        qm = lin["wq"].fwd(kctx, h1, w)
         q = a["q"] if a is not None else torch.empty_like(qm)
         pos = st["seg"].positions   # always varlen; run_args prologue
         K.rope_fwd(kctx, qm, q, pos, d.n_heads, d.head_dim, d.rope_base)
-        km = h1 @ w["wk"]
+        km = lin["wk"].fwd(kctx, h1, w)
         k = a["k"] if a is not None else torch.empty_like(km)
         K.rope_fwd(kctx, km, k, pos, d.n_kv_heads, d.head_dim, d.rope_base)
         if a is not None:
-            v = a["v"]
-            torch.matmul(h1, w["wv"], out=v)
+            v = lin["wv"].fwd(kctx, h1, w, out=a["v"])
         else:
-            v = h1 @ w["wv"]
+            v = lin["wv"].fwd(kctx, h1, w)
         st.pop("h1")
         st.update(q=q, k=k, v=v)
 
@@ -215,11 +227,12 @@ class BlockFwd(_Base):
     @staticmethod
     def _stage_resid1_norm2(kctx, K, d, st):
         a = st["a"]
+        wo = st["lin"]["wo"]
         if a is not None:
-            h_mid = a["h_mid"]
-            torch.addmm(st["x"], st["attn_out"], st["w"]["wo"], out=h_mid)
+            h_mid = wo.fwd(kctx, st["attn_out"], st["w"], out=a["h_mid"],
+                           add=st["x"])
         else:
-            h_mid = st["x"] + st["attn_out"] @ st["w"]["wo"]
+            h_mid = wo.fwd(kctx, st["attn_out"], st["w"], add=st["x"])
         h2 = torch.empty_like(h_mid)
         rstd = torch.empty(d.tokens, dtype=torch.float32, device=h_mid.device)
         K.rmsnorm_fwd(kctx, h_mid, st["w"]["ffn_norm_w"], h2, rstd)
@@ -230,14 +243,14 @@ class BlockFwd(_Base):
 
     @staticmethod
     def _stage_up_proj(kctx, K, d, st):
-        h2, w, a = st["h2"], st["w"], st["a"]
+        h2, w, a, lin = st["h2"], st["w"], st["a"], st["lin"]
         if a is not None and "x1" in a:
-            torch.matmul(h2, w["w1"], out=a["x1"])
-            torch.matmul(h2, w["w3"], out=a["x3"])
+            lin["w1"].fwd(kctx, h2, w, out=a["x1"])
+            lin["w3"].fwd(kctx, h2, w, out=a["x3"])
             st["x1"], st["x3"] = a["x1"], a["x3"]
         else:
-            st["x1"] = h2 @ w["w1"]
-            st["x3"] = h2 @ w["w3"]
+            st["x1"] = lin["w1"].fwd(kctx, h2, w)
+            st["x3"] = lin["w3"].fwd(kctx, h2, w)
         st.pop("h2")
 
     @staticmethod
@@ -249,7 +262,8 @@ class BlockFwd(_Base):
 
     @staticmethod
     def _stage_down_resid(kctx, K, d, st):
-        torch.addmm(st["h_mid"], st.pop("s"), st["w"]["w2"], out=st["y"])
+        st["lin"]["w2"].fwd(kctx, st.pop("s"), st["w"], out=st["y"],
+                            add=st["h_mid"])
         st.pop("h_mid")
 
     # (stage_name, fn, emitted context fields)
@@ -298,6 +312,10 @@ class BlockFwd(_Base):
         st = {"x": x, "w": w, "a": a, "y": y}
         if extras:
             st.update(extras)
+        if "lin" not in st:
+            # direct-invocation callers (unit tests bypassing launch) get
+            # the outer-policy triples, like the segments default
+            st["lin"] = self.linears(None)
         skip_aux_temp = bool(st.get("aux_temp_ready"))
         for entry in self.STAGES[:count]:
             if skip_aux_temp and len(entry) > 3 and entry[3] == "aux_temp":
@@ -322,6 +340,7 @@ class BlockRecompute(BlockFwd):
             a = self.cl_for(ctx.task).views(self._out(ctx, 0))
             extras = self._aux_temp_state(ctx) or {}
             extras["seg"] = self._attn_meta(ctx)
+            extras["lin"] = self.linears(self.layer_of(ctx.task))
             # no tp extras: recompute stops at the last context-emitting
             # stage (up_proj), which is shard-transparent — the sliced
             # weight/context views carry the width; no collective runs
@@ -354,7 +373,8 @@ def replace_stage(stages: tuple, name: str, fn) -> tuple:
     return tuple(out)
 
 
-def dense_mlp_tail_bwd(kctx, K, dy, h_mid, rstd_ffn, x1, x3, w, acc, norm_bwd):
+def dense_mlp_tail_bwd(kctx, K, dy, h_mid, rstd_ffn, x1, x3, w, acc, norm_bwd,
+                       *, lin):
     """Dense SwiGLU MLP-tail backward, shared by every dense family/kind
     (previously duplicated verbatim in four `_backward` methods).
 
@@ -362,8 +382,9 @@ def dense_mlp_tail_bwd(kctx, K, dy, h_mid, rstd_ffn, x1, x3, w, acc, norm_bwd):
     ``h_mid`` / qwen3.5's ``xo``), ``rstd_ffn`` and the up-projections
     ``x1``/``x3`` — plus the packed weight views; accumulates
     w1/w3/w2/ffn_norm_w through ``acc`` and returns the residual-stream
-    gradient WITH the incoming ``dy`` added. Kernel-call order is
-    byte-identical to the per-family copies it replaced.
+    gradient WITH the incoming ``dy`` added. ``lin`` carries the w1/w3/w2
+    linear triples (blocks/linear.py); the default lane's kernel-call
+    order is byte-identical to the per-family copies it replaced.
 
     Scratch discipline: del each (t, .) temporary at last use so the
     caching allocator recycles it within the task; additive joins run in
@@ -373,21 +394,21 @@ def dense_mlp_tail_bwd(kctx, K, dy, h_mid, rstd_ffn, x1, x3, w, acc, norm_bwd):
     K.rmsnorm_apply(kctx, h_mid, rstd_ffn, w["ffn_norm_w"], h2)
     s = torch.empty_like(x1)
     K.swiglu_fwd_out(kctx, x1, x3, s)
-    ds = dy @ w["w2"].T
+    ds = lin["w2"].dgrad(kctx, dy, w)
     if acc.wanted("w2"):
-        acc("w2", s.T @ dy)
+        acc("w2", lin["w2"].wgrad(kctx, s, dy))
     del s
     dx1 = torch.empty_like(x1)
     dx3 = torch.empty_like(x3)
     K.swiglu_bwd(kctx, ds, x1, x3, dx1, dx3)
     del ds
     if acc.wanted("w1"):
-        acc("w1", h2.T @ dx1)
+        acc("w1", lin["w1"].wgrad(kctx, h2, dx1))
     if acc.wanted("w3"):
-        acc("w3", h2.T @ dx3)
+        acc("w3", lin["w3"].wgrad(kctx, h2, dx3))
     del h2
-    dh2 = dx1 @ w["w1"].T
-    dh2.addmm_(dx3, w["w3"].T)
+    dh2 = lin["w1"].dgrad(kctx, dx1, w)
+    lin["w3"].dgrad(kctx, dx3, w, into=dh2)
     del dx1, dx3
     dh_mid, dffn_norm = norm_bwd(dh2, h_mid, rstd_ffn, w["ffn_norm_w"])
     del dh2
@@ -397,7 +418,7 @@ def dense_mlp_tail_bwd(kctx, K, dy, h_mid, rstd_ffn, x1, x3, w, acc, norm_bwd):
 
 
 def tp_mlp_tail_bwd(kctx, K, dy, h_mid, rstd_ffn, x1, x3, w, acc,
-                    norm_bwd, gh, es, dh2_out):
+                    norm_bwd, gh, es, dh2_out, *, lin):
     """Tensor-parallel twin of dense_mlp_tail_bwd: identical math on
     the SHARD-width views (x1/x3 and the w1/w3/w2 views arrive
     sliced), with ONE collective — the residual-stream gradient dh2
@@ -410,26 +431,26 @@ def tp_mlp_tail_bwd(kctx, K, dy, h_mid, rstd_ffn, x1, x3, w, acc,
     K.rmsnorm_apply(kctx, h_mid, rstd_ffn, w["ffn_norm_w"], h2)
     s = torch.empty_like(x1)
     K.swiglu_fwd_out(kctx, x1, x3, s)
-    ds = dy @ w["w2"].T
+    ds = lin["w2"].dgrad(kctx, dy, w)
     if acc.wanted("w2"):
-        acc("w2", s.T @ dy)
+        acc("w2", lin["w2"].wgrad(kctx, s, dy))
     del s
     dx1 = torch.empty_like(x1)
     dx3 = torch.empty_like(x3)
     K.swiglu_bwd(kctx, ds, x1, x3, dx1, dx3)
     del ds
     if acc.wanted("w1"):
-        acc("w1", h2.T @ dx1)
+        acc("w1", lin["w1"].wgrad(kctx, h2, dx1))
     if acc.wanted("w3"):
-        acc("w3", h2.T @ dx3)
+        acc("w3", lin["w3"].wgrad(kctx, h2, dx3))
     del h2
     # the dh2 partial lands in dh2_out — the task's dx OUTPUT buffer,
     # unused until attention backward overwrites it at the end: an
     # engine-owned scratch with task-output lifetime (operand
     # contract in tp_allreduce_inplace). bf16 throughout, the same
     # gemm-then-addmm tree as the dense path.
-    torch.matmul(dx1, w["w1"].T, out=dh2_out)
-    dh2_out.addmm_(dx3, w["w3"].T)
+    lin["w1"].dgrad(kctx, dx1, w, out=dh2_out)
+    lin["w3"].dgrad(kctx, dx3, w, into=dh2_out)
     del dx1, dx3
     tp_allreduce_inplace(gh, es, dh2_out)   # partials -> full
     dh_mid, dffn_norm = norm_bwd(dh2_out, h_mid, rstd_ffn,
@@ -446,6 +467,8 @@ class BlockBwd(_Base):
     # ctx field holding the post-attention residual the MLP tail reads
     # (plain class attr, not a dataclass field)
     MLP_RESID_FIELD = "h_mid"
+
+    LINEAR_FIELDS = LLAMA3_LINEAR_FIELDS
 
     def launch(self, ctx: TaskContext) -> None:
         d = self.dims
@@ -466,7 +489,8 @@ class BlockBwd(_Base):
                         dw = self.gl_for(ctx.task).views(self._out(ctx, j))
                         break
                 dx = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
-            a = {**a, "_seg": self._attn_meta(ctx)}
+            a = {**a, "_seg": self._attn_meta(ctx),
+                 "lin": self.linears(self.layer_of(ctx.task))}
             aux_counts = self._aux_counts_state(ctx)
             if aux_counts is not None:
                 a["aux_counts"] = aux_counts
@@ -483,9 +507,12 @@ class BlockBwd(_Base):
         reads the run_args prologue metadata (cu/pos/max) that the LAUNCH
         merged into ``a`` under _pk_* keys (symmetric with the forward's
         ``st``). Direct-invocation callers (unit tests bypassing launch)
-        get the uniform default here."""
+        get the uniform default here — for the segments metadata AND the
+        linear triples (outer-policy resolution, like the forward's)."""
         acc = self._acc_fn(dw, accum)
         norm_bwd = self._norm_bwd_fn(kctx)
+        if "lin" not in a:
+            a = {**a, "lin": self.linears(None)}
         dh_mid = self._mlp_bwd(kctx, dy, a, w, dw, accum, acc, norm_bwd)
         self._attn_bwd(kctx, dh_mid, a, x, w, acc, norm_bwd, dx_out)
 
@@ -495,18 +522,21 @@ class BlockBwd(_Base):
         return {}
 
     def _mlp_bwd(self, kctx, dy, a, w, dw, accum, acc, norm_bwd):
+        # subclass _backward overrides all funnel through the shared
+        # template above, so a["lin"] is present here by construction
         return dense_mlp_tail_bwd(
             kctx, self.kernels, dy, a[self.MLP_RESID_FIELD], a["rstd_ffn"],
-            a["x1"], a["x3"], w, acc, norm_bwd,
+            a["x1"], a["x3"], w, acc, norm_bwd, lin=a["lin"],
         )
 
     def _attn_bwd(self, kctx, dh_mid, a, x, w, acc, norm_bwd, dx_out) -> None:
         d = self.dims
         K = self.kernels
         seg = a["_seg"]
-        d_attn = dh_mid @ w["wo"].T
+        lin = a["lin"]
+        d_attn = lin["wo"].dgrad(kctx, dh_mid, w)
         if acc.wanted("wo"):
-            acc("wo", a["attn_out"].T @ dh_mid)
+            acc("wo", lin["wo"].wgrad(kctx, a["attn_out"], dh_mid))
         dq, dk, dv = ops.flash_bwd(
             d_attn, a["q"], a["k"], a["v"], a["attn_out"], a["lse"],
             d.n_heads, d.n_kv_heads, d.head_dim,
@@ -522,15 +552,15 @@ class BlockBwd(_Base):
         h1 = torch.empty_like(x)
         K.rmsnorm_apply(kctx, x, a["rstd_attn"], w["attn_norm_w"], h1)
         if acc.wanted("wq"):
-            acc("wq", h1.T @ dq_r)
+            acc("wq", lin["wq"].wgrad(kctx, h1, dq_r))
         if acc.wanted("wk"):
-            acc("wk", h1.T @ dk_r)
+            acc("wk", lin["wk"].wgrad(kctx, h1, dk_r))
         if acc.wanted("wv"):
-            acc("wv", h1.T @ dv)
+            acc("wv", lin["wv"].wgrad(kctx, h1, dv))
         del h1
-        dh1 = dq_r @ w["wq"].T
-        dh1.addmm_(dk_r, w["wk"].T)
-        dh1.addmm_(dv, w["wv"].T)
+        dh1 = lin["wq"].dgrad(kctx, dq_r, w)
+        lin["wk"].dgrad(kctx, dk_r, w, into=dh1)
+        lin["wv"].dgrad(kctx, dv, w, into=dh1)
         del dq_r, dk_r, dv
         dx_n, dattn_norm = norm_bwd(dh1, x, a["rstd_attn"], w["attn_norm_w"])
         del dh1
@@ -580,7 +610,7 @@ class TpBlockBwd(BlockBwd):
         return tp_mlp_tail_bwd(
             kctx, self.kernels, dy, a[self.MLP_RESID_FIELD],
             a["rstd_ffn"], a["x1"], a["x3"], w, acc, norm_bwd,
-            gh=comm.gh, es=comm.es, dh2_out=comm.dx_out,
+            gh=comm.gh, es=comm.es, dh2_out=comm.dx_out, lin=a["lin"],
         )
 
 

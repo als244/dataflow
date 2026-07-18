@@ -47,6 +47,7 @@ class Qwen3BlockFwd(BlockFwd):
     @staticmethod
     def _stage_qkv_qknorm(kctx, K, d, st):
         h1, w, a = st["h1"], st["w"], st["a"]
+        # linear-triple conversion pending (exemplar: llama3)
         t, h, kvh, hd = d.tokens, d.n_heads, d.n_kv_heads, d.head_dim
         # write-through: projections land directly in the ctx views when a
         # context is attached (bwd reads PRE-norm qm/km from ctx)
@@ -132,6 +133,7 @@ class Qwen3BlockBwd(BlockBwd):
     def _attn_bwd(self, kctx, dh_mid, a, x, w, acc, norm_bwd, dx_out) -> None:
         # attention part (qk-norm variant); the shared dense MLP tail runs
         # first via BlockBwd._backward's template (_mlp_bwd)
+        # linear-triple conversion pending (exemplar: llama3)
         d = self.dims
         K = self.kernels
         t, h, kvh, hd = d.tokens, d.n_heads, d.n_kv_heads, d.head_dim

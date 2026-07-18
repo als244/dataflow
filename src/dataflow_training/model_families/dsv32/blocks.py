@@ -96,6 +96,7 @@ def _bits_for_bounds(idx, bounds, device):
 def _indexer_inputs(kctx, K, d, h1, q_lora_n, w, pos):
     """(q_idx (t, H*dI), k_idx (t, dI), wts (t, H) fp32-scaled) — the
     rope-first assembled indexer tensors."""
+    # linear-triple conversion pending (exemplar: llama3)
     t = h1.shape[0]
     hi, di, rope = d.index_n_heads, d.index_head_dim, d.qk_rope_dim
     # in-place strided rope on the assembled projections (rope-FIRST
@@ -237,6 +238,7 @@ class Dsv32DenseBlockFwd(Dsv32AuxTempState, Dsv32ProfileFill, Dsv3DenseBlockFwd)
         if src is None:
             # scratch path: recompute from x is unnecessary — mla_q kept
             # nothing; recompute from st? Rebuild from h1 kept in st.
+            # linear-triple conversion pending (exemplar: llama3)
             src = st["h1"] @ w["w_q_a"]
             q_lora_n = torch.empty_like(src)
             r = torch.empty(d.tokens, dtype=torch.float32, device=src.device)
@@ -343,6 +345,7 @@ class Dsv32DenseBlockBwd(Dsv32AuxTempState, Dsv32ProfileFill, Dsv3DenseBlockBwd)
                         bits_by_seq=None):
         """The indexer's KL training path (detached seam). Extracted so
         the train_indexer=False ablation skips it wholesale."""
+        # linear-triple conversion pending (exemplar: llama3)
         K = self.kernels
         t = d.tokens
         h, qk, rope = d.n_heads, d.qk_head_dim, d.qk_rope_dim
@@ -444,6 +447,7 @@ class Dsv32DenseBlockBwd(Dsv32AuxTempState, Dsv32ProfileFill, Dsv3DenseBlockBwd)
 
 
     def _attn_bwd(self, kctx, dh_mid, a, x, w, acc, norm_bwd, dx_out) -> None:
+        # linear-triple conversion pending (exemplar: llama3)
         d = self.dims
         K = self.kernels
         t = d.tokens
