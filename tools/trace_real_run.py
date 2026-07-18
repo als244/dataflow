@@ -78,19 +78,19 @@ def parity_line(measured: dict, sim: dict) -> str:
             f"sim {log_makespan_us(sim):.0f}us")
 
 
-def put_step_rounds(client, stream, rounds: int, step: int) -> int:
+def put_step_rounds(client, feed, rounds: int, step: int) -> int:
     """Put one step's token/target rounds; returns the step's valid
     count (the global denominator)."""
     valid = 0
     for r in range(rounds):
-        tok, tgt = stream(step * rounds + r)
+        tok, tgt = feed(step * rounds + r)
         valid += int((tgt >= 0).sum())
         client.put_object(f"tokens_0_{r}", tok.numpy().tobytes())
         client.put_object(f"targets_0_{r}", tgt.numpy().tobytes())
     return valid
 
 
-def capture_run(client, cfg, recipe, stream, steps: int, *,
+def capture_run(client, cfg, recipe, feed, steps: int, *,
                 budget_gib: float, seed: int = 11, log=print) -> dict:
     """K real steps with trace capture; returns {program, annotated,
     trace (last step), losses}."""
@@ -107,7 +107,7 @@ def capture_run(client, cfg, recipe, stream, steps: int, *,
     cd = cfg_dict(cfg)
     init_model(client, resolver_family(cfg), cd, seed=seed)
     R = cfg.grad_accum_rounds
-    valid0 = put_step_rounds(client, stream, R, 0)
+    valid0 = put_step_rounds(client, feed, R, 0)
     reg = client.register_program(
         program_to_dict(planned.program),
         resolver={"kind": "model_family",
@@ -120,7 +120,7 @@ def capture_run(client, cfg, recipe, stream, steps: int, *,
     losses = []
     fetch = [f"loss_0_{r}" for r in range(R)]
     for step in range(steps):
-        valid = valid0 if step == 0 else put_step_rounds(client, stream,
+        valid = valid0 if step == 0 else put_step_rounds(client, feed,
                                                          R, step)
         out = client.run(reg["prog_id"],
                          args={"step": step, "valid_rows": valid},
@@ -143,7 +143,7 @@ def main() -> int:
     from dataflow.core.jsonio import program_to_dict
     from dataflow_training.run import presets as P
     from dataflow_training.run.driver import daemon_client
-    from dataflow_training.data.fineweb import make_stream
+    from dataflow_training.data.fineweb import make_feed
     from dataflow_training.run.recipe import Recipe
 
     ap = argparse.ArgumentParser()
@@ -160,7 +160,7 @@ def main() -> int:
     recipe = Recipe(peak_lr=3e-4, min_lr=3e-5, warmup_steps=1,
                     total_steps=args.steps)
     with daemon_client(slab_gib=args.slab, log=print) as client:
-        cap = capture_run(client, cfg, recipe, make_stream(cfg.tokens),
+        cap = capture_run(client, cfg, recipe, make_feed(cfg.tokens),
                           args.steps, budget_gib=args.budget)
 
     measured = measured_log_from_trace(cap["trace"])

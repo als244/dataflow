@@ -21,16 +21,16 @@ def quiet_log(*args, **kwargs):
 
 def one_daemon_run(steps: int) -> list[float]:
     from dataflow_training.run.driver import daemon_client, run_engine
-    from dataflow_training.data.fineweb import make_stream
+    from dataflow_training.data.fineweb import make_feed
     from dataflow_training.run.presets import qwen3_smoke_preset
     from dataflow_training.run.recipe import Recipe
 
     cfg = qwen3_smoke_preset()
     recipe = Recipe(peak_lr=3e-4, min_lr=3e-5, warmup_steps=2,
                     total_steps=steps)
-    stream = make_stream(cfg.tokens)
+    feed = make_feed(cfg.tokens)
     with daemon_client(slab_gib=6.0, log=quiet_log) as client:
-        res = run_engine(client, cfg, recipe, stream, steps,
+        res = run_engine(client, cfg, recipe, feed, steps,
                          budget_gib=4.0, seed=11, log=quiet_log)
     return res.losses
 
@@ -40,6 +40,6 @@ def test_same_program_across_daemon_relaunch():
     first = one_daemon_run(3)
     second = one_daemon_run(3)   # same prog_id in a fresh daemon
     assert all(math.isfinite(x) for x in first + second), (first, second)
-    # same seed, same stream, fresh daemons: the runs are replicas
+    # same seed, same feed, fresh daemons: the runs are replicas
     for a, b in zip(first, second):
         assert abs(a - b) < 1e-6, (first, second)

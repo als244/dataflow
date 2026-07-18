@@ -21,7 +21,7 @@ from dataflow_training.run.presets import (  # noqa: E402
     smoke_preset,
 )
 from dataflow_training.run.driver import daemon_client, init_model  # noqa: E402
-from dataflow_training.data.fineweb import make_stream  # noqa: E402
+from dataflow_training.data.fineweb import make_feed  # noqa: E402
 from dataflow_training.run.recipe import Recipe  # noqa: E402
 from dataflow_training.model_families.families import resolve_family  # noqa: E402
 from dataflow_training.lowering.planning import plan_program  # noqa: E402
@@ -29,14 +29,14 @@ from dataflow_training.lowering.planning import plan_program  # noqa: E402
 STEPS = 3
 
 
-def run_steps(client, cfg, prog_id, stream) -> list:
+def run_steps(client, cfg, prog_id, feed) -> list:
     losses = []
     overflows = []
     fetch = [f"loss_0_{r}" for r in range(cfg.grad_accum_rounds)]
     for step in range(STEPS):
         valid = 0
         for r in range(cfg.grad_accum_rounds):
-            tok, tgt = stream(step * cfg.grad_accum_rounds + r)
+            tok, tgt = feed(step * cfg.grad_accum_rounds + r)
             valid += int((tgt >= 0).sum())
             client.put_object(f"tokens_0_{r}", tok.numpy().tobytes())
             client.put_object(f"targets_0_{r}", tgt.numpy().tobytes())
@@ -64,9 +64,9 @@ def test_same_daemon_rerun_bitwise(tmp_path):
     fam_name = resolver_family(cfg)
     with daemon_client(slab_gib=4.0, log=print) as client:
         init_model(client, fam_name, cd, seed=11)
-        stream = make_stream(cfg.tokens)
+        feed = make_feed(cfg.tokens)
         for r in range(cfg.grad_accum_rounds):
-            tok, tgt = stream(r)
+            tok, tgt = feed(r)
             client.put_object(f"tokens_0_{r}", tok.numpy().tobytes())
             client.put_object(f"targets_0_{r}", tgt.numpy().tobytes())
         reg = client.register_program(
@@ -75,11 +75,11 @@ def test_same_daemon_rerun_bitwise(tmp_path):
                       "hyper": recipe.hyper_spec()})
         assert not reg["bindings"]["missing_inputs"]
         first = run_steps(client, cfg, reg["prog_id"],
-                          make_stream(cfg.tokens))
+                          make_feed(cfg.tokens))
         # re-init: same seed, same bytes
         init_model(client, fam_name, cd, seed=11)
         second = run_steps(client, cfg, reg["prog_id"],
-                           make_stream(cfg.tokens))
+                           make_feed(cfg.tokens))
     assert first == second, (
         f"same-daemon rerun diverged: {first} vs {second} — an "
         f"engine/kernel change shifted numerics (in-process runs are "

@@ -23,7 +23,7 @@ import torch
 
 from dataflow_training.model_families import bridges
 from dataflow_training.run import presets as P
-from dataflow_training.data.fineweb import make_stream
+from dataflow_training.data.fineweb import make_feed
 
 CKPTS = _ROOT / "results" / "pretrain" / "checkpoints"
 
@@ -79,13 +79,13 @@ def main() -> int:
 
     B = args.batch_tokens // cfg.seq_len
     T = cfg.seq_len
-    stream = make_stream(args.batch_tokens, split="val")
+    feed = make_feed(args.batch_tokens, split="val")
     rounds = max(1, args.val_tokens // args.batch_tokens)
     total_nll = 0.0
     total_valid = 0
     with torch.no_grad():
         for r in range(rounds):
-            tok, tgt = stream(r)
+            tok, tgt = feed(r)
             valid = int((tgt >= 0).sum())
             loss = model.loss(tok.cuda().view(B, T), tgt.cuda().view(B, T))
             total_nll += float(loss) * valid

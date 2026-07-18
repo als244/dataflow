@@ -1,6 +1,6 @@
 """The infra gate: a tiny real-vocab model trained via BOTH the pytorch
 reference and the service daemon from a byte-identical init on the identical
-fineweb stream must produce aligned loss curves. Boots an in-process daemon;
+fineweb feed must produce aligned loss curves. Boots an in-process daemon;
 GPU + a few seconds."""
 import pytest
 import torch
@@ -12,18 +12,18 @@ def test_reference_vs_service_parity_smoke():
         pytest.skip("no CUDA")
     from dataflow_training.run import parity, presets as P
     from dataflow_training.run.driver import daemon_client, run_engine, run_reference
-    from dataflow_training.data.fineweb import make_stream
+    from dataflow_training.data.fineweb import make_feed
     from dataflow_training.run.recipe import Recipe
 
     cfg = P.smoke_preset()
     steps = 15
     recipe = Recipe(peak_lr=3e-4, min_lr=3e-5, warmup_steps=3, total_steps=steps)
-    stream = make_stream(cfg.tokens)
+    feed = make_feed(cfg.tokens)
     quiet = lambda *_a, **_k: None
 
-    ref = run_reference(cfg, recipe, stream, steps, seed=11, log=quiet)
+    ref = run_reference(cfg, recipe, feed, steps, seed=11, log=quiet)
     with daemon_client(slab_gib=4.0, log=quiet) as client:
-        eng = run_engine(client, cfg, recipe, stream, steps, budget_gib=4.0,
+        eng = run_engine(client, cfg, recipe, feed, steps, budget_gib=4.0,
                          seed=11, log=quiet)
 
     rep = parity.compare(ref.losses, eng.losses)

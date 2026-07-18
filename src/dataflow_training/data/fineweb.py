@@ -1,4 +1,4 @@
-"""Deterministic token stream over the llm.c fineweb10B shards.
+"""Deterministic token feed over the llm.c fineweb10B shards.
 
 The corpus is a directory of ``fineweb_{split}_*.bin`` shards in the llm.c
 gpt2 format: a 1024-byte header (``int32[256]``; ``[0]`` magic 20240520,
@@ -7,7 +7,7 @@ gpt2 token ids. gpt2's vocabulary is 50257 (max id 50256); we train at
 vocab 50304 (padded for GEMM alignment), so every id is a valid,
 in-range target and no ignore-index masking is needed.
 
-The stream is the ONE data seam shared by both training backends (the
+The feed is the ONE data seam shared by both training backends (the
 pytorch reference and the engine). It is a PURE function of the call
 index ``k`` — no RNG, no hidden cursor state — so the reference and the
 engine see byte-identical ``(tokens, targets)`` for the same ``k``. The
@@ -132,13 +132,13 @@ class ShardCorpus:
 
 
 @dataclass
-class FinewebStream:
-    """``stream(k) -> (tokens, targets)`` int32 CPU tensors, shape
+class FinewebFeed:
+    """``feed(k) -> (tokens, targets)`` int32 CPU tensors, shape
     ``(tokens_per_round,)``.
 
     Round ``k`` is corpus tokens ``[k*T : k*T + T]`` with ``targets`` the
     global shift by one (``[k*T + 1 : k*T + T + 1]``). Pure in ``k``.
-    ``start_token`` offsets the whole stream (e.g. a held-out val cursor).
+    ``start_token`` offsets the whole feed (e.g. a held-out val cursor).
     """
 
     corpus: ShardCorpus
@@ -161,10 +161,10 @@ class FinewebStream:
         return tokens, targets
 
 
-def make_stream(tokens_per_round: int, *, root: str | os.PathLike = DEFAULT_ROOT,
-                split: str = "train", start_token: int = 0) -> FinewebStream:
-    """Convenience: open the corpus and build a stream in one call."""
-    return FinewebStream(ShardCorpus(root, split), tokens_per_round,
+def make_feed(tokens_per_round: int, *, root: str | os.PathLike = DEFAULT_ROOT,
+                split: str = "train", start_token: int = 0) -> FinewebFeed:
+    """Convenience: open the corpus and build a feed in one call."""
+    return FinewebFeed(ShardCorpus(root, split), tokens_per_round,
                          start_token=start_token)
 
 
@@ -177,7 +177,7 @@ class DocIndex:
     """Global EOT positions over a ShardCorpus, built lazily per shard
     (one numpy scan of the mmap, ~100 ms per 100M-token shard, cached
     in-process). Provides the filtered->raw coordinate map for the
-    doc-aware stream: "filtered" = the corpus with every EOT removed."""
+    doc-aware feed: "filtered" = the corpus with every EOT removed."""
 
     def __init__(self, corpus: ShardCorpus):
         self.corpus = corpus
@@ -216,8 +216,8 @@ class DocIndex:
 
 
 @dataclass
-class DocAwareFinewebStream:
-    """``stream(k) -> (tokens, targets, seq_lens)``: doc-aware packing.
+class DocAwareFinewebFeed:
+    """``feed(k) -> (tokens, targets, seq_lens)``: doc-aware packing.
 
     Round ``k`` is ``tokens_per_round`` consecutive NON-EOT corpus tokens
     (documents in corpus order — the fixed-block token order minus the
@@ -295,10 +295,10 @@ class DocAwareFinewebStream:
         return (torch.from_numpy(toks), torch.from_numpy(tgts), tuple(lens))
 
 
-def make_doc_stream(tokens_per_round: int, max_seqlen: int, *,
+def make_doc_feed(tokens_per_round: int, max_seqlen: int, *,
                     root: str | os.PathLike = DEFAULT_ROOT,
                     split: str = "train",
-                    start_token: int = 0) -> DocAwareFinewebStream:
-    """Doc-aware packed stream (EOT-split varlen rounds)."""
-    return DocAwareFinewebStream(ShardCorpus(root, split), tokens_per_round,
+                    start_token: int = 0) -> DocAwareFinewebFeed:
+    """Doc-aware packed feed (EOT-split varlen rounds)."""
+    return DocAwareFinewebFeed(ShardCorpus(root, split), tokens_per_round,
                                  max_seqlen, start_token=start_token)

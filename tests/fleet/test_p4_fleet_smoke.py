@@ -26,7 +26,7 @@ def quiet(*a, **k):
 
 
 def test_fleet_dp_125m_smoke():
-    from dataflow_training.data.fineweb import make_stream
+    from dataflow_training.data.fineweb import make_feed
     from dataflow_training.distributed.fleet import run_fleet_dp
     from dataflow_training.run.presets import preset
     from dataflow_training.run.recipe import Recipe
@@ -35,7 +35,7 @@ def test_fleet_dp_125m_smoke():
     steps = 12
     recipe = Recipe(peak_lr=3e-4, min_lr=3e-5, warmup_steps=2,
                     total_steps=steps)
-    res = run_fleet_dp(cfg, recipe, make_stream(cfg.tokens), steps,
+    res = run_fleet_dp(cfg, recipe, make_feed(cfg.tokens), steps,
                        rank_rounds=(6, 2), budgets=(4.0, 4.0),
                        slabs=(12.0, 10.0), topology=TOPO, log=quiet)
     assert len(res.losses) == steps

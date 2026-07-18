@@ -29,7 +29,7 @@ _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT / "src"))
 
 from dataflow_training.run.driver import daemon_client, load_result, run_engine
-from dataflow_training.data.fineweb import make_stream
+from dataflow_training.data.fineweb import make_feed
 from dataflow_training.distributed.fleet import run_fleet_dp
 from dataflow_training.run.presets import preset
 from dataflow_training.run.recipe import Recipe
@@ -76,10 +76,10 @@ def run_config(cfg_base, tokens_global: int, steps: int, budgets,
         res_s = load_result(single_path)
     else:
         print(f"[sweep] {tag}: SINGLE ({rounds} rounds x {t_round} tok)")
-        stream = make_stream(cfg.tokens)
+        feed = make_feed(cfg.tokens)
         t0 = time.monotonic()
         with daemon_client(slab_gib=backing[0]) as client:
-            res_s = run_engine(client, cfg, recipe, stream, steps,
+            res_s = run_engine(client, cfg, recipe, feed, steps,
                                budget_gib=budgets[0], seed=seed,
                                log_every=max(1, steps // 2))
         res_s.meta["bringup_plus_train_wall_s"] = round(
@@ -93,9 +93,9 @@ def run_config(cfg_base, tokens_global: int, steps: int, budgets,
     else:
         split = (rounds * 3 // 4, rounds // 4)
         print(f"[sweep] {tag}: DIST rounds {split[0]}:{split[1]}")
-        stream = make_stream(cfg.tokens)
+        feed = make_feed(cfg.tokens)
         t0 = time.monotonic()
-        res_d = run_fleet_dp(cfg, recipe, stream, steps,
+        res_d = run_fleet_dp(cfg, recipe, feed, steps,
                              rank_rounds=split, budgets=tuple(budgets),
                              slabs=tuple(backing), topology=topo,
                              seed=seed, log_every=max(1, steps // 2))

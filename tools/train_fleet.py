@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from dataflow_training.run import parity
 from dataflow_training.run.driver import load_result
-from dataflow_training.data.fineweb import make_stream
+from dataflow_training.data.fineweb import make_feed
 from dataflow_training.distributed.fleet import run_fleet_dp
 from dataflow_training.run.presets import preset
 from dataflow_training.run.recipe import Recipe
@@ -111,12 +111,12 @@ def main() -> None:
             if not sep or not sock:
                 p.error(f"--attach wants HOST=SOCK, got {item!r}")
             attach[name] = sock
-        stream = make_stream(cfg.tokens)
+        feed = make_feed(cfg.tokens)
         profile = None
         if args.profile:
             profile = {"start": args.profile_start_before_step,
                        "stop": args.profile_stop_after_step}
-        res = run_fleet_dp(cfg, recipe, stream, args.steps,
+        res = run_fleet_dp(cfg, recipe, feed, args.steps,
                            rank_rounds=rounds,
                            budgets=floats_or_none(args.budgets),
                            slabs=floats_or_none(args.slabs),

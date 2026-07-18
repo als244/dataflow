@@ -6,7 +6,7 @@ Subcommands:
   parity   one preset, reference + engine at N device budgets -> curves + report
   scaling  the ladder, one backend/budget -> loss curves for the scaling study
 
-All backends share the deterministic fineweb stream, the cosine recipe, and a
+All backends share the deterministic fineweb feed, the cosine recipe, and a
 byte-identical seeded init (the reference bridges the engine's packed bytes).
 """
 from __future__ import annotations
@@ -27,7 +27,7 @@ from dataflow_training.run.driver import (
     run_engine,
     run_reference,
 )
-from dataflow_training.data.fineweb import make_doc_stream, make_stream
+from dataflow_training.data.fineweb import make_doc_feed, make_feed
 from dataflow_training.run.recipe import Recipe
 
 RESULTS = _ROOT / "results" / "pretrain"
@@ -38,13 +38,13 @@ def _recipe(steps: int, *, peak_lr: float = 3e-4) -> Recipe:
                   warmup_steps=max(1, steps // 10), total_steps=steps)
 
 
-def _stream(cfg, data_mode: str):
-    """The run's token stream: "block" = llm.c fixed windows (uniform
+def _feed(cfg, data_mode: str):
+    """The run's token feed: "block" = llm.c fixed windows (uniform
     rows, EOT flows through); "doc" = doc-aware packed varlen (EOT-split
     segments, per-round seq_lens — both backends' packed modes)."""
     if data_mode == "doc":
-        return make_doc_stream(cfg.tokens, cfg.seq_len)
-    return make_stream(cfg.tokens)
+        return make_doc_feed(cfg.tokens, cfg.seq_len)
+    return make_feed(cfg.tokens)
 
 
 def _log(msg: str) -> None:
@@ -82,20 +82,20 @@ def cmd_smoke(args) -> int:
     cfg = P.smoke_preset()
     steps = args.steps
     recipe = _recipe(steps)
-    stream = make_stream(cfg.tokens)
+    feed = make_feed(cfg.tokens)
     lnV = math.log(cfg.vocab_size)
     _log(f"SMOKE: {cfg.n_layers}L d{cfg.d_model} vocab{cfg.vocab_size} "
          f"seq{cfg.seq_len}x{cfg.batch} ga{cfg.grad_accum_rounds} "
          f"steps{steps}  ln(V)={lnV:.3f}")
 
-    ref = run_reference(cfg, recipe, stream, steps, seed=11, log=_log)
+    ref = run_reference(cfg, recipe, feed, steps, seed=11, log=_log)
     with daemon_client(slab_gib=args.slab, log=_log) as client:
         # seed the store, then check the daemon's init byte-matches the
         # reference's (before any run() mutates the weights)
         init_model(client, "llama3", P.cfg_dict(cfg), seed=11)
         identical = _init_bytes_identical(cfg, client, seed=11)
         _log(f"init byte-identity (daemon vs reference): {identical}")
-        eng = run_engine(client, cfg, recipe, stream, steps,
+        eng = run_engine(client, cfg, recipe, feed, steps,
                          budget_gib=args.budget, seed=11, log=_log)
 
     RESULTS.mkdir(parents=True, exist_ok=True)
@@ -118,14 +118,14 @@ def cmd_parity(args) -> int:
     cfg = P.resolve_preset(args.preset)
     steps = args.steps
     recipe = _recipe(steps)
-    stream = make_stream(cfg.tokens)
+    feed = make_feed(cfg.tokens)
     budgets = [float(b) for b in args.budgets.split(",")]
     lnV = math.log(cfg.vocab_size)
     RESULTS.mkdir(parents=True, exist_ok=True)
     _log(f"PARITY {args.preset}: steps{steps} budgets{budgets} "
          f"tok/step={P.tokens_per_step(cfg)}")
 
-    ref = run_reference(cfg, recipe, stream, steps, seed=11,
+    ref = run_reference(cfg, recipe, feed, steps, seed=11,
                         grad_checkpoint=args.grad_checkpoint, log=_log)
     ref.save(RESULTS / f"{args.preset}_reference.json")
     # the reference and the engine share this process's CUDA context:
@@ -141,7 +141,7 @@ def cmd_parity(args) -> int:
     engs = {}
     with daemon_client(slab_gib=args.slab, log=_log) as client:
         for b in budgets:
-            eng = run_engine(client, cfg, recipe, stream, steps,
+            eng = run_engine(client, cfg, recipe, feed, steps,
                              budget_gib=b, seed=11, log=_log)
             eng.save(RESULTS / f"{args.preset}_engine_{b:g}gib.json")
             engs[b] = eng
@@ -173,8 +173,8 @@ def cmd_scaling(args) -> int:
     if args.backend == "reference":
         for name in presets:
             cfg = P.preset(name)
-            stream = make_stream(cfg.tokens)
-            r = run_reference(cfg, recipe, stream, steps, seed=11,
+            feed = make_feed(cfg.tokens)
+            r = run_reference(cfg, recipe, feed, steps, seed=11,
                               grad_checkpoint=args.grad_checkpoint, log=_log)
             r.meta["preset"] = name
             r.meta["params"] = P.param_counts(cfg)
@@ -183,8 +183,8 @@ def cmd_scaling(args) -> int:
         with daemon_client(slab_gib=args.slab, log=_log) as client:
             for name in presets:
                 cfg = P.preset(name)
-                stream = make_stream(cfg.tokens)
-                r = run_engine(client, cfg, recipe, stream, steps,
+                feed = make_feed(cfg.tokens)
+                r = run_engine(client, cfg, recipe, feed, steps,
                                budget_gib=args.budget, seed=11, log=_log)
                 r.meta["preset"] = name
                 r.meta["params"] = P.param_counts(cfg)
@@ -208,7 +208,7 @@ def cmd_reference(args) -> int:
     if overrides:
         cfg = replace(cfg, **overrides)
     recipe = _recipe(args.steps, peak_lr=args.peak_lr)
-    stream = _stream(cfg, args.data)
+    feed = _feed(cfg, args.data)
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     ck_dir = None
@@ -222,7 +222,7 @@ def cmd_reference(args) -> int:
          f"grad_checkpoint={args.grad_checkpoint} "
          f"tokens/step={cfg.seq_len * cfg.batch * cfg.grad_accum_rounds} "
          f"ckpt={args.checkpoint_every or 'off'}")
-    res = run_reference(cfg, recipe, stream, args.steps,
+    res = run_reference(cfg, recipe, feed, args.steps,
                         grad_checkpoint=args.grad_checkpoint,
                         checkpoint_every=args.checkpoint_every,
                         checkpoint_dir=ck_dir, resume=args.resume,
@@ -235,7 +235,7 @@ def cmd_reference(args) -> int:
 def cmd_engine(args) -> int:
     """Engine-ONLY run (one daemon, one GPU): the service engine
     trained end to end, the curve saved for comparison against a
-    reference yardstick (same seed/stream/recipe conventions).
+    reference yardstick (same seed/feed/recipe conventions).
     Long runs checkpoint host-locally and resume with --resume."""
     from dataclasses import replace
 
@@ -248,7 +248,7 @@ def cmd_engine(args) -> int:
     if overrides:
         cfg = replace(cfg, **overrides)
     recipe = _recipe(args.steps, peak_lr=args.peak_lr)
-    stream = _stream(cfg, args.data)
+    feed = _feed(cfg, args.data)
     ck_dir = None
     if args.checkpoint_every:
         ck_dir = RESULTS / "checkpoints" / Path(args.out).stem
@@ -258,7 +258,7 @@ def cmd_engine(args) -> int:
          f"tokens/step={cfg.seq_len * cfg.batch * cfg.grad_accum_rounds} "
          f"ckpt={args.checkpoint_every or 'off'}")
     with daemon_client(slab_gib=args.slab, log=_log) as client:
-        res = run_engine(client, cfg, recipe, stream, args.steps,
+        res = run_engine(client, cfg, recipe, feed, args.steps,
                          budget_gib=args.budget, seed=11, log=_log,
                          checkpoint_every=args.checkpoint_every,
                          checkpoint_dir=ck_dir, resume=args.resume)

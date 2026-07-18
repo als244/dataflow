@@ -1,6 +1,6 @@
 """One training loop, two backends: the pytorch REFERENCE and the ENGINE
 SERVICE (dataflowd). Both consume the same recipe, the same deterministic
-token stream, and the same seeded init (the reference bridges the engine's
+token feed, and the same seeded init (the reference bridges the engine's
 packed init bytes), so the only variable is the execution engine.
 
 The reference is a plain pytorch loop over ``reference_models.Llama3`` with an
@@ -229,7 +229,7 @@ def reference_optimizer(model, cfg, recipe: Recipe):
 def save_reference_checkpoint(path, step: int, model, opt, res) -> None:
     """Atomic torch checkpoint for long reference runs: model + adamw
     moments (ordered like opt.params) + the curve so far. The data
-    stream is a pure function of the round index and the twin has no
+    feed is a pure function of the round index and the twin has no
     dropout, so (states, step) is the complete resume record."""
     import os
 
@@ -261,12 +261,12 @@ def load_reference_checkpoint(path, model, opt, res) -> int:
     return int(ck["step"])
 
 
-def run_reference(cfg, recipe: Recipe, stream, steps: int, *, seed: int = 11,
+def run_reference(cfg, recipe: Recipe, feed, steps: int, *, seed: int = 11,
                   device: str = "cuda", grad_checkpoint: bool = False,
                   checkpoint_every: int | None = None, checkpoint_dir=None,
                   resume: bool = False, partial_out=None,
                   log=print, log_every: int = 10) -> RunResult:
-    """Train ``reference_models.Llama3`` from the engine's seeded init on ``stream``."""
+    """Train ``reference_models.Llama3`` from the engine's seeded init on ``feed``."""
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow_training.model_families.families import resolve_family
 
@@ -320,12 +320,12 @@ def run_reference(cfg, recipe: Recipe, stream, steps: int, *, seed: int = 11,
         rounds = []
         step_valid = 0
         for r in range(R):
-            got = stream(step * R + r)
+            got = feed(step * R + r)
             rounds.append(got)
             step_valid += int((got[1] >= 0).sum())
         for got in rounds:
             tok, tgt = got[0], got[1]
-            # doc-aware streams yield (tokens, targets, seq_lens): the
+            # doc-aware feeds yield (tokens, targets, seq_lens): the
             # round runs PACKED (one (1, t) row, per-sequence positions,
             # block-diagonal attention) — the twins' varlen-native mode
             lens = got[2] if len(got) > 2 else None
@@ -495,7 +495,7 @@ def latest_engine_checkpoint(ckpt_dir) -> Path | None:
     return found[-1].parent if found else None
 
 
-def run_engine(client, cfg, recipe: Recipe, stream, steps: int, *,
+def run_engine(client, cfg, recipe: Recipe, feed, steps: int, *,
                budget_gib: float, seed: int = 11, recompute: bool = True,
                log=print, log_every: int = 10,
                checkpoint_every: int | None = None,
@@ -508,7 +508,7 @@ def run_engine(client, cfg, recipe: Recipe, stream, steps: int, *,
     ``resume``: restore the newest complete checkpoint AFTER init and
     registration, then continue — the engine is stateless per step,
     so bytes + step index + recorded losses are the whole trajectory
-    (data rounds re-derive from the stream by step index)."""
+    (data rounds re-derive from the feed by step index)."""
     import shutil
 
     from dataflow.core.jsonio import program_to_dict
@@ -526,7 +526,7 @@ def run_engine(client, cfg, recipe: Recipe, stream, steps: int, *,
     lens_by_step: dict[int, dict] = {}
 
     def put_round(step: int, r: int) -> None:
-        got = stream(step * R + r)
+        got = feed(step * R + r)
         tok, tgt = got[0], got[1]
         if len(got) > 2:
             # doc-aware round: per-round cumulative boundaries ride
