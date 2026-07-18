@@ -71,3 +71,16 @@ def compare_to_sim_eventlog(trace: RunTrace, event_log: Any, *, time_tol: float 
         peak_sim=event_log.peak_fast_memory_bytes,
         peak_runtime=trace.peak_fast_bytes,
     )
+
+
+def trace_to_dict(trace: RunTrace) -> dict:
+    """Wire form of a RunTrace: measured intervals + memory trace +
+    peak, JSON-clean. Events are omitted (debug-volume; the interval
+    timeline is what sim comparison and the webapp consume)."""
+    return {
+        "intervals": [[iv.task_id, iv.track, iv.start, iv.end]
+                      for iv in trace.intervals],
+        "memory_trace": [[t, used] for t, used in trace.memory_trace],
+        "peak_fast_bytes": trace.peak_fast_bytes,
+        "makespan_us": trace.makespan_us(),
+    }

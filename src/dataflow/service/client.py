@@ -384,11 +384,12 @@ class EngineClient:
 
     def run(self, prog_id: str, *, args: dict | None = None,
             rebind: dict | None = None, fetch=(), label=None,
-            wait=True, timeout=None):
+            trace: bool = False, wait=True, timeout=None):
         return self._call("run", {"prog_id": prog_id,
                                   "args": args or {},
                                   "rebind": rebind or {},
-                                  "fetch": list(fetch), "label": label},
+                                  "fetch": list(fetch), "label": label,
+                                  "trace": bool(trace)},
                           wait=wait, timeout=timeout)
 
     def cancel_run(self, run_id: str):

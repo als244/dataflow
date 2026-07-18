@@ -181,6 +181,22 @@ def qwen35moe_smoke_preset():
     )
 
 
+def qwen35_smoke_preset():
+    """Tiny qwen3.5-dense hybrid smoke: 3 delta-rule + 1 full-attention
+    layer (interval 4), the same attention geometry as the qwen35moe
+    smoke, dense SwiGLU tail."""
+    from dataflow.training.models.qwen35 import ShapedQwen35Config
+
+    return ShapedQwen35Config(
+        n_layers=4, d_model=256, full_attention_interval=4, n_heads=4,
+        n_kv_heads=2, head_dim=64, partial_rotary_factor=0.25,
+        lin_k_heads=2, lin_v_heads=4, lin_k_head_dim=32, lin_v_head_dim=32,
+        lin_conv_kernel=4, d_ff=1024, vocab_size=VOCAB_SIZE,
+        seq_len=SMOKE_SEQ_LEN, batch=SMOKE_BATCH,
+        grad_accum_rounds=SMOKE_GRAD_ACCUM_ROUNDS,
+    )
+
+
 # MLA-trio engine-parity smoke twins. LBL-OFF like the other MoE smokes
 # (aux_coef=0 AND bias_update_speed=0 — no load-balance functions on either
 # side); dsv32/glm52 additionally freeze the indexer (train_indexer=False):
