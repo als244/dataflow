@@ -43,6 +43,8 @@ from . import (  # noqa: F401,E402
     dsa_flashmla,
     embed,
     gated_rmsnorm,
+    gelu,
+    layernorm,
     moe_dispatch,
     moe_grouped_gemm,
     moe_router,

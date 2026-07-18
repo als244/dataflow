@@ -54,6 +54,11 @@ from dataflow_training.model_families.glm52.presets import (  # noqa: E402,F401
     glm52_cfg_dict,
     glm52_smoke_preset,
 )
+from dataflow_training.model_families.gpt2.presets import (  # noqa: E402,F401
+    gpt2_cfg_dict,
+    gpt2_preset,
+    gpt2_smoke_preset,
+)
 from dataflow_training.model_families.llama3.presets import (  # noqa: E402,F401
     LADDER,
     LADDER_NAMES,
@@ -98,6 +103,8 @@ def resolve_preset(name: str):
         return dsv3_2b_preset(load_balance=True)
     if name == "dsv3_2b_nolbl":
         return dsv3_2b_preset(load_balance=False)
+    if name in ("gpt2_124m", "gpt2"):
+        return gpt2_preset()
     return preset(name)
 
 
@@ -105,6 +112,7 @@ RESOLVER_FAMILY_BY_TYPE = {
     "ShapedDsv3Config": "dsv3",
     "ShapedDsv32Config": "dsv32",
     "ShapedGlm52Config": "glm52",
+    "ShapedGpt2Config": "gpt2",
     "ShapedLlamaConfig": "llama3",
     "ShapedOlmoeConfig": "olmoe",
     "ShapedQwen3Config": "qwen3",
@@ -126,6 +134,7 @@ CFG_DICT_BY_TYPE = {
     "ShapedDsv3Config": dsv3_cfg_dict,
     "ShapedDsv32Config": dsv32_cfg_dict,
     "ShapedGlm52Config": glm52_cfg_dict,
+    "ShapedGpt2Config": gpt2_cfg_dict,
     "ShapedLlamaConfig": llama3_cfg_dict,
     "ShapedOlmoeConfig": olmoe_cfg_dict,
     "ShapedQwen3Config": qwen3_cfg_dict,

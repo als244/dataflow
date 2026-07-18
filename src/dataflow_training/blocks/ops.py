@@ -84,6 +84,72 @@ def rmsnorm_noweight_reference(x: torch.Tensor) -> torch.Tensor:
     return (xf * rstd).to(x.dtype)
 
 
+# --- layernorm (gpt2: learned gain AND bias, mean-centered) ---------------------
+
+LN_EPS = 1e-5
+
+
+def layernorm_fwd(x: torch.Tensor, w: torch.Tensor, b: torch.Tensor | None,
+                  out: torch.Tensor, mean_out: torch.Tensor,
+                  rstd_out: torch.Tensor) -> None:
+    """fp32 mean/rstd saved; the normalized value rounds to the storage
+    dtype BEFORE the affine (the repo's norm-kernel convention, mirrored
+    by the reference twins). ``b`` None = bias-free variant."""
+    xf = x.float()
+    mean = xf.mean(-1)
+    rstd = torch.rsqrt((xf - mean.unsqueeze(-1)).pow(2).mean(-1) + LN_EPS)
+    mean_out.copy_(mean)
+    rstd_out.copy_(rstd)
+    xhat = ((xf - mean.unsqueeze(-1)) * rstd.unsqueeze(-1)).to(x.dtype)
+    y = xhat * w if b is None else xhat * w + b
+    out.copy_(y.to(x.dtype))
+
+
+def layernorm_apply(x: torch.Tensor, mean: torch.Tensor, rstd: torch.Tensor,
+                    w: torch.Tensor, b: torch.Tensor | None) -> torch.Tensor:
+    """Recompute the normalized output from saved (mean, rstd)."""
+    xhat = ((x.float() - mean.unsqueeze(-1)) * rstd.unsqueeze(-1)).to(x.dtype)
+    y = xhat * w if b is None else xhat * w + b
+    return y.to(x.dtype)
+
+
+def layernorm_bwd(
+    dy: torch.Tensor, x: torch.Tensor, mean: torch.Tensor,
+    rstd: torch.Tensor, w: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Returns (dx, dw fp32, db fp32). Row-chunked like rmsnorm_bwd (per-row
+    math unchanged; only the dw/db accumulation order differs, fp32 noise)."""
+    dx = torch.empty_like(x)
+    d = x.shape[-1]
+    dw_acc = torch.zeros(d, device=x.device, dtype=torch.float32)
+    db_acc = torch.zeros(d, device=x.device, dtype=torch.float32)
+    wf = w.float()
+    t = x.shape[0]
+    for lo in range(0, t, ROWWISE_CHUNK):
+        hi = min(lo + ROWWISE_CHUNK, t)
+        xf = x[lo:hi].float()
+        dyf = dy[lo:hi].float()
+        xhat = (xf - mean[lo:hi].unsqueeze(-1)) * rstd[lo:hi].unsqueeze(-1)
+        dxhat = dyf * wf
+        dw_acc += (dyf * xhat).sum(0)
+        db_acc += dyf.sum(0)
+        dx[lo:hi] = (
+            rstd[lo:hi].unsqueeze(-1)
+            * (dxhat - dxhat.mean(-1, keepdim=True)
+               - xhat * (dxhat * xhat).mean(-1, keepdim=True))
+        ).to(x.dtype)
+    return dx, dw_acc, db_acc
+
+
+def layernorm_reference(x: torch.Tensor, w: torch.Tensor,
+                        b: torch.Tensor) -> torch.Tensor:
+    xf = x.float()
+    mean = xf.mean(-1, keepdim=True)
+    rstd = torch.rsqrt((xf - mean).pow(2).mean(-1, keepdim=True) + LN_EPS)
+    xhat = ((xf - mean) * rstd).to(x.dtype)
+    return (xhat * w + b).to(x.dtype)
+
+
 # --- rope (llama rotate-half) ----------------------------------------------------
 
 # --- sequence structure -----------------------------------------------------

@@ -44,6 +44,15 @@ def run_family_parity(cfg, *, steps: int = 15, slab_gib: float = 6.0,
 
 
 @pytest.mark.gpu
+def test_gpt2_engine_vs_reference():
+    if not torch.cuda.is_available():
+        pytest.skip("no CUDA")
+    from dataflow_training.run.presets import gpt2_smoke_preset
+
+    run_family_parity(gpt2_smoke_preset())
+
+
+@pytest.mark.gpu
 def test_qwen3_engine_vs_reference():
     if not torch.cuda.is_available():
         pytest.skip("no CUDA")

@@ -1035,6 +1035,123 @@ def qwen35moe_attn_activation_layout(dims: Qwen35MoeDims) -> PackedLayout:
         _qwen35_attn_attn_ctx(dims) + moe_context_specs(dims, dims.moe, aux_temp=True))
 
 
+@dataclass(frozen=True)
+class Gpt2Dims:
+    """GPT-2 dimensions (the nanogpt-speedrun baseline shape): pre-LN
+    blocks with LayerNorm (gain AND bias), fused c_attn QKV (one (d, 3d)
+    matrix + bias), full MHA (no GQA, no rope — LEARNED positions),
+    GELU-tanh MLP with biases, untied embed/head. ``n_ctx`` is the
+    learned-position table's row count — every segment of a packed round
+    must fit inside it (positions restart per sequence)."""
+
+    d_model: int
+    n_heads: int
+    d_ff: int
+    vocab_size: int
+    tokens: int
+    seq_len: int
+    n_ctx: int
+    # tied embed/head (config option; classic GPT-2 ties, the repo default
+    # is untied like the llama3 baselines): ONE W_embed packs
+    # [w | wpe | final_norm_w | final_norm_b] and serves both ends
+    tied: bool = False
+    # biases in Linears AND LayerNorms (the nanoGPT flag): True = classic
+    # GPT-2; False = the bias-free variant — every b_*/*_norm_b field
+    # drops out of the layouts entirely
+    use_bias: bool = True
+    dtypes: DTypePolicy = DTypePolicy()
+    # explicit per-sequence lengths for ragged packing (sum == tokens);
+    # None = uniform sequences of seq_len
+    seq_lens: tuple[int, ...] | None = None
+
+    @property
+    def head_dim(self) -> int:
+        return self.d_model // self.n_heads
+
+    @property
+    def kv_dim(self) -> int:
+        return self.d_model          # full MHA: kv width == q width
+
+    # per-field optimizer assignment (tasks/optim.py): "adamw" (default,
+    # historical behavior) | "sgd" | "sgdm" | "muon" | an OptPolicy with
+    # fnmatch overrides. update_specials (frozen) stay the highest-priority
+    # per-field override on top of this.
+    opt_policy: object = "adamw"
+
+
+def gpt2_weight_layout(dims: Gpt2Dims, layer: int | None = None) -> PackedLayout:
+    d, ff = dims.d_model, dims.d_ff
+    specs = [
+        ("attn_norm_w", (d,)),
+        ("attn_norm_b", (d,)),
+        ("w_qkv", (d, 3 * d)),
+        ("b_qkv", (3 * d,)),
+        ("wo", (d, d)),
+        ("b_o", (d,)),
+        ("ffn_norm_w", (d,)),
+        ("ffn_norm_b", (d,)),
+        ("w_fc", (d, ff)),
+        ("b_fc", (ff,)),
+        ("w_proj", (ff, d)),
+        ("b_proj", (d,)),
+    ]
+    if not dims.use_bias:
+        specs = [s for s in specs
+                 if not (s[0].startswith("b_") or s[0].endswith("_norm_b"))]
+    return PackedLayout.build(_param_specs(dims, specs, layer=layer))
+
+
+def gpt2_activation_layout(dims: Gpt2Dims) -> PackedLayout:
+    """Saved-for-backward activations for one GPT-2 block forward: both
+    LayerNorm statistics pairs (mean AND rstd — mean-centered norms, unlike
+    the rms families), post-projection q/k/v, flash lse + attention output,
+    the post-attention residual, and the pre-GELU MLP projection. The
+    normed inputs h1/h2 are recomputed in backward from the statistics."""
+    t, d, ff, h = dims.tokens, dims.d_model, dims.d_ff, dims.n_heads
+    return PackedLayout.build([
+        ("mean_attn", (t,), "fp32"),
+        ("rstd_attn", (t,), "fp32"),
+        ("q", (t, d), "bf16"),
+        ("k", (t, d), "bf16"),
+        ("v", (t, d), "bf16"),
+        _lse_spec(dims, h),
+        ("attn_out", (t, d), "bf16"),
+        ("h_mid", (t, d), "bf16"),
+        ("mean_ffn", (t,), "fp32"),
+        ("rstd_ffn", (t,), "fp32"),
+        ("x_fc", (t, ff), "bf16"),
+    ])
+
+
+def gpt2_embed_layout(dims: Gpt2Dims) -> PackedLayout:
+    """W_embed packs the token table AND the learned-position table; the
+    TIED variant appends the final LayerNorm pair so one object serves the
+    head too (policy ns follows the serving side: "head" when tied)."""
+    specs = [
+        ("w", (dims.vocab_size, dims.d_model)),
+        ("wpe", (dims.n_ctx, dims.d_model)),
+    ]
+    if dims.tied:
+        specs.append(("final_norm_w", (dims.d_model,)))
+        if dims.use_bias:
+            specs.append(("final_norm_b", (dims.d_model,)))
+    return PackedLayout.build(
+        _param_specs(dims, specs, ns="head" if dims.tied else "embed"))
+
+
+def gpt2_head_layout(dims: Gpt2Dims) -> PackedLayout:
+    """W_head packs the projection table plus the final LayerNorm's gain
+    AND (use_bias) bias (policy names "head.w", "head.final_norm_w",
+    "head.final_norm_b")."""
+    specs = [
+        ("w", (dims.vocab_size, dims.d_model)),
+        ("final_norm_w", (dims.d_model,)),
+    ]
+    if dims.use_bias:
+        specs.append(("final_norm_b", (dims.d_model,)))
+    return PackedLayout.build(_param_specs(dims, specs, ns="head"))
+
+
 def embed_weight_layout(dims) -> PackedLayout:
     return PackedLayout.build(
         _param_specs(dims, [("w", (dims.vocab_size, dims.d_model))], ns="embed")

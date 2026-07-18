@@ -204,6 +204,31 @@ on a remote overlay, the sync set must include EVERYTHING the harness
 imports (`reference_models/` lives at the repo root, outside `src/`).
 A stale twin produces failures that look exactly like engine bugs.
 
+**18. Zero-init parameters make the one-step PARAM entry a per-element
+sign lottery.** For a zero-init field (every gpt2 bias), one adamw step
+from zero moments moves each element by exactly ±lr·sign(grad) — and
+|p₀| = 0 removes the dilution that hides sign disagreements everywhere
+else. Any element whose TRUE gradient is near zero flips by coin on
+each side independently: one flipped element of 160 reads as rel 0.16;
+a whole structurally-zero section reads as rel 0.6 with cosine 0.8.
+Two sub-cases, one mechanism:
+  - *near-zero elements* of a real-gradient bias (which elements are
+    near-tied varies with packing shape — the ragged case flips
+    different ones than uniform);
+  - *exactly-zero sections*: softmax attention is EXACTLY invariant to
+    the key bias (a constant added to every key shifts each row's
+    scores uniformly; softmax cancels it), so grad b_k is fp32 noise
+    around 0 — measured ~1e-6 against 5e-4/7e-2 real q/v sections.
+    Under adamw the parameter random-walks at ±lr per step (bounded by
+    weight decay in real runs; the loss is invariant regardless).
+Instrument split: gate the param entry with `param_atol` at the ~2·lr
+walk scale (raw elementwise gap; the GRAD entry stays live and sharp —
+bias grads track at rel ~3e-3), and add a per-section grad probe for
+any structurally-zero section (`capture=True` exposes
+`engine_grads`/`twin_grads` in twin names). A real k-gradient appearing
+on EITHER side is an attention-math bug on that side — the section
+probe fails it; a whole-entry envelope would have hidden it.
+
 ## Onboarding a new family
 
 1. Twin in `reference_models/`: self-contained, paper semantics,
@@ -231,6 +256,7 @@ Gradient (dW-space) medians / worst / min cosine, uniform ≈ ragged:
 
 | tier | families | grad median | worst field | min cos |
 |---|---|---|---|---|
+| dense, no rope/GQA | gpt2 | 0.6–1.3e-3 | ~4e-3 (norm gains) | ≥0.99999 |
 | dense + attention | llama3, qwen3 | 0.7–1.2e-2 | ~1.7e-2 | ≥0.9998 |
 | hybrid dense | qwen35 | ~1.6e-2 | ~5e-2 (state params) | ≥0.9990 |
 | MoE, local flips | qwen3moe, olmoe, dsv3, dsv32 | 1–10e-2 | 0.05–0.22 (router/experts) | ≥0.976 |
@@ -241,3 +267,9 @@ with depth; isolated-block floor 3–7e-3 with hot rows only at
 countable tie margins. Loss rel ≤ ~1e-3 (flip-amplified) and ≤ ~1e-4
 otherwise. Numbers above these tiers demand investigation, not wider
 bands; numbers within them still require the flip counts to reconcile.
+
+gpt2 carries the zero-init-bias PARAM sign lottery (gotcha 18): its
+bias param entries gate through `param_atol` at the 2·lr walk scale
+while every bias GRAD entry gates tight; the c_attn.bias k-section is
+structurally zero (softmax key-bias invariance) and has a dedicated
+per-section probe.

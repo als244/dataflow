@@ -39,6 +39,7 @@ from .bridge_common import (  # noqa: F401
 from .dsv3 import bridge as dsv3_bridge
 from .dsv32 import bridge as dsv32_bridge
 from .glm52 import bridge as glm52_bridge
+from .gpt2 import bridge as gpt2_bridge
 from .llama3 import bridge as llama3_bridge
 from .olmoe import bridge as olmoe_bridge
 from .qwen3 import bridge as qwen3_bridge
@@ -51,6 +52,7 @@ FAMILY_BRIDGES = {
     "ShapedDsv3Config": dsv3_bridge,
     "ShapedDsv32Config": dsv32_bridge,
     "ShapedGlm52Config": glm52_bridge,
+    "ShapedGpt2Config": gpt2_bridge,
     "ShapedLlamaConfig": llama3_bridge,
     "ShapedOlmoeConfig": olmoe_bridge,
     "ShapedQwen3Config": qwen3_bridge,

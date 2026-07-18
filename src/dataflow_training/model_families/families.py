@@ -307,6 +307,33 @@ def _dsv32() -> ModelFamily:
     )
 
 
+def _gpt2() -> ModelFamily:
+    from dataflow_training.blocks.layouts import gpt2_activation_layout, gpt2_weight_layout
+    from dataflow_training.model_families.gpt2.blocks import (
+        Gpt2BlockBwd,
+        Gpt2BlockFwd,
+        Gpt2BlockRecompute,
+        build_gpt2_resolver,
+    )
+    from .gpt2 import ShapedGpt2Config, derive_dims, initial_values, lower_gpt2
+
+    return ModelFamily(
+        name="gpt2",
+        config_type=ShapedGpt2Config,
+        derive_dims=derive_dims,
+        lower=lower_gpt2,
+        initial_values=initial_values,
+        build_resolver=build_gpt2_resolver,
+        block_fwd=Gpt2BlockFwd,
+        block_bwd=Gpt2BlockBwd,
+        block_recompute=Gpt2BlockRecompute,
+        weight_layout=gpt2_weight_layout,
+        activation_layout=gpt2_activation_layout,
+        twin_module="reference_models.gpt2",
+        bridge_module="dataflow_training.model_families.gpt2.bridge",
+    )
+
+
 def _glm52() -> ModelFamily:
     from .glm52 import (
         ShapedGlm52Config,
@@ -332,6 +359,7 @@ def _glm52() -> ModelFamily:
 
 
 _FAMILIES: dict[str, Callable[[], ModelFamily]] = {
+    "gpt2": _gpt2,
     "llama3": _llama3,
     "qwen3": _qwen3,
     "qwen35": _qwen35,

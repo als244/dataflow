@@ -590,6 +590,7 @@ def engine_grad_state_dict(cfg, fam, dims, program, resolver, values,
 # cascade) are documented there. Param/loss entries always gate at the
 # tight defaults — these bands apply to grad:{name} entries only.
 FAMILY_GRAD_GATE = {
+    "gpt2":      (3e-2, 0.9990, None),
     "llama3":    (3e-2, 0.9990, None),
     "qwen3":     (4e-2, 0.9990, None),
     "qwen35":    (1e-1, 0.9980, None),
@@ -633,6 +634,7 @@ def check_model_step(
     seed: int = 0,
     tol: float = 3e-2,
     field_atol: dict[str, float] | None = None,
+    param_atol: dict[str, float] | None = None,
     run_args: dict | None = None,
     reference_seq_lens: tuple[int, ...] | None = None,
     reference_train_only: tuple[str, ...] | None = None,
@@ -756,7 +758,14 @@ def check_model_step(
         if twin_tensor is None:
             errors[name] = float("inf")
             continue
+        # param_atol: raw-gap gate on the PARAM entry only — the grad
+        # entry stays live (the sharp instrument). For zero-init params
+        # (biases) one optimizer step is a per-element sign lottery
+        # wherever the true gradient is near zero (|p0|=0 removes the
+        # dilution that hides it elsewhere) — size at the ~2*lr walk.
         atol = match_field_atol(name, field_atol)
+        if atol is None:
+            atol = match_field_atol(name, param_atol)
         if atol is not None:
             gap = float((engine_tensor.float().cpu()
                          - twin_tensor.float().cpu()).abs().max())
@@ -814,6 +823,13 @@ def check_model_step(
                      for k, v in twin_state.items()},
             "init": {k: v.detach().float().cpu().clone()
                      for k, v in init_state.items()},
+            # dW-space, twin names — for offline section-wise probes
+            # (fields whose combined entry is enveloped still get sharp
+            # per-section scrutiny from these)
+            "engine_grads": {k: v.detach().float().cpu().clone()
+                             for k, v in engine_grads.items()},
+            "twin_grads": {k: v.detach().float().cpu().clone()
+                           for k, v in twin_grads.items()},
         }
     result.close()
     dry.close()

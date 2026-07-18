@@ -278,6 +278,104 @@ add_cases("rmsnorm_bwd",
           AuditCase("single_row", make_rmsnorm_bwd_single_row, outputs=(4, 5), tol=8e-2))
 
 
+def _ln_stats(x):
+    xf = x.float()
+    mean = xf.mean(-1)
+    rstd = torch.rsqrt((xf - mean.unsqueeze(-1)).pow(2).mean(-1) + 1e-5)
+    return mean, rstd
+
+
+def make_layernorm_fwd_odd(g):
+    t, d = 33, 415
+    return (rand(g, t, d), rand(g, d), rand(g, d),
+            torch.empty(t, d, device="cuda", dtype=torch.bfloat16),
+            torch.empty(t, device="cuda", dtype=torch.float32),
+            torch.empty(t, device="cuda", dtype=torch.float32)), {}
+
+
+def make_layernorm_fwd_constant_row(g):
+    t, d = 8, 256
+    x = rand(g, t, d)
+    x[3].fill_(2.0)                 # var 0: rstd = 1/sqrt(eps), large finite
+    return (x, rand(g, d), rand(g, d),
+            torch.empty(t, d, device="cuda", dtype=torch.bfloat16),
+            torch.empty(t, device="cuda", dtype=torch.float32),
+            torch.empty(t, device="cuda", dtype=torch.float32)), {}
+
+
+def make_layernorm_apply_odd(g):
+    t, d = 33, 415
+    x = rand(g, t, d)
+    mean, rstd = _ln_stats(x)
+    return (x, mean, rstd, rand(g, d), rand(g, d),
+            torch.empty(t, d, device="cuda", dtype=torch.bfloat16)), {}
+
+
+def make_layernorm_bwd_odd(g):
+    t, d = 33, 415
+    x = rand(g, t, d)
+    mean, rstd = _ln_stats(x)
+    return (rand(g, t, d), x, mean, rstd, rand(g, d),
+            torch.empty(t, d, device="cuda", dtype=torch.bfloat16),
+            torch.empty(d, device="cuda", dtype=torch.float32),
+            torch.empty(d, device="cuda", dtype=torch.float32)), {}
+
+
+def make_layernorm_bwd_single_row(g):
+    t, d = 1, 512
+    x = rand(g, t, d)
+    mean, rstd = _ln_stats(x)
+    return (rand(g, t, d), x, mean, rstd, rand(g, d),
+            torch.empty(t, d, device="cuda", dtype=torch.bfloat16),
+            torch.empty(d, device="cuda", dtype=torch.float32),
+            torch.empty(d, device="cuda", dtype=torch.float32)), {}
+
+
+add_cases("layernorm_fwd",
+          AuditCase("odd_shape", make_layernorm_fwd_odd, outputs=(3, 4, 5)),
+          AuditCase("constant_row", make_layernorm_fwd_constant_row,
+                    outputs=(3, 4, 5)))
+add_cases("layernorm_apply",
+          AuditCase("odd_shape", make_layernorm_apply_odd, outputs=(5,)))
+add_cases("layernorm_bwd",
+          AuditCase("odd_shape", make_layernorm_bwd_odd, outputs=(5, 6, 7),
+                    tol=8e-2),
+          AuditCase("single_row", make_layernorm_bwd_single_row,
+                    outputs=(5, 6, 7), tol=8e-2))
+
+
+def make_gelu_fwd_odd(g):
+    t, f = 33, 415
+    return (rand(g, t, f),
+            torch.empty(t, f, device="cuda", dtype=torch.bfloat16)), {}
+
+
+def make_gelu_fwd_saturated(g):
+    n = 4096
+    return (rand(g, 1, n, scale=40.0),      # tanh fully saturated both sides
+            torch.empty(1, n, device="cuda", dtype=torch.bfloat16)), {}
+
+
+def make_gelu_bwd_odd(g):
+    t, f = 33, 415
+    return (rand(g, t, f), rand(g, t, f),
+            torch.empty(t, f, device="cuda", dtype=torch.bfloat16)), {}
+
+
+def make_gelu_bwd_saturated(g):
+    n = 4096
+    return (rand(g, 1, n, scale=8.0), rand(g, 1, n, scale=40.0),
+            torch.empty(1, n, device="cuda", dtype=torch.bfloat16)), {}
+
+
+add_cases("gelu_fwd_out",
+          AuditCase("odd_shape", make_gelu_fwd_odd, outputs=(1,)),
+          AuditCase("saturated", make_gelu_fwd_saturated, outputs=(1,)))
+add_cases("gelu_bwd",
+          AuditCase("odd_shape", make_gelu_bwd_odd, outputs=(2,)),
+          AuditCase("saturated", make_gelu_bwd_saturated, outputs=(2,)))
+
+
 def make_rope_fwd_odd(g):
     t, h, hd = 33, 5, 64
     pos = torch.randint(0, 4096, (t,), device="cuda", dtype=torch.int32,

@@ -40,6 +40,7 @@ STEPS = 6
 CALIBRATE = bool(os.environ.get("DATAFLOW_CALIBRATE"))
 
 FAMILY_PRESETS = {
+    "gpt2": "gpt2_smoke_preset",
     "llama3": "smoke_preset",
     "qwen3": "qwen3_smoke_preset",
     "qwen35": "qwen35_smoke_preset",
@@ -57,6 +58,7 @@ FAMILY_PRESETS = {
 # Dense families sit at 1e-4-scale; MoE adds routing discreteness;
 # the MLA trio (+DSA for dsv32) is the loosest.
 BANDS = {
+    "gpt2": (5e-4, 2e-3),
     "llama3": (5e-4, 2e-3),
     "qwen3": (5e-4, 2e-3),
     "qwen35": (8e-4, 2e-3),

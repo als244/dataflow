@@ -19,7 +19,7 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT))
 
-FAMILIES = ("llama3", "qwen3", "olmoe", "dsv3", "dsv32", "glm52",
+FAMILIES = ("gpt2", "llama3", "qwen3", "olmoe", "dsv3", "dsv32", "glm52",
             "qwen3moe", "qwen35", "qwen35moe")
 SHAPES = ("uniform", "ragged")
 
