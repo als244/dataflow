@@ -97,7 +97,7 @@ def test_dsv32_partial_ownership_lowering_rejected():
     cfg = _tiny_cfg()
     part = dataclasses.replace(dims_of_dsv32(cfg).moe, expert_ids=(0, 1, 2))
     with pytest.raises(NotImplementedError):
-        with mock.patch("dataflow_training.model_families.dsv32.moe_spec_of", return_value=part):
+        with mock.patch("dataflow_training.model_families.dsv32.model.moe_spec_of", return_value=part):
             lower_dsv32(cfg)
 
 

@@ -220,7 +220,7 @@ def analyze_window(program, log) -> dict:
 
 def main() -> None:
     from dataflow.runtime.device.cuda import CudaBackend
-    from dataflow_training.model_families.llama3_blocks import build_resolver
+    from dataflow_training.model_families.llama3.blocks import build_resolver
     from dataflow_training.model_families.llama3 import dims_of, lower_llama3
     from dataflow_training.lowering.planning import plan_program, simulate_program
     from dataflow_training.run.profiling import apply_measured_costs, cached_pcie, load_or_profile

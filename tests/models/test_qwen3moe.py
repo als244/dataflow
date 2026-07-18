@@ -55,7 +55,7 @@ def _tiny_dims(cfg=None):
 
 def test_qwen3moe_stage_context_completeness():
     from dataflow_training.blocks.layouts import qwen3moe_activation_layout
-    from dataflow_training.model_families.qwen3moe_blocks import Qwen3MoeBlockFwd
+    from dataflow_training.model_families.qwen3moe.blocks import Qwen3MoeBlockFwd
 
     cl = qwen3moe_activation_layout(_tiny_dims())
     declared = {f.name for f in cl.fields}
@@ -110,7 +110,7 @@ def test_qwen3moe_partial_ownership_lowering_rejected():
     cfg = _tiny_cfg()
     part = dataclasses.replace(dims_of_qwen3moe(cfg).moe, expert_ids=(0, 1, 2))
     with pytest.raises(NotImplementedError):
-        with mock.patch("dataflow_training.model_families.qwen3moe.moe_spec_of", return_value=part):
+        with mock.patch("dataflow_training.model_families.qwen3moe.model.moe_spec_of", return_value=part):
             lower_qwen3moe(cfg)
 
 

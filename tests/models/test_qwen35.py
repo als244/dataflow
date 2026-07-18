@@ -178,7 +178,7 @@ def test_qwen35_stage_context_completeness():
         qwen35_attn_activation_layout,
         qwen35_lin_activation_layout,
     )
-    from dataflow_training.model_families.qwen35_blocks import Qwen35AttnBlockFwd, Qwen35LinBlockFwd
+    from dataflow_training.model_families.qwen35.blocks import Qwen35AttnBlockFwd, Qwen35LinBlockFwd
 
     dims = _tiny_dims()
     for cls, cl in (

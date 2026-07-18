@@ -7,7 +7,7 @@
   crept back in);
 - the boundary sits exactly after the last context-emitting stage.
 """
-from dataflow_training.model_families.llama3_blocks import BlockFwd
+from dataflow_training.model_families.llama3.blocks import BlockFwd
 from dataflow_training.blocks.layouts import activation_layout
 from dataflow_training.model_families.llama3 import dims_of
 from dataflow_training.model_families.llama3 import ShapedLlamaConfig

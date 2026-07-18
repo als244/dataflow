@@ -50,7 +50,14 @@ class BuildResolverFn(Protocol):
 
 
 @dataclass(frozen=True)
-class Family:
+class ModelFamily:
+    """Everything one model family contributes, as data: the config
+    type, the lowering surface, the resolver builder, the parity-twin
+    hooks, and the gradcheck bundle. A NEW family is three files (model
+    / blocks / bridge), one twin, and one registry line — the
+    parametrized gates apply automatically. ``Model`` binds a family to
+    ONE concrete config for ergonomic call sites."""
+
     name: str
     config_type: type          # a frozen dataclass with preset classmethods
     dims_of: DimsOfFn
@@ -65,11 +72,67 @@ class Family:
     block_recompute: type | None = None
     weight_layout: Callable | None = None
     activation_layout: Callable | None = None
+    # parity-twin hooks: import path into reference_models/ + the bridge
+    # module exposing build_reference_model/load_reference_init/
+    # to_reference_state_dict (None until the family grows a twin)
+    twin_module: str | None = None
+    bridge_module: str | None = None
+
+    def cfg_dict(self, cfg) -> dict:
+        from dataflow_training.run.presets import cfg_dict as cfg_to_dict
+
+        return cfg_to_dict(cfg)
+
+    def smoke_config(self):
+        return self.config_type.tiny()
+
+    def resolver_spec(self, cfg, hyper: dict | None = None) -> dict:
+        from dataflow_training.register import canonical_spec
+
+        return canonical_spec(self.name, self.cfg_dict(cfg), hyper)
+
+    def bind(self, cfg) -> "Model":
+        return Model(self, cfg)
+
+
+@dataclass(frozen=True)
+class Model:
+    """A ModelFamily bound to ONE concrete config: the ergonomic
+    handle run/ drivers and tools pass around instead of (family, cfg)
+    tuples."""
+
+    family: ModelFamily
+    cfg: object
+
+    @property
+    def dims(self):
+        return self.family.dims_of(self.cfg)
+
+    def lower(self, **kw):
+        return self.family.lower(self.cfg, **kw)
+
+    def cfg_dict(self) -> dict:
+        return self.family.cfg_dict(self.cfg)
+
+    def resolver_spec(self, hyper: dict | None = None) -> dict:
+        return self.family.resolver_spec(self.cfg, hyper)
+
+    def reference(self, *, device="cuda"):
+        """Build the isolated pure-torch twin for this config (the
+        family's bridge module owns construction + init loading)."""
+        from dataflow_training.model_families import bridges
+
+        return bridges.build_reference_model(self.cfg, device=device)
+
+
+# The historical name stays importable until the repo-wide rename batch
+# (call sites migrate incrementally; new code says ModelFamily).
+Family = ModelFamily
 
 
 def _llama3() -> Family:
     from dataflow_training.blocks.layouts import activation_layout, weight_layout
-    from dataflow_training.model_families.llama3_blocks import BlockBwd, BlockFwd, BlockRecompute, build_resolver
+    from dataflow_training.model_families.llama3.blocks import BlockBwd, BlockFwd, BlockRecompute, build_resolver
     from .llama3 import dims_of, initial_values, lower_llama3
     from .llama3 import ShapedLlamaConfig
 
@@ -85,12 +148,14 @@ def _llama3() -> Family:
         block_recompute=BlockRecompute,
         weight_layout=weight_layout,
         activation_layout=activation_layout,
+        twin_module="reference_models.llama3",
+        bridge_module="dataflow_training.model_families.llama3.bridge",
     )
 
 
 def _qwen3() -> Family:
     from dataflow_training.blocks.layouts import qwen3_activation_layout, qwen3_weight_layout
-    from dataflow_training.model_families.qwen3_blocks import (
+    from dataflow_training.model_families.qwen3.blocks import (
         Qwen3BlockBwd,
         Qwen3BlockFwd,
         Qwen3BlockRecompute,
@@ -111,11 +176,13 @@ def _qwen3() -> Family:
         block_recompute=Qwen3BlockRecompute,
         weight_layout=qwen3_weight_layout,
         activation_layout=qwen3_activation_layout,
+        twin_module="reference_models.qwen3",
+        bridge_module="dataflow_training.model_families.qwen3.bridge",
     )
 
 
 def _qwen35() -> Family:
-    from dataflow_training.model_families.qwen35_blocks import build_qwen35_resolver
+    from dataflow_training.model_families.qwen35.blocks import build_qwen35_resolver
     from .qwen35 import initial_values_qwen35, lower_qwen35
     from .qwen35 import ShapedQwen35Config, dims_of_qwen35
 
@@ -128,11 +195,13 @@ def _qwen35() -> Family:
         lower=lower_qwen35,
         initial_values=initial_values_qwen35,
         build_resolver=build_qwen35_resolver,
+        twin_module="reference_models.qwen35",
+        bridge_module="dataflow_training.model_families.qwen35.bridge",
     )
 
 
 def _olmoe() -> Family:
-    from dataflow_training.model_families.olmoe_blocks import build_olmoe_resolver
+    from dataflow_training.model_families.olmoe.blocks import build_olmoe_resolver
     from .olmoe import ShapedOlmoeConfig, dims_of_olmoe, initial_values_olmoe, lower_olmoe
 
     # MoE family — the block ladder needs the aux-loss term in the
@@ -145,11 +214,13 @@ def _olmoe() -> Family:
         lower=lower_olmoe,
         initial_values=initial_values_olmoe,
         build_resolver=build_olmoe_resolver,
+        twin_module="reference_models.olmoe",
+        bridge_module="dataflow_training.model_families.olmoe.bridge",
     )
 
 
 def _qwen35moe() -> Family:
-    from dataflow_training.model_families.qwen35moe_blocks import build_qwen35moe_resolver
+    from dataflow_training.model_families.qwen35moe.blocks import build_qwen35moe_resolver
     from .qwen35moe import (
         ShapedQwen35MoeConfig,
         dims_of_qwen35moe,
@@ -166,11 +237,13 @@ def _qwen35moe() -> Family:
         lower=lower_qwen35moe,
         initial_values=initial_values_qwen35moe,
         build_resolver=build_qwen35moe_resolver,
+        twin_module="reference_models.qwen35moe",
+        bridge_module="dataflow_training.model_families.qwen35moe.bridge",
     )
 
 
 def _qwen3moe() -> Family:
-    from dataflow_training.model_families.qwen3moe_blocks import build_qwen3moe_resolver
+    from dataflow_training.model_families.qwen3moe.blocks import build_qwen3moe_resolver
     from .qwen3moe import (
         ShapedQwen3MoeConfig,
         dims_of_qwen3moe,
@@ -187,11 +260,13 @@ def _qwen3moe() -> Family:
         lower=lower_qwen3moe,
         initial_values=initial_values_qwen3moe,
         build_resolver=build_qwen3moe_resolver,
+        twin_module="reference_models.qwen3moe",
+        bridge_module="dataflow_training.model_families.qwen3moe.bridge",
     )
 
 
 def _dsv3() -> Family:
-    from dataflow_training.model_families.dsv3_blocks import build_dsv3_resolver
+    from dataflow_training.model_families.dsv3.blocks import build_dsv3_resolver
     from .dsv3 import (
         ShapedDsv3Config,
         dims_of_dsv3,
@@ -208,11 +283,13 @@ def _dsv3() -> Family:
         lower=lower_dsv3,
         initial_values=initial_values_dsv3,
         build_resolver=build_dsv3_resolver,
+        twin_module="reference_models.dsv3",
+        bridge_module="dataflow_training.model_families.dsv3.bridge",
     )
 
 
 def _dsv32() -> Family:
-    from dataflow_training.model_families.dsv32_blocks import build_dsv32_resolver
+    from dataflow_training.model_families.dsv32.blocks import build_dsv32_resolver
     from .dsv32 import (
         ShapedDsv32Config,
         dims_of_dsv32,
@@ -229,6 +306,8 @@ def _dsv32() -> Family:
         lower=lower_dsv32,
         initial_values=initial_values_dsv32,
         build_resolver=build_dsv32_resolver,
+        twin_module="reference_models.dsv32",
+        bridge_module="dataflow_training.model_families.dsv32.bridge",
     )
 
 
@@ -240,7 +319,7 @@ def _glm52() -> Family:
         lower_glm52,
     )
 
-    from dataflow_training.model_families.glm52_blocks import build_glm52_resolver
+    from dataflow_training.model_families.glm52.blocks import build_glm52_resolver
 
     # IndexShare: cross-layer selection via M/dM objects — ladder in
     # tests/models/test_glm52.py + tests/models/test_glm52_lowering.py
@@ -251,6 +330,8 @@ def _glm52() -> Family:
         lower=lower_glm52,
         initial_values=initial_values_glm52,
         build_resolver=build_glm52_resolver,
+        twin_module="reference_models.glm52",
+        bridge_module="dataflow_training.model_families.glm52.bridge",
     )
 
 

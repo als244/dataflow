@@ -219,7 +219,7 @@ def _golden_block(x_ref, leaves, dims, kind, route_ids=None, segments=None):
 
 @pytest.mark.parametrize("kind", ["dense", "moe"])
 def test_dsv3_block_ladder2(kind):
-    from dataflow_training.model_families.dsv3_blocks import (
+    from dataflow_training.model_families.dsv3.blocks import (
         Dsv3DenseBlockBwd,
         Dsv3DenseBlockFwd,
         Dsv3DenseBlockRecompute,
@@ -331,7 +331,7 @@ def test_dsv3_block_ladder2(kind):
 
 
 def test_dsv3_stage_context_completeness():
-    from dataflow_training.model_families.dsv3_blocks import Dsv3DenseBlockFwd, Dsv3MoeBlockFwd
+    from dataflow_training.model_families.dsv3.blocks import Dsv3DenseBlockFwd, Dsv3MoeBlockFwd
     from dataflow_training.blocks.layouts import (
         dsv3_dense_activation_layout,
         dsv3_moe_activation_layout,

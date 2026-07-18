@@ -98,7 +98,7 @@ def test_glm52_partial_ownership_lowering_rejected():
     cfg = _tiny_cfg()
     part = dataclasses.replace(dims_of_glm52(cfg).moe, expert_ids=(0, 1, 2))
     with pytest.raises(NotImplementedError):
-        with mock.patch("dataflow_training.model_families.glm52.moe_spec_of", return_value=part):
+        with mock.patch("dataflow_training.model_families.glm52.model.moe_spec_of", return_value=part):
             lower_glm52(cfg)
 
 

@@ -103,7 +103,7 @@ def test_round_prologue_engine_e2e():
     from dataflow_training.data.segments import uniform_segments
     from dataflow_training.blocks.base_blocks import RoundPrologue
     from dataflow.runtime.interop import torch_view
-    from dataflow_training.model_families.llama3_blocks import build_resolver
+    from dataflow_training.model_families.llama3.blocks import build_resolver
     from dataflow_training.lowering.emit import apply_exact_sizes, size_of_factory
     from dataflow_training.model_families.llama3 import family_layouts, initial_values
     from dataflow_training.lowering.planning import plan_program

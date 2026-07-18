@@ -55,7 +55,7 @@ def _tiny_dims(cfg=None):
 
 def test_olmoe_stage_context_completeness():
     from dataflow_training.blocks.layouts import olmoe_activation_layout
-    from dataflow_training.model_families.olmoe_blocks import OlmoeBlockFwd
+    from dataflow_training.model_families.olmoe.blocks import OlmoeBlockFwd
 
     cl = olmoe_activation_layout(_tiny_dims())
     declared = {f.name for f in cl.fields}
@@ -99,7 +99,7 @@ def test_olmoe_partial_ownership_lowering_rejected():
     cfg = _tiny_cfg()
     part = dataclasses.replace(dims_of_olmoe(cfg).moe, expert_ids=(0, 1, 2))
     with pytest.raises(NotImplementedError):
-        with mock.patch("dataflow_training.model_families.olmoe.moe_spec_of", return_value=part):
+        with mock.patch("dataflow_training.model_families.olmoe.model.moe_spec_of", return_value=part):
             lower_olmoe(cfg)
 
 

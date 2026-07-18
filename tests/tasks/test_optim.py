@@ -485,7 +485,7 @@ def test_hyper_overrides_and_schedule_model_step():
     from dataflow.runtime.interop import TORCH_DTYPE_BY_NAME, torch_view
     from dataflow_training.blocks.base_blocks import AdamWHyper
     from dataflow_training.blocks.layouts import embed_weight_layout, weight_layout
-    from dataflow_training.model_families.llama3_blocks import build_resolver
+    from dataflow_training.model_families.llama3.blocks import build_resolver
     from dataflow_training.blocks.optim import LRSchedule
     from dataflow_training.model_families.families import resolve_family
     from dataflow_training.model_families.llama3 import ShapedLlamaConfig

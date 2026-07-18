@@ -11,7 +11,7 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from dataflow_training.blocks.layouts import Qwen3Dims, qwen3_activation_layout  # noqa: E402
-from dataflow_training.model_families.qwen3_blocks import Qwen3BlockFwd  # noqa: E402
+from dataflow_training.model_families.qwen3.blocks import Qwen3BlockFwd  # noqa: E402
 from dataflow_training.model_families.qwen3 import dims_of_qwen3, lower_qwen3  # noqa: E402
 from dataflow_training.model_families.qwen3 import ShapedQwen3Config  # noqa: E402
 

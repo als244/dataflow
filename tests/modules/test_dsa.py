@@ -464,7 +464,7 @@ def _golden_dsv32_block(x_ref, leaves, dims, kind, sel_idx=None, route_ids=None,
 
 @pytest.mark.parametrize("kind", ["dense", "moe"])
 def test_dsv32_block_ladder2(kind):
-    from dataflow_training.model_families.dsv32_blocks import (
+    from dataflow_training.model_families.dsv32.blocks import (
         Dsv32DenseBlockBwd,
         Dsv32DenseBlockFwd,
         Dsv32DenseBlockRecompute,

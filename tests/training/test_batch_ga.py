@@ -12,7 +12,7 @@ from dataflow.runtime import Engine  # noqa: E402
 from dataflow.runtime.device.cuda import CudaBackend  # noqa: E402
 from dataflow.runtime.device.fake import FakeBackend  # noqa: E402
 from dataflow.runtime.interop import torch_view  # noqa: E402
-from dataflow_training.model_families.llama3_blocks import build_resolver  # noqa: E402
+from dataflow_training.model_families.llama3.blocks import build_resolver  # noqa: E402
 from dataflow_training.blocks import ops  # noqa: E402
 from dataflow_training.model_families.llama3 import dims_of, initial_values, lower_llama3  # noqa: E402
 from dataflow_training.lowering.planning import plan_program  # noqa: E402

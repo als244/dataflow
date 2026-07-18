@@ -26,7 +26,7 @@ import torch  # noqa: E402
 
 def engine_grad_dict(cfg, dims, result) -> dict:
     """Mirror of bridges.dsv3.to_dsv3_state_dict over dW objects."""
-    from dataflow_training.model_families.bridges.dsv3 import (
+    from dataflow_training.model_families.dsv3.bridge import (
         mla_attention_entries,
         transposed,
     )
