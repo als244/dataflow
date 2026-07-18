@@ -183,32 +183,43 @@ def test_parked_reuse_and_eviction_accounting(backend):
 
 
 def test_e2e_mini_vmm_matches_static():
-    """Full train() on the mini config: vmm losses == static losses bitwise
-    (same kernels, same order; only addresses differ)."""
+    """One engine step on the mini config: the vmm fast pool produces
+    BITWISE-identical loss and final weights vs the static pool (same
+    kernels, same order; only addresses differ — in-process runs are
+    exactly deterministic, so equality is byte equality)."""
+    from dataflow.runtime import Engine
+    from dataflow.runtime.engine import uniform_segments
+    from dataflow.training.families import resolve_family
     from dataflow.training.models.llama3 import ShapedLlamaConfig
     from dataflow.training.planning import plan_program
-    from dataflow.training.train_loop import train
-    from dataflow.training.families import resolve_family
 
     cfg = ShapedLlamaConfig(
         n_layers=2, d_model=64, n_heads=4, n_kv_heads=2, d_ff=160,
-        vocab_size=512, seq_len=64, batch=2, grad_accum_rounds=2,
+        vocab_size=512, seq_len=64, batch=2,
     )
     fam = resolve_family(cfg)
-    program = fam.lower(cfg)
-    planned = plan_program(program, fast_memory_capacity=64 * MB)
+    dims = fam.dims_of(cfg)
+    planned = plan_program(fam.lower(cfg), fast_memory_capacity=64 * MB)
 
-    losses = {}
-    stats = {}
+    final = {}
     for mode in ("static", "vmm"):
         backend = CudaBackend()
-        report = train(
-            planned.program, cfg, backend, steps=2, seed=11,
-            placement_mode=mode,
-        )
-        losses[mode] = report.losses
-        stats[mode] = report
-    assert losses["vmm"] == losses["static"], (losses["vmm"], losses["static"])
-    vs = stats["vmm"].vmm_stats
-    assert vs is not None and vs["maps"] > 0
-    assert stats["vmm"].step_slab_overflows == stats["static"].step_slab_overflows
+        values = fam.initial_values(planned.program, cfg, backend, seed=11)
+        run_args = {"segments": uniform_segments(dims, planned.program)}
+        result = Engine(backend).execute(
+            planned.program, resolver=fam.build_resolver(dims),
+            initial_buffers=values, run_args=run_args, vmm=(mode == "vmm"))
+        loss_rec = result.objects.get("loss_0_0")
+        loss = torch_view((loss_rec.backing or loss_rec.fast).buffer,
+                          (1,), torch.float32).clone().cpu()
+        w0 = torch_view(values["W_0"], (values["W_0"].size_bytes,),
+                        torch.uint8).clone().cpu()
+        final[mode] = (loss, w0, result.slab_overflows)
+        result.close()
+        for buf in values.values():
+            backend.free(buf)
+    assert torch.equal(final["vmm"][0], final["static"][0]), (
+        final["vmm"][0], final["static"][0])
+    assert torch.equal(final["vmm"][1], final["static"][1]), (
+        "final W_0 bytes differ between vmm and static pools")
+    assert final["vmm"][2] == final["static"][2]

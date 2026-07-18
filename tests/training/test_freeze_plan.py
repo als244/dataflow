@@ -8,10 +8,15 @@ backward tasks when nothing below trains (truncation) or keep a
 dgrad-only pass-through (guards-first), A saves only where a backward
 will read it, and the dy chain stops at the deepest trainable depth.
 
-E2E gates run the REAL engine against the policy-dispatched golden —
-the golden freezes the same params through the same policy, so
-check_model_step certifies loss + trainable-param parity while frozen
-params must remain bit-identical on both sides by construction.
+E2E gates run the REAL engine against the isolated reference twin.
+Fully-frozen weight objects deliberately carry NO optimizer task, so
+check_model_step's gradient extraction (one optimizer task per weight
+object) cannot run those configs; the freeze gates instead use the
+local assert_frozen_model_step runner: the twin steps only the
+mirrored trainable allowlist, certifying loss + trainable-param
+parity while frozen params are checked BIT-IDENTICAL to the shared
+init on both legs (the freeze contract itself). Partial-field freezes
+keep every optimizer task and still ride check_model_step.
 """
 from __future__ import annotations
 
@@ -45,6 +50,35 @@ def _tiny(**over):
 
 
 # ---------------------------------------------------------------- analyzer
+
+
+def make_default_stream_probe(*, vocab: int, tokens: int, seq_len: int,
+                               rounds: int, seed: int,
+                               decoupled: bool = False):
+    """Test seam: the bench default_stream's data contract, minus the
+    engine. Returns (stream, seq_len); see test_bench_default_stream_
+    semantics."""
+    import torch as _torch
+
+    gen = _torch.Generator().manual_seed(seed + 1)
+    fixed: dict[int, tuple] = {}
+
+    def stream(k: int):
+        r = k % max(1, rounds)
+        if r not in fixed:
+            toks = _torch.randint(0, vocab, (tokens,), generator=gen,
+                                  dtype=_torch.int32)
+            if decoupled:
+                tgts = _torch.randint(0, vocab, (tokens,), generator=gen,
+                                      dtype=_torch.int32)
+            else:
+                tgts = (toks.view(-1, seq_len).roll(-1, dims=1)
+                        .reshape(-1).contiguous())
+            fixed[r] = (toks, tgts)
+        return fixed[r]
+
+    return stream, seq_len
+
 
 def test_no_freeze_derives_none():
     assert _plan(_tiny()) is None
@@ -103,10 +137,80 @@ def test_plan_repr_compact():
 _CAP = 64 * 1024 * 1024
 
 
+def assert_frozen_model_step(cfg, *, frozen_prefixes, tol=3e-2, seed=0):
+    """Freeze-aware E2E gate: one REAL-engine step vs the isolated twin
+    stepping only the params OUTSIDE ``frozen_prefixes`` (twin-name
+    prefixes — the mirror of the engine's freeze policy). Certifies the
+    CE loss and every trainable param in twin-name space, and pins the
+    freeze contract itself: frozen params must be BIT-IDENTICAL to the
+    shared init on BOTH legs (a wrong allowlist fails loudly here).
+
+    Exists because check_model_step's gradient extraction resolves one
+    optimizer task per weight object; fully-frozen objects have none."""
+    import torch
+
+    from dataflow.pretrain import bridges
+    from dataflow.runtime import Engine
+    from dataflow.runtime.device.cuda import CudaBackend
+    from dataflow.runtime.device.fake import FakeBackend
+    from dataflow.runtime.engine import uniform_segments
+    from dataflow.tasks.interop import torch_view
+    from dataflow.training.families import resolve_family
+    from dataflow.training.planning import plan_program
+    from dataflow.training.testing.gradcheck import (
+        EngineFinalBytes,
+        reference_model_step,
+        rel_l2,
+    )
+
+    fam = resolve_family(cfg)
+    dims = fam.dims_of(cfg)
+    planned = plan_program(fam.lower(cfg), fast_memory_capacity=_CAP)
+    backend = CudaBackend()
+    values = fam.initial_values(planned.program, cfg, backend, seed=seed)
+
+    twin = bridges.build_reference_model(cfg)
+    trainable = tuple(name for name, par in twin.named_parameters()
+                      if not name.startswith(frozen_prefixes))
+    n_params = sum(1 for name, par in twin.named_parameters())
+    assert trainable and len(trainable) < n_params, frozen_prefixes
+    twin_loss, twin, twin_states, init_state, twin_counts = (
+        reference_model_step(cfg, values, train_only=trainable, model=twin))
+
+    dry = Engine(FakeBackend()).execute(planned.program,
+                                        initial_buffers=values)
+    result = Engine(backend).execute(
+        planned.program,
+        resolver=fam.build_resolver(dims),
+        initial_buffers=values,
+        pool_prewarm=dry.pool_demand,
+        run_args={"segments": uniform_segments(dims, planned.program)},
+    )
+    loss_buf = result.objects.get("loss_0_0").backing.buffer
+    run_loss = float(torch_view(loss_buf, (1,), torch.float32)[0])
+    assert abs(run_loss - twin_loss) / max(abs(twin_loss), 1e-6) < tol
+
+    engine_state = bridges.to_reference_state_dict(
+        cfg, EngineFinalBytes(result))
+    twin_state = dict(twin.state_dict())
+    for name, engine_tensor in engine_state.items():
+        engine_tensor = engine_tensor.cpu()
+        if name in init_state and name.startswith(frozen_prefixes):
+            init = init_state[name].cpu()
+            assert torch.equal(engine_tensor, init), f"engine moved {name}"
+            assert torch.equal(twin_state[name].cpu(), init), \
+                f"twin moved {name}"
+            continue
+        err = rel_l2(engine_tensor, twin_state[name])
+        assert err < tol, (name, err)
+    result.close()
+    dry.close()
+
+
 def test_model_step_truncated_prefix():
     """Layer 0 + embedding frozen: layer 0 has NO backward, NO A, NO
     dW/O; no dy below the head->layer-1 edge; no embed_bwd. Engine
-    matches the policy-dispatched golden."""
+    matches the twin stepping the same trainable set."""
     cfg = _tiny(opt_policy=freeze(layers=(0,), embed=True))
     prog = lower_llama3(cfg)
     ids = set(prog.task_by_id())
@@ -120,7 +224,7 @@ def test_model_step_truncated_prefix():
     assert not any("dy_0_0_0" in tt.inputs
                    for tt in prog.task_by_id().values())
     assert not any(t.startswith("embed_bwd") for t in ids)
-    check_model_step(cfg, fast_memory_capacity=_CAP, tol=3e-2).assert_ok()
+    assert_frozen_model_step(cfg, frozen_prefixes=("embed.", "blocks.0."))
 
 
 def test_model_step_passthrough():
@@ -131,7 +235,7 @@ def test_model_step_passthrough():
     prog = lower_llama3(cfg)
     sizes = prog.object_sizes()
     assert "dW_0_0" not in sizes and "dW_embed_0" in sizes
-    check_model_step(cfg, fast_memory_capacity=_CAP, tol=3e-2).assert_ok()
+    assert_frozen_model_step(cfg, frozen_prefixes=("blocks.0.",))
 
 
 def test_model_step_partial_fields():
@@ -145,10 +249,87 @@ def test_model_step_partial_fields():
 
 def test_model_step_truncated_ga2():
     """Grad accumulation across the truncated program: create/accumulate
-    rounds on the shrunken dW set."""
+    rounds on the shrunken dW set. The twin accumulates the SAME two
+    rounds (one backward on the summed per-round means) and steps only
+    the trainable params; per-round CE, trainable params, and
+    frozen-bit-identity all gate."""
+    import torch
+
+    from dataflow.pretrain import bridges
+    from dataflow.pretrain.driver import adamw_field_step
+    from dataflow.runtime import Engine
+    from dataflow.runtime.device.cuda import CudaBackend
+    from dataflow.runtime.device.fake import FakeBackend
+    from dataflow.runtime.engine import uniform_segments
+    from dataflow.tasks.base_blocks import AdamWHyper
+    from dataflow.tasks.interop import torch_view
+    from dataflow.training.families import resolve_family
+    from dataflow.training.planning import plan_program
+    from dataflow.training.testing.gradcheck import EngineFinalBytes, rel_l2
+
     cfg = _tiny(grad_accum_rounds=2,
                 opt_policy=freeze(layers=(0,), embed=True))
-    check_model_step(cfg, fast_memory_capacity=_CAP, tol=3e-2).assert_ok()
+    frozen = ("embed.", "blocks.0.")
+    fam = resolve_family(cfg)
+    dims = fam.dims_of(cfg)
+    planned = plan_program(fam.lower(cfg), fast_memory_capacity=_CAP)
+    backend = CudaBackend()
+    values = fam.initial_values(planned.program, cfg, backend, seed=0)
+
+    twin = bridges.build_reference_model(cfg)
+    bridges.load_reference_init(twin, cfg, dims,
+                                bridges.get_bytes_from_values(values))
+    init_state = {k: v.detach().clone() for k, v in twin.state_dict().items()}
+    twin.train()
+    rows = dims.tokens // cfg.seq_len
+    twin_losses = []
+    total = None
+    for r in range(cfg.grad_accum_rounds):
+        toks = torch_view(values[f"tokens_0_{r}"], (dims.tokens,),
+                          torch.int32).long().cuda().view(rows, cfg.seq_len)
+        tgts = torch_view(values[f"targets_0_{r}"], (dims.tokens,),
+                          torch.int32).long().cuda().view(rows, cfg.seq_len)
+        loss_r = twin.loss(toks, tgts)
+        twin_losses.append(float(loss_r.detach()))
+        total = loss_r if total is None else total + loss_r
+    total.backward()
+    hp = AdamWHyper()
+    for name, par in twin.named_parameters():
+        if par.grad is None or name.startswith(frozen):
+            continue
+        m = torch.zeros_like(par)
+        v = torch.zeros_like(par)
+        adamw_field_step(par.data, par.grad, m, v, lr=hp.lr,
+                         beta1=hp.beta1, beta2=hp.beta2, eps=hp.eps,
+                         weight_decay=hp.weight_decay, step=1)
+
+    dry = Engine(FakeBackend()).execute(planned.program,
+                                        initial_buffers=values)
+    result = Engine(backend).execute(
+        planned.program, resolver=fam.build_resolver(dims),
+        initial_buffers=values, pool_prewarm=dry.pool_demand,
+        run_args={"segments": uniform_segments(dims, planned.program)},
+    )
+    for r, twin_loss in enumerate(twin_losses):
+        loss_buf = result.objects.get(f"loss_0_{r}").backing.buffer
+        run_loss = float(torch_view(loss_buf, (1,), torch.float32)[0])
+        assert abs(run_loss - twin_loss) / max(abs(twin_loss), 1e-6) < 3e-2
+
+    engine_state = bridges.to_reference_state_dict(
+        cfg, EngineFinalBytes(result))
+    twin_state = dict(twin.state_dict())
+    for name, engine_tensor in engine_state.items():
+        engine_tensor = engine_tensor.cpu()
+        if name.startswith(frozen):
+            init = init_state[name].cpu()
+            assert torch.equal(engine_tensor, init), f"engine moved {name}"
+            assert torch.equal(twin_state[name].cpu(), init), \
+                f"twin moved {name}"
+            continue
+        err = rel_l2(engine_tensor, twin_state[name])
+        assert err < 3e-2, (name, err)
+    result.close()
+    dry.close()
 
 
 def test_model_step_pair_freeze():
@@ -195,12 +376,12 @@ def test_model_step_truncated_olmoe():
     """Truncation through a MoE family's engine path: layer 0 (router,
     experts and all) + embedding frozen — the MoE tail's guarded direct
     dw writes and the aux injection above the boundary must still match
-    the golden."""
+    the twin (which drives the same round-global LBL channel)."""
     from dataflow.training.models.olmoe import ShapedOlmoeConfig
 
     cfg = dataclasses.replace(ShapedOlmoeConfig.tiny(),
                               opt_policy=freeze(layers=(0,), embed=True))
-    check_model_step(cfg, fast_memory_capacity=_CAP, tol=3e-2).assert_ok()
+    assert_frozen_model_step(cfg, frozen_prefixes=("embed.", "blocks.0."))
 
 
 def test_train_indexer_unified_into_policy():
@@ -241,7 +422,9 @@ def test_model_step_frozen_head():
     assert any(t_.startswith("head_loss") for t_ in ids)
     assert "dW_head_0" not in sizes and "O_head" not in sizes
     assert not any(t_.startswith("optimizer_head") for t_ in ids)
-    check_model_step(cfg, fast_memory_capacity=_CAP, tol=3e-2).assert_ok()
+    # W_head packs lm_head AND final_norm — both frozen with the head
+    assert_frozen_model_step(cfg,
+                             frozen_prefixes=("lm_head.", "final_norm."))
 
 
 def test_bench_default_stream_semantics():
@@ -250,9 +433,9 @@ def test_bench_default_stream_semantics():
     SAME data repeated across steps (memorization signal)."""
     import torch
 
-    from dataflow.training.train_loop import _make_default_stream_probe
 
-    stream, seq = _make_default_stream_probe(vocab=97, tokens=32, seq_len=8,
+
+    stream, seq = make_default_stream_probe(vocab=97, tokens=32, seq_len=8,
                                              rounds=2, seed=3)
     t0_r0, y0_r0 = stream(0)
     t0_r1, y0_r1 = stream(1)
@@ -266,7 +449,7 @@ def test_bench_default_stream_semantics():
 
     # decoupled mode: targets independent of tokens, still fixed
     # across steps, still unique per round
-    dstream, _ = _make_default_stream_probe(vocab=97, tokens=32, seq_len=8,
+    dstream, _ = make_default_stream_probe(vocab=97, tokens=32, seq_len=8,
                                             rounds=2, seed=3, decoupled=True)
     dt0, dy0 = dstream(0)
     dt1, dy1 = dstream(2)

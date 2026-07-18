@@ -307,12 +307,6 @@ def build_tp_mlp_resolver(dims: TpMlpDims, hyper=None, kernels=None):
     return resolver
 
 
-def no_golden():
-    raise NotImplementedError(
-        "tp_mlp is a group-plane demonstration family; its truth "
-        "source is the full-width reference in its own gate, not a "
-        "golden module")
-
 
 def tp_mlp_family():
     from dataflow.training.families import Family
@@ -324,7 +318,6 @@ def tp_mlp_family():
         lower=lower_tp_mlp,
         initial_values=initial_values_tp_mlp,
         build_resolver=build_tp_mlp_resolver,
-        golden=no_golden,
     )
 
 

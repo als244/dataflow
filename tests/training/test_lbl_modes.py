@@ -193,37 +193,56 @@ def test_modes_differ_on_router_at_ga4():
     assert max(gaps) > 1e-6, gaps
 
 
+def aux_router_grad(ga: int, retained: bool) -> dict:
+    """The aux-induced ROUTER GRADIENT, isolated as dW(alpha) - dW(0) in
+    fp32 dW space. The gradient — not the weight delta — is the honest
+    observable: bf16 WEIGHT storage rounds the per-element update to the
+    weight quantum, so weight-space deltas of two runs are quantization
+    lotteries (docs/correctness_compare.md gotcha 2; the old weight-form
+    of this test read 0.19 where the gradient truth is 0.07/0.004)."""
+    on = run_step(olmoe_cfg(ga, aux=25.0, retained=retained), pin_dw0=True)
+    off = run_step(olmoe_cfg(ga, aux=0.0, retained=retained), pin_dw0=True)
+    return {i: on[f"dW_0_{i}"]["w_router"].float()
+               - off[f"dW_0_{i}"]["w_router"].float() for i in (0, 1)}
+
+
 @pytest.mark.gpu
 def test_retained_router_delta_is_ga_invariant_per_round_is_not():
-    """Under SGD the aux-induced router delta isolates -lr*g_aux exactly.
-    Retained mode's delta is invariant to the round partitioning of the
-    same step tokens; the per-round default's is not."""
-    def router_delta(ga, retained):
-        on = run_step(olmoe_cfg(ga, aux=25.0, retained=retained))
-        off = run_step(olmoe_cfg(ga, aux=0.0, retained=retained))
-        return {i: on[f"W_{i}"]["w_router"].float() -
-                   off[f"W_{i}"]["w_router"].float() for i in (0, 1)}
-
-    ret1, ret4 = router_delta(1, True), router_delta(4, True)
-    per1, per4 = router_delta(1, False), router_delta(4, False)
+    """Retained mode's aux router gradient is invariant to the round
+    partitioning of the same step tokens; the per-round default's is
+    not (f_round vs f_global — by design). Bands from measurement:
+    top aux layer 0.004 (pure mechanism), layer 0 0.07 (cross-
+    partitioning batching noise on the retained packs, 4x smaller
+    signal); per-round gaps 0.92-0.98. Gate at 2x the measured retained
+    worst plus the separation property."""
+    ret1, ret4 = aux_router_grad(1, True), aux_router_grad(4, True)
+    per1, per4 = aux_router_grad(1, False), aux_router_grad(4, False)
     for i in (0, 1):
         ret_gap = rel_l2(ret1[i], ret4[i])
         per_gap = rel_l2(per1[i], per4[i])
-        assert ret_gap < 5e-2, (i, ret_gap)
-        assert per_gap > 2 * ret_gap, (i, per_gap, ret_gap)
+        assert ret_gap < 0.15, (i, ret_gap)
+        assert per_gap > 5 * ret_gap, (i, per_gap, ret_gap)
 
 
 @pytest.mark.gpu
 def test_counts_ga_invariant_and_sum_exact():
-    """Same tokens, different partitioning: per-token selections are
-    identical, so the step counts agree and always sum to T_STEP * top_k."""
+    """Same tokens, different partitioning: totals are EXACT (T_STEP *
+    top_k — any mismatch is a counting bug) and per-expert counts agree
+    to a small flip budget. Bit-equality across partitionings is TOO
+    strong: batching the same tokens differently shifts activations at
+    the ulp level, and a token whose routing margin sits below that
+    noise flips experts — the near-tie flip class
+    (docs/correctness_compare.md gotcha 4; measured here: one token,
+    |delta| <= 1)."""
     c1 = run_step(olmoe_cfg(1, aux=0.0, retained=False))
     c4 = run_step(olmoe_cfg(4, aux=0.0, retained=False))
     for i in (0, 1):
         a1 = c1[f"Aux_{i}"]["expert_counts_current_step"]
         a4 = c4[f"Aux_{i}"]["expert_counts_current_step"]
         assert int(a1.sum()) == T_STEP * 2, a1
-        assert torch.equal(a1, a4), (i, a1, a4)
+        assert int(a4.sum()) == T_STEP * 2, a4
+        flips = int((a1.long() - a4.long()).abs().sum()) // 2
+        assert flips <= 2, (i, a1, a4)
         assert torch.equal(c1[f"Aux_{i}"]["expert_counts_overall"].int(), a1)
 
 

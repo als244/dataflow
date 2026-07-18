@@ -39,7 +39,7 @@ def test_program_is_byte_identical_to_legacy():
 
 
 def test_packed_args_match_golden():
-    check_model_step(_cfg(), run_args=RA, golden_seq_lens=LENS,
+    check_model_step(_cfg(), run_args=RA, reference_seq_lens=LENS,
                      fast_memory_capacity=64 * 1024 * 1024,
                      tol=3e-2).assert_ok()
 
@@ -47,7 +47,7 @@ def test_packed_args_match_golden():
 def test_packed_args_with_forced_recompute():
     cfg = _cfg()
     levels = {f"A_0_0_{i}": 1 for i in range(cfg.n_layers)}
-    check_model_step(cfg, run_args=RA, golden_seq_lens=LENS,
+    check_model_step(cfg, run_args=RA, reference_seq_lens=LENS,
                      recompute_levels=levels,
                      fast_memory_capacity=64 * 1024 * 1024,
                      tol=3e-2).assert_ok()

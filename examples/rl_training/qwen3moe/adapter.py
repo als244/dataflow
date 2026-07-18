@@ -5,9 +5,10 @@ from unittest.mock import patch
 
 import torch
 
-from dataflow.models.qwen3moe_reference import GoldenQwen3Moe
 from dataflow.tasks.modules.moe.spec import moe_aux_temp_layout
 from dataflow.training.models.qwen3moe import ShapedQwen3MoeConfig
+
+from golden_base import GoldenQwen3Moe
 
 name = "qwen3moe"
 

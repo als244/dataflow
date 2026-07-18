@@ -7,9 +7,10 @@ from unittest.mock import patch
 
 import torch
 
-from dataflow.models.dsv32_reference import GoldenDsv32
 from dataflow.tasks.layouts import dsv32_aux_temp_layout
 from dataflow.training.models.dsv32 import ShapedDsv32Config
+
+from golden_base import GoldenDsv32
 
 name = "dsv32"
 

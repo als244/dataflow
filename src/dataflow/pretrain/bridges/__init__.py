@@ -86,3 +86,9 @@ def build_reference_model(cfg, *, device="cuda", dtype=torch.bfloat16):
 def load_reference_init(model, cfg, dims, get_bytes):
     """Load the engine's packed init into ``model`` (family-dispatched)."""
     return bridge_module(cfg).load_reference_init(model, cfg, dims, get_bytes)
+
+
+def to_reference_state_dict(cfg, get_bytes):
+    """Engine packed bytes -> twin-named state dict (family-dispatched);
+    the comparison space of the engine-vs-reference gates."""
+    return bridge_module(cfg).to_reference_state_dict(cfg, get_bytes)

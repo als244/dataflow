@@ -9,8 +9,8 @@
   autograd backward sees the inference engine's exact choices — the same
   contract the runtime enforces through M objects + train_indexer=False.
 
-The forward body mirrors ``models/glm52_reference.py`` (kept in sync by
-the example's parity gate itself: any drift fails the gate).
+The forward body mirrors the vendored ``golden_base.py`` (kept in sync
+by the example's parity gate itself: any drift fails the gate).
 """
 from __future__ import annotations
 
@@ -18,7 +18,6 @@ from dataclasses import dataclass
 
 import torch
 
-from dataflow.models.glm52_reference import GoldenGlm52
 from dataflow.tasks import ops
 from dataflow.tasks.modules.dsa_reference import (
     dsa_index_scores_reference,
@@ -28,6 +27,8 @@ from dataflow.tasks.modules.dsa_reference import (
 )
 from dataflow.tasks.modules.mla_reference import mla_qkv_reference
 from dataflow.tasks.modules.moe.reference import moe_mlp_reference, moe_topk_reference
+
+from golden_base import GoldenGlm52
 
 
 @dataclass

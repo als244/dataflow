@@ -65,7 +65,11 @@ def test_qwen35_model_step_ragged():
     from dataflow.training.models.qwen35 import ShapedQwen35Config
 
     cfg = replace(ShapedQwen35Config.tiny(), seq_lens=RAGGED)
-    check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2).assert_ok()
+    grad_tol, min_cos, budget = _FAMILY_GRAD_GATE["qwen35"]
+    check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
+                     field_atol=_QWEN35_BIAS_ATOL, grad_tol=grad_tol,
+                     min_cosine=min_cos,
+                     counts_budget=budget).assert_ok()
 
 
 def test_varlen_single_launch_matches_reference_autograd():
@@ -112,6 +116,18 @@ def _ragged_for(cfg):
 # coin flip — the |a-b|<=atol envelope catches real garbage. Same class the
 # per-family dsv32/glm52 tests envelope with _BIAS_ATOL.
 _DSA_BIAS_ATOL = {"w_router_bias": 2.5e-3, "idx_k_ln_b": 2.5e-4}
+# qwen3.5's zero-init decay bias: true grad below the bf16 noise floor,
+# one-step update = +-lr * sign(noise). The old GOLDEN shared the
+# engine's noise (identical packed order) so rel_l2 agreed by luck of
+# construction; the ISOLATED twin computes its own noise, making the
+# sign a coin flip — the |a-b| <= ~2lr envelope is the honest gate.
+_QWEN35_BIAS_ATOL = {"dt_bias": 2.5e-4}
+
+
+# Per-family gradient bands live in gradcheck.FAMILY_GRAD_GATE (shared
+# by every ladder-3 suite); see docs/correctness_compare.md for the
+# calibration and tier mechanisms.
+from dataflow.training.testing.gradcheck import FAMILY_GRAD_GATE as _FAMILY_GRAD_GATE
 
 
 @pytest.mark.parametrize("family", [
@@ -138,6 +154,20 @@ def test_model_step_ragged_all_families(family):
                    if k.startswith("Shaped") and k.endswith("Config"))
     cfg = cfg_cls.tiny()
     cfg = replace(cfg, seq_lens=_ragged_for(cfg))
-    atol = _DSA_BIAS_ATOL if family in ("dsv32", "glm52") else None
-    check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024,
-                     tol=3e-2, field_atol=atol).assert_ok()
+    atol = None
+    if family in ("dsv32", "glm52"):
+        atol = _DSA_BIAS_ATOL
+    elif family == "dsv3":
+        # noaux bias one-flip envelope: a single near-tie flip moves one
+        # count by 1; a count on the exact integer mean then flips its
+        # sign term by speed (minimal example: the counts-parity entry +
+        # tools/debug_dsv3_bias_repro.py). 1.5x speed admits the
+        # one-flip class only.
+        atol = {"router_bias": 1.5e-3}   # dsv3 twin buffer name
+    elif family == "qwen35moe":
+        atol = _QWEN35_BIAS_ATOL
+    grad_tol, min_cos, budget = _FAMILY_GRAD_GATE[family]
+    check_model_step(cfg, fast_memory_capacity=96 * 1024 * 1024,
+                     tol=3e-2, field_atol=atol, grad_tol=grad_tol,
+                     min_cosine=min_cos,
+                     counts_budget=budget).assert_ok()

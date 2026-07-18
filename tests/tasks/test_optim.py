@@ -3,8 +3,9 @@
 Levels: per-optimizer step math vs independent inline formulas; muon
 orthogonalization properties; policy dispatch + state-layout slots;
 and the end-to-end gate — a MIXED per-field policy through the REAL
-engine vs a hand replica applying reference steps to golden autograd
-gradients. Default policy byte-stability is covered by the lowering
+engine vs a hand replica applying reference steps to the engine's own
+retained dW gradient slabs (exactly the bytes the optimizer kernels
+consumed). Default policy byte-stability is covered by the lowering
 tripwires + every existing family ladder (all-adamw unchanged).
 """
 from __future__ import annotations
@@ -142,17 +143,64 @@ def test_opt_state_layout_slots_follow_policy():
 
 
 # --------------------------------------------------------------- E2E
+#
+# The E2E gates feed each hand replica the ENGINE'S OWN dW slabs — the
+# exact gradient bytes the optimizer kernels consumed — so they isolate
+# optimizer-step math from forward/backward parity (covered elsewhere).
+
+
+def retain_grad_slabs(program):
+    """Pin every dW object's terminal placement to fast so the gradient
+    slabs survive pool recycling for post-run readout (final_locations
+    is the designed retention API)."""
+    dw_ids = {o.id for t in program.tasks for o in t.outputs
+              if o.id.startswith("dW")}
+    dw_ids.update(o.id for o in program.initial_objects
+                  if o.id.startswith("dW"))
+    return replace(program,
+                   final_locations={**dict(program.final_locations),
+                                    **{oid: "fast" for oid in dw_ids}})
+
+
+def block_dw_id(records, layer):
+    """The block-gradient object id for ``layer`` ("dW_{s}_{i}") from
+    the result's object table — embed/head grads have their own
+    prefixes and single-step programs have exactly one candidate."""
+    cands = [oid for oid in records
+             if oid.startswith("dW") and oid.endswith(f"_{layer}")
+             and not oid.startswith(("dW_embed", "dW_head"))]
+    assert len(cands) == 1, (layer, cands)
+    return cands[0]
+
+
+def engine_grad_fields(result, dw_id, weights, dims, ns=None, layer=None):
+    """{field name: tensor view} of one retained dW slab, unpacked with
+    the grad layout mirroring ``weights``. Frozen fields carry no
+    gradient storage, so they are absent by construction."""
+    from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME, torch_view
+    from dataflow.tasks.layouts import grad_layout
+
+    gl = grad_layout(weights, dims.dtypes, ns=ns, layer=layer,
+                     opt_policy=getattr(dims, "opt_policy", None))
+    rec = result.objects.get(dw_id)
+    slot = rec.fast or rec.backing
+    return {f.name: torch_view(slot.buffer, f.shape,
+                               TORCH_DTYPE_BY_NAME[f.dtype],
+                               offset_bytes=f.offset_bytes)
+            for f in gl.fields}
 
 
 def test_mixed_policy_model_step_vs_hand_replica():
     """llama3 tiny, one step, per-field policy {wq: muon, w1: sgdm,
     wo: sgd, rest adamw} through the REAL engine — final weights must
-    match golden-autograd grads + independent inline reference steps."""
+    match independent inline reference steps fed the engine's retained
+    dW gradient slabs."""
     from dataflow.runtime import Engine
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.runtime.device.fake import FakeBackend
     from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME, torch_view
     from dataflow.tasks.base_blocks import AdamWHyper
+    from dataflow.tasks.layouts import weight_layout
     from dataflow.training.families import resolve_family
     from dataflow.training.models.llama3 import ShapedLlamaConfig
     from dataflow.training.planning import plan_program
@@ -164,7 +212,7 @@ def test_mixed_policy_model_step_vs_hand_replica():
     cfg = replace(ShapedLlamaConfig.tiny(), opt_policy=policy)
     fam = resolve_family(cfg)
     dims = fam.dims_of(cfg)
-    planned = plan_program(fam.lower(cfg),
+    planned = plan_program(retain_grad_slabs(fam.lower(cfg)),
                            fast_memory_capacity=64 * 1024 * 1024)
     backend = CudaBackend()
     values = fam.initial_values(planned.program, cfg, backend, seed=7)
@@ -176,14 +224,6 @@ def test_mixed_policy_model_step_vs_hand_replica():
     leaves = [pinned("W_embed"),
               [pinned(f"W_{i}") for i in range(cfg.n_layers)],
               pinned("W_head")]
-    golden = fam.golden().from_packed_bytes(dims, cfg.n_layers, *leaves)
-    tokens = torch_view(values["tokens_0_0"], (dims.tokens,),
-                        torch.int32).long().cuda()
-    targets = torch_view(values["targets_0_0"], (dims.tokens,),
-                         torch.int32).long().cuda()
-    for p in golden.parameters():
-        p.grad = None
-    golden.loss(tokens, targets).backward()
 
     hp = AdamWHyper()
 
@@ -223,39 +263,41 @@ def test_mixed_policy_model_step_vs_hand_replica():
 
     worst = (0.0, "")
     for i in range(cfg.n_layers):
-        layout, gleaves = golden.final_leaves(f"W_{i}")
+        layout = weight_layout(dims, layer=i)
+        grads = engine_grad_fields(
+            result, block_dw_id(result.objects.records, i), layout,
+            dims, layer=i)
         rec = result.objects.get(f"W_{i}")
         buf = (rec.backing or rec.fast).buffer
         # compare against ref_step applied to the ORIGINAL packed
-        # bytes + golden autograd grads, field by field
+        # bytes + the engine's dW slab, field by field
         w0 = leaves[1][i]
-        for f, (name, param) in zip(layout.fields,
-                                    golden.w_blocks[i].items()):
-            assert f.name == name
+        for f in layout.fields:
+            if f.name not in grads:      # frozen: no grad, no step
+                continue
             dt = TORCH_DTYPE_BY_NAME[f.dtype]
-            nbytes = param.numel() * dt.itemsize
-            base = (w0[f.offset_bytes:f.offset_bytes + nbytes]
+            base = (w0[f.offset_bytes:f.offset_bytes + f.nbytes]
                     .view(dt).view(*f.shape).cuda())
-            expect = ref_step(name, base.reshape(param.shape),
-                              param.grad).reshape(f.shape)
-            got = torch_view(buf, f.shape, TORCH_DTYPE_BY_NAME[f.dtype],
+            expect = ref_step(f.name, base, grads[f.name])
+            got = torch_view(buf, f.shape, dt,
                              offset_bytes=f.offset_bytes)
             r = rel_l2(got, expect)
             if r > worst[0]:
-                worst = (r, f"W_{i}.{name}")
+                worst = (r, f"W_{i}.{f.name}")
     assert worst[0] <= 3e-2, worst
 
 
 def test_muon_recipe_string_model_step_vs_hand_replica():
     """opt_policy="muon" (THE RECIPE) on llama3 tiny through the real
     engine: 2D projections take nesterov-NS muon, embed/head/norms take
-    adamw — verified against golden autograd grads + inline reference
-    steps for BOTH rules."""
+    adamw — verified against the engine's retained dW grads + inline
+    reference steps for BOTH rules."""
     from dataflow.runtime import Engine
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.runtime.device.fake import FakeBackend
     from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME, torch_view
     from dataflow.tasks.base_blocks import AdamWHyper
+    from dataflow.tasks.layouts import weight_layout
     from dataflow.training.families import resolve_family
     from dataflow.training.models.llama3 import ShapedLlamaConfig
     from dataflow.training.planning import plan_program
@@ -267,7 +309,7 @@ def test_muon_recipe_string_model_step_vs_hand_replica():
     dims = fam.dims_of(cfg)
     assert resolve_opt_policy(dims.opt_policy).for_field(
         "wq", None, (2, 2)) == "muon"
-    planned = plan_program(fam.lower(cfg),
+    planned = plan_program(retain_grad_slabs(fam.lower(cfg)),
                            fast_memory_capacity=64 * 1024 * 1024)
     backend = CudaBackend()
     values = fam.initial_values(planned.program, cfg, backend, seed=9)
@@ -279,14 +321,6 @@ def test_muon_recipe_string_model_step_vs_hand_replica():
     leaves = [pinned("W_embed"),
               [pinned(f"W_{i}") for i in range(cfg.n_layers)],
               pinned("W_head")]
-    golden = fam.golden().from_packed_bytes(dims, cfg.n_layers, *leaves)
-    tokens = torch_view(values["tokens_0_0"], (dims.tokens,),
-                        torch.int32).long().cuda()
-    targets = torch_view(values["targets_0_0"], (dims.tokens,),
-                         torch.int32).long().cuda()
-    for p in golden.parameters():
-        p.grad = None
-    golden.loss(tokens, targets).backward()
 
     hp = AdamWHyper()
     policy = resolve_opt_policy("muon")
@@ -318,23 +352,24 @@ def test_muon_recipe_string_model_step_vs_hand_replica():
 
     worst = (0.0, "")
     for i in range(cfg.n_layers):
-        layout, _ = golden.final_leaves(f"W_{i}")
+        layout = weight_layout(dims, layer=i)
+        grads = engine_grad_fields(
+            result, block_dw_id(result.objects.records, i), layout,
+            dims, layer=i)
         rec = result.objects.get(f"W_{i}")
         buf = (rec.backing or rec.fast).buffer
         w0 = leaves[1][i]
-        for f, (name, param) in zip(layout.fields,
-                                    golden.w_blocks[i].items()):
-            assert f.name == name
+        for f in layout.fields:
+            if f.name not in grads:      # frozen: no grad, no step
+                continue
             dt = TORCH_DTYPE_BY_NAME[f.dtype]
-            nbytes = param.numel() * dt.itemsize
-            base = (w0[f.offset_bytes:f.offset_bytes + nbytes]
+            base = (w0[f.offset_bytes:f.offset_bytes + f.nbytes]
                     .view(dt).view(*f.shape).cuda())
-            expect = ref_step(name, base.reshape(param.shape),
-                              param.grad).reshape(f.shape)
+            expect = ref_step(f.name, base, grads[f.name])
             got = torch_view(buf, f.shape, dt, offset_bytes=f.offset_bytes)
             r = rel_l2(got, expect)
             if r > worst[0]:
-                worst = (r, f"W_{i}.{name}")
+                worst = (r, f"W_{i}.{f.name}")
     assert worst[0] <= 3e-2, worst
 
 
@@ -347,6 +382,7 @@ def test_layer_indexed_policy_sizes_and_model_step():
     from dataflow.runtime.device.fake import FakeBackend
     from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME, torch_view
     from dataflow.tasks.base_blocks import AdamWHyper
+    from dataflow.tasks.layouts import weight_layout
     from dataflow.training.families import resolve_family
     from dataflow.training.models.llama3 import ShapedLlamaConfig
     from dataflow.training.planning import plan_program
@@ -363,7 +399,8 @@ def test_layer_indexed_policy_sizes_and_model_step():
     assert "O_0" not in o_sizes, o_sizes   # sgd: stateless -> O DROPPED
     assert o_sizes["O_1"] > 0               # adamw: m+v
 
-    planned = plan_program(prog, fast_memory_capacity=64 * 1024 * 1024)
+    planned = plan_program(retain_grad_slabs(prog),
+                           fast_memory_capacity=64 * 1024 * 1024)
     backend = CudaBackend()
     values = fam.initial_values(planned.program, cfg, backend, seed=13)
 
@@ -374,14 +411,6 @@ def test_layer_indexed_policy_sizes_and_model_step():
     leaves = [pinned("W_embed"),
               [pinned(f"W_{i}") for i in range(cfg.n_layers)],
               pinned("W_head")]
-    golden = fam.golden().from_packed_bytes(dims, cfg.n_layers, *leaves)
-    tokens = torch_view(values["tokens_0_0"], (dims.tokens,),
-                        torch.int32).long().cuda()
-    targets = torch_view(values["targets_0_0"], (dims.tokens,),
-                         torch.int32).long().cuda()
-    for p_ in golden.parameters():
-        p_.grad = None
-    golden.loss(tokens, targets).backward()
 
     hp = AdamWHyper()
 
@@ -408,22 +437,24 @@ def test_layer_indexed_policy_sizes_and_model_step():
 
     worst = (0.0, "")
     for i in range(cfg.n_layers):
-        layout, _ = golden.final_leaves(f"W_{i}")
+        layout = weight_layout(dims, layer=i)
+        grads = engine_grad_fields(
+            result, block_dw_id(result.objects.records, i), layout,
+            dims, layer=i)
         rec = result.objects.get(f"W_{i}")
         buf = (rec.backing or rec.fast).buffer
         w0 = leaves[1][i]
-        for f, (name, param) in zip(layout.fields,
-                                    golden.w_blocks[i].items()):
+        for f in layout.fields:
+            if f.name not in grads:      # frozen: no grad, no step
+                continue
             dt = TORCH_DTYPE_BY_NAME[f.dtype]
-            nbytes = param.numel() * dt.itemsize
-            base = (w0[f.offset_bytes:f.offset_bytes + nbytes]
+            base = (w0[f.offset_bytes:f.offset_bytes + f.nbytes]
                     .view(dt).view(*f.shape).cuda())
-            expect = ref_step(i, base.reshape(param.shape),
-                              param.grad).reshape(f.shape)
+            expect = ref_step(i, base, grads[f.name])
             got = torch_view(buf, f.shape, dt, offset_bytes=f.offset_bytes)
             r = rel_l2(got, expect)
             if r > worst[0]:
-                worst = (r, f"W_{i}.{name}")
+                worst = (r, f"W_{i}.{f.name}")
     assert worst[0] <= 3e-2, worst
 
 
@@ -453,6 +484,7 @@ def test_hyper_overrides_and_schedule_model_step():
     from dataflow.runtime.device.fake import FakeBackend
     from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME, torch_view
     from dataflow.tasks.base_blocks import AdamWHyper
+    from dataflow.tasks.layouts import embed_weight_layout, weight_layout
     from dataflow.tasks.models.llama3_blocks import build_resolver
     from dataflow.tasks.optim import LRSchedule
     from dataflow.training.families import resolve_family
@@ -471,7 +503,7 @@ def test_hyper_overrides_and_schedule_model_step():
     cfg = replace(ShapedLlamaConfig.tiny(), opt_policy=policy)
     fam = resolve_family(cfg)
     dims = fam.dims_of(cfg)
-    planned = plan_program(fam.lower(cfg),
+    planned = plan_program(retain_grad_slabs(fam.lower(cfg)),
                            fast_memory_capacity=64 * 1024 * 1024)
     backend = CudaBackend()
     values = fam.initial_values(planned.program, cfg, backend, seed=17)
@@ -483,14 +515,6 @@ def test_hyper_overrides_and_schedule_model_step():
     leaves = [pinned("W_embed"),
               [pinned(f"W_{i}") for i in range(cfg.n_layers)],
               pinned("W_head")]
-    golden = fam.golden().from_packed_bytes(dims, cfg.n_layers, *leaves)
-    tokens = torch_view(values["tokens_0_0"], (dims.tokens,),
-                        torch.int32).long().cuda()
-    targets = torch_view(values["targets_0_0"], (dims.tokens,),
-                         torch.int32).long().cuda()
-    for p_ in golden.parameters():
-        p_.grad = None
-    golden.loss(tokens, targets).backward()
 
     sched_scale = 0.5     # step 1 of warmup 2
 
@@ -516,21 +540,24 @@ def test_hyper_overrides_and_schedule_model_step():
         run_args={"segments": uniform_segments(dims, planned.program)})
 
     worst = (0.0, "")
-    checks = [("W_embed", "embed", golden.w_embed, leaves[0])] + [
-        (f"W_{i}", None, golden.w_blocks[i], leaves[1][i])
+    checks = [("W_embed", "embed", None, embed_weight_layout(dims),
+               leaves[0], "dW_embed_0")] + [
+        (f"W_{i}", None, i, weight_layout(dims, layer=i), leaves[1][i],
+         block_dw_id(result.objects.records, i))
         for i in range(cfg.n_layers)]
-    for oid, ns, gleaves, w0 in checks:
-        layout, _ = golden.final_leaves(oid)
+    for oid, ns, layer, layout, w0, dw_id in checks:
+        grads = engine_grad_fields(result, dw_id, layout, dims,
+                                   ns=ns, layer=layer)
         rec = result.objects.get(oid)
         buf = (rec.backing or rec.fast).buffer
-        for f, (name, param) in zip(layout.fields, gleaves.items()):
-            key = f"{ns}.{name}" if ns else name
+        for f in layout.fields:
+            key = f"{ns}.{f.name}" if ns else f.name
+            if f.name not in grads:      # frozen: no grad, no step
+                continue
             dt = TORCH_DTYPE_BY_NAME[f.dtype]
-            nbytes = param.numel() * dt.itemsize
-            base = (w0[f.offset_bytes:f.offset_bytes + nbytes]
+            base = (w0[f.offset_bytes:f.offset_bytes + f.nbytes]
                     .view(dt).view(*f.shape).cuda())
-            expect = ref_step(key, base.reshape(param.shape),
-                              param.grad).reshape(f.shape)
+            expect = ref_step(key, base, grads[f.name])
             got = torch_view(buf, f.shape, dt, offset_bytes=f.offset_bytes)
             r = rel_l2(got, expect)
             if r > worst[0]:

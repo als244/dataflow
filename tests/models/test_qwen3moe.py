@@ -8,7 +8,6 @@ routing (norm_topk_prob=true), aux at 0.001, NO shared expert, recompute
 reproducing the routing decision bit-exactly, fixed-seed engine
 determinism.
 """
-import math
 from dataclasses import replace
 
 import pytest
@@ -17,7 +16,11 @@ torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
     pytest.skip("no CUDA device", allow_module_level=True)
 
-from dataflow.training.testing.gradcheck import check_model_step, rel_l2  # noqa: E402
+from dataflow.training.testing.gradcheck import (  # noqa: E402
+    check_model_step,
+    family_gate_kwargs,
+    rel_l2,
+)
 
 pytestmark = pytest.mark.gpu
 
@@ -37,149 +40,14 @@ def _tiny_dims(cfg=None):
 # --- golden self-consistency -----------------------------------------------------
 
 
-def test_golden_qwen3moe_trains():
-    from dataflow.models.qwen3moe_reference import GoldenQwen3Moe
-    from dataflow.tasks.layouts import head_weight_layout, qwen3moe_weight_layout
-
-    cfg = _tiny_cfg()
-    dims = _tiny_dims(cfg)
-    gen = torch.Generator().manual_seed(0)
-
-    def packed(layout):
-        flat = (torch.randn(layout.total_bytes // 2, generator=gen) * 0.02).to(torch.bfloat16)
-        for f in layout.fields:
-            if f.name.endswith("_norm_w"):
-                start = f.offset_bytes // 2
-                n = int(torch.tensor(f.shape).prod())
-                flat[start : start + n] = 1.0
-        return flat.view(torch.uint8)
-
-    def table():
-        n = dims.vocab_size * dims.d_model
-        return (torch.randn(n, generator=gen) * 0.02).to(torch.bfloat16).view(torch.uint8)
-
-    golden = GoldenQwen3Moe.from_packed_bytes(
-        dims, cfg.n_layers, table(),
-        [packed(qwen3moe_weight_layout(dims)) for _ in range(cfg.n_layers)],
-        packed(head_weight_layout(dims)),
-    )
-    toks = torch.randint(0, dims.vocab_size, (dims.tokens,), generator=gen).cuda()
-    tgts = torch.randint(0, dims.vocab_size, (dims.tokens,), generator=gen).cuda()
-    ce0, aux0 = golden.loss_terms(toks, tgts)
-    assert torch.isfinite(aux0) and float(aux0.detach()) > 0.0
-    losses = [golden.train_step(toks, tgts) for _ in range(3)]
-    assert all(x == x for x in losses)
-    assert abs(losses[0] - math.log(dims.vocab_size)) < 0.5
-    assert losses[-1] < losses[0]
 
 
 # --- ladder 2: block fwd/recompute/bwd vs golden autograd (with aux) --------------
 
-
-def _block_state(dims, wl, seed):
-    from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME
-
-    gen = torch.Generator(device="cuda").manual_seed(seed)
-    views = {}
-    for f in wl.fields:
-        n = int(torch.tensor(f.shape).prod())
-        dt = TORCH_DTYPE_BY_NAME[f.dtype]
-        if f.name.endswith("_norm_w"):
-            views[f.name] = torch.ones(f.shape, device="cuda", dtype=dt)
-        else:
-            views[f.name] = (
-                torch.randn(n, generator=gen, device="cuda") * 0.06
-            ).to(dt).view(f.shape)
-    x = (torch.randn(dims.tokens, dims.d_model, generator=gen, device="cuda") * 0.5).to(torch.bfloat16)
-    dy = (torch.randn(dims.tokens, dims.d_model, generator=gen, device="cuda") * 0.5).to(torch.bfloat16)
-    return views, x, dy
-
-
-_INT_CTX_FIELDS = ("route_ids", "route_order", "route_offsets")
-
-
-def test_qwen3moe_block_ladder2():
-    from dataflow.models.qwen3moe_reference import GoldenQwen3Moe
-    from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME
-    from dataflow.tasks.kernels import KernelCtx, resolve_kernels
-    from dataflow.tasks.layouts import grad_layout
-    from dataflow.tasks.models.qwen3moe_blocks import (
-        Qwen3MoeBlockBwd,
-        Qwen3MoeBlockFwd,
-        Qwen3MoeBlockRecompute,
-    )
-
-    cfg = _tiny_cfg()
-    dims = _tiny_dims(cfg)
-    kernels = resolve_kernels()
-    kctx = KernelCtx()
-    fwd = Qwen3MoeBlockFwd(dims, kernels)
-    bwd = Qwen3MoeBlockBwd(dims, kernels)
-    wl, cl = fwd.wl, fwd.cl
-
-    w, x, dy = _block_state(dims, wl, seed=23)
-    a = {
-        f.name: torch.empty(f.shape, dtype=TORCH_DTYPE_BY_NAME[f.dtype], device="cuda")
-        for f in cl.fields
-    }
-    y = torch.empty_like(x)
-    from dataflow.tasks.modules.moe.spec import moe_aux_temp_layout
-
-    m_l = moe_aux_temp_layout(dims, dims.moe)
-    meta_views = {f.name: torch.empty(f.shape, dtype=TORCH_DTYPE_BY_NAME[f.dtype],
-                                      device="cuda") for f in m_l.fields}
-    # ONE materialized Segments handed to BOTH sides (bypassing launch)
-    from dataflow.tasks.ops import Segments
-
-    seg = Segments.of_dims(dims).on("cuda")
-    fwd._forward(kctx, x, w, y, a, extras={"aux_temp": dict(meta_views), "seg": seg})
-
-    # recompute equivalence: the ROUTING DECISION must reproduce bit-exactly
-    a2 = {
-        f.name: torch.empty(f.shape, dtype=TORCH_DTYPE_BY_NAME[f.dtype], device="cuda")
-        for f in cl.fields
-    }
-    Qwen3MoeBlockRecompute(dims, kernels)._run_stages(
-        kctx, x, w, a2, count=Qwen3MoeBlockRecompute.recompute_stage_count(),
-        extras={"aux_temp": dict(meta_views), "aux_temp_ready": True, "seg": seg},
-    )
-    torch.cuda.synchronize()
-    errors = {}
-    for name in a:
-        if name in _INT_CTX_FIELDS:
-            assert torch.equal(a2[name], a[name]), f"recompute int field {name}"
-        else:
-            errors[f"recompute:{name}"] = rel_l2(a2[name], a[name])
-
-    gl = grad_layout(wl, dims.dtypes)
-    dwv = {
-        f.name: torch.zeros(f.shape, device="cuda", dtype=TORCH_DTYPE_BY_NAME[f.dtype])
-        for f in gl.fields
-    }
-    dx = torch.empty_like(x)
-    a["_seg"] = seg
-    bwd._backward(kctx, dy, a, x, w, dx, dwv, accum=False,
-                  aux_temp={"aux_temp": meta_views})
-
-    golden = GoldenQwen3Moe(dims=dims, n_layers=cfg.n_layers)
-    leaves = {n: t.detach().clone().requires_grad_() for n, t in w.items()}
-    x_ref = x.clone().requires_grad_()
-    y_ref, aux_ref = golden.block_forward(x_ref, leaves, route_ids=meta_views["route_ids"], segments=seg)
-    y_ref.backward(dy, retain_graph=True)
-    aux_ref.backward()
-
-    errors["fwd:y"] = rel_l2(y, y_ref)
-    errors["bwd:dx"] = rel_l2(dx, x_ref.grad)
-    for name in dwv:
-        errors[f"bwd:d{name}"] = rel_l2(dwv[name], leaves[name].grad)
-
-    bwd._backward(kctx, dy, a, x, w, dx, dwv, accum=True,
-                  aux_temp={"aux_temp": meta_views})
-    for name in dwv:
-        errors[f"accum:2x:{name}"] = rel_l2(dwv[name], 2.0 * leaves[name].grad)
-
-    bad = {k: round(v, 4) for k, v in errors.items() if v > 4e-2}
-    assert not bad, bad
+# block-level ladder retired with the golden models: block math is
+# gated by the per-op kernel pins, the model-level dW comparison
+# (grad: entries), and per-block isolation (tools/deep_compare.py
+# --isolate); see docs/correctness_compare.md.
 
 
 # --- structure + lowering ----------------------------------------------------------
@@ -249,23 +117,25 @@ def test_qwen3moe_partial_ownership_lowering_rejected():
 # --- ladder 3: full program through the real engine --------------------------------
 
 
-def test_qwen3moe_model_step_vs_golden():
-    check_model_step(_tiny_cfg(), fast_memory_capacity=64 * 1024 * 1024, tol=3e-2).assert_ok()
 
 
 def test_qwen3moe_aux_zero_model_step_vs_golden():
     check_model_step(
         _tiny_cfg(aux_coef=0.0), fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
+        **family_gate_kwargs("qwen3moe"),
     ).assert_ok()
 
 
 def test_qwen3moe_plan_invariance():
     cfg = _tiny_cfg()
-    r1 = check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2)
-    r2 = check_model_step(cfg, fast_memory_capacity=8 * 1024 * 1024, tol=3e-2)
+    r1 = check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
+                          **family_gate_kwargs("qwen3moe"))
+    r2 = check_model_step(cfg, fast_memory_capacity=8 * 1024 * 1024, tol=3e-2,
+                          **family_gate_kwargs("qwen3moe"))
     levels = {f"A_0_0_{i}": 1 for i in range(cfg.n_layers)}
     r3 = check_model_step(
         cfg, fast_memory_capacity=8 * 1024 * 1024, recompute_levels=levels, tol=3e-2,
+        **family_gate_kwargs("qwen3moe"),
     )
     for r in (r1, r2, r3):
         r.assert_ok()
@@ -273,77 +143,74 @@ def test_qwen3moe_plan_invariance():
 
 def test_qwen3moe_batch2_packed_sequences_vs_golden():
     cfg = _tiny_cfg(batch=2, seq_len=64)
-    check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2).assert_ok()
+    check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
+                     **family_gate_kwargs("qwen3moe")).assert_ok()
 
 
-def test_qwen3moe_ga2_matches_golden():
-    from dataflow.models.qwen3moe_reference import GoldenQwen3Moe
+def test_qwen3moe_ga2_matches_reference():
+    """Two grad-accum rounds with per-round CE + per-round aux, ONE
+    backward on the total — engine == the isolated twin (each round is
+    one packed forward, so the twin's forward-global aux IS the engine's
+    round-global default)."""
+    from dataflow.pretrain import bridges
+    from dataflow.pretrain.driver import adamw_field_step
     from dataflow.runtime import Engine
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.runtime.device.fake import FakeBackend
-    from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME, torch_view
+    from dataflow.tasks.base_blocks import AdamWHyper
+    from dataflow.tasks.interop import torch_view
     from dataflow.training.families import resolve_family
     from dataflow.training.planning import plan_program
+    from dataflow.training.testing.gradcheck import EngineFinalBytes
 
     cfg = _tiny_cfg(grad_accum_rounds=2)
     fam = resolve_family(cfg)
     dims = fam.dims_of(cfg)
-    planned = plan_program(fam.lower(cfg), fast_memory_capacity=16 * 1024 * 1024)
+    planned = plan_program(fam.lower(cfg),
+                           fast_memory_capacity=16 * 1024 * 1024)
     backend = CudaBackend()
     values = fam.initial_values(planned.program, cfg, backend, seed=3)
 
-    def pinned(name):
-        buf = values[name]
-        return torch_view(buf, (buf.size_bytes,), torch.uint8).clone()
-
-    golden = GoldenQwen3Moe.from_packed_bytes(
-        dims, cfg.n_layers, pinned("W_embed"),
-        [pinned(f"W_{i}") for i in range(cfg.n_layers)], pinned("W_head"),
-    )
+    model = bridges.build_reference_model(cfg)
+    bridges.load_reference_init(model, cfg, dims,
+                                bridges.get_bytes_from_values(values))
+    model.train()
+    B = dims.tokens // cfg.seq_len
     total = None
     for r in range(cfg.grad_accum_rounds):
-        toks = torch_view(values[f"tokens_0_{r}"], (dims.tokens,), torch.int32).long().cuda()
-        tgts = torch_view(values[f"targets_0_{r}"], (dims.tokens,), torch.int32).long().cuda()
-        ce_r, aux_r = golden.loss_terms(toks, tgts)
-        term = ce_r + aux_r
-        total = term if total is None else total + term
+        toks = torch_view(values[f"tokens_0_{r}"], (dims.tokens,),
+                          torch.int32).long().cuda().view(B, cfg.seq_len)
+        tgts = torch_view(values[f"targets_0_{r}"], (dims.tokens,),
+                          torch.int32).long().cuda().view(B, cfg.seq_len)
+        loss_r = model.loss(toks, tgts, aux_coef=cfg.aux_coef)
+        total = loss_r if total is None else total + loss_r
     total.backward()
-    golden.step_count = 1
-    golden._opt_obj("embed", golden.w_embed)
-    for i, leaves in enumerate(golden.w_blocks):
-        golden._opt_obj(f"block_{i}", leaves)
-    golden._opt_obj("head", golden.w_head)
+    hp = AdamWHyper()
+    for par in model.parameters():
+        if par.grad is None:
+            continue
+        m = torch.zeros_like(par)
+        v = torch.zeros_like(par)
+        adamw_field_step(par.data, par.grad, m, v, lr=hp.lr,
+                         beta1=hp.beta1, beta2=hp.beta2, eps=hp.eps,
+                         weight_decay=hp.weight_decay, step=1)
 
     from dataflow.runtime.engine import uniform_segments
 
-    dry = Engine(FakeBackend()).execute(planned.program, initial_buffers=values)
+    dry = Engine(FakeBackend()).execute(planned.program,
+                                        initial_buffers=values)
     result = Engine(backend).execute(
         planned.program, resolver=fam.build_resolver(dims),
         initial_buffers=values, pool_prewarm=dry.pool_demand,
         run_args={"segments": uniform_segments(dims, planned.program)},
     )
-
-    def worst_field_err(object_id):
-        rec = result.objects.get(object_id)
-        slot = rec.backing or rec.fast
-        layout, leaves = golden.final_leaves(object_id)
-        return max(
-            rel_l2(
-                torch_view(slot.buffer, f.shape, TORCH_DTYPE_BY_NAME[f.dtype],
-                           offset_bytes=f.offset_bytes),
-                leaves[f.name],
-            )
-            for f in layout.fields
-        )
-
-    assert worst_field_err("W_embed") < 3e-2
-    for i in range(cfg.n_layers):
-        assert worst_field_err(f"W_{i}") < 3e-2, f"W_{i}"
-    assert worst_field_err("W_head") < 3e-2
+    engine_state = bridges.to_reference_state_dict(
+        cfg, EngineFinalBytes(result))
+    twin_state = dict(model.state_dict())
+    for name, engine_tensor in engine_state.items():
+        err = rel_l2(engine_tensor, twin_state[name])
+        assert err < 3e-2, (name, err)
     result.close()
-    dry.close()
-    for buf in values.values():
-        backend.free(buf)
 
 
 # --- engine-level gates: determinism / measured-replan / multistep ------------------
@@ -427,50 +294,6 @@ def test_qwen3moe_measured_costs_replan_still_golden():
     _assert_same(again, base)
 
 
-def test_qwen3moe_multistep_matches_golden_and_loss_decreases():
-    from dataflow.models.qwen3moe_reference import GoldenQwen3Moe
-    from dataflow.runtime.device.cuda import CudaBackend
-    from dataflow.tasks.interop import torch_view
-    from dataflow.training.families import resolve_family
-    from dataflow.training.planning import plan_program
-    from dataflow.training.train_loop import train
-
-    STEPS = 3
-    cfg = _tiny_cfg()
-    fam = resolve_family(cfg)
-    dims = fam.dims_of(cfg)
-    planned = plan_program(fam.lower(cfg), fast_memory_capacity=8 * 1024 * 1024)
-    backend = CudaBackend()
-
-    gen = torch.Generator().manual_seed(99)
-    one_batch = (
-        torch.randint(0, dims.vocab_size, (dims.tokens,), generator=gen, dtype=torch.int32),
-        torch.randint(0, dims.vocab_size, (dims.tokens,), generator=gen, dtype=torch.int32),
-    )
-    batches = [one_batch] * STEPS
-
-    snapshot = fam.initial_values(planned.program, cfg, backend, seed=5)
-
-    def pinned(name):
-        buf = snapshot[name]
-        return torch_view(buf, (buf.size_bytes,), torch.uint8).clone()
-
-    golden = GoldenQwen3Moe.from_packed_bytes(
-        dims, cfg.n_layers, pinned("W_embed"),
-        [pinned(f"W_{i}") for i in range(cfg.n_layers)], pinned("W_head"),
-    )
-    golden_losses = [
-        golden.train_step(t.long().cuda(), g.long().cuda()) for t, g in batches
-    ]
-
-    report = train(
-        planned.program, cfg, backend,
-        steps=STEPS, seed=5, token_stream=lambda s: batches[s],
-    )
-    for ours, ref in zip(report.losses, golden_losses):
-        assert abs(ours - ref) / max(abs(ref), 1e-9) < 3e-2, (report.losses, golden_losses)
-    assert report.losses[-1] < report.losses[0]
-    assert all(n == 0 for n in report.step_slab_overflows[1:]), report.step_slab_overflows
 
 
 def test_qwen3moe_poison_on_free_changes_nothing():

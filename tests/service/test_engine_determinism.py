@@ -31,6 +31,7 @@ STEPS = 3
 
 def run_steps(client, cfg, prog_id, stream) -> list:
     losses = []
+    overflows = []
     fetch = [f"loss_0_{r}" for r in range(cfg.grad_accum_rounds)]
     for step in range(STEPS):
         valid = 0
@@ -44,6 +45,11 @@ def run_steps(client, cfg, prog_id, stream) -> list:
                          fetch=fetch)
         assert out.get("state") == "done", (step, out)
         losses.append(sum(out["fetched"][k] for k in fetch))
+        overflows.append(out.get("slab_overflows"))
+    # steady state must be overflow-free: step 0 may escape to the vendor
+    # allocator while pools warm; later steps reuse those buffers
+    if all(n is not None for n in overflows):
+        assert all(n == 0 for n in overflows[1:]), overflows
     return losses
 
 

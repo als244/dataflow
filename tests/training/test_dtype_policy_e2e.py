@@ -14,10 +14,19 @@ if not torch.cuda.is_available():
     pytest.skip("no CUDA device", allow_module_level=True)
 
 from dataflow.tasks.layouts import DTypePolicy, ParamDTypes  # noqa: E402
+from dataflow.training.testing.gradcheck import (  # noqa: E402
+    check_block_backward,
+    check_model_step,
+    family_gate_kwargs,
+)
 from dataflow.training.models.llama3 import ShapedLlamaConfig  # noqa: E402
-from dataflow.training.testing.gradcheck import check_block_backward, check_model_step  # noqa: E402
 
 pytestmark = pytest.mark.gpu
+
+# dt_bias is zero-init with a sub-noise one-step update — the documented
+# field_atol envelope (~2*lr); fp32 storage does not lift the GRADIENT
+# out of cross-implementation kernel noise, so the envelope stays
+QWEN35_BIAS_ATOL = {"dt_bias": 2.5e-4}
 
 FP32_ALL = ParamDTypes(param="fp32", grad="fp32", opt="fp32")
 MIXED = DTypePolicy(
@@ -79,7 +88,9 @@ def test_qwen35_model_step_mixed_policy():
         ),
     )
     cfg = replace(ShapedQwen35Config.tiny(), dtypes=policy)
-    check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2).assert_ok()
+    check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
+                     field_atol=QWEN35_BIAS_ATOL,
+                     **family_gate_kwargs("qwen35")).assert_ok()
 
 
 DEPTH = DTypePolicy(
@@ -128,4 +139,6 @@ def test_qwen35_model_step_depth_dependent():
         ),
     )
     cfg = replace(ShapedQwen35Config.tiny(), dtypes=policy)
-    check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2).assert_ok()
+    check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
+                     field_atol=QWEN35_BIAS_ATOL,
+                     **family_gate_kwargs("qwen35")).assert_ok()

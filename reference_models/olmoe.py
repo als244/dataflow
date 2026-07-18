@@ -121,6 +121,27 @@ def apply_rope(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.T
     return out.to(x.dtype)
 
 
+def packed_positions(seq_lens, device) -> torch.Tensor:
+    """Per-token rope positions for a PACKED round: every sequence
+    restarts at 0. (varlen mode — see Model.forward(seq_lens=...))."""
+    return torch.cat([torch.arange(n, device=device) for n in seq_lens])
+
+
+def block_causal_mask(seq_lens, device) -> torch.Tensor:
+    """(T, T) additive {0, -inf} fp32 mask for a packed round: causal
+    WITHIN each sequence, -inf across sequences — block-diagonal varlen
+    attention, the packed-round semantics the engine's prologue derives
+    from run_args seq_lens."""
+    t = int(sum(seq_lens))
+    m = torch.full((t, t), float("-inf"), device=device)
+    lo = 0
+    for n in seq_lens:
+        m[lo:lo + n, lo:lo + n] = torch.triu(
+            torch.full((n, n), float("-inf"), device=device), diagonal=1)
+        lo += n
+    return m
+
+
 class Attention(nn.Module):
     """qwen3-shaped attention with FULL-ROW qk-norm applied BEFORE rope: one
     RMSNorm over the whole ``(T, q_dim)`` / ``(T, kv_dim)`` projection row
@@ -139,7 +160,7 @@ class Attention(nn.Module):
         self.k_norm = RMSNorm(cfg.kv_dim)   # FULL-ROW gain (whole k row)
         self.wo = nn.Linear(cfg.q_dim, cfg.d_model, bias=False)
 
-    def forward(self, h1, cos, sin):
+    def forward(self, h1, cos, sin, mask=None):
         B, T, _ = h1.shape
         H, KV, hd = self.n_heads, self.n_kv_heads, self.head_dim
         # full-row qk-norm over the ENTIRE projection row, then reshape to heads
@@ -152,7 +173,11 @@ class Attention(nn.Module):
         q = q.transpose(1, 2)                             # (B, H, T, hd)
         k = k.repeat_interleave(rep, dim=2).transpose(1, 2)   # rep == 1 at 7B (no GQA)
         v = v.repeat_interleave(rep, dim=2).transpose(1, 2)
-        o = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        if mask is None:
+            o = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        else:       # packed varlen: block-diagonal causality in the mask
+            o = F.scaled_dot_product_attention(q, k, v,
+                                               attn_mask=mask.to(q.dtype))
         o = o.transpose(1, 2).reshape(B, T, H * hd)
         return self.wo(o)
 
@@ -183,6 +208,24 @@ class MoE(nn.Module):
         # this layer's load-balancing term, populated each forward (None until
         # the first forward). Read via Olmoe.load_balance_loss().
         self.aux_lbl: torch.Tensor | None = None
+        # round-global LBL state (see forward); ints detached, p_sum live
+        self.step_counts: torch.Tensor | None = None
+        self.round_p_sum: torch.Tensor | None = None
+        self.round_tokens = 0
+
+    def reset_round_lbl(self) -> None:
+        self.step_counts = None
+        self.round_p_sum = None
+        self.round_tokens = 0
+
+    def round_lbl(self) -> torch.Tensor:
+        """ROUND-global L_layer = E * sum_e f_e * pbar_e from the pieces
+        accumulated across the round's forwards — the engine's DEFAULT
+        per-round LBL (round-global counts/probs, crossing sequence
+        boundaries within the round; memory-efficient, ga-variant)."""
+        t = self.round_tokens
+        f = self.step_counts.float() / (t * self.top_k)
+        return self.n_experts * (f * (self.round_p_sum / t)).sum()
 
     def forward(self, h2: torch.Tensor, resid: torch.Tensor) -> torch.Tensor:
         B, T, d = h2.shape
@@ -200,11 +243,23 @@ class MoE(nn.Module):
         #   via bincount => detached), p̄_e = mean full-E router prob for e (grad
         #   flows through p̄). Stashed only — does NOT touch the routed output below.
         n_tok = B * T
-        counts = torch.bincount(ids.reshape(-1),
-                                minlength=self.n_experts).float()
+        counts_i = torch.bincount(ids.reshape(-1),
+                                  minlength=self.n_experts)
+        counts = counts_i.float()
         frac = counts / (n_tok * self.top_k)              # (E,) f_e, detached fraction
-        p_bar = probs.reshape(n_tok, self.n_experts).mean(0)   # (E,) grad-carrying
+        p_flat = probs.reshape(n_tok, self.n_experts)
+        p_bar = p_flat.mean(0)                            # (E,) grad-carrying
         self.aux_lbl = self.n_experts * (frac * p_bar).sum()   # fp32 scalar
+        # ROUND-global LBL pieces (engine-default semantics): detached
+        # counts + LIVE prob sums accumulated across the round's forwards;
+        # the parity harness combines them via round_load_balance_loss()
+        # and resets with reset_round_lbl()
+        p_sum = p_flat.sum(0)                             # (E,) LIVE
+        self.step_counts = (counts_i if self.step_counts is None
+                            else self.step_counts + counts_i)
+        self.round_p_sum = (p_sum if self.round_p_sum is None
+                            else self.round_p_sum + p_sum)
+        self.round_tokens += n_tok
         # dropless masked E-loop (autograd-able; correctness over speed)
         routed = torch.zeros(B, T, d, dtype=torch.float32, device=h2.device)
         for e in range(self.n_experts):
@@ -225,8 +280,8 @@ class Block(nn.Module):
         self.ffn_norm = RMSNorm(cfg.d_model)
         self.moe = MoE(cfg)
 
-    def forward(self, x, cos, sin):
-        h_mid = x + self.attn(self.attn_norm(x), cos, sin)
+    def forward(self, x, cos, sin, mask=None):
+        h_mid = x + self.attn(self.attn_norm(x), cos, sin, mask)
         # the MoE tail folds the residual into its fp32 combine (returns h_mid + routed)
         return self.moe(self.ffn_norm(h_mid), h_mid)
 
@@ -234,6 +289,12 @@ class Block(nn.Module):
 class Olmoe(nn.Module):
     """Untied-embedding OLMoE. ``forward`` takes ``(B, T)`` int tokens where
     each row is an independent causal sequence (uniform packing)."""
+
+    SUPPORTS_PACKED = True
+
+    # load-balance form the training-parity harness can rely on:
+    # "forward_global" (see gradcheck.reference_model_step)
+    AUX_FORM = "forward_global"
 
     def __init__(self, cfg: OlmoeConfig):
         super().__init__()
@@ -246,18 +307,51 @@ class Olmoe(nn.Module):
         # trade compute for memory — only needed at the largest scale; off by default.
         self.grad_checkpoint = False
 
-    def forward(self, tokens: torch.Tensor) -> torch.Tensor:
+    def forward(self, tokens: torch.Tensor,
+                seq_lens: tuple[int, ...] | None = None) -> torch.Tensor:
         B, T = tokens.shape
         x = self.embed(tokens)
-        cos, sin = rope_tables(T, self.cfg.head_dim, self.cfg.rope_base,
-                               x.device)
+        if seq_lens is None:
+            cos, sin = rope_tables(T, self.cfg.head_dim, self.cfg.rope_base,
+                                   x.device)
+            mask = None
+        else:
+            if B != 1 or T != int(sum(seq_lens)):
+                raise ValueError(f"packed mode expects (1, sum(seq_lens)) "
+                                 f"tokens; got {tuple(tokens.shape)} for "
+                                 f"{seq_lens}")
+            cos, sin = rope_tables(max(seq_lens), self.cfg.head_dim,
+                                   self.cfg.rope_base, x.device)
+            pos = packed_positions(seq_lens, x.device)
+            cos, sin = cos[pos], sin[pos]
+            mask = block_causal_mask(seq_lens, x.device)
         for blk in self.blocks:
             if self.grad_checkpoint and self.training:
-                x = torch.utils.checkpoint.checkpoint(blk, x, cos, sin,
+                x = torch.utils.checkpoint.checkpoint(blk, x, cos, sin, mask,
                                                       use_reentrant=False)
             else:
-                x = blk(x, cos, sin)
+                x = blk(x, cos, sin, mask)
         return self.lm_head(self.final_norm(x))
+
+
+    def reset_round_lbl(self) -> None:
+        """Clear every MoE layer's accumulated round-LBL pieces (call
+        between rounds / steps in multi-round harnesses)."""
+        for m in self.modules():
+            if hasattr(m, "round_p_sum"):
+                m.reset_round_lbl()
+
+    def round_load_balance_loss(self) -> torch.Tensor:
+        """Sum over MoE layers of the ROUND-global load-balance term
+        (round_lbl) — the engine-default per-round LBL. The harness
+        applies aux_coef and adds it ONCE per round after the round's
+        forwards; contrast load_balance_loss() (per-forward form)."""
+        total = torch.zeros((), dtype=torch.float32,
+                            device=self.embed.weight.device)
+        for m in self.modules():
+            if getattr(m, "round_p_sum", None) is not None:
+                total = total + m.round_lbl()
+        return total
 
     def load_balance_loss(self) -> torch.Tensor:
         """Sum over MoE layers of the per-layer load-balancing term
@@ -273,7 +367,8 @@ class Olmoe(nn.Module):
         return torch.stack(terms).sum()
 
     def loss(self, tokens: torch.Tensor, targets: torch.Tensor, *,
-             aux_coef: float = 0.0) -> torch.Tensor:
+             aux_coef: float = 0.0,
+             seq_lens: tuple[int, ...] | None = None) -> torch.Tensor:
         """Mean cross-entropy over all tokens (fp32) — matches the engine's
         per-round HeadLoss normalization. ``tokens``/``targets`` are ``(B, T)``
         int; targets are the next-token ids.
@@ -283,7 +378,7 @@ class Olmoe(nn.Module):
         summed over MoE layers — the standard Switch/GShard term (matches the
         engine). The default ``aux_coef=0`` returns CE alone, bit-identical to
         the CE-only path."""
-        logits = self.forward(tokens)
+        logits = self.forward(tokens, seq_lens=seq_lens)
         ce = F.cross_entropy(
             logits.float().reshape(-1, logits.shape[-1]),
             targets.reshape(-1).long(),

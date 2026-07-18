@@ -181,6 +181,37 @@ def swiglu(gate: torch.Tensor, up: torch.Tensor) -> torch.Tensor:
     return F.silu(gate.float()).to(gate.dtype) * up
 
 
+def packed_positions(seq_lens, device) -> torch.Tensor:
+    """Per-token rope positions for a PACKED round: every sequence
+    restarts at 0. (varlen mode — see Model.forward(seq_lens=...))."""
+    return torch.cat([torch.arange(n, device=device) for n in seq_lens])
+
+
+def block_causal_mask(seq_lens, device) -> torch.Tensor:
+    """(T, T) additive {0, -inf} fp32 mask for a packed round: causal
+    WITHIN each sequence, -inf across sequences. In packed mode this
+    REPLACES the plain causal mask everywhere it flows — sparse core,
+    indexer scores, selection, and the KL live set inherit the
+    block-diagonal structure automatically."""
+    t = int(sum(seq_lens))
+    m = torch.full((t, t), float("-inf"), device=device)
+    lo = 0
+    for n in seq_lens:
+        m[lo:lo + n, lo:lo + n] = torch.triu(
+            torch.full((n, n), float("-inf"), device=device), diagonal=1)
+        lo += n
+    return m
+
+
+def seq_bounds_of(seq_lens) -> tuple[tuple[int, int], ...]:
+    """Flat-token (lo, hi) per sequence for a packed round."""
+    out, lo = [], 0
+    for n in seq_lens:
+        out.append((lo, lo + n))
+        lo += n
+    return tuple(out)
+
+
 class DsaAttention(nn.Module):
     """MLA expansion + DeepSeek Sparse Attention.
 
@@ -214,6 +245,10 @@ class DsaAttention(nn.Module):
         # per-head score weights: fp32, engine orientation (h1 @ w_idx_w)
         self.w_idx_w = nn.Parameter(torch.empty(cfg.d_model, hi, dtype=torch.float32))
         nn.init.normal_(self.w_idx_w, std=cfg.d_model ** -0.5)
+        # opt-in KL channel (harness parity gates): forward additionally
+        # stashes this layer's indexer training loss on self.idx_kl
+        self.stash_idx_kl = False
+        self.idx_kl: torch.Tensor | None = None
 
     def _mla_qkv(self, h1, cos, sin):
         """MLA q/kv expansion -> (q_lora, q_full, k_full, v_pad); the last
@@ -282,8 +317,37 @@ class DsaAttention(nn.Module):
         with torch.no_grad():                                 # indexer: selection only
             scores = self._index_scores(h1, q_lora, cos, sin, causal)
             mask = self._select_mask(scores, causal)
+        if self.stash_idx_kl:
+            self.idx_kl = self._indexer_kl(h1, q_lora, q_full, k_full,
+                                           cos, sin, causal, mask)
         attn = self._sparse_core(q_full, k_full, v_pad, mask)
         return self.wo(attn)
+
+    def _indexer_kl(self, h1, q_lora, q_full, k_full, cos, sin, causal,
+                    mask):
+        """The engine's indexer training objective, replicated exactly
+        (tasks/modules/dsa_reference.py): L_I = sum_t KL(p_t || sigma_t)
+        over the selection's live set. The KL TARGET p is this layer's
+        head-summed masked attention probabilities, L1-renormalized,
+        DETACHED; the indexer INPUT is detached (h1/q_lora), so the
+        gradient reaches ONLY the five indexer weights — no gradient
+        crosses the seam in either direction."""
+        c = self.cfg
+        with torch.no_grad():
+            scale = c.qk_head_dim ** -0.5
+            logits = torch.einsum("bthd,bshd->bhts", q_full.float(),
+                                  k_full.float()) * scale
+            logits = logits + mask.unsqueeze(1)
+            p = torch.softmax(logits, dim=-1).sum(1)           # (B,T,T)
+        live = mask == 0
+        p = p.masked_fill(~live, 0.0)
+        p = p / p.sum(-1, keepdim=True).clamp_min(1e-20)
+        scores_t = self._index_scores(h1.detach(), q_lora.detach(),
+                                      cos, sin, causal)
+        logsig = torch.log_softmax(scores_t + mask, dim=-1)
+        plogp = torch.where(p > 0, p * p.clamp_min(1e-20).log(),
+                            p.new_zeros(()))
+        return (plogp - p * logsig.masked_fill(~live, 0.0)).sum()
 
 
 class DenseMLP(nn.Module):
@@ -373,7 +437,7 @@ class MoE(nn.Module):
             torch.sign(c.mean() - c).to(self.w_router_bias.dtype), alpha=speed)
 
     def _load_balance_loss(self, logits: torch.Tensor, ids: torch.Tensor,
-                           B: int, T: int) -> torch.Tensor:
+                           B: int, T: int, seq_bounds=None) -> torch.Tensor:
         """DeepSeek-V3's complementary SEQUENCE-WISE balance loss, no α
         (fp32 scalar). Per sequence s (each of the B length-T rows):
         ``L_s = Σ_e f_e^s·P_e^s`` with ``f_e^s = count_e^s·E/(K·T)`` from the
@@ -384,25 +448,36 @@ class MoE(nn.Module):
         EXCLUDED. Matches the engine's ``moe_seq_aux_loss_reference``."""
         E, K = self.cfg.n_experts, self.cfg.top_k
         s = torch.sigmoid(logits.float())                     # (N, E)
-        sn = (s / s.sum(-1, keepdim=True)).view(B, T, E)      # grad via P
-        row_ids = ids.view(B, T, K)
+        sn_flat = s / s.sum(-1, keepdim=True)                 # grad via P
         total = torch.zeros((), dtype=torch.float32, device=logits.device)
-        for row in range(B):
-            with torch.no_grad():                             # f from discrete ids
-                counts = torch.bincount(row_ids[row].reshape(-1),
+        if seq_bounds is None:
+            sn = sn_flat.view(B, T, E)
+            row_ids = ids.view(B, T, K)
+            for row in range(B):
+                with torch.no_grad():                         # f from discrete ids
+                    counts = torch.bincount(row_ids[row].reshape(-1),
+                                            minlength=E).float()
+                    f = counts * E / (K * T)
+                total = total + (f * sn[row].mean(0)).sum()
+            return total
+        for lo, hi in seq_bounds:      # packed: each SEGMENT is one sequence
+            with torch.no_grad():
+                counts = torch.bincount(ids[lo:hi].reshape(-1),
                                         minlength=E).float()
-                f = counts * E / (K * T)
-            total = total + (f * sn[row].mean(0)).sum()
+                f = counts * E / (K * (hi - lo))
+            total = total + (f * sn_flat[lo:hi].mean(0)).sum()
         return total
 
-    def forward(self, h2: torch.Tensor, resid: torch.Tensor) -> torch.Tensor:
+    def forward(self, h2: torch.Tensor, resid: torch.Tensor,
+                seq_bounds=None) -> torch.Tensor:
         c = self.cfg
         B, T, d = h2.shape
         f = c.d_ff_expert
         x = h2.reshape(B * T, d)
         logits = x @ self.w_router                            # (N, E) storage-dtype
         w, ids = self._route(logits)
-        self.aux_lbl = self._load_balance_loss(logits, ids, B, T)  # fp32, no α
+        self.aux_lbl = self._load_balance_loss(logits, ids, B, T,
+                                               seq_bounds)   # fp32, no α
         # step-aggregate counts (detached ints) for apply_bias_update
         self.last_counts = torch.bincount(ids.reshape(-1), minlength=c.n_experts)
         routed = torch.zeros(B * T, d, dtype=torch.float32, device=h2.device)
@@ -429,18 +504,24 @@ class Block(nn.Module):
         self.ffn_norm = RMSNorm(cfg.d_model)
         self.mlp = DenseMLP(cfg) if self.kind == "dense" else MoE(cfg)
 
-    def forward(self, x, cos, sin, causal):
+    def forward(self, x, cos, sin, causal, seq_bounds=None):
         h_mid = x + self.attn(self.attn_norm(x), cos, sin, causal)
         h2 = self.ffn_norm(h_mid)
         if self.kind == "dense":
             return h_mid + self.mlp(h2)
         # the MoE tail folds the residual into its fp32 combine
-        return self.mlp(h2, h_mid)
+        return self.mlp(h2, h_mid, seq_bounds)
 
 
 class Dsv32(nn.Module):
     """Untied-embedding DeepSeek-V3.2. ``forward`` takes ``(B, T)`` int tokens
     where each row is an independent causal sequence (uniform packing)."""
+
+    SUPPORTS_PACKED = True
+
+    # load-balance form the training-parity harness can rely on:
+    # "sequence_wise" (see gradcheck.reference_model_step)
+    AUX_FORM = "sequence_wise"
 
     def __init__(self, cfg: Dsv32Config):
         super().__init__()
@@ -453,19 +534,54 @@ class Dsv32(nn.Module):
         # trade compute for memory — only needed at the largest scale; off by default.
         self.grad_checkpoint = False
 
-    def forward(self, tokens: torch.Tensor) -> torch.Tensor:
+    def forward(self, tokens: torch.Tensor,
+                seq_lens: tuple[int, ...] | None = None) -> torch.Tensor:
         B, T = tokens.shape
         x = self.embed(tokens)
-        cos, sin = rope_tables(T, self.cfg.qk_rope_dim, self.cfg.rope_base, x.device)
-        causal = torch.triu(
-            torch.full((T, T), float("-inf"), device=x.device), diagonal=1)
+        if seq_lens is None:
+            cos, sin = rope_tables(T, self.cfg.qk_rope_dim,
+                                   self.cfg.rope_base, x.device)
+            causal = torch.triu(
+                torch.full((T, T), float("-inf"), device=x.device),
+                diagonal=1)
+            bounds = None
+        else:
+            if B != 1 or T != int(sum(seq_lens)):
+                raise ValueError(f"packed mode expects (1, sum(seq_lens)) "
+                                 f"tokens; got {tuple(tokens.shape)} for "
+                                 f"{seq_lens}")
+            cos, sin = rope_tables(max(seq_lens), self.cfg.qk_rope_dim,
+                                   self.cfg.rope_base, x.device)
+            pos = packed_positions(seq_lens, x.device)
+            cos, sin = cos[pos], sin[pos]
+            causal = block_causal_mask(seq_lens, x.device)
+            bounds = seq_bounds_of(seq_lens)
         for blk in self.blocks:
             if self.grad_checkpoint and self.training:
                 x = torch.utils.checkpoint.checkpoint(
-                    blk, x, cos, sin, causal, use_reentrant=False)
+                    blk, x, cos, sin, causal, bounds, use_reentrant=False)
             else:
-                x = blk(x, cos, sin, causal)
+                x = blk(x, cos, sin, causal, bounds)
         return self.lm_head(self.final_norm(x))
+
+    def enable_indexer_kl(self, on: bool = True) -> None:
+        """Opt-in the indexer KL channel: every layer's forward then
+        stashes its training objective for indexer_loss(). Off by
+        default (the extra O(h*T^2) prob materialization is gate-only)."""
+        for blk in self.blocks:
+            blk.attn.stash_idx_kl = on
+
+    def indexer_loss(self) -> torch.Tensor:
+        """Sum over layers of the indexer KL objective stashed by the
+        most recent forward (every dsv32 layer is its own leader group).
+        The engine applies this at coefficient 1, unscaled by the CE
+        denominator — the harness adds it the same way."""
+        total = torch.zeros((), dtype=torch.float32,
+                            device=self.embed.weight.device)
+        for blk in self.blocks:
+            if blk.attn.idx_kl is not None:
+                total = total + blk.attn.idx_kl
+        return total
 
     def load_balance_loss(self) -> torch.Tensor:
         """Sum over MoE layers of the routed-expert load-balancing aux
@@ -481,14 +597,15 @@ class Dsv32(nn.Module):
         return total
 
     def loss(self, tokens: torch.Tensor, targets: torch.Tensor, *,
-             aux_coef: float = 0.0) -> torch.Tensor:
+             aux_coef: float = 0.0,
+             seq_lens: tuple[int, ...] | None = None) -> torch.Tensor:
         """``loss()`` returns mean CE; pass ``aux_coef>0`` to add DeepSeek-V3's
         SEQUENCE-WISE balance loss (see the module docstring), summed over
         rows and MoE layers — matches the engine's
         ``moe_seq_aux_loss_reference``; the shared expert is excluded. With
         the default ``aux_coef=0`` the returned value is the pure-CE loss.
         ``tokens``/``targets`` are ``(B, T)`` int next-token ids."""
-        logits = self.forward(tokens)
+        logits = self.forward(tokens, seq_lens=seq_lens)
         ce = F.cross_entropy(
             logits.float().reshape(-1, logits.shape[-1]),
             targets.reshape(-1).long(),

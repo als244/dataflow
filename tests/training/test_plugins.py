@@ -35,7 +35,7 @@ STUB = textwrap.dedent('''
             name="stubfam", config_type=ShapedStubConfig,
             dims_of=base.dims_of, lower=lower_llama3,
             initial_values=base.initial_values,
-            build_resolver=base.build_resolver, golden=base.golden,
+            build_resolver=base.build_resolver,
         )
 
 
@@ -123,7 +123,7 @@ def test_validate_family_reports_broken_surface():
             name="brokenfam", config_type=dict,  # not a dataclass, no tiny()
             dims_of=base.dims_of, lower=base.lower,
             initial_values=base.initial_values,
-            build_resolver=base.build_resolver, golden=base.golden,
+            build_resolver=base.build_resolver,
         )
 
     F.register_family("brokenfam", _broken)

@@ -5,8 +5,9 @@ from dataclasses import replace
 
 import torch
 
-from dataflow.models.llama3_reference import GoldenLlama3
 from dataflow.training.models.llama3 import ShapedLlamaConfig
+
+from golden_base import GoldenLlama3
 
 name = "llama3"
 bias_speed = 0.0

@@ -289,6 +289,15 @@ def run_reference(cfg, recipe: Recipe, stream, steps: int, *, seed: int = 11,
                 (ce_r * scale).backward()
             step_loss += float(ce_r.detach()) * scale
         opt.step(step)
+        # noaux balance-bias configs: apply the optimizer-time sign rule
+        # on the STEP-AGGREGATE counts (the twin modules accumulated them
+        # across this step's rounds; apply_bias_update clears them) —
+        # matching the engine's once-per-step application
+        speed = float(getattr(cfg, "bias_update_speed", 0.0) or 0.0)
+        if speed > 0.0:
+            for module in model.modules():
+                if hasattr(module, "apply_bias_update"):
+                    module.apply_bias_update(speed)
         torch.cuda.synchronize()
         dt = time.perf_counter() - t0
         res.losses.append(step_loss)

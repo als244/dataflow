@@ -145,6 +145,36 @@ class GatedRMSNorm(nn.Module):
         return (y * self.weight.float()).to(o.dtype)
 
 
+def packed_positions(seq_lens, device) -> torch.Tensor:
+    """Per-token rope positions for a PACKED round: every sequence
+    restarts at 0. (varlen mode — see Model.forward(seq_lens=...))."""
+    return torch.cat([torch.arange(n, device=device) for n in seq_lens])
+
+
+def block_causal_mask(seq_lens, device) -> torch.Tensor:
+    """(T, T) additive {0, -inf} fp32 mask for a packed round: causal
+    WITHIN each sequence, -inf across sequences (block-diagonal varlen
+    attention for the full-attention mixers; the DeltaNet mixers reset
+    state per segment instead — see GatedDeltaNet.forward)."""
+    t = int(sum(seq_lens))
+    m = torch.full((t, t), float("-inf"), device=device)
+    lo = 0
+    for n in seq_lens:
+        m[lo:lo + n, lo:lo + n] = torch.triu(
+            torch.full((n, n), float("-inf"), device=device), diagonal=1)
+        lo += n
+    return m
+
+
+def seq_bounds_of(seq_lens) -> tuple[tuple[int, int], ...]:
+    """Flat-token (lo, hi) per sequence for a packed round."""
+    out, lo = [], 0
+    for n in seq_lens:
+        out.append((lo, lo + n))
+        lo += n
+    return tuple(out)
+
+
 class GatedDeltaNet(nn.Module):
     """The linear (Gated DeltaNet) mixer, including its output projection."""
 
@@ -167,7 +197,14 @@ class GatedDeltaNet(nn.Module):
         y = F.conv1d(xf, self.conv.weight.float(), groups=self.cfg.conv_dim)
         return F.silu(y.transpose(1, 2)).to(x.dtype)          # (B,T,D)
 
-    def forward(self, h1: torch.Tensor) -> torch.Tensor:
+    def forward(self, h1: torch.Tensor, seq_bounds=None) -> torch.Tensor:
+        if seq_bounds is not None:
+            # packed varlen: the recurrence (conv left-pad + delta-rule
+            # state) restarts per sequence — run each segment through the
+            # single-sequence path and concatenate. Exact, not approximate:
+            # both the conv pad and the state are zero-initialized.
+            return torch.cat([self.forward(h1[:, lo:hi])
+                              for lo, hi in seq_bounds], dim=1)
         c = self.cfg
         B, T, _ = h1.shape
         qkvz = self.w_qkvz(h1)
@@ -200,7 +237,7 @@ class GatedAttention(nn.Module):
         self.k_norm = RMSNorm(cfg.head_dim)
         self.wo = nn.Linear(cfg.attn_dim, cfg.d_model, bias=False)
 
-    def forward(self, h1, cos, sin) -> torch.Tensor:
+    def forward(self, h1, cos, sin, mask=None) -> torch.Tensor:
         c = self.cfg
         B, T, _ = h1.shape
         H, KV, hd = c.n_heads, c.n_kv_heads, c.head_dim
@@ -214,7 +251,11 @@ class GatedAttention(nn.Module):
         rep = H // KV
         k = k.repeat_interleave(rep, dim=2).transpose(1, 2)
         v = v.repeat_interleave(rep, dim=2).transpose(1, 2)
-        o = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        if mask is None:
+            o = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        else:       # packed varlen: block-diagonal causality in the mask
+            o = F.scaled_dot_product_attention(q, k, v,
+                                               attn_mask=mask.to(q.dtype))
         o = o.transpose(1, 2).reshape(B, T, c.attn_dim)
         gated = o * torch.sigmoid(gate.float()).to(o.dtype)
         return self.wo(gated)
@@ -241,14 +282,17 @@ class Block(nn.Module):
         self.ffn_norm = RMSNorm(cfg.d_model)
         self.mlp = MLP(cfg)
 
-    def forward(self, x, cos, sin):
+    def forward(self, x, cos, sin, mask=None, seq_bounds=None):
         h1 = self.attn_norm(x)
-        mix = self.mixer(h1, cos, sin) if self.kind == "full" else self.mixer(h1)
+        mix = (self.mixer(h1, cos, sin, mask) if self.kind == "full"
+               else self.mixer(h1, seq_bounds))
         xo = x + mix
         return xo + self.mlp(self.ffn_norm(xo))
 
 
 class Qwen35(nn.Module):
+
+    SUPPORTS_PACKED = True
     def __init__(self, cfg: Qwen35Config):
         super().__init__()
         self.cfg = cfg
@@ -260,19 +304,36 @@ class Qwen35(nn.Module):
             self.lm_head.weight = self.embed.weight
         self.grad_checkpoint = False
 
-    def forward(self, tokens: torch.Tensor) -> torch.Tensor:
+    def forward(self, tokens: torch.Tensor,
+                seq_lens: tuple[int, ...] | None = None) -> torch.Tensor:
         B, T = tokens.shape
         x = self.embed(tokens)
-        cos, sin = rope_tables(T, self.cfg.rot_dim, self.cfg.rope_base, x.device)
+        if seq_lens is None:
+            cos, sin = rope_tables(T, self.cfg.rot_dim, self.cfg.rope_base,
+                                   x.device)
+            mask = None
+            bounds = None
+        else:
+            if B != 1 or T != int(sum(seq_lens)):
+                raise ValueError(f"packed mode expects (1, sum(seq_lens)) "
+                                 f"tokens; got {tuple(tokens.shape)} for "
+                                 f"{seq_lens}")
+            cos, sin = rope_tables(max(seq_lens), self.cfg.rot_dim,
+                                   self.cfg.rope_base, x.device)
+            pos = packed_positions(seq_lens, x.device)
+            cos, sin = cos[pos], sin[pos]
+            mask = block_causal_mask(seq_lens, x.device)
+            bounds = seq_bounds_of(seq_lens)
         for blk in self.blocks:
             if self.grad_checkpoint and self.training:
-                x = torch.utils.checkpoint.checkpoint(blk, x, cos, sin,
-                                                      use_reentrant=False)
+                x = torch.utils.checkpoint.checkpoint(
+                    blk, x, cos, sin, mask, bounds, use_reentrant=False)
             else:
-                x = blk(x, cos, sin)
+                x = blk(x, cos, sin, mask, bounds)
         return self.lm_head(self.final_norm(x))
 
-    def loss(self, tokens: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-        logits = self.forward(tokens)
+    def loss(self, tokens: torch.Tensor, targets: torch.Tensor, *,
+             seq_lens: tuple[int, ...] | None = None) -> torch.Tensor:
+        logits = self.forward(tokens, seq_lens=seq_lens)
         return F.cross_entropy(logits.float().reshape(-1, logits.shape[-1]),
                                targets.reshape(-1).long())

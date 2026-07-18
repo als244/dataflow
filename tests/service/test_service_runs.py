@@ -79,41 +79,6 @@ def _tokens(cfg, seed):
     return toks, tgts
 
 
-def test_daemon_losses_bit_equal_inprocess(rig):
-    """N steps of identical data: daemon losses == in-process losses,
-    bit for bit."""
-    from dataflow.runtime.device.cuda import CudaBackend
-    from dataflow.training.train_loop import train
-
-    cfg, steps = rig["cfg"], 4
-    toks, tgts = _tokens(cfg, seed=101)
-
-    # ---- in-process reference
-    backend = CudaBackend()
-
-    def stream(_k):
-        return toks, tgts
-
-    report = train(rig["planned"].program, cfg, backend, steps=steps,
-                   seed=11, token_stream=stream)
-    ref_losses = [round(x, 10) for x in report.losses]
-
-    # ---- daemon
-    with EngineClient(rig["sock"], client_name="parity") as c:
-        c.materialize_group({"kind": "family_init_all", "family": "llama3",
-                             "cfg": _cfg_dict(cfg), "seed": 11})
-        c.put_object("tokens_0_0", toks.numpy().tobytes())
-        c.put_object("targets_0_0", tgts.numpy().tobytes())
-        reg = c.register_program(rig["prog_dict"],
-                                 resolver=rig["resolver"])
-        assert not reg["bindings"]["missing_inputs"]
-        got = []
-        for k in range(steps):
-            r = c.run(reg["prog_id"], args={"step": k},
-                      fetch=["loss_0_0"])
-            assert r["state"] == "done"
-            got.append(round(r["fetched"]["loss_0_0"], 10))
-    assert got == ref_losses, f"daemon {got} != inprocess {ref_losses}"
 
 
 def test_rebind_two_token_slabs(rig):

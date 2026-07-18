@@ -180,6 +180,36 @@ def swiglu(x1: torch.Tensor, x3: torch.Tensor) -> torch.Tensor:
 # --- MLA attention ------------------------------------------------------------
 
 
+def packed_positions(seq_lens, device) -> torch.Tensor:
+    """Per-token rope positions for a PACKED round: every sequence
+    restarts at 0. (varlen mode — see Model.forward(seq_lens=...))."""
+    return torch.cat([torch.arange(n, device=device) for n in seq_lens])
+
+
+def block_causal_mask(seq_lens, device) -> torch.Tensor:
+    """(T, T) additive {0, -inf} fp32 mask for a packed round: causal
+    WITHIN each sequence, -inf across sequences — block-diagonal varlen
+    attention, the packed-round semantics the engine's prologue derives
+    from run_args seq_lens."""
+    t = int(sum(seq_lens))
+    m = torch.full((t, t), float("-inf"), device=device)
+    lo = 0
+    for n in seq_lens:
+        m[lo:lo + n, lo:lo + n] = torch.triu(
+            torch.full((n, n), float("-inf"), device=device), diagonal=1)
+        lo += n
+    return m
+
+
+def seq_bounds_of(seq_lens) -> tuple[tuple[int, int], ...]:
+    """Flat-token (lo, hi) per sequence for a packed round."""
+    out, lo = [], 0
+    for n in seq_lens:
+        out.append((lo, lo + n))
+        lo += n
+    return tuple(out)
+
+
 class MLA(nn.Module):
     """Multi-head Latent Attention: low-rank q + low-rank kv with a single
     decoupled RoPE key shared across heads. Takes the post-attn-norm input
@@ -198,7 +228,8 @@ class MLA(nn.Module):
         self.w_kv_b = nn.Linear(cfg.kv_lora_rank, h * (cfg.qk_nope_dim + cfg.v_head_dim), bias=False)
         self.wo = nn.Linear(h * cfg.v_head_dim, cfg.d_model, bias=False)
 
-    def forward(self, h1: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
+    def forward(self, h1: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor,
+                mask: torch.Tensor | None = None) -> torch.Tensor:
         c = self.cfg
         B, T, _ = h1.shape
         H, nope, rope, v = c.n_heads, c.qk_nope_dim, c.qk_rope_dim, c.v_head_dim
@@ -219,9 +250,16 @@ class MLA(nn.Module):
         vv = kvb[..., nope:]                                   # (B, T, H, v)
 
         # per-head causal attention; SDPA scale = qk**-0.5 (default at head_dim=qk)
-        o = F.scaled_dot_product_attention(
-            q.transpose(1, 2), k.transpose(1, 2), vv.transpose(1, 2), is_causal=True,
-        )                                                      # (B, H, T, v)
+        if mask is None:
+            o = F.scaled_dot_product_attention(
+                q.transpose(1, 2), k.transpose(1, 2), vv.transpose(1, 2),
+                is_causal=True,
+            )                                                  # (B, H, T, v)
+        else:       # packed varlen: block-diagonal causality lives in the mask
+            o = F.scaled_dot_product_attention(
+                q.transpose(1, 2), k.transpose(1, 2), vv.transpose(1, 2),
+                attn_mask=mask.to(q.dtype),
+            )
         o = o.transpose(1, 2).reshape(B, T, H * v)
         return self.wo(o)
 
@@ -278,8 +316,10 @@ class MoEMLP(nn.Module):
         # (re)computed and stashed by every forward; 0 until the first forward.
         self.aux_lbl = torch.zeros(())
         # the most recent forward's aggregate assignment counts (E,) int64 —
-        # consumed by apply_bias_update (the optimizer-time sign rule)
+        # consumed by apply_bias_update (the optimizer-time sign rule);
+        # accumulates across grad-accum forwards, cleared on apply
         self.last_counts: torch.Tensor | None = None
+        self.step_counts: torch.Tensor | None = None
         self.w13 = nn.Parameter(torch.empty(E, d, 2 * F_))
         self.w2 = nn.Parameter(torch.empty(E, F_, d))
         # fan-in init so a from-scratch (non-bridged) model is well-conditioned;
@@ -292,14 +332,17 @@ class MoEMLP(nn.Module):
             self.w_s2 = nn.Linear(fs, d, bias=False)
 
     def apply_bias_update(self, speed: float) -> None:
-        """DeepSeek's aux-free balance rule on the most recent forward's
-        assignment counts: ``b += speed * sign(mean(c) - c)``. An
-        OPTIMIZER-TIME mechanism — the training harness calls this once per
-        step after the weight update; the bias never sees autograd (it enters
-        selection only)."""
-        c = self.last_counts.float()
+        """DeepSeek's aux-free balance rule on the STEP-AGGREGATE
+        assignment counts (summed over every forward since the last
+        call — grad-accum rounds included, matching the engine's dW
+        count accumulation): ``b += speed * sign(mean(c) - c)``. An
+        OPTIMIZER-TIME mechanism — the training harness calls this once
+        per step after the weight update; the bias never sees autograd
+        (it enters selection only). Clears the aggregate."""
+        c = self.step_counts.float()
         self.router_bias.add_(
             torch.sign(c.mean() - c).to(self.router_bias.dtype), alpha=speed)
+        self.step_counts = torch.zeros_like(self.step_counts)
 
     def _route(self, logits: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """sigmoid_noaux_tc: group-limited biased selection, raw-sigmoid
@@ -327,8 +370,12 @@ class MoEMLP(nn.Module):
         weights = picked / picked.sum(-1, keepdim=True) * c.routed_scaling
         return weights, ids
 
-    def forward(self, h2: torch.Tensor, resid: torch.Tensor) -> torch.Tensor:
-        # h2: post-ffn-norm activation; resid: post-attention residual stream.
+    def forward(self, h2: torch.Tensor, resid: torch.Tensor,
+                seq_bounds=None) -> torch.Tensor:
+        # h2: post-ffn-norm activation; resid: post-attention residual
+        # stream. ``seq_bounds``: flat-token (lo, hi) per sequence in
+        # PACKED mode — the SEQUENCE-WISE aux then loops segments
+        # instead of (B, T) rows.
         c = self.cfg
         B, T, d = h2.shape
         F_ = c.d_ff_expert
@@ -349,18 +396,29 @@ class MoEMLP(nn.Module):
         # Summed over the B rows; at B=1 this equals the global E·Σ_e f_e·p̄_e.
         K = ids.shape[1]
         s = torch.sigmoid(logits.float())
-        sn = (s / s.sum(-1, keepdim=True)).view(B, T, c.n_experts)
-        row_ids = ids.view(B, T, K)
+        sn_flat = s / s.sum(-1, keepdim=True)                  # (N, E)
         aux = torch.zeros((), dtype=torch.float32, device=hf.device)
-        for row in range(B):
-            counts = torch.bincount(row_ids[row].reshape(-1),
-                                    minlength=c.n_experts).float()
-            f = counts * c.n_experts / (K * T)
-            aux = aux + (f * sn[row].mean(0)).sum()
+        if seq_bounds is None:
+            sn = sn_flat.view(B, T, c.n_experts)
+            row_ids = ids.view(B, T, K)
+            for row in range(B):
+                counts = torch.bincount(row_ids[row].reshape(-1),
+                                        minlength=c.n_experts).float()
+                f = counts * c.n_experts / (K * T)
+                aux = aux + (f * sn[row].mean(0)).sum()
+        else:
+            # packed varlen: each SEGMENT is one sequence of the round
+            for lo, hi in seq_bounds:
+                counts = torch.bincount(ids[lo:hi].reshape(-1),
+                                        minlength=c.n_experts).float()
+                f = counts * c.n_experts / (K * (hi - lo))
+                aux = aux + (f * sn_flat[lo:hi].mean(0)).sum()
         self.aux_lbl = aux
         # step-aggregate discrete assignment counts (detached ints) for the
         # optimizer-time aux-free bias rule (apply_bias_update)
         self.last_counts = torch.bincount(ids.reshape(-1), minlength=c.n_experts)
+        self.step_counts = (self.last_counts if self.step_counts is None
+                            else self.step_counts + self.last_counts)
 
         # dropless masked E-loop: at most one top-K slot hits each expert per row
         routed = torch.zeros(B * T, d, dtype=torch.float32, device=hf.device)
@@ -393,15 +451,24 @@ class Block(nn.Module):
         self.ffn_norm = RMSNorm(cfg.d_model)
         self.ffn = DenseMLP(cfg) if self.kind == "dense" else MoEMLP(cfg)
 
-    def forward(self, x, cos, sin):
-        h_mid = x + self.attn(self.attn_norm(x), cos, sin)
-        # both FFN kinds fold the residual into their output (return h_mid + ffn)
-        return self.ffn(self.ffn_norm(h_mid), h_mid)
+    def forward(self, x, cos, sin, mask=None, seq_bounds=None):
+        h_mid = x + self.attn(self.attn_norm(x), cos, sin, mask)
+        h2 = self.ffn_norm(h_mid)
+        # both FFN kinds fold the residual into their output (h_mid + ffn)
+        if self.kind == "dense":
+            return self.ffn(h2, h_mid)
+        return self.ffn(h2, h_mid, seq_bounds)
 
 
 class Dsv3(nn.Module):
     """Untied-embedding DeepSeek-V3. ``forward`` takes ``(B, T)`` int tokens
     where each row is an independent causal sequence (uniform packing)."""
+
+    SUPPORTS_PACKED = True
+
+    # load-balance form the training-parity harness can rely on:
+    # "sequence_wise" (see gradcheck.reference_model_step)
+    AUX_FORM = "sequence_wise"
 
     def __init__(self, cfg: Dsv3Config):
         super().__init__()
@@ -414,16 +481,32 @@ class Dsv3(nn.Module):
         # trade compute for memory — only needed at the largest scale; off by default.
         self.grad_checkpoint = False
 
-    def forward(self, tokens: torch.Tensor) -> torch.Tensor:
+    def forward(self, tokens: torch.Tensor,
+                seq_lens: tuple[int, ...] | None = None) -> torch.Tensor:
         B, T = tokens.shape
         x = self.embed(tokens)
-        cos, sin = rope_tables(T, self.cfg.qk_rope_dim, self.cfg.rope_base, x.device)
+        if seq_lens is None:
+            cos, sin = rope_tables(T, self.cfg.qk_rope_dim,
+                                   self.cfg.rope_base, x.device)
+            mask = None
+            bounds = None
+        else:
+            if B != 1 or T != int(sum(seq_lens)):
+                raise ValueError(f"packed mode expects (1, sum(seq_lens)) "
+                                 f"tokens; got {tuple(tokens.shape)} for "
+                                 f"{seq_lens}")
+            cos, sin = rope_tables(max(seq_lens), self.cfg.qk_rope_dim,
+                                   self.cfg.rope_base, x.device)
+            pos = packed_positions(seq_lens, x.device)
+            cos, sin = cos[pos], sin[pos]
+            mask = block_causal_mask(seq_lens, x.device)
+            bounds = seq_bounds_of(seq_lens)
         for blk in self.blocks:
             if self.grad_checkpoint and self.training:
-                x = torch.utils.checkpoint.checkpoint(blk, x, cos, sin,
-                                                      use_reentrant=False)
+                x = torch.utils.checkpoint.checkpoint(
+                    blk, x, cos, sin, mask, bounds, use_reentrant=False)
             else:
-                x = blk(x, cos, sin)
+                x = blk(x, cos, sin, mask, bounds)
         return self.lm_head(self.final_norm(x))
 
     def load_balance_loss(self) -> torch.Tensor:
@@ -438,7 +521,8 @@ class Dsv3(nn.Module):
         return torch.stack(terms).sum()
 
     def loss(self, tokens: torch.Tensor, targets: torch.Tensor, *,
-             aux_coef: float = 0.0) -> torch.Tensor:
+             aux_coef: float = 0.0,
+             seq_lens: tuple[int, ...] | None = None) -> torch.Tensor:
         """Mean cross-entropy over all tokens (fp32) — matches the engine's
         per-round HeadLoss normalization. ``tokens``/``targets`` are ``(B, T)``
         int next-token ids. Pass ``aux_coef>0`` to add DeepSeek-V3's
@@ -446,7 +530,7 @@ class Dsv3(nn.Module):
         and MoE layers — matches the engine's ``moe_seq_aux_loss_reference``;
         the shared expert is excluded. Default ``aux_coef=0`` → pure CE,
         bit-identical to the aux-free path."""
-        logits = self.forward(tokens)
+        logits = self.forward(tokens, seq_lens=seq_lens)
         ce = F.cross_entropy(
             logits.float().reshape(-1, logits.shape[-1]),
             targets.reshape(-1).long(),

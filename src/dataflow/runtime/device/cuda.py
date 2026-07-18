@@ -38,6 +38,23 @@ class CudaError(RuntimeError):
     pass
 
 
+import weakref
+
+# every constructed backend, for test-teardown drains (weak: a backend
+# dies with its last reference; drain_all only touches live ones)
+_BACKENDS: "weakref.WeakSet" = weakref.WeakSet()
+
+
+def drain_all_backends() -> int:
+    """Release every outstanding allocation on every live CudaBackend —
+    the raw-cudaMalloc counterpart of torch.cuda.empty_cache for test
+    teardown. Returns total bytes released."""
+    total = 0
+    for be in list(_BACKENDS):
+        total += be.drain()
+    return total
+
+
 def _check(result: tuple) -> tuple:
     err = result[0]
     if err != cudart.cudaError_t.cudaSuccess:
@@ -66,7 +83,7 @@ class PcieBandwidth:
     bidi_d2h: int
 
 
-@dataclass
+@dataclass(eq=False)
 class CudaBackend:
     name: str = "cuda"
     physical: bool = True
@@ -88,11 +105,17 @@ class CudaBackend:
     _hostfn_ptr: Any = None
     # diagnostics
     events_created: int = 0
+    # live-allocation ledger: every alloc() registers here, free()
+    # deregisters. drain() releases whatever is still outstanding — the
+    # lifecycle backstop for callers that exit without freeing (test
+    # teardown; raw cudaMalloc is invisible to torch's empty_cache)
+    _live: dict = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         _check(cudart.cudaSetDevice(self.device))
         _check(cudart.cudaFree(0))  # establish context eagerly
         self._t0_host = time.perf_counter()
+        _BACKENDS.add(self)
         if self.completion_mode == "hostfn":
             self._hostfn_cfunc = _HOSTFN_CFUNC_TYPE(self._on_hostfn)
             addr = ctypes.cast(self._hostfn_cfunc, ctypes.c_void_p).value
@@ -151,10 +174,12 @@ class CudaBackend:
         else:
             ptr, raw = self._alloc_pinned(size_bytes)
         self._seq += 1
-        return Buffer(
+        buf = Buffer(
             id=f"buf{self._seq}", location=location, size_bytes=size_bytes,
             ptr=int(ptr), raw=raw,
         )
+        self._live[buf.id] = buf
+        return buf
 
     def _alloc_pinned(self, size_bytes: int):
         """cudaHostAlloc, page-granular (no power-of-2 rounding — that lore is
@@ -172,12 +197,24 @@ class CudaBackend:
         return int(ptr), ("hostalloc", size_bytes)
 
     def free(self, buffer: Buffer) -> None:
+        if self._live.pop(buffer.id, None) is None:
+            return                      # already freed (drain idempotence)
         if buffer.location == "fast":
             _check(cudart.cudaFree(buffer.ptr))
         else:
             _check(cudart.cudaFreeHost(buffer.ptr))
             if isinstance(buffer.raw, tuple) and buffer.raw[0] == "hostalloc":
                 self.pinned_bytes -= buffer.raw[1]
+
+    def drain(self) -> int:
+        """Free every allocation still outstanding on this backend;
+        returns the byte total released. Safe only when no work is in
+        flight (synchronize first)."""
+        released = 0
+        for buf in list(self._live.values()):
+            released += buf.size_bytes
+            self.free(buf)
+        return released
 
     # --- async work -----------------------------------------------------------
     def memcpy_async(

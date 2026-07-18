@@ -242,8 +242,14 @@ def test_index_scores_ragged_packing_matches_per_sequence():
     sa = dsa_index_scores_reference(h1[:64], ql[:64], w, d_a)
     sb = dsa_index_scores_reference(h1[64:], ql[64:], w, d_b)
     la, lb = ~torch.isinf(sa), ~torch.isinf(sb)
-    assert rel_l2(s_packed[:64, :64][la], sa[la]) < 1e-6
-    assert rel_l2(s_packed[64:, 64:][lb], sb[lb]) < 1e-6
+    assert rel_l2(s_packed[:64, :64][la], sa[la]) < 1e-2   # NOT bitwise: packing the same tokens differently changes
+        # GEMM batching, shifting activations at the bf16 ulp level
+        # (measured 3.2e-3; the counts-bit-equality lesson in
+        # continuous form — docs/correctness_compare.md gotcha 4)
+    assert rel_l2(s_packed[64:, 64:][lb], sb[lb]) < 1e-2   # NOT bitwise: packing the same tokens differently changes
+        # GEMM batching, shifting activations at the bf16 ulp level
+        # (measured 3.2e-3; the counts-bit-equality lesson in
+        # continuous form — docs/correctness_compare.md gotcha 4)
 
 
 # --- eager kernel ops vs references (M-H1b) ----------------------------------------

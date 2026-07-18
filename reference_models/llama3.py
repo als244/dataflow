@@ -87,6 +87,27 @@ def apply_rope(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.T
     return out.to(x.dtype)
 
 
+def packed_positions(seq_lens, device) -> torch.Tensor:
+    """Per-token rope positions for a PACKED round: every sequence
+    restarts at 0. (varlen mode — see Model.forward(seq_lens=...))."""
+    return torch.cat([torch.arange(n, device=device) for n in seq_lens])
+
+
+def block_causal_mask(seq_lens, device) -> torch.Tensor:
+    """(T, T) additive {0, -inf} fp32 mask for a packed round: causal
+    WITHIN each sequence, -inf across sequences — block-diagonal varlen
+    attention, the packed-round semantics the engine's prologue derives
+    from run_args seq_lens."""
+    t = int(sum(seq_lens))
+    m = torch.full((t, t), float("-inf"), device=device)
+    lo = 0
+    for n in seq_lens:
+        m[lo:lo + n, lo:lo + n] = torch.triu(
+            torch.full((n, n), float("-inf"), device=device), diagonal=1)
+        lo += n
+    return m
+
+
 class Attention(nn.Module):
     def __init__(self, cfg: Llama3Config):
         super().__init__()
@@ -98,7 +119,7 @@ class Attention(nn.Module):
         self.wv = nn.Linear(cfg.d_model, cfg.kv_dim, bias=False)
         self.wo = nn.Linear(cfg.n_heads * cfg.head_dim, cfg.d_model, bias=False)
 
-    def forward(self, x, cos, sin):
+    def forward(self, x, cos, sin, mask=None):
         B, T, _ = x.shape
         H, KV, hd = self.n_heads, self.n_kv_heads, self.head_dim
         q = apply_rope(self.wq(x).view(B, T, H, hd), cos, sin)
@@ -108,7 +129,11 @@ class Attention(nn.Module):
         q = q.transpose(1, 2)                                   # (B, H, T, hd)
         k = k.repeat_interleave(rep, dim=2).transpose(1, 2)
         v = v.repeat_interleave(rep, dim=2).transpose(1, 2)
-        o = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        if mask is None:
+            o = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        else:       # packed varlen: block-diagonal causality lives in the mask
+            o = F.scaled_dot_product_attention(q, k, v,
+                                               attn_mask=mask.to(q.dtype))
         o = o.transpose(1, 2).reshape(B, T, H * hd)
         return self.wo(o)
 
@@ -134,14 +159,19 @@ class Block(nn.Module):
         self.ffn_norm = RMSNorm(cfg.d_model)
         self.mlp = MLP(cfg)
 
-    def forward(self, x, cos, sin):
-        h = x + self.attn(self.attn_norm(x), cos, sin)
+    def forward(self, x, cos, sin, mask=None):
+        h = x + self.attn(self.attn_norm(x), cos, sin, mask)
         return h + self.mlp(self.ffn_norm(h))
 
 
 class Llama3(nn.Module):
     """Untied-embedding llama3. ``forward`` takes ``(B, T)`` int tokens where
-    each row is an independent causal sequence (uniform packing)."""
+    each row is an independent causal sequence (uniform packing); pass
+    ``seq_lens`` with a ``(1, sum(seq_lens))`` packed row for native varlen
+    (per-sequence positions + block-diagonal attention — the engine's
+    packed-round semantics)."""
+
+    SUPPORTS_PACKED = True
 
     def __init__(self, cfg: Llama3Config):
         super().__init__()
@@ -155,24 +185,39 @@ class Llama3(nn.Module):
         # single card; off by default.
         self.grad_checkpoint = False
 
-    def forward(self, tokens: torch.Tensor) -> torch.Tensor:
+    def forward(self, tokens: torch.Tensor,
+                seq_lens: tuple[int, ...] | None = None) -> torch.Tensor:
         B, T = tokens.shape
         x = self.embed(tokens)
-        cos, sin = rope_tables(T, self.cfg.head_dim, self.cfg.rope_base,
-                               x.device)
+        if seq_lens is None:
+            cos, sin = rope_tables(T, self.cfg.head_dim, self.cfg.rope_base,
+                                   x.device)
+            mask = None
+        else:
+            if B != 1 or T != int(sum(seq_lens)):
+                raise ValueError(f"packed mode expects (1, sum(seq_lens)) "
+                                 f"tokens; got {tuple(tokens.shape)} for "
+                                 f"{seq_lens}")
+            cos, sin = rope_tables(max(seq_lens), self.cfg.head_dim,
+                                   self.cfg.rope_base, x.device)
+            pos = packed_positions(seq_lens, x.device)
+            cos, sin = cos[pos], sin[pos]
+            mask = block_causal_mask(seq_lens, x.device)
         for blk in self.blocks:
             if self.grad_checkpoint and self.training:
-                x = torch.utils.checkpoint.checkpoint(blk, x, cos, sin,
+                x = torch.utils.checkpoint.checkpoint(blk, x, cos, sin, mask,
                                                       use_reentrant=False)
             else:
-                x = blk(x, cos, sin)
+                x = blk(x, cos, sin, mask)
         return self.lm_head(self.final_norm(x))
 
-    def loss(self, tokens: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    def loss(self, tokens: torch.Tensor, targets: torch.Tensor, *,
+             seq_lens: tuple[int, ...] | None = None) -> torch.Tensor:
         """Mean cross-entropy over all tokens (fp32) — matches the engine's
         per-round HeadLoss normalization. ``tokens``/``targets`` are ``(B, T)``
-        int; targets are the next-token ids."""
-        logits = self.forward(tokens)
+        int; targets are the next-token ids. ``seq_lens`` selects packed
+        varlen mode (see ``forward``)."""
+        logits = self.forward(tokens, seq_lens=seq_lens)
         return F.cross_entropy(
             logits.float().reshape(-1, logits.shape[-1]),
             targets.reshape(-1).long(),

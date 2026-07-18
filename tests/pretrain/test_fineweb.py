@@ -16,9 +16,17 @@ def test_header_parse(corpus):
     magic, version, ntok = fineweb.read_header(corpus.paths[0])
     assert magic == fineweb.MAGIC
     assert version == 1
-    assert ntok == 100_000_000  # llm.c 100M-token shards
+    # llm.c shards are 100M tokens each; a box may hold a SUBSET of
+    # the corpus (test rigs ship only the stream head), so gate the
+    # per-shard invariant, not the corpus total
+    assert ntok == 100_000_000
     assert corpus.total_tokens == sum(corpus.shard_ntok)
-    assert corpus.total_tokens > 10_000_000_000  # ~10.25B across 103 shards
+    if len(corpus.paths) >= 103:
+        assert corpus.total_tokens > 10_000_000_000  # full llm.c corpus
+    else:
+        # subset rig (e.g. the stream-head shards on a test box): the
+        # per-shard invariants above are the load-bearing checks
+        assert corpus.total_tokens == 100_000_000 * len(corpus.paths)
 
 
 def test_stream_deterministic(corpus):

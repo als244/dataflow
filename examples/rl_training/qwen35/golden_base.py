@@ -1,4 +1,10 @@
-"""Golden Qwen3.5-dense reference: plain eager torch + autograd.
+"""Vendored isolated reference base for this example (formerly
+dataflow.models.qwen35_reference): the example is self-contained client
+code and carries its own ground-truth trainer; kept in sync by the
+example's parity gate. The packed-leaf helpers (``Leaves``,
+``unpack_leaves``) formerly lived in dataflow.models.llama3_reference.
+
+Golden Qwen3.5-dense reference: plain eager torch + autograd.
 
 Standalone (the hybrid structure doesn't fit the llama golden): per-kind
 block forwards composed EXCLUSIVELY from the pinned reference ops
@@ -28,7 +34,18 @@ from dataflow.tasks.layouts import (
     qwen35_lin_weight_layout,
 )
 from dataflow.tasks.base_blocks import AdamWHyper
-from dataflow.models.llama3_reference import Leaves, unpack_leaves
+
+Leaves = dict[str, torch.Tensor]
+
+
+def unpack_leaves(layout: PackedLayout, raw_bytes: torch.Tensor) -> Leaves:
+    """Typed CUDA leaf tensors (requires_grad) from a packed uint8 copy."""
+    out: Leaves = {}
+    for f in layout.fields:
+        sl = raw_bytes[f.offset_bytes : f.offset_bytes + f.nbytes]
+        t = sl.clone().view(TORCH_DTYPE_BY_NAME[f.dtype]).view(f.shape)
+        out[f.name] = t.cuda().requires_grad_()
+    return out
 
 
 @dataclass

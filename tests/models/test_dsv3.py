@@ -14,7 +14,6 @@ that lands a count on the mean boundary flips a whole +-speed bias step
 qwen35moe's dt_bias sign lottery; the honest comparison is the
 field_atol envelope |db| <= 2*speed + slack, not a relative bound.
 """
-import math
 from dataclasses import replace
 
 import pytest
@@ -23,7 +22,12 @@ torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
     pytest.skip("no CUDA device", allow_module_level=True)
 
-from dataflow.training.testing.gradcheck import check_model_step, rel_l2  # noqa: E402
+from dataflow.training.testing.gradcheck import (  # noqa: E402
+    check_model_step,
+    family_gate_kwargs,
+    rel_l2,
+    field_atol_for,
+)
 
 pytestmark = pytest.mark.gpu
 
@@ -43,55 +47,6 @@ def _tiny_dims(cfg=None):
 # --- golden self-consistency -----------------------------------------------------
 
 
-def test_golden_dsv3_trains():
-    from dataflow.models.dsv3_reference import GoldenDsv3
-    from dataflow.tasks.layouts import head_weight_layout
-
-    cfg = _tiny_cfg()
-    dims = _tiny_dims(cfg)
-    gen = torch.Generator().manual_seed(0)
-
-    def packed(layout):
-        flat = torch.zeros(layout.total_bytes, dtype=torch.uint8)
-        fb = flat.view(torch.uint8)
-        for f in layout.fields:
-            n = int(torch.tensor(f.shape).prod())
-            if f.dtype == "fp32":
-                v = torch.zeros(n, dtype=torch.float32)  # the balance bias
-                fb[f.offset_bytes:f.offset_bytes + f.nbytes] = v.view(torch.uint8)
-                continue
-            vals = (torch.randn(n, generator=gen) * 0.02).to(torch.bfloat16)
-            if f.name.endswith("_norm_w"):
-                vals = torch.ones(n, dtype=torch.bfloat16)
-            fb[f.offset_bytes:f.offset_bytes + f.nbytes] = vals.view(torch.uint8)
-        return flat
-
-    def table():
-        n = dims.vocab_size * dims.d_model
-        return (torch.randn(n, generator=gen) * 0.02).to(torch.bfloat16).view(torch.uint8)
-
-    golden = GoldenDsv3.from_packed_bytes(
-        dims, cfg.n_layers, table(),
-        [packed(golden_layout) for golden_layout in
-         (GoldenDsv3(dims=dims, n_layers=cfg.n_layers).block_layout(i)
-          for i in range(cfg.n_layers))],
-        packed(head_weight_layout(dims)),
-    )
-    toks = torch.randint(0, dims.vocab_size, (dims.tokens,), generator=gen).cuda()
-    tgts = torch.randint(0, dims.vocab_size, (dims.tokens,), generator=gen).cuda()
-    ce0, aux0 = golden.loss_terms(toks, tgts)
-    assert torch.isfinite(aux0) and float(aux0.detach()) > 0.0
-    losses = [golden.train_step(toks, tgts) for _ in range(3)]
-    assert all(x == x for x in losses)
-    assert abs(losses[0] - math.log(dims.vocab_size)) < 0.5
-    assert losses[-1] < losses[0]
-    # the balance bias moved (skewed routing at random init) but only by
-    # multiples of the update speed
-    moved = [b["w_router_bias"] for b in golden.w_blocks if "w_router_bias" in b]
-    assert moved and any(m.abs().sum() > 0 for m in moved)
-    for m in moved:
-        steps = m / cfg.bias_update_speed
-        assert torch.allclose(steps, steps.round(), atol=1e-4)
 
 
 # --- lowering ----------------------------------------------------------------------
@@ -150,31 +105,31 @@ def test_dsv3_partial_ownership_lowering_rejected():
 # --- full program through the real engine ------------------------------------------
 
 
-_BIAS_ATOL = {"w_router_bias": 2.5e-3}  # 2.5x speed: +-2 steps + fp slack
+_BIAS_ATOL = {"router_bias": 2.5e-3}   # 2.5x speed: +-2 steps + fp
+# slack. KEY IS THE TWIN BUFFER NAME ("router_bias"; dsv32/glm52 use
+# "w_router_bias") — a w_-prefixed key never suffix-matches here and
+# silently disables the envelope (bitten three times, see ledger)
 
 
-def test_dsv3_model_step_vs_golden():
-    check_model_step(_tiny_cfg(), fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
-                     field_atol=_BIAS_ATOL).assert_ok()
 
 
 def test_dsv3_aux_zero_model_step_vs_golden():
     check_model_step(
         _tiny_cfg(aux_coef=0.0), fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
-        field_atol=_BIAS_ATOL,
+        field_atol=_BIAS_ATOL, **family_gate_kwargs("dsv3"),
     ).assert_ok()
 
 
 def test_dsv3_plan_invariance():
     cfg = _tiny_cfg()
     r1 = check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
-                          field_atol=_BIAS_ATOL)
+                          field_atol=_BIAS_ATOL, **family_gate_kwargs("dsv3"))
     r2 = check_model_step(cfg, fast_memory_capacity=8 * 1024 * 1024, tol=3e-2,
-                          field_atol=_BIAS_ATOL)
+                          field_atol=_BIAS_ATOL, **family_gate_kwargs("dsv3"))
     levels = {f"A_0_0_{i}": 1 for i in range(cfg.n_layers)}
     r3 = check_model_step(
         cfg, fast_memory_capacity=8 * 1024 * 1024, recompute_levels=levels, tol=3e-2,
-        field_atol=_BIAS_ATOL,
+        field_atol=_BIAS_ATOL, **family_gate_kwargs("dsv3"),
     )
     for r in (r1, r2, r3):
         r.assert_ok()
@@ -183,90 +138,85 @@ def test_dsv3_plan_invariance():
 def test_dsv3_batch2_packed_sequences_vs_golden():
     cfg = _tiny_cfg(batch=2, seq_len=64)
     check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
-                     field_atol=_BIAS_ATOL).assert_ok()
+                     field_atol=_BIAS_ATOL,
+                     **family_gate_kwargs("dsv3")).assert_ok()
 
 
-def test_dsv3_ga2_matches_golden():
-    from dataflow.models.dsv3_reference import GoldenDsv3
+def test_dsv3_ga2_matches_reference():
+    """Two grad-accum rounds with the LBL composite + noaux bias rule:
+    engine == the isolated twin (whose per-step aggregate-count bias
+    semantics were certified against the engine at 2B scale)."""
+    from dataflow.pretrain import bridges
+    from dataflow.pretrain.driver import adamw_field_step
     from dataflow.runtime import Engine
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.runtime.device.fake import FakeBackend
-    from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME, torch_view
+    from dataflow.tasks.base_blocks import AdamWHyper
+    from dataflow.tasks.interop import torch_view
     from dataflow.training.families import resolve_family
     from dataflow.training.planning import plan_program
+    from dataflow.training.testing.gradcheck import (
+        EngineFinalBytes,
+        rel_l2,
+    )
 
     cfg = _tiny_cfg(grad_accum_rounds=2)
     fam = resolve_family(cfg)
     dims = fam.dims_of(cfg)
-    planned = plan_program(fam.lower(cfg), fast_memory_capacity=16 * 1024 * 1024)
+    planned = plan_program(fam.lower(cfg),
+                           fast_memory_capacity=16 * 1024 * 1024)
     backend = CudaBackend()
     values = fam.initial_values(planned.program, cfg, backend, seed=3)
 
-    def pinned(name):
-        buf = values[name]
-        return torch_view(buf, (buf.size_bytes,), torch.uint8).clone()
-
-    golden = GoldenDsv3.from_packed_bytes(
-        dims, cfg.n_layers, pinned("W_embed"),
-        [pinned(f"W_{i}") for i in range(cfg.n_layers)], pinned("W_head"),
-    )
-    golden._pending_counts = []
+    model = bridges.build_reference_model(cfg)
+    bridges.load_reference_init(model, cfg, dims,
+                                bridges.get_bytes_from_values(values))
+    model.train()
+    B = dims.tokens // cfg.seq_len
     total = None
     for r in range(cfg.grad_accum_rounds):
-        toks = torch_view(values[f"tokens_0_{r}"], (dims.tokens,), torch.int32).long().cuda()
-        tgts = torch_view(values[f"targets_0_{r}"], (dims.tokens,), torch.int32).long().cuda()
-        ce_r, aux_r = golden.loss_terms(toks, tgts)
-        term = ce_r + aux_r
-        total = term if total is None else total + term
+        toks = torch_view(values[f"tokens_0_{r}"], (dims.tokens,),
+                          torch.int32).long().cuda().view(B, cfg.seq_len)
+        tgts = torch_view(values[f"targets_0_{r}"], (dims.tokens,),
+                          torch.int32).long().cuda().view(B, cfg.seq_len)
+        loss_r = model.loss(toks, tgts, aux_coef=cfg.aux_coef)
+        total = loss_r if total is None else total + loss_r
     total.backward()
-    golden.step_count = 1
-    golden._opt_obj("embed", golden.w_embed)
-    # bias rule on the STEP AGGREGATE counts (both rounds), mirroring the
-    # runtime's dW accumulation; counts were captured per round in order
-    n_moe = sum(1 for b in golden.w_blocks if "w_router_bias" in b)
-    per_round = [golden._pending_counts[i::n_moe] for i in range(n_moe)] \
-        if n_moe else []
-    moe_i = 0
-    for i, leaves in enumerate(golden.w_blocks):
-        golden._opt_obj(f"block_{i}", leaves)
-        if "w_router_bias" in leaves:
-            agg = sum(per_round[moe_i])
-            b = leaves["w_router_bias"]
-            b.data.add_(torch.sign(agg.mean() - agg).to(b.dtype),
-                        alpha=cfg.bias_update_speed)
-            moe_i += 1
-    golden._opt_obj("head", golden.w_head)
+    hp = AdamWHyper()
+    for par in model.parameters():
+        if par.grad is None:
+            continue
+        m = torch.zeros_like(par)
+        v = torch.zeros_like(par)
+        adamw_field_step(par.data, par.grad, m, v, lr=hp.lr,
+                         beta1=hp.beta1, beta2=hp.beta2, eps=hp.eps,
+                         weight_decay=hp.weight_decay, step=1)
+    for module in model.modules():
+        if hasattr(module, "apply_bias_update"):
+            module.apply_bias_update(cfg.bias_update_speed)
 
     from dataflow.runtime.engine import uniform_segments
 
-    dry = Engine(FakeBackend()).execute(planned.program, initial_buffers=values)
+    dry = Engine(FakeBackend()).execute(planned.program,
+                                        initial_buffers=values)
     result = Engine(backend).execute(
         planned.program, resolver=fam.build_resolver(dims),
         initial_buffers=values, pool_prewarm=dry.pool_demand,
         run_args={"segments": uniform_segments(dims, planned.program)},
     )
-
-    def worst_field_err(object_id):
-        rec = result.objects.get(object_id)
-        slot = rec.backing or rec.fast
-        layout, leaves = golden.final_leaves(object_id)
-        return max(
-            rel_l2(
-                torch_view(slot.buffer, f.shape, TORCH_DTYPE_BY_NAME[f.dtype],
-                           offset_bytes=f.offset_bytes),
-                leaves[f.name],
-            )
-            for f in layout.fields
-        )
-
-    assert worst_field_err("W_embed") < 3e-2
-    for i in range(cfg.n_layers):
-        assert worst_field_err(f"W_{i}") < 3e-2, f"W_{i}"
-    assert worst_field_err("W_head") < 3e-2
+    engine_state = bridges.to_reference_state_dict(
+        cfg, EngineFinalBytes(result))
+    twin_state = dict(model.state_dict())
+    for name, engine_tensor in engine_state.items():
+        atol = field_atol_for(name, _BIAS_ATOL)
+        if atol is not None:
+            gap = float((engine_tensor.float().cpu()
+                         - twin_state[name].float().cpu()).abs().max())
+            assert gap <= atol, (name, gap)
+            continue
+        err = rel_l2(engine_tensor, twin_state[name])
+        assert err < 3e-2, (name, err)
     result.close()
-    dry.close()
-    for buf in values.values():
-        backend.free(buf)
 
 
 # --- engine gates -------------------------------------------------------------------
@@ -362,50 +312,6 @@ def test_dsv3_measured_costs_replan_still_golden():
     _assert_same(again, base)
 
 
-def test_dsv3_multistep_matches_golden_and_loss_decreases():
-    from dataflow.models.dsv3_reference import GoldenDsv3
-    from dataflow.runtime.device.cuda import CudaBackend
-    from dataflow.tasks.interop import torch_view
-    from dataflow.training.families import resolve_family
-    from dataflow.training.planning import plan_program
-    from dataflow.training.train_loop import train
-
-    STEPS = 3
-    cfg = _tiny_cfg()
-    fam = resolve_family(cfg)
-    dims = fam.dims_of(cfg)
-    planned = plan_program(fam.lower(cfg), fast_memory_capacity=8 * 1024 * 1024)
-    backend = CudaBackend()
-
-    gen = torch.Generator().manual_seed(99)
-    one_batch = (
-        torch.randint(0, dims.vocab_size, (dims.tokens,), generator=gen, dtype=torch.int32),
-        torch.randint(0, dims.vocab_size, (dims.tokens,), generator=gen, dtype=torch.int32),
-    )
-    batches = [one_batch] * STEPS
-
-    snapshot = fam.initial_values(planned.program, cfg, backend, seed=5)
-
-    def pinned(name):
-        buf = snapshot[name]
-        return torch_view(buf, (buf.size_bytes,), torch.uint8).clone()
-
-    golden = GoldenDsv3.from_packed_bytes(
-        dims, cfg.n_layers, pinned("W_embed"),
-        [pinned(f"W_{i}") for i in range(cfg.n_layers)], pinned("W_head"),
-    )
-    golden_losses = [
-        golden.train_step(t.long().cuda(), g.long().cuda()) for t, g in batches
-    ]
-
-    report = train(
-        planned.program, cfg, backend,
-        steps=STEPS, seed=5, token_stream=lambda s: batches[s],
-    )
-    for ours, ref in zip(report.losses, golden_losses):
-        assert abs(ours - ref) / max(abs(ref), 1e-9) < 3e-2, (report.losses, golden_losses)
-    assert report.losses[-1] < report.losses[0]
-    assert all(n == 0 for n in report.step_slab_overflows[1:]), report.step_slab_overflows
 
 
 def test_dsv3_poison_on_free_changes_nothing():

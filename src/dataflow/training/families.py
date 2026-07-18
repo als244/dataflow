@@ -1,5 +1,6 @@
 """Model-family registry: the ONE place that maps a shaped config to its
-lowering, dims, executables, golden reference, and gradcheck bundle.
+lowering, dims, executables, and gradcheck bundle; the
+correctness authority is the isolated reference twin (reference_models/).
 
 The train loop, gradcheck harness, and sweep tools dispatch through
 ``resolve_family(cfg)`` instead of importing a family's modules directly —
@@ -33,7 +34,7 @@ class LowerFn(Protocol):
 
 class InitialValuesFn(Protocol):
     """(program, cfg, backend, seed) -> {object_id: pinned host tensor}.
-    Generation ORDER is part of golden comparability."""
+    Generation ORDER is part of reference comparability."""
 
     def __call__(self, program, cfg, backend, seed: int = 0) -> dict: ...
 
@@ -48,15 +49,6 @@ class BuildResolverFn(Protocol):
     def __call__(self, dims) -> object: ...
 
 
-class GoldenFn(Protocol):
-    """Zero-arg, returns the golden model CLASS (lazy import). The class
-    must support ``from_packed_bytes(dims, n_layers, *leaves)`` and a
-    ``train_step`` producing loss + updated state — the gradcheck
-    harnesses drive it as the independent autograd witness."""
-
-    def __call__(self) -> type: ...
-
-
 @dataclass(frozen=True)
 class Family:
     name: str
@@ -65,7 +57,6 @@ class Family:
     lower: LowerFn
     initial_values: InitialValuesFn
     build_resolver: BuildResolverFn
-    golden: GoldenFn
     # gradcheck bundle (ladder level 2) — None for heterogeneous families,
     # whose per-kind block ladders live in their own test module instead of
     # the generic check_block_backward harness
@@ -82,11 +73,6 @@ def _llama3() -> Family:
     from .models.llama3 import dims_of, initial_values, lower_llama3
     from .models.llama3 import ShapedLlamaConfig
 
-    def golden():
-        from dataflow.models.llama3_reference import GoldenLlama3
-
-        return GoldenLlama3
-
     return Family(
         name="llama3",
         config_type=ShapedLlamaConfig,
@@ -94,7 +80,6 @@ def _llama3() -> Family:
         lower=lower_llama3,
         initial_values=initial_values,
         build_resolver=build_resolver,
-        golden=golden,
         block_fwd=BlockFwd,
         block_bwd=BlockBwd,
         block_recompute=BlockRecompute,
@@ -114,11 +99,6 @@ def _qwen3() -> Family:
     from .models.qwen3 import dims_of_qwen3, initial_values_qwen3, lower_qwen3
     from .models.qwen3 import ShapedQwen3Config
 
-    def golden():
-        from dataflow.models.qwen3_reference import GoldenQwen3
-
-        return GoldenQwen3
-
     return Family(
         name="qwen3",
         config_type=ShapedQwen3Config,
@@ -126,7 +106,6 @@ def _qwen3() -> Family:
         lower=lower_qwen3,
         initial_values=initial_values_qwen3,
         build_resolver=build_qwen3_resolver,
-        golden=golden,
         block_fwd=Qwen3BlockFwd,
         block_bwd=Qwen3BlockBwd,
         block_recompute=Qwen3BlockRecompute,
@@ -140,11 +119,6 @@ def _qwen35() -> Family:
     from .models.qwen35 import initial_values_qwen35, lower_qwen35
     from .models.qwen35 import ShapedQwen35Config, dims_of_qwen35
 
-    def golden():
-        from dataflow.models.qwen35_reference import GoldenQwen35
-
-        return GoldenQwen35
-
     # heterogeneous (lin/full kinds) — the per-kind block ladders live in
     # tests/models/test_qwen35.py, so no generic gradcheck bundle here
     return Family(
@@ -154,7 +128,6 @@ def _qwen35() -> Family:
         lower=lower_qwen35,
         initial_values=initial_values_qwen35,
         build_resolver=build_qwen35_resolver,
-        golden=golden,
     )
 
 
@@ -162,14 +135,9 @@ def _olmoe() -> Family:
     from dataflow.tasks.models.olmoe_blocks import build_olmoe_resolver
     from .models.olmoe import ShapedOlmoeConfig, dims_of_olmoe, initial_values_olmoe, lower_olmoe
 
-    def golden():
-        from dataflow.models.olmoe_reference import GoldenOlmoe
-
-        return GoldenOlmoe
-
-    # MoE family — the block ladder needs the aux-loss term in the golden
-    # objective, so it lives in tests/models/test_olmoe.py rather than
-    # the generic check_block_backward harness (no gradcheck bundle)
+    # MoE family — the block ladder needs the aux-loss term in the
+    # reference objective, so it lives in tests/models/test_olmoe.py
+    # rather than the generic check_block_backward harness
     return Family(
         name="olmoe",
         config_type=ShapedOlmoeConfig,
@@ -177,7 +145,6 @@ def _olmoe() -> Family:
         lower=lower_olmoe,
         initial_values=initial_values_olmoe,
         build_resolver=build_olmoe_resolver,
-        golden=golden,
     )
 
 
@@ -190,11 +157,6 @@ def _qwen35moe() -> Family:
         lower_qwen35moe,
     )
 
-    def golden():
-        from dataflow.models.qwen35moe_reference import GoldenQwen35Moe
-
-        return GoldenQwen35Moe
-
     # heterogeneous MoE (linmoe/gattnmoe kinds) — per-kind ladders live in
     # tests/models/test_qwen35moe.py
     return Family(
@@ -204,7 +166,6 @@ def _qwen35moe() -> Family:
         lower=lower_qwen35moe,
         initial_values=initial_values_qwen35moe,
         build_resolver=build_qwen35moe_resolver,
-        golden=golden,
     )
 
 
@@ -217,11 +178,6 @@ def _qwen3moe() -> Family:
         lower_qwen3moe,
     )
 
-    def golden():
-        from dataflow.models.qwen3moe_reference import GoldenQwen3Moe
-
-        return GoldenQwen3Moe
-
     # MoE family (aux objective) — block ladder lives in
     # tests/models/test_qwen3moe.py (no gradcheck bundle)
     return Family(
@@ -231,7 +187,6 @@ def _qwen3moe() -> Family:
         lower=lower_qwen3moe,
         initial_values=initial_values_qwen3moe,
         build_resolver=build_qwen3moe_resolver,
-        golden=golden,
     )
 
 
@@ -244,11 +199,6 @@ def _dsv3() -> Family:
         lower_dsv3,
     )
 
-    def golden():
-        from dataflow.models.dsv3_reference import GoldenDsv3
-
-        return GoldenDsv3
-
     # MLA + hybrid dense/MoE depth + sigmoid_noaux_tc — block ladder lives
     # in tests/modules/test_mla.py, family ladder in tests/models/test_dsv3.py
     return Family(
@@ -258,7 +208,6 @@ def _dsv3() -> Family:
         lower=lower_dsv3,
         initial_values=initial_values_dsv3,
         build_resolver=build_dsv3_resolver,
-        golden=golden,
     )
 
 
@@ -271,11 +220,6 @@ def _dsv32() -> Family:
         lower_dsv32,
     )
 
-    def golden():
-        from dataflow.models.dsv32_reference import GoldenDsv32
-
-        return GoldenDsv32
-
     # dsv3 + DSA (lightning indexer, sparse mode) — ladders in
     # tests/modules/test_dsa.py + tests/models/test_dsv32.py
     return Family(
@@ -285,7 +229,6 @@ def _dsv32() -> Family:
         lower=lower_dsv32,
         initial_values=initial_values_dsv32,
         build_resolver=build_dsv32_resolver,
-        golden=golden,
     )
 
 
@@ -299,11 +242,6 @@ def _glm52() -> Family:
 
     from dataflow.tasks.models.glm52_blocks import build_glm52_resolver
 
-    def golden():
-        from dataflow.models.glm52_reference import GoldenGlm52
-
-        return GoldenGlm52
-
     # IndexShare: cross-layer selection via M/dM objects — ladder in
     # tests/models/test_glm52.py + tests/models/test_glm52_lowering.py
     return Family(
@@ -313,7 +251,6 @@ def _glm52() -> Family:
         lower=lower_glm52,
         initial_values=initial_values_glm52,
         build_resolver=build_glm52_resolver,
-        golden=golden,
     )
 
 
@@ -426,13 +363,6 @@ def validate_family(name: str, *, preset: str = "tiny") -> list[str]:
                             f"(first 3): {unresolved[:3]}")
     except Exception as exc:
         problems.append(f"build_resolver raised: {exc!r}")
-    try:
-        g = fam.golden()
-        for member in ("from_packed_bytes", "train_step"):
-            if not hasattr(g, member):
-                problems.append(f"golden class {g.__name__} lacks {member}")
-    except Exception as exc:
-        problems.append(f"golden() raised: {exc!r}")
     return problems
 
 

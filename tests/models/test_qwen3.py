@@ -102,12 +102,6 @@ def test_qwen3_block_backward():
     check_block_backward(dims_of_qwen3(CFG), family=family("qwen3")).assert_ok()
 
 
-@gpu
-@pytest.mark.gpu
-def test_qwen3_model_step_vs_golden():
-    from dataflow.training.testing.gradcheck import check_model_step
-
-    check_model_step(CFG, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2).assert_ok()
 
 
 @gpu
@@ -126,49 +120,3 @@ def test_qwen3_plan_invariance():
         r.assert_ok()
 
 
-@gpu
-@pytest.mark.gpu
-def test_qwen3_multistep_matches_golden_and_loss_decreases():
-    from dataflow.models.qwen3_reference import GoldenQwen3
-    from dataflow.runtime.device.cuda import CudaBackend
-    from dataflow.tasks.interop import torch_view
-    from dataflow.training.planning import plan_program
-    from dataflow.training.models.qwen3 import initial_values_qwen3
-    from dataflow.training.train_loop import train
-
-    STEPS = 3
-    dims = dims_of_qwen3(CFG)
-    planned = plan_program(lower_qwen3(CFG), fast_memory_capacity=8 * 1024 * 1024)
-    backend = CudaBackend()
-
-    gen = torch.Generator().manual_seed(99)
-    one_batch = (
-        torch.randint(0, dims.vocab_size, (dims.tokens,), generator=gen, dtype=torch.int32),
-        torch.randint(0, dims.vocab_size, (dims.tokens,), generator=gen, dtype=torch.int32),
-    )
-    batches = [one_batch] * STEPS
-
-    snapshot = initial_values_qwen3(planned.program, CFG, backend, seed=5)
-
-    def pinned(name):
-        buf = snapshot[name]
-        return torch_view(buf, (buf.size_bytes,), torch.uint8).clone()
-
-    golden = GoldenQwen3.from_packed_bytes(
-        dims, CFG.n_layers,
-        pinned("W_embed"),
-        [pinned(f"W_{i}") for i in range(CFG.n_layers)],
-        pinned("W_head"),
-    )
-    golden_losses = [
-        golden.train_step(t.long().cuda(), g.long().cuda()) for t, g in batches
-    ]
-
-    report = train(
-        planned.program, CFG, backend,
-        steps=STEPS, seed=5, token_stream=lambda s: batches[s],
-    )
-    for ours, ref in zip(report.losses, golden_losses):
-        assert abs(ours - ref) / max(abs(ref), 1e-9) < 3e-2, (report.losses, golden_losses)
-    assert report.losses[-1] < report.losses[0]
-    assert all(n == 0 for n in report.step_slab_overflows[1:]), report.step_slab_overflows

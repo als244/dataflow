@@ -127,6 +127,27 @@ def swiglu(gate: torch.Tensor, up: torch.Tensor) -> torch.Tensor:
     return F.silu(gate.float()).to(gate.dtype) * up
 
 
+def packed_positions(seq_lens, device) -> torch.Tensor:
+    """Per-token rope positions for a PACKED round: every sequence
+    restarts at 0. (varlen mode — see Model.forward(seq_lens=...))."""
+    return torch.cat([torch.arange(n, device=device) for n in seq_lens])
+
+
+def block_causal_mask(seq_lens, device) -> torch.Tensor:
+    """(T, T) additive {0, -inf} fp32 mask for a packed round: causal
+    WITHIN each sequence, -inf across sequences — block-diagonal varlen
+    attention, the packed-round semantics the engine's prologue derives
+    from run_args seq_lens."""
+    t = int(sum(seq_lens))
+    m = torch.full((t, t), float("-inf"), device=device)
+    lo = 0
+    for n in seq_lens:
+        m[lo:lo + n, lo:lo + n] = torch.triu(
+            torch.full((n, n), float("-inf"), device=device), diagonal=1)
+        lo += n
+    return m
+
+
 class Attention(nn.Module):
     """qwen3 attention: per-head qk-norm before full RoPE, GQA, causal."""
 
@@ -142,7 +163,7 @@ class Attention(nn.Module):
         self.k_norm = RMSNorm(cfg.head_dim)
         self.wo = nn.Linear(cfg.q_dim, cfg.d_model, bias=False)
 
-    def forward(self, x, cos, sin):
+    def forward(self, x, cos, sin, mask=None):
         B, T, _ = x.shape
         H, KV, hd = self.n_heads, self.n_kv_heads, self.head_dim
         # PER-HEAD qk-norm (RMSNorm over each head_dim row) THEN rope
@@ -153,7 +174,11 @@ class Attention(nn.Module):
         q = q.transpose(1, 2)                                   # (B, H, T, hd)
         k = k.repeat_interleave(rep, dim=2).transpose(1, 2)
         v = v.repeat_interleave(rep, dim=2).transpose(1, 2)
-        o = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        if mask is None:
+            o = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        else:       # packed varlen: block-diagonal causality in the mask
+            o = F.scaled_dot_product_attention(q, k, v,
+                                               attn_mask=mask.to(q.dtype))
         o = o.transpose(1, 2).reshape(B, T, H * hd)
         return self.wo(o)
 
@@ -182,6 +207,24 @@ class MoE(nn.Module):
         nn.init.normal_(self.w_router, std=d ** -0.5)
         nn.init.normal_(self.w13_experts, std=d ** -0.5)
         nn.init.normal_(self.w2_experts, std=f ** -0.5)
+        # round-global LBL state (see forward); ints detached, p_sum live
+        self.step_counts: torch.Tensor | None = None
+        self.round_p_sum: torch.Tensor | None = None
+        self.round_tokens = 0
+
+    def reset_round_lbl(self) -> None:
+        self.step_counts = None
+        self.round_p_sum = None
+        self.round_tokens = 0
+
+    def round_lbl(self) -> torch.Tensor:
+        """ROUND-global L_layer = E * sum_e f_e * pbar_e from the pieces
+        accumulated across the round's forwards — the engine's DEFAULT
+        per-round LBL (round-global counts/probs, crossing sequence
+        boundaries within the round; memory-efficient, ga-variant)."""
+        t = self.round_tokens
+        f = self.step_counts.float() / (t * self.top_k)
+        return self.n_experts * (f * (self.round_p_sum / t)).sum()
 
     def forward(self, h2: torch.Tensor, resid: torch.Tensor) -> torch.Tensor:
         """h2: post-ffn-norm ``(B, T, d)``; resid: post-attention residual."""
@@ -201,8 +244,19 @@ class MoE(nn.Module):
         E = self.n_experts
         counts = torch.bincount(ids.reshape(-1).long(), minlength=E)   # (E,)
         f_e = counts.float() / ids.numel()                            # count_e/(T·K)
-        pbar = torch.softmax(lf, dim=-1).reshape(-1, E).mean(0)        # (E,) full-E
+        p_flat = torch.softmax(lf, dim=-1).reshape(-1, E)
+        pbar = p_flat.mean(0)                                          # (E,) full-E
         self.aux_lbl = E * (f_e * pbar).sum()                         # fp32 scalar
+        # ROUND-global LBL pieces (engine-default semantics): detached
+        # counts + LIVE prob sums accumulated across the round's forwards;
+        # the parity harness combines them via round_load_balance_loss()
+        # and resets with reset_round_lbl()
+        p_sum = p_flat.sum(0)                                          # LIVE
+        self.step_counts = (counts if self.step_counts is None
+                            else self.step_counts + counts)
+        self.round_p_sum = (p_sum if self.round_p_sum is None
+                            else self.round_p_sum + p_sum)
+        self.round_tokens += p_flat.shape[0]
         routed = torch.zeros_like(h2, dtype=torch.float32)
         for e in range(self.n_experts):
             coef = (route_w * (ids == e)).sum(-1)        # (B, T) fp32; <=1 hit/token
@@ -221,8 +275,8 @@ class Block(nn.Module):
         self.ffn_norm = RMSNorm(cfg.d_model)
         self.moe = MoE(cfg)
 
-    def forward(self, x, cos, sin):
-        h_mid = x + self.attn(self.attn_norm(x), cos, sin)
+    def forward(self, x, cos, sin, mask=None):
+        h_mid = x + self.attn(self.attn_norm(x), cos, sin, mask)
         # the second residual is folded into the MoE combine (h_mid + routed)
         return self.moe(self.ffn_norm(h_mid), h_mid)
 
@@ -230,6 +284,12 @@ class Block(nn.Module):
 class Qwen3Moe(nn.Module):
     """Untied-embedding Qwen3-MoE. ``forward`` takes ``(B, T)`` int tokens
     where each row is an independent causal sequence (uniform packing)."""
+
+    SUPPORTS_PACKED = True
+
+    # load-balance form the training-parity harness can rely on:
+    # "forward_global" (see gradcheck.reference_model_step)
+    AUX_FORM = "forward_global"
 
     def __init__(self, cfg: Qwen3MoeConfig):
         super().__init__()
@@ -243,18 +303,51 @@ class Qwen3Moe(nn.Module):
         # single card; off by default.
         self.grad_checkpoint = False
 
-    def forward(self, tokens: torch.Tensor) -> torch.Tensor:
+    def forward(self, tokens: torch.Tensor,
+                seq_lens: tuple[int, ...] | None = None) -> torch.Tensor:
         B, T = tokens.shape
         x = self.embed(tokens)
-        cos, sin = rope_tables(T, self.cfg.head_dim, self.cfg.rope_base,
-                               x.device)
+        if seq_lens is None:
+            cos, sin = rope_tables(T, self.cfg.head_dim, self.cfg.rope_base,
+                                   x.device)
+            mask = None
+        else:
+            if B != 1 or T != int(sum(seq_lens)):
+                raise ValueError(f"packed mode expects (1, sum(seq_lens)) "
+                                 f"tokens; got {tuple(tokens.shape)} for "
+                                 f"{seq_lens}")
+            cos, sin = rope_tables(max(seq_lens), self.cfg.head_dim,
+                                   self.cfg.rope_base, x.device)
+            pos = packed_positions(seq_lens, x.device)
+            cos, sin = cos[pos], sin[pos]
+            mask = block_causal_mask(seq_lens, x.device)
         for blk in self.blocks:
             if self.grad_checkpoint and self.training:
-                x = torch.utils.checkpoint.checkpoint(blk, x, cos, sin,
+                x = torch.utils.checkpoint.checkpoint(blk, x, cos, sin, mask,
                                                       use_reentrant=False)
             else:
-                x = blk(x, cos, sin)
+                x = blk(x, cos, sin, mask)
         return self.lm_head(self.final_norm(x))
+
+
+    def reset_round_lbl(self) -> None:
+        """Clear every MoE layer's accumulated round-LBL pieces (call
+        between rounds / steps in multi-round harnesses)."""
+        for m in self.modules():
+            if hasattr(m, "round_p_sum"):
+                m.reset_round_lbl()
+
+    def round_load_balance_loss(self) -> torch.Tensor:
+        """Sum over MoE layers of the ROUND-global load-balance term
+        (round_lbl) — the engine-default per-round LBL. The harness
+        applies aux_coef and adds it ONCE per round after the round's
+        forwards; contrast load_balance_loss() (per-forward form)."""
+        total = torch.zeros((), dtype=torch.float32,
+                            device=self.embed.weight.device)
+        for m in self.modules():
+            if getattr(m, "round_p_sum", None) is not None:
+                total = total + m.round_lbl()
+        return total
 
     def load_balance_loss(self) -> torch.Tensor:
         """Sum over MoE layers of the load-balancing aux term ``E·Σ_e f_e·p̄_e``
@@ -270,7 +363,8 @@ class Qwen3Moe(nn.Module):
         return total
 
     def loss(self, tokens: torch.Tensor, targets: torch.Tensor, *,
-             aux_coef: float = 0.0) -> torch.Tensor:
+             aux_coef: float = 0.0,
+             seq_lens: tuple[int, ...] | None = None) -> torch.Tensor:
         """loss() returns mean CE; pass ``aux_coef>0`` to add the MoE
         load-balancing auxiliary loss α·E·Σ_e f_e·p̄_e (α=aux_coef), summed over
         MoE layers — the standard Switch/GShard term (matches the engine).
@@ -279,7 +373,7 @@ class Qwen3Moe(nn.Module):
         per-round HeadLoss normalization. ``tokens``/``targets`` are ``(B, T)``
         int; targets are the next-token ids. The default ``aux_coef=0`` returns
         pure CE, bit-identical to the model without the aux term."""
-        logits = self.forward(tokens)
+        logits = self.forward(tokens, seq_lens=seq_lens)
         ce = F.cross_entropy(
             logits.float().reshape(-1, logits.shape[-1]),
             targets.reshape(-1).long(),

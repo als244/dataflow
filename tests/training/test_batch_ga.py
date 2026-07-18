@@ -8,7 +8,6 @@ torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
     pytest.skip("no CUDA device", allow_module_level=True)
 
-from dataflow.models.llama3_reference import GoldenLlama3  # noqa: E402
 from dataflow.runtime import Engine  # noqa: E402
 from dataflow.runtime.device.cuda import CudaBackend  # noqa: E402
 from dataflow.runtime.device.fake import FakeBackend  # noqa: E402
@@ -43,7 +42,15 @@ def test_causal_mask_does_not_leak_across_batch():
     assert torch.equal(batched[s:], per1)
 
 
-def test_batch_ga_model_step_matches_golden():
+def test_batch_ga_model_step_matches_reference():
+    """Grad accumulation (2 rounds) through the engine == the isolated
+    twin accumulating the same per-round losses — final params compared
+    in twin-name space through the bridge."""
+    from dataflow.pretrain import bridges
+    from dataflow.pretrain.driver import adamw_field_step
+    from dataflow.tasks.base_blocks import AdamWHyper
+    from dataflow.training.testing.gradcheck import EngineFinalBytes
+
     dims = dims_of(CFG)
     program = lower_llama3(CFG)
     planned = plan_program(program, fast_memory_capacity=10 * 1024 * 1024)  # tight
@@ -51,29 +58,29 @@ def test_batch_ga_model_step_matches_golden():
     backend = CudaBackend()
     values = initial_values(planned.program, CFG, backend, seed=3)
 
-    def pinned(name):
-        buf = values[name]
-        return torch_view(buf, (buf.size_bytes,), torch.uint8).clone()
-
-    golden = GoldenLlama3.from_packed_bytes(
-        dims, CFG.n_layers,
-        pinned("W_embed"),
-        [pinned(f"W_{i}") for i in range(CFG.n_layers)],
-        pinned("W_head"),
-    )
-    # grad accumulation sums per-round mean losses: backward once on the sum
+    model = bridges.build_reference_model(CFG)
+    bridges.load_reference_init(model, CFG, dims,
+                                bridges.get_bytes_from_values(values))
+    model.train()
+    B = dims.tokens // CFG.seq_len
     total = None
     for r in range(CFG.grad_accum_rounds):
-        tokens = torch_view(values[f"tokens_0_{r}"], (dims.tokens,), torch.int32).long().cuda()
-        targets = torch_view(values[f"targets_0_{r}"], (dims.tokens,), torch.int32).long().cuda()
-        loss_r = golden.loss(tokens, targets)
+        tokens = torch_view(values[f"tokens_0_{r}"], (dims.tokens,),
+                            torch.int32).long().cuda().view(B, CFG.seq_len)
+        targets = torch_view(values[f"targets_0_{r}"], (dims.tokens,),
+                             torch.int32).long().cuda().view(B, CFG.seq_len)
+        loss_r = model.loss(tokens, targets)
         total = loss_r if total is None else total + loss_r
     total.backward()
-    golden.step_count = 1
-    golden._opt_obj("embed", golden.w_embed)
-    for i, leaves in enumerate(golden.w_blocks):
-        golden._opt_obj(f"block_{i}", leaves)
-    golden._opt_obj("head", golden.w_head)
+    hp = AdamWHyper()
+    for par in model.parameters():
+        if par.grad is None:
+            continue
+        m = torch.zeros_like(par)
+        v = torch.zeros_like(par)
+        adamw_field_step(par.data, par.grad, m, v, lr=hp.lr,
+                         beta1=hp.beta1, beta2=hp.beta2, eps=hp.eps,
+                         weight_decay=hp.weight_decay, step=1)
 
     from dataflow.runtime.engine import uniform_segments
 
@@ -84,23 +91,10 @@ def test_batch_ga_model_step_matches_golden():
         run_args={"segments": uniform_segments(dims, planned.program)},
     )
 
-    def worst_field_err(object_id: str) -> float:
-        from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME
-
-        rec = result.objects.get(object_id)
-        slot = rec.backing or rec.fast
-        layout, leaves = golden.final_leaves(object_id)
-        return max(
-            rel_l2(
-                torch_view(slot.buffer, f.shape, TORCH_DTYPE_BY_NAME[f.dtype],
-                           offset_bytes=f.offset_bytes),
-                leaves[f.name],
-            )
-            for f in layout.fields
-        )
-
-    assert worst_field_err("W_embed") < 3e-2
-    for i in range(CFG.n_layers):
-        assert worst_field_err(f"W_{i}") < 3e-2, f"W_{i}"
-    assert worst_field_err("W_head") < 3e-2
+    engine_state = bridges.to_reference_state_dict(
+        CFG, EngineFinalBytes(result))
+    twin_state = dict(model.state_dict())
+    for name, engine_tensor in engine_state.items():
+        err = rel_l2(engine_tensor, twin_state[name])
+        assert err < 3e-2, (name, err)
     result.close()

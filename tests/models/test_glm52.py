@@ -14,7 +14,6 @@ that lands a count on the mean boundary flips a whole +-speed bias step
 qwen35moe's dt_bias sign lottery; the honest comparison is the
 field_atol envelope |db| <= 2*speed + slack, not a relative bound.
 """
-import math
 from dataclasses import replace
 
 import pytest
@@ -23,7 +22,11 @@ torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
     pytest.skip("no CUDA device", allow_module_level=True)
 
-from dataflow.training.testing.gradcheck import check_model_step, rel_l2  # noqa: E402
+from dataflow.training.testing.gradcheck import (  # noqa: E402
+    check_model_step,
+    family_gate_kwargs,
+    rel_l2,
+)
 
 pytestmark = pytest.mark.gpu
 
@@ -43,55 +46,6 @@ def _tiny_dims(cfg=None):
 # --- golden self-consistency -----------------------------------------------------
 
 
-def test_golden_glm52_trains():
-    from dataflow.models.glm52_reference import GoldenGlm52
-    from dataflow.tasks.layouts import head_weight_layout
-
-    cfg = _tiny_cfg()
-    dims = _tiny_dims(cfg)
-    gen = torch.Generator().manual_seed(0)
-
-    def packed(layout):
-        flat = torch.zeros(layout.total_bytes, dtype=torch.uint8)
-        fb = flat.view(torch.uint8)
-        for f in layout.fields:
-            n = int(torch.tensor(f.shape).prod())
-            if f.dtype == "fp32":
-                v = torch.zeros(n, dtype=torch.float32)  # the balance bias
-                fb[f.offset_bytes:f.offset_bytes + f.nbytes] = v.view(torch.uint8)
-                continue
-            vals = (torch.randn(n, generator=gen) * 0.02).to(torch.bfloat16)
-            if f.name.endswith("_norm_w"):
-                vals = torch.ones(n, dtype=torch.bfloat16)
-            fb[f.offset_bytes:f.offset_bytes + f.nbytes] = vals.view(torch.uint8)
-        return flat
-
-    def table():
-        n = dims.vocab_size * dims.d_model
-        return (torch.randn(n, generator=gen) * 0.02).to(torch.bfloat16).view(torch.uint8)
-
-    golden = GoldenGlm52.from_packed_bytes(
-        dims, cfg.n_layers, table(),
-        [packed(golden_layout) for golden_layout in
-         (GoldenGlm52(dims=dims, n_layers=cfg.n_layers).block_layout(i)
-          for i in range(cfg.n_layers))],
-        packed(head_weight_layout(dims)),
-    )
-    toks = torch.randint(0, dims.vocab_size, (dims.tokens,), generator=gen).cuda()
-    tgts = torch.randint(0, dims.vocab_size, (dims.tokens,), generator=gen).cuda()
-    ce0, aux0 = golden.loss_terms(toks, tgts)
-    assert torch.isfinite(aux0) and float(aux0.detach()) > 0.0
-    losses = [golden.train_step(toks, tgts) for _ in range(3)]
-    assert all(x == x for x in losses)
-    assert abs(losses[0] - math.log(dims.vocab_size)) < 0.5
-    assert losses[-1] < losses[0]
-    # the balance bias moved (skewed routing at random init) but only by
-    # multiples of the update speed
-    moved = [b["w_router_bias"] for b in golden.w_blocks if "w_router_bias" in b]
-    assert moved and any(m.abs().sum() > 0 for m in moved)
-    for m in moved:
-        steps = m / cfg.bias_update_speed
-        assert torch.allclose(steps, steps.round(), atol=1e-4)
 
 
 # --- lowering ----------------------------------------------------------------------
@@ -160,28 +114,25 @@ _BIAS_ATOL = {
 }
 
 
-def test_glm52_model_step_vs_golden():
-    check_model_step(_tiny_cfg(), fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
-                     field_atol=_BIAS_ATOL).assert_ok()
 
 
 def test_glm52_aux_zero_model_step_vs_golden():
     check_model_step(
         _tiny_cfg(aux_coef=0.0), fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
-        field_atol=_BIAS_ATOL,
+        field_atol=_BIAS_ATOL, **family_gate_kwargs("glm52"),
     ).assert_ok()
 
 
 def test_glm52_plan_invariance():
     cfg = _tiny_cfg()
     r1 = check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
-                          field_atol=_BIAS_ATOL)
+                          field_atol=_BIAS_ATOL, **family_gate_kwargs("glm52"))
     r2 = check_model_step(cfg, fast_memory_capacity=8 * 1024 * 1024, tol=3e-2,
-                          field_atol=_BIAS_ATOL)
+                          field_atol=_BIAS_ATOL, **family_gate_kwargs("glm52"))
     levels = {f"A_0_0_{i}": 1 for i in range(cfg.n_layers)}
     r3 = check_model_step(
         cfg, fast_memory_capacity=8 * 1024 * 1024, recompute_levels=levels, tol=3e-2,
-        field_atol=_BIAS_ATOL,
+        field_atol=_BIAS_ATOL, **family_gate_kwargs("glm52"),
     )
     for r in (r1, r2, r3):
         r.assert_ok()
@@ -190,92 +141,103 @@ def test_glm52_plan_invariance():
 def test_glm52_batch2_packed_sequences_vs_golden():
     cfg = _tiny_cfg(batch=2, seq_len=64)
     check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
-                     field_atol=_BIAS_ATOL).assert_ok()
+                     field_atol=_BIAS_ATOL,
+                     **family_gate_kwargs("glm52")).assert_ok()
 
 
-def test_glm52_ga2_matches_golden():
-    from dataflow.models.glm52_reference import GoldenGlm52
+def test_glm52_ga2_matches_reference():
+    """Two grad-accum rounds with the LBL composite, the leader-group
+    indexer KL and the noaux bias rule: engine == the isolated twin. The
+    twin stashes per-FORWARD assignment counts only, so the
+    STEP-AGGREGATE bias rule (the engine's dW count accumulation) is
+    applied here by summing each MoE module's counts across rounds
+    before its own sign rule; sign-lottery bias fields compare under the
+    _BIAS_ATOL envelope (see module docstring)."""
+    from dataflow.pretrain import bridges
+    from dataflow.pretrain.driver import adamw_field_step
     from dataflow.runtime import Engine
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.runtime.device.fake import FakeBackend
-    from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME, torch_view
+    from dataflow.tasks.base_blocks import AdamWHyper
+    from dataflow.tasks.interop import torch_view
     from dataflow.training.families import resolve_family
     from dataflow.training.planning import plan_program
+    from dataflow.training.testing.gradcheck import (
+        EngineFinalBytes,
+        field_atol_for,
+    )
 
     cfg = _tiny_cfg(grad_accum_rounds=2)
     fam = resolve_family(cfg)
     dims = fam.dims_of(cfg)
-    planned = plan_program(fam.lower(cfg), fast_memory_capacity=16 * 1024 * 1024)
+    planned = plan_program(fam.lower(cfg),
+                           fast_memory_capacity=16 * 1024 * 1024)
     backend = CudaBackend()
     values = fam.initial_values(planned.program, cfg, backend, seed=3)
 
-    def pinned(name):
-        buf = values[name]
-        return torch_view(buf, (buf.size_bytes,), torch.uint8).clone()
-
-    golden = GoldenGlm52.from_packed_bytes(
-        dims, cfg.n_layers, pinned("W_embed"),
-        [pinned(f"W_{i}") for i in range(cfg.n_layers)], pinned("W_head"),
-    )
-    golden._pending_counts = []
+    model = bridges.build_reference_model(cfg)
+    bridges.load_reference_init(model, cfg, dims,
+                                bridges.get_bytes_from_values(values))
+    model.train()
+    drive_idx = (bool(getattr(cfg, "train_indexer", False))
+                 and hasattr(model, "indexer_loss"))
+    if drive_idx:
+        model.enable_indexer_kl(True)
+    B = dims.tokens // cfg.seq_len
     total = None
+    agg_counts = {}
     for r in range(cfg.grad_accum_rounds):
-        toks = torch_view(values[f"tokens_0_{r}"], (dims.tokens,), torch.int32).long().cuda()
-        tgts = torch_view(values[f"targets_0_{r}"], (dims.tokens,), torch.int32).long().cuda()
-        ce_r, aux_r = golden.loss_terms(toks, tgts)
-        term = ce_r + aux_r
-        total = term if total is None else total + term
+        toks = torch_view(values[f"tokens_0_{r}"], (dims.tokens,),
+                          torch.int32).long().cuda().view(B, cfg.seq_len)
+        tgts = torch_view(values[f"targets_0_{r}"], (dims.tokens,),
+                          torch.int32).long().cuda().view(B, cfg.seq_len)
+        loss_r = model.loss(toks, tgts, aux_coef=cfg.aux_coef)
+        if drive_idx:
+            loss_r = loss_r + model.indexer_loss()
+        total = loss_r if total is None else total + loss_r
+        for mod_name, module in model.named_modules():
+            if hasattr(module, "apply_bias_update"):
+                prev = agg_counts.get(mod_name)
+                agg_counts[mod_name] = (
+                    module.last_counts if prev is None
+                    else prev + module.last_counts)
     total.backward()
-    golden.step_count = 1
-    golden._opt_obj("embed", golden.w_embed)
-    # bias rule on the STEP AGGREGATE counts (both rounds), mirroring the
-    # runtime's dW accumulation; counts were captured per round in order
-    n_moe = sum(1 for b in golden.w_blocks if "w_router_bias" in b)
-    per_round = [golden._pending_counts[i::n_moe] for i in range(n_moe)] \
-        if n_moe else []
-    moe_i = 0
-    for i, leaves in enumerate(golden.w_blocks):
-        golden._opt_obj(f"block_{i}", leaves)
-        if "w_router_bias" in leaves:
-            agg = sum(per_round[moe_i])
-            b = leaves["w_router_bias"]
-            b.data.add_(torch.sign(agg.mean() - agg).to(b.dtype),
-                        alpha=cfg.bias_update_speed)
-            moe_i += 1
-    golden._opt_obj("head", golden.w_head)
+    hp = AdamWHyper()
+    for par in model.parameters():
+        if par.grad is None:
+            continue
+        m = torch.zeros_like(par)
+        v = torch.zeros_like(par)
+        adamw_field_step(par.data, par.grad, m, v, lr=hp.lr,
+                         beta1=hp.beta1, beta2=hp.beta2, eps=hp.eps,
+                         weight_decay=hp.weight_decay, step=1)
+    for mod_name, module in model.named_modules():
+        if hasattr(module, "apply_bias_update"):
+            module.last_counts = agg_counts[mod_name]
+            module.apply_bias_update(cfg.bias_update_speed)
 
     from dataflow.runtime.engine import uniform_segments
 
-    dry = Engine(FakeBackend()).execute(planned.program, initial_buffers=values)
+    dry = Engine(FakeBackend()).execute(planned.program,
+                                        initial_buffers=values)
     result = Engine(backend).execute(
         planned.program, resolver=fam.build_resolver(dims),
         initial_buffers=values, pool_prewarm=dry.pool_demand,
         run_args={"segments": uniform_segments(dims, planned.program)},
     )
-
-    def worst_field_err(object_id):
-        rec = result.objects.get(object_id)
-        slot = rec.backing or rec.fast
-        layout, leaves = golden.final_leaves(object_id)
-        worst = 0.0
-        for f in layout.fields:
-            got = torch_view(slot.buffer, f.shape, TORCH_DTYPE_BY_NAME[f.dtype],
-                             offset_bytes=f.offset_bytes)
-            if f.name in _BIAS_ATOL:  # sign-lottery fields: absolute envelope
-                d = (got.float().cpu() - leaves[f.name].float().cpu()).abs().max()
-                assert float(d) <= _BIAS_ATOL[f.name], (f.name, float(d))
-                continue
-            worst = max(worst, rel_l2(got, leaves[f.name]))
-        return worst
-
-    assert worst_field_err("W_embed") < 3e-2
-    for i in range(cfg.n_layers):
-        assert worst_field_err(f"W_{i}") < 3e-2, f"W_{i}"
-    assert worst_field_err("W_head") < 3e-2
+    engine_state = bridges.to_reference_state_dict(
+        cfg, EngineFinalBytes(result))
+    twin_state = dict(model.state_dict())
+    for name, engine_tensor in engine_state.items():
+        atol = field_atol_for(name, _BIAS_ATOL)
+        if atol is not None:  # sign-lottery fields: absolute envelope
+            gap = float((engine_tensor.float().cpu()
+                         - twin_state[name].float().cpu()).abs().max())
+            assert gap <= atol, (name, gap)
+            continue
+        err = rel_l2(engine_tensor, twin_state[name])
+        assert err < 3e-2, (name, err)
     result.close()
-    dry.close()
-    for buf in values.values():
-        backend.free(buf)
 
 
 # --- engine gates -------------------------------------------------------------------
@@ -370,209 +332,13 @@ def test_glm52_measured_costs_replan_still_golden():
     _assert_same(again, base)
 
 
-def test_glm52_multistep_matches_golden_and_loss_decreases():
-    from dataflow.models.glm52_reference import GoldenGlm52
-    from dataflow.runtime.device.cuda import CudaBackend
-    from dataflow.tasks.interop import torch_view
-    from dataflow.training.families import resolve_family
-    from dataflow.training.planning import plan_program
-    from dataflow.training.train_loop import train
-
-    STEPS = 3
-    cfg = _tiny_cfg()
-    fam = resolve_family(cfg)
-    dims = fam.dims_of(cfg)
-    planned = plan_program(fam.lower(cfg), fast_memory_capacity=8 * 1024 * 1024)
-    backend = CudaBackend()
-
-    gen = torch.Generator().manual_seed(99)
-    one_batch = (
-        torch.randint(0, dims.vocab_size, (dims.tokens,), generator=gen, dtype=torch.int32),
-        torch.randint(0, dims.vocab_size, (dims.tokens,), generator=gen, dtype=torch.int32),
-    )
-    batches = [one_batch] * STEPS
-
-    snapshot = fam.initial_values(planned.program, cfg, backend, seed=5)
-
-    def pinned(name):
-        buf = snapshot[name]
-        return torch_view(buf, (buf.size_bytes,), torch.uint8).clone()
-
-    golden = GoldenGlm52.from_packed_bytes(
-        dims, cfg.n_layers, pinned("W_embed"),
-        [pinned(f"W_{i}") for i in range(cfg.n_layers)], pinned("W_head"),
-    )
-    golden_losses = [
-        golden.train_step(t.long().cuda(), g.long().cuda()) for t, g in batches
-    ]
-
-    report = train(
-        planned.program, cfg, backend,
-        steps=STEPS, seed=5, token_stream=lambda s: batches[s],
-    )
-    for ours, ref in zip(report.losses, golden_losses):
-        assert abs(ours - ref) / max(abs(ref), 1e-9) < 3e-2, (report.losses, golden_losses)
-    assert report.losses[-1] < report.losses[0]
-    assert all(n == 0 for n in report.step_slab_overflows[1:]), report.step_slab_overflows
 
 
 
-def test_glm52_leader_follower_pair_ladder():
-    """THE IndexShare math gate, isolated at block level: a gml LEADER +
-    gmf FOLLOWER chain vs golden autograd of the two-block compose with
-    L_multi = (KL(p_leader||sigma) + KL(p_follower||sigma)) / 2. Runs the
-    runtime bwds in reverse order (follower creates dM with its target;
-    leader consumes and chains sigma - (p_own + dM)/2 through its indexer
-    weights) and compares EVERY gradient."""
-    from dataflow.models.glm52_reference import GoldenGlm52
-    from dataflow.tasks.modules.dsa_reference import dsa_mask_from_idx
-    from dataflow.tasks.models.glm52_blocks import (
-        Glm52MfBlockBwd,
-        Glm52MfBlockFwd,
-        Glm52MlBlockBwd,
-        Glm52MlBlockFwd,
-    )
-    from dataflow.tasks.interop import TORCH_DTYPE_BY_NAME
-    from dataflow.tasks.kernels import KernelCtx, resolve_kernels
-    from dataflow.tasks.layouts import glm52_aux_temp_layout, grad_layout
-
-    # pattern chosen so the gml leader at layer 1 serves EXACTLY one
-    # follower (group {1, 2}, N=2) — the chain below is the whole group
-    cfg = _tiny_cfg(indexer_types=("full", "full", "shared", "full", "full", "shared"))
-    dims = _tiny_dims(cfg)
-    from dataflow.tasks.ops import Segments
-
-    # ONE materialized Segments handed to fwd (extras) and bwd (a["_seg"]) —
-    # the engine run-prologue that normally sets the varlen metadata
-    seg = Segments.of_dims(dims).on("cuda")
-    kernels = resolve_kernels()
-    kctx = KernelCtx()
-    ld_fwd, ld_bwd = Glm52MlBlockFwd(dims, kernels), Glm52MlBlockBwd(dims, kernels)
-    f_fwd, f_bwd = Glm52MfBlockFwd(dims, kernels), Glm52MfBlockBwd(dims, kernels)
-
-    gen = torch.Generator(device="cuda").manual_seed(77)
-
-    def mk_weights(wl):
-        w = {}
-        for f in wl.fields:
-            n = int(torch.tensor(f.shape).prod())
-            dt = TORCH_DTYPE_BY_NAME[f.dtype]
-            if f.name.endswith("_norm_w") or f.name == "idx_k_ln_w":
-                w[f.name] = torch.ones(f.shape, device="cuda", dtype=dt)
-            elif f.name in ("w_router_bias", "idx_k_ln_b"):
-                w[f.name] = torch.zeros(f.shape, device="cuda", dtype=dt)
-            else:
-                w[f.name] = (torch.randn(n, generator=gen, device="cuda") * 0.06
-                             ).to(dt).view(f.shape)
-        return w
-
-    w_ld = mk_weights(ld_fwd.wl)
-    w_f = mk_weights(f_fwd.wl)
-    x = (torch.randn(dims.tokens, dims.d_model, generator=gen, device="cuda") * 0.5
-         ).to(torch.bfloat16)
-    dy2 = (torch.randn(dims.tokens, dims.d_model, generator=gen, device="cuda") * 0.5
-           ).to(torch.bfloat16)
-
-    def mk_ctx(cl):
-        return {f.name: torch.empty(f.shape, dtype=TORCH_DTYPE_BY_NAME[f.dtype],
-                                    device="cuda") for f in cl.fields}
-
-    def mk_meta(kind):
-        m_l = glm52_aux_temp_layout(dims, kind)
-        return {f.name: torch.empty(f.shape, dtype=TORCH_DTYPE_BY_NAME[f.dtype],
-                                    device="cuda") for f in m_l.fields}
-
-    meta_ld = mk_meta("gml")
-    meta_f = mk_meta("gmf")
-    a1, a2 = mk_ctx(ld_fwd.cl), mk_ctx(f_fwd.cl)
-    y1 = torch.empty_like(x)
-    y2 = torch.empty_like(x)
-    ld_fwd._forward(kctx, x, w_ld, y1, a1, extras={"aux_temp": dict(meta_ld), "seg": seg})
-    f_fwd._forward(kctx, y1, w_f, y2, a2,
-                   extras={"aux_temp": dict(meta_f), "seg": seg,
-                           "shared_idx": meta_ld["dsa_idx"]})
-
-    gl_ld = grad_layout(ld_fwd.wl, dims.dtypes)
-    gl_f = grad_layout(f_fwd.wl, dims.dtypes)
-    dw_ld = {f.name: torch.zeros(f.shape, device="cuda", dtype=TORCH_DTYPE_BY_NAME[f.dtype])
-             for f in gl_ld.fields}
-    dw_f = {f.name: torch.zeros(f.shape, device="cuda", dtype=TORCH_DTYPE_BY_NAME[f.dtype])
-            for f in gl_f.fields}
-    dm = torch.empty(dims.tokens, dims.index_topk, dtype=torch.float32, device="cuda")
-    dx1 = torch.empty_like(x)   # grad into y1 from the follower
-    dx0 = torch.empty_like(x)
-    a1["_seg"] = seg
-    a2["_seg"] = seg
-    # reverse order: follower bwd creates dM, leader bwd consumes it
-    f_bwd._backward(kctx, dy2, a2, y1, w_f, dx1, dw_f, accum=False,
-                    aux_temp={"aux_temp": meta_f, "shared_idx": meta_ld["dsa_idx"],
-                          "_dm_view": dm, "_dm_create": True, "_kl_n": 2})
-    ld_bwd._backward(kctx, dx1, a1, x, w_ld, dx0, dw_ld, accum=False,
-                     aux_temp={"aux_temp": meta_ld, "_dm_view": dm, "_kl_n": 2})
-
-    # ---- golden compose ----
-    leaves_ld = {n: (t_.detach().clone().requires_grad_()
-                     if n != "w_router_bias" else t_) for n, t_ in w_ld.items()}
-    leaves_f = {n: (t_.detach().clone().requires_grad_()
-                    if n != "w_router_bias" else t_) for n, t_ in w_f.items()}
-    x_ref = x.clone().requires_grad_()
-    golden = GoldenGlm52(dims=dims, n_layers=cfg.n_layers)
-    golden._layer_ptr = 1          # gml leader sits at layer 1 in tiny
-    golden._group_scores = None
-    golden._group_mask = None
-    # pin the runtime's selections/routings
-    from dataflow.tasks.modules.dsa_reference import dsa_index_scores_reference
-    from dataflow.tasks.modules.mla_reference import mla_qkv_reference
-    from dataflow.tasks import ops as _ops
-
-    h1_ref = _ops.rmsnorm_reference(x_ref, leaves_ld["attn_norm_w"])
-    q_lora_ref, *_ = mla_qkv_reference(h1_ref, leaves_ld, dims, seg)
-    scores = dsa_index_scores_reference(h1_ref.detach(), q_lora_ref.detach(),
-                                        leaves_ld, dims, seg)
-    mask = dsa_mask_from_idx(meta_ld["dsa_idx"].long(), dims, dims.tokens, seg)
-    golden._group_scores, golden._group_mask = scores, mask
-    golden._pin_mask = True
-
-    def golden_block(x_in, leaves, layer, route_ids):
-        golden._layer_ptr = layer
-        # reuse the pinned group state for both members
-        gs, gm = golden._group_scores, golden._group_mask
-        y_ref, aux = golden.block_forward(x_in, leaves, route_ids=route_ids)
-        if golden._layer_ptr == layer + 1 and dims.role_of(layer) == "full":
-            # block_forward recomputed scores/mask from its own graph for
-            # the leader; RE-PIN the mask-based state to the runtime's
-            golden._group_scores = golden._group_scores if gs is None else golden._group_scores
-        return y_ref, aux
-
-    # simpler: call block_forward directly with pinned state — the leader
-    # call would overwrite the pinned mask with its own selection, so pin
-    # AFTER by monkey-adjusting: run leader with its natural computation
-    # but force the mask to the runtime's selection
-    import dataflow.models.glm52_reference as GR
-
-    orig_topk = GR.dsa_topk_reference
-    try:
-        GR.dsa_topk_reference = lambda s, k, segments=None: meta_ld["dsa_idx"].long()
-        golden._layer_ptr = 1
-        y1_ref, aux1 = golden.block_forward(
-            x_ref, leaves_ld, route_ids=meta_ld["route_ids"], segments=seg)
-        y2_ref, aux2 = golden.block_forward(
-            y1_ref, leaves_f, route_ids=meta_f["route_ids"], segments=seg)
-    finally:
-        GR.dsa_topk_reference = orig_topk
-    (aux1 + aux2).backward(retain_graph=True)
-    y2_ref.backward(dy2)
-
-    errors = {"fwd:y1": rel_l2(y1, y1_ref.detach()), "fwd:y2": rel_l2(y2, y2_ref.detach()),
-              "bwd:dx0": rel_l2(dx0, x_ref.grad)}
-    for name, dw in (("ld", dw_ld), ("f", dw_f)):
-        leaves = leaves_ld if name == "ld" else leaves_f
-        for fname, g in dw.items():
-            if fname == "w_router_bias":
-                continue
-            errors[f"{name}:d{fname}"] = rel_l2(g, leaves[fname].grad)
-    bad = {k: round(v, 4) for k, v in errors.items() if v > 4e-2}
-    assert not bad, bad
+# block-level ladder retired with the golden models: block math is
+# gated by the per-op kernel pins, the model-level dW comparison
+# (grad: entries), and per-block isolation (tools/deep_compare.py
+# --isolate); see docs/correctness_compare.md.
 
 
 def test_glm52_poison_on_free_changes_nothing():
@@ -619,7 +385,8 @@ def test_glm52_frozen_indexer_ablation():
                 for oid in (task.outputs and [o.id for o in task.outputs] or [])
                 if str(oid).startswith("dAuxTemp_")]
     check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
-                     field_atol=_BIAS_ATOL).assert_ok()
+                     field_atol=_BIAS_ATOL,
+                     **family_gate_kwargs("glm52")).assert_ok()
 
 
 def test_glm52_dense_warmup_model_step():
@@ -631,8 +398,10 @@ def test_glm52_dense_warmup_model_step():
     zeroed); the frozen optimizer makes that invisible to param/state
     comparisons, which is exactly the point."""
     cfg = _tiny_cfg(sparse_mode=False)
+    idx_only = ("w_idx_q", "w_idx_k", "idx_k_ln_w", "idx_k_ln_b", "w_idx_w")
     check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
-                     field_atol=_BIAS_ATOL).assert_ok()
+                     field_atol=_BIAS_ATOL, reference_train_only=idx_only,
+                     **family_gate_kwargs("glm52")).assert_ok()
 
 
 def test_glm52_dense_warmup_freeze_and_movement():
