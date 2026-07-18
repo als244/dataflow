@@ -56,11 +56,11 @@ class BlockRecorder(nn.Module):
             return getattr(super().__getattr__("inner"), name)
 
 
-def kinds_of(dims, cfg):
+def block_kinds(dims, cfg):
     return getattr(dims, "kinds", None) or ("?",) * cfg.n_layers
 
 
-def ragged_for(cfg):
+def ragged_partition(cfg):
     t = cfg.seq_len * cfg.batch
     a = t // 2 + 3
     b = t // 4 + 1
@@ -72,7 +72,7 @@ def main() -> int:
     from dataflow.runtime import Engine
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.runtime.device.fake import FakeBackend
-    from dataflow_training.blocks.segments import uniform_segments
+    from dataflow_training.data.segments import uniform_segments
     from dataflow.runtime.interop import torch_view
     from dataflow_training.model_families.families import resolve_family
     from dataflow_training.lowering.planning import plan_program
@@ -103,7 +103,7 @@ def main() -> int:
                    if k.startswith("Shaped") and k.endswith("Config"))
     cfg = cfg_cls.tiny()
     if args.shape == "ragged":
-        cfg = replace(cfg, seq_lens=ragged_for(cfg))
+        cfg = replace(cfg, seq_lens=ragged_partition(cfg))
 
     fam = resolve_family(cfg)
     dims = fam.dims_of(cfg)
@@ -223,7 +223,7 @@ def main() -> int:
         mask = torch.ones(dims.tokens, dtype=torch.bool)
         mask[hot] = False
         print(f"== ISOLATED block(s) {targets_iso} "
-              f"[{kinds_of(dims, cfg)[bi]} compared] on engine inputs:")
+              f"[{block_kinds(dims, cfg)[bi]} compared] on engine inputs:")
         print(f"  rel={rel_l2(eng, twn):.3e} cos={cos_sim(eng, twn):.6f}")
         print(f"  row-med {med:.3e}  p90 {float(rowrel.quantile(0.9)):.3e}"
               f"  max {float(rowrel.max()):.3e}")
@@ -234,7 +234,7 @@ def main() -> int:
         return 0
 
     # ---- 1. forward divergence by depth + hot rows ----
-    kinds = kinds_of(dims, cfg)
+    kinds = block_kinds(dims, cfg)
     print(f"== {args.family}/{args.shape}: forward divergence by depth")
     hot_union: set[int] = set()
     for bi, rec in enumerate(recs):

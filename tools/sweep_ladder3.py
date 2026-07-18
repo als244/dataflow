@@ -24,7 +24,7 @@ FAMILIES = ("llama3", "qwen3", "olmoe", "dsv3", "dsv32", "glm52",
 SHAPES = ("uniform", "ragged")
 
 
-def ragged_for(cfg):
+def ragged_partition(cfg):
     t = cfg.seq_len * cfg.batch
     a = t // 2 + 3
     b = t // 4 + 1
@@ -75,7 +75,7 @@ def main() -> int:
         for shape in SHAPES:
             cfg = tiny_cfg(family)
             if shape == "ragged":
-                cfg = replace(cfg, seq_lens=ragged_for(cfg))
+                cfg = replace(cfg, seq_lens=ragged_partition(cfg))
             label = f"{family}/{shape}"
             try:
                 report = check_model_step(

@@ -94,8 +94,7 @@ class RunResult:
 class Session:
     """Long-lived device state reused across Engine.execute() calls.
 
-    Multi-step training replays the same annotated chain once per optimizer
-    step; re-creating the pool each step would re-allocate the device slab
+    Multi-step callers replay the same annotated chain once per step; re-creating the pool each step would re-allocate the device slab
     and re-pin tens of GB of host memory. A Session owns the backend and the
     BufferPool (with its slabs) so steady-state steps perform zero vendor
     allocations. Slabs are keyed to the first program's capacities; reusing a

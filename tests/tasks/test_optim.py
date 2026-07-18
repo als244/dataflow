@@ -252,7 +252,7 @@ def test_mixed_policy_model_step_vs_hand_replica():
                 out = out - hp.lr * eff
         return out.to(w.dtype)
 
-    from dataflow_training.blocks.segments import uniform_segments
+    from dataflow_training.data.segments import uniform_segments
 
     dry = Engine(FakeBackend()).execute(planned.program,
                                         initial_buffers=values)
@@ -341,7 +341,7 @@ def test_muon_recipe_string_model_step_vs_hand_replica():
             out = out - hp.lr * scale * _ns_orthogonalize(eff).float()
         return out.to(w.dtype)
 
-    from dataflow_training.blocks.segments import uniform_segments
+    from dataflow_training.data.segments import uniform_segments
 
     dry = Engine(FakeBackend()).execute(planned.program,
                                         initial_buffers=values)
@@ -426,7 +426,7 @@ def test_layer_indexed_policy_sizes_and_model_step():
                    / ((v / (1 - hp.beta2)).sqrt() + hp.eps))
         return out.to(w.dtype)
 
-    from dataflow_training.blocks.segments import uniform_segments
+    from dataflow_training.data.segments import uniform_segments
 
     dry = Engine(FakeBackend()).execute(planned.program,
                                         initial_buffers=values)
@@ -529,7 +529,7 @@ def test_hyper_overrides_and_schedule_model_step():
                 - lr * (m / (1 - 0.9))
                 / ((v / (1 - 0.95)).sqrt() + 1e-8)).to(w.dtype)
 
-    from dataflow_training.blocks.segments import uniform_segments
+    from dataflow_training.data.segments import uniform_segments
 
     dry = Engine(FakeBackend()).execute(planned.program,
                                         initial_buffers=values)

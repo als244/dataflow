@@ -30,7 +30,7 @@ class TaskContext:
     workspace: Buffer | None = None
     # per-run opaque parameters (engine service run(args=...)); the
     # engine never interprets them — executables read what they need
-    # (e.g. the optimizer's global step for bias correction). IMMUTABLE
+    # (e.g. a global step counter a task family keys on). IMMUTABLE
     # after the run-start prologue: tasks must never write run_args.
     run_args: Mapping[str, object] | None = None
     # small MUTABLE shared runtime state, one dict per run — written by

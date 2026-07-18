@@ -153,7 +153,7 @@ def assert_frozen_model_step(cfg, *, frozen_prefixes, tol=3e-2, seed=0):
     from dataflow.runtime import Engine
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.runtime.device.fake import FakeBackend
-    from dataflow_training.blocks.segments import uniform_segments
+    from dataflow_training.data.segments import uniform_segments
     from dataflow.runtime.interop import torch_view
     from dataflow_training.model_families.families import resolve_family
     from dataflow_training.lowering.planning import plan_program
@@ -260,7 +260,7 @@ def test_model_step_truncated_ga2():
     from dataflow.runtime import Engine
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.runtime.device.fake import FakeBackend
-    from dataflow_training.blocks.segments import uniform_segments
+    from dataflow_training.data.segments import uniform_segments
     from dataflow_training.blocks.base_blocks import AdamWHyper
     from dataflow.runtime.interop import torch_view
     from dataflow_training.model_families.families import resolve_family

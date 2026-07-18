@@ -27,7 +27,7 @@ from dataflow.core.jsonio import program_to_dict  # noqa: E402
 from dataflow.runtime import Engine  # noqa: E402
 from dataflow.runtime.device.cuda import CudaBackend  # noqa: E402
 from dataflow.runtime.device.fake import FakeBackend  # noqa: E402
-from dataflow_training.blocks.segments import uniform_segments  # noqa: E402
+from dataflow_training.data.segments import uniform_segments  # noqa: E402
 from dataflow.service import EngineClient, EngineConfig, Server  # noqa: E402
 from dataflow.runtime.interop import TORCH_DTYPE_BY_NAME, torch_view  # noqa: E402
 from dataflow_training.model_families.families import resolve_family  # noqa: E402

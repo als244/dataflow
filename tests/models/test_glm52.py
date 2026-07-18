@@ -164,7 +164,7 @@ def test_glm52_ga2_matches_reference():
     from dataflow_training.lowering.planning import plan_program
     from dataflow_training.testing.gradcheck import (
         EngineFinalBytes,
-        field_atol_for,
+        match_field_atol,
     )
 
     cfg = _tiny_cfg(grad_accum_rounds=2)
@@ -216,7 +216,7 @@ def test_glm52_ga2_matches_reference():
             module.last_counts = agg_counts[mod_name]
             module.apply_bias_update(cfg.bias_update_speed)
 
-    from dataflow_training.blocks.segments import uniform_segments
+    from dataflow_training.data.segments import uniform_segments
 
     dry = Engine(FakeBackend()).execute(planned.program,
                                         initial_buffers=values)
@@ -229,7 +229,7 @@ def test_glm52_ga2_matches_reference():
         cfg, EngineFinalBytes(result))
     twin_state = dict(model.state_dict())
     for name, engine_tensor in engine_state.items():
-        atol = field_atol_for(name, _BIAS_ATOL)
+        atol = match_field_atol(name, _BIAS_ATOL)
         if atol is not None:  # sign-lottery fields: absolute envelope
             gap = float((engine_tensor.float().cpu()
                          - twin_state[name].float().cpu()).abs().max())
@@ -259,7 +259,7 @@ def _run(engine_kwargs=None, program=None, seed=7, resolver_wrapper=None):
 
     backend = CudaBackend()
     values = fam.initial_values(prog, cfg, backend, seed=seed)
-    from dataflow_training.blocks.segments import uniform_segments
+    from dataflow_training.data.segments import uniform_segments
 
     dry = Engine(FakeBackend()).execute(prog, initial_buffers=values)
     resolver = fam.build_resolver(fam.dims_of(cfg))
@@ -447,7 +447,7 @@ def test_glm52_dense_warmup_freeze_and_movement():
                               (values["W_embed"].size_bytes,), torch.uint8).clone()
     head_before = torch_view(values["W_head"],
                              (values["W_head"].size_bytes,), torch.uint8).clone()
-    from dataflow_training.blocks.segments import uniform_segments
+    from dataflow_training.data.segments import uniform_segments
 
     dry = Engine(FakeBackend()).execute(planned.program, initial_buffers=values)
     result = Engine(backend).execute(

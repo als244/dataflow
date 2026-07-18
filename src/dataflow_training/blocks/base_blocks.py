@@ -199,20 +199,20 @@ class _Base:
     def _attn_meta(self, ctx):
         """The round's ``Segments`` — the SINGLE varlen descriptor every
         family's fwd/bwd attention + rope reads (models ALWAYS run varlen).
-        Resolved + materialized WORKLOAD-side (segments_for: internal
+        Resolved + materialized WORKLOAD-side (resolve_segments: internal
         form, wire seq_lens, or the dims-uniform default; device fields
         built once per run, cached in ctx.run_values); stages read
         ``seg.cu`` / ``seg.positions`` / ``seg.max_len`` as attributes,
         never rebuilding a device tensor mid-round. Round parsed from
         the task id ({s}_{r})."""
         r = self._round_of(ctx)
-        from .segments import segments_for
+        from ..data.segments import resolve_segments
 
         # run_args are OPAQUE to the engine: the workload resolves its
         # own packed metadata — internal Segments, wire seq_lens, or
         # the dims-uniform default — materialized once per run and
-        # cached in ctx.run_values (segments_for)
-        return segments_for(ctx, self.dims, r)
+        # cached in ctx.run_values (resolve_segments)
+        return resolve_segments(ctx, self.dims, r)
 
     def _aux_counts_state(self, ctx) -> dict | None:
         """Views of the layer's PERSISTENT Aux object (the per-step +

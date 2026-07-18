@@ -103,7 +103,7 @@ def test_varlen_single_launch_matches_reference_autograd():
     assert rel_l2(dv, av.grad) < 3e-2
 
 
-def _ragged_for(cfg):
+def _ragged_partition(cfg):
     """A deliberately unaligned partition of one round's tokens."""
     t = cfg.seq_len * cfg.batch
     a = t // 2 + 3
@@ -153,7 +153,7 @@ def test_model_step_ragged_all_families(family):
     cfg_cls = next(v for k, v in vars(mod).items()
                    if k.startswith("Shaped") and k.endswith("Config"))
     cfg = cfg_cls.tiny()
-    cfg = replace(cfg, seq_lens=_ragged_for(cfg))
+    cfg = replace(cfg, seq_lens=_ragged_partition(cfg))
     atol = None
     if family in ("dsv32", "glm52"):
         atol = _DSA_BIAS_ATOL

@@ -69,7 +69,7 @@ class CheckReport:
     # entries stay tight
     tol_by_prefix: dict | None = None
 
-    def tol_for(self, name: str) -> float:
+    def entry_tolerance(self, name: str) -> float:
         if self.tol_by_prefix:
             for prefix, t in self.tol_by_prefix.items():
                 if name.startswith(prefix):
@@ -78,7 +78,7 @@ class CheckReport:
 
     @property
     def ok(self) -> bool:
-        if any(v > self.tol_for(k) for k, v in self.errors.items()):
+        if any(v > self.entry_tolerance(k) for k, v in self.errors.items()):
             return False
         return all(c >= self.min_cosine for c in self.cosines.values())
 
@@ -89,7 +89,7 @@ class CheckReport:
     def assert_ok(self) -> None:
         if not self.ok:
             bad = {k: round(v, 5) for k, v in self.errors.items()
-                   if v > self.tol_for(k)}
+                   if v > self.entry_tolerance(k)}
             low = {k: round(c, 5) for k, c in self.cosines.items()
                    if c < self.min_cosine}
             raise AssertionError(
@@ -146,7 +146,7 @@ def check_block_backward(dims, *, family=None, seed: int = 0, tol: float = 3e-2)
             "bundle); its per-kind block ladders live in its own test module"
         )
 
-    from dataflow_training.blocks.segments import Segments
+    from dataflow_training.data.segments import Segments
 
     w, x, dy = _random_block_state(dims, family.weight_layout(dims), seed)
     kernels = resolve_kernels()
@@ -421,7 +421,7 @@ def isolated_block_compare(cfg, isolate, *, seed: int = 0,
     from dataflow.runtime import Engine
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.runtime.device.fake import FakeBackend
-    from dataflow_training.blocks.segments import uniform_segments
+    from dataflow_training.data.segments import uniform_segments
     from dataflow.runtime.interop import torch_view
     from dataflow_training.model_families.families import resolve_family
     from dataflow_training.lowering.planning import plan_program
@@ -613,7 +613,7 @@ def family_gate_kwargs(family_name: str) -> dict:
             "counts_budget": budget}
 
 
-def field_atol_for(name: str, field_atol: dict | None):
+def match_field_atol(name: str, field_atol: dict | None):
     """Suffix-match a twin parameter/buffer name against the caller's
     atol table (keys are engine-field/short names, e.g.
     "w_router_bias")."""
@@ -729,7 +729,7 @@ def check_model_step(
         twin_loss = float(twin.indexer_loss())
 
     if run_args is None:
-        from dataflow_training.blocks.segments import uniform_segments
+        from dataflow_training.data.segments import uniform_segments
 
         run_args = {"segments": uniform_segments(dims, planned.program)}
 
@@ -756,7 +756,7 @@ def check_model_step(
         if twin_tensor is None:
             errors[name] = float("inf")
             continue
-        atol = field_atol_for(name, field_atol)
+        atol = match_field_atol(name, field_atol)
         if atol is not None:
             gap = float((engine_tensor.float().cpu()
                          - twin_tensor.float().cpu()).abs().max())
@@ -774,7 +774,7 @@ def check_model_step(
         g_twin = twin_grads.get(name)
         if g_twin is None or g_twin.shape != g_engine.shape:
             continue        # frozen/train_only params carry no twin grad
-        atol = field_atol_for(name, field_atol)
+        atol = match_field_atol(name, field_atol)
         if atol is not None:
             continue        # enveloped fields: raw-gap gate above only
         errors["grad:" + name] = rel_l2(g_engine, g_twin)

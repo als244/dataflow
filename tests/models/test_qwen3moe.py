@@ -195,7 +195,7 @@ def test_qwen3moe_ga2_matches_reference():
                          beta1=hp.beta1, beta2=hp.beta2, eps=hp.eps,
                          weight_decay=hp.weight_decay, step=1)
 
-    from dataflow_training.blocks.segments import uniform_segments
+    from dataflow_training.data.segments import uniform_segments
 
     dry = Engine(FakeBackend()).execute(planned.program,
                                         initial_buffers=values)
@@ -236,7 +236,7 @@ def _run(engine_kwargs=None, program=None, seed=7, resolver_wrapper=None):
     resolver = fam.build_resolver(fam.dims_of(cfg))
     if resolver_wrapper is not None:
         resolver = resolver_wrapper(resolver, backend)
-    from dataflow_training.blocks.segments import uniform_segments
+    from dataflow_training.data.segments import uniform_segments
     result = Engine(backend, **(engine_kwargs or {})).execute(
         prog, resolver=resolver,
         initial_buffers=values, pool_prewarm=dry.pool_demand,

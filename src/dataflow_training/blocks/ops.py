@@ -19,8 +19,8 @@ import math
 
 import torch
 
-from .segments import Segments  # noqa: F401 — re-export: the round
-# value object lives beside the op library; both are workload-owned
+from ..data.segments import Segments  # noqa: F401 — re-export for
+# the op library surface; the round descriptor is DATA-plane
 
 # --- rmsnorm -------------------------------------------------------------------
 

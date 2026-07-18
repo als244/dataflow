@@ -186,7 +186,7 @@ def block_causal_mask(seq_lens, device) -> torch.Tensor:
     return m
 
 
-def seq_bounds_of(seq_lens) -> tuple[tuple[int, int], ...]:
+def sequence_bounds(seq_lens) -> tuple[tuple[int, int], ...]:
     """Flat-token (lo, hi) per sequence for a packed round."""
     out, lo = [], 0
     for n in seq_lens:
@@ -530,7 +530,7 @@ class Glm52(nn.Module):
             pos = packed_positions(seq_lens, x.device)
             cos, sin = cos[pos], sin[pos]
             base_mask = block_causal_mask(seq_lens, x.device)
-            bounds = seq_bounds_of(seq_lens)
+            bounds = sequence_bounds(seq_lens)
         mask = None   # each group opens with a full (leader) layer that sets it
         for blk in self.blocks:
             if self.grad_checkpoint and self.training:

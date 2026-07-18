@@ -89,7 +89,7 @@ _capsule_new.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_void_p]
 # pool reuse, buffers recur at IDENTICAL addresses every step, so views are
 # cached by (address, offset, dtype, shape, device-kind). The cached tensor
 # does not own memory; the pool retains allocations for the session, and
-# training clears the cache at teardown (clear_view_cache).
+# long-lived callers clear it at teardown (clear_view_cache).
 _VIEW_CACHE: dict = {}
 _VIEW_CACHE_MAX = 8192
 

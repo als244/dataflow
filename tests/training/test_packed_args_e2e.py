@@ -69,7 +69,7 @@ def test_packed_mode_materializes_positions_once(monkeypatch):
     from dataflow.runtime import Engine
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.runtime.device.fake import FakeBackend
-    from dataflow_training.blocks.segments import Segments
+    from dataflow_training.data.segments import Segments
     from dataflow_training.model_families.families import resolve_family
     from dataflow_training.lowering.planning import plan_program
 
@@ -106,7 +106,7 @@ def test_packed_mode_materializes_positions_once(monkeypatch):
 
 
 class SegmentsProbeCtx:
-    """Minimal TaskContext stand-in for segments_for: run_args +
+    """Minimal TaskContext stand-in for resolve_segments: run_args +
     run_values + backend are all it reads."""
 
     def __init__(self, run_args, backend):
@@ -119,38 +119,38 @@ def test_workload_segments_positions():
     import torch as _t
 
     from dataflow.runtime.device.cuda import CudaBackend
-    from dataflow_training.blocks.segments import segments_for
+    from dataflow_training.data.segments import resolve_segments
 
     ctx = SegmentsProbeCtx({"seq_lens": {"0": [0, 5, 8]}}, CudaBackend())
-    seg = segments_for(ctx, None, "0")
+    seg = resolve_segments(ctx, None, "0")
     assert seg.positions.device.type == "cuda" and seg.positions.dtype == _t.int32
     assert seg.positions.cpu().tolist() == [0, 1, 2, 3, 4, 0, 1, 2]
     # cached: the SAME materialized object comes back for the run
-    assert segments_for(ctx, None, "0") is seg
+    assert resolve_segments(ctx, None, "0") is seg
 
 
 def test_workload_segments_derives_max_seqlen_and_mirrors():
-    """segments_for: wire boundaries -> materialized Segments resolved
+    """resolve_segments: wire boundaries -> materialized Segments resolved
     WORKLOAD-side (run_args stay opaque to the engine); tight per-round
     max_len, device cu mirror; caller's run_args untouched."""
     import torch as _t
 
     from dataflow.runtime.device.cuda import CudaBackend
-    from dataflow_training.blocks.segments import segments_for
+    from dataflow_training.data.segments import resolve_segments
 
     ra = {"step": 3,
           "seq_lens": {"0": [0, 73, 111, 128], "1": [0, 50, 128]}}
     ctx = SegmentsProbeCtx(ra, CudaBackend())
-    s0 = segments_for(ctx, None, "0")
-    s1 = segments_for(ctx, None, "1")
+    s0 = resolve_segments(ctx, None, "0")
+    s1 = resolve_segments(ctx, None, "1")
     assert s0.max_len == 73 and s1.max_len == 78
     assert "segments" not in ra  # run_args untouched (opaque + immutable)
     assert s0.cu.device.type == "cuda" and s0.cu.dtype == _t.int32
     assert s0.cu.cpu().tolist() == [0, 73, 111, 128]
 
     with pytest.raises(ValueError):
-        segments_for(SegmentsProbeCtx({"seq_lens": {"0": [5, 3]}},
+        resolve_segments(SegmentsProbeCtx({"seq_lens": {"0": [5, 3]}},
                                       CudaBackend()), None, "0")
     with pytest.raises(ValueError):
-        segments_for(SegmentsProbeCtx({"seq_lens": {"0": [0, 10, 7]}},
+        resolve_segments(SegmentsProbeCtx({"seq_lens": {"0": [0, 10, 7]}},
                                       CudaBackend()), None, "0")

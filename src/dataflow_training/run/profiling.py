@@ -170,14 +170,14 @@ def profile_program(
     profiles: dict[tuple, TaskProfile] = {}
 
     # attention blocks resolve the round's Segments workload-side
-    # (segments_for); the profiler drives executables directly, so build
+    # (resolve_segments); the profiler drives executables directly, so build
     # + materialize a uniform descriptor once here (from any block
     # executable's dims — all tasks share dims)
     _run_args = None
     for _t in program.tasks:
         _d = getattr(resolver(_t), "dims", None)
         if _d is not None:
-            from ..blocks.segments import uniform_segments
+            from ..data.segments import uniform_segments
 
             segs = uniform_segments(_d, program)
             if getattr(backend, "physical", False):

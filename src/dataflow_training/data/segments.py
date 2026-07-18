@@ -4,7 +4,7 @@ engine treats run_args as fully opaque (its own contract), so the
 wire seq_lens -> Segments conversion, the device materialization
 (pinned + non_blocking, identity-deduped), and the dims-uniform
 fallback all live here, cached in ctx.run_values by the first
-consuming task (segments_for).
+consuming task (resolve_segments).
 """
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ class Segments:
     ``positions`` are excluded from equality/hash (identity is ``lengths``).
 
     Replaces the old seq_spec (int | tuple) + the seq_lens_of /
-    seq_bounds_of / positions_for / attn_meta free-function family.
+    sequence_bounds / positions_for / attn_meta free-function family.
     """
     lengths: tuple[int, ...]
     cu: torch.Tensor | None = field(default=None, compare=False)
@@ -121,7 +121,7 @@ def uniform_segments(dims, program) -> dict:
     implied by ``dims`` (``batch`` uniform ``seq_len`` sequences, or the
     config's fixed ``seq_lens``) — one shared object, materialized once by
     the first consuming task. Round key is the task id's ``{s}_{r}_{i}``
-    middle field (matches segments_for), a superset of block rounds; extra
+    middle field (matches resolve_segments), a superset of block rounds; extra
     keys are harmless."""
     seg = Segments.of_dims(dims)
     rounds = set()
@@ -132,7 +132,7 @@ def uniform_segments(dims, program) -> dict:
     return {r: seg for r in (rounds or {"0"})}
 
 
-def segments_for(ctx, dims, round_key) -> "Segments":
+def resolve_segments(ctx, dims, round_key) -> "Segments":
     """The round's materialized Segments, resolved from run_args by the
     FIRST consuming task and cached in ctx.run_values for the rest of
     the run. Accepts the clean internal form run_args["segments"] =
