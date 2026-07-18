@@ -1,12 +1,12 @@
-"""OLMoE correctness ladder (GPU): the first family on the pluggable MoE
-module, mirrored on tests/models/test_qwen35.py.
+"""Qwen3-MoE correctness ladder (GPU): third family on the pluggable MoE
+module, mirrored on tests/dataflow_training/models/test_olmoe.py.
 
-Family-specific pins: full-row qk-norm (one rstd per token), the MoE tail
-spliced after resid1_norm2, aux load-balance gradient injection (the
-golden's autograd objective is CE + aux while its reported loss is CE),
-recompute reproducing the ROUTING DECISION bit-exactly (int ctx fields
-compared with torch.equal), and end-to-end engine determinism (fixed seed
-twice -> identical bytes).
+Family-specific pins: qwen3's PER-HEAD qk-norm inherited verbatim (dense
+qwen3 classes; per-head rstds), GQA exercised in the tiny config (4 q /
+2 kv heads — the real models are 32/4 and 64/4), topk_then_softmax
+routing (norm_topk_prob=true), aux at 0.001, NO shared expert, recompute
+reproducing the routing decision bit-exactly, fixed-seed engine
+determinism.
 """
 from dataclasses import replace
 
@@ -26,13 +26,13 @@ pytestmark = pytest.mark.gpu
 
 
 def _tiny_cfg(**over):
-    from dataflow_training.model_families.olmoe import ShapedOlmoeConfig
+    from dataflow_training.model_families.qwen3moe import ShapedQwen3MoeConfig
 
-    return replace(ShapedOlmoeConfig.tiny(), **over)
+    return replace(ShapedQwen3MoeConfig.tiny(), **over)
 
 
 def _tiny_dims(cfg=None):
-    from dataflow_training.model_families.olmoe import derive_dims
+    from dataflow_training.model_families.qwen3moe import derive_dims
 
     return derive_dims(cfg if cfg is not None else _tiny_cfg())
 
@@ -53,54 +53,65 @@ def _tiny_dims(cfg=None):
 # --- structure + lowering ----------------------------------------------------------
 
 
-def test_olmoe_stage_context_completeness():
-    from dataflow_training.blocks.layouts import olmoe_activation_layout
-    from dataflow_training.model_families.olmoe.blocks import OlmoeBlockFwd
+def test_qwen3moe_stage_context_completeness():
+    from dataflow_training.blocks.layouts import qwen3moe_activation_layout
+    from dataflow_training.model_families.qwen3moe.blocks import Qwen3MoeBlockFwd
 
-    cl = olmoe_activation_layout(_tiny_dims())
+    cl = qwen3moe_activation_layout(_tiny_dims())
     declared = {f.name for f in cl.fields}
-    emitted = OlmoeBlockFwd.context_fields_emitted()
+    emitted = Qwen3MoeBlockFwd.context_fields_emitted()
     assert declared == emitted, declared ^ emitted
-    assert OlmoeBlockFwd.recompute_stage_count() < len(OlmoeBlockFwd.STAGES)
-    # combine (the y-only epilogue) must sit past the recompute boundary
-    names = [s[0] for s in OlmoeBlockFwd.STAGES]
-    assert names[OlmoeBlockFwd.recompute_stage_count():] == ["moe_experts2_combine"]
+    assert Qwen3MoeBlockFwd.recompute_stage_count() < len(Qwen3MoeBlockFwd.STAGES)
+    names = [s[0] for s in Qwen3MoeBlockFwd.STAGES]
+    assert names[Qwen3MoeBlockFwd.recompute_stage_count():] == ["moe_experts2_combine"]
 
 
-def test_olmoe_lowering_validates_and_plans():
+def test_qwen3moe_lowering_validates_and_plans():
     from dataflow.core import validate_program
     from dataflow_training.model_families.families import resolve_family
     from dataflow_training.lowering.planning import plan_program, simulate_program
 
     cfg = _tiny_cfg()
     fam = resolve_family(cfg)
-    assert fam.name == "olmoe"
+    assert fam.name == "qwen3moe"
     program = fam.lower(cfg)
     validate_program(program)
-    assert program.metadata["family"] == "olmoe-shaped"
+    assert program.metadata["family"] == "qwen3moe-shaped"
     ids = {spec.id for spec in program.initial_objects}
     assert {"W_embed", "W_head", "O_head"} <= ids  # untied
     keys = {t.compute_block_key for t in program.tasks}
-    assert {"moeattn_fwd", "moeattn_bwd", "head_loss"} <= keys
+    assert {"q3moeattn_fwd", "q3moeattn_bwd", "head_loss"} <= keys
     planned = plan_program(program, fast_memory_capacity=8 * 1024 * 1024)
     log = simulate_program(planned.program)
     assert max(iv.end for iv in log.task_intervals) > 0
 
 
-def test_olmoe_partial_ownership_lowering_rejected():
-    """Accounting for partial expert ownership is plumbed and unit-tested
-    (tests/modules/test_moe.py); the PROGRAM path refuses until a multi-rank
-    runtime exists."""
+def test_qwen3moe_full_scale_presets_lower_and_validate():
+    """30B (48L) and 235B are definition-validated: lowering + exact sizes
+    succeed even though neither trains on this host (183 GiB / 1.4 TiB
+    pinned — documented in training/models/qwen3moe.py)."""
+    from dataflow.core import validate_program
+    from dataflow_training.model_families.qwen3moe import ShapedQwen3MoeConfig, lower_qwen3moe
+
+    for cfg in (ShapedQwen3MoeConfig.qwen3moe_30b(seq_len=128),
+                ShapedQwen3MoeConfig.qwen3moe_235b(seq_len=128)):
+        program = lower_qwen3moe(cfg)
+        validate_program(program)
+        n_blocks = sum(1 for t in program.tasks if t.compute_block_key == "q3moeattn_fwd")
+        assert n_blocks == cfg.n_layers
+
+
+def test_qwen3moe_partial_ownership_lowering_rejected():
     import dataclasses
     import unittest.mock as mock
 
-    from dataflow_training.model_families.olmoe import derive_dims, lower_olmoe
+    from dataflow_training.model_families.qwen3moe import derive_dims, lower_qwen3moe
 
     cfg = _tiny_cfg()
     part = dataclasses.replace(derive_dims(cfg).moe, expert_ids=(0, 1, 2))
     with pytest.raises(NotImplementedError):
-        with mock.patch("dataflow_training.model_families.olmoe.model.derive_moe_spec", return_value=part):
-            lower_olmoe(cfg)
+        with mock.patch("dataflow_training.model_families.qwen3moe.model.derive_moe_spec", return_value=part):
+            lower_qwen3moe(cfg)
 
 
 # --- ladder 3: full program through the real engine --------------------------------
@@ -108,40 +119,39 @@ def test_olmoe_partial_ownership_lowering_rejected():
 
 
 
-def test_olmoe_aux_zero_model_step_vs_golden():
+def test_qwen3moe_aux_zero_model_step_vs_golden():
     check_model_step(
         _tiny_cfg(aux_coef=0.0), fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
-        **family_gate_kwargs("olmoe"),
+        **family_gate_kwargs("qwen3moe"),
     ).assert_ok()
 
 
-def test_olmoe_plan_invariance():
+def test_qwen3moe_plan_invariance():
     cfg = _tiny_cfg()
     r1 = check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
-                          **family_gate_kwargs("olmoe"))
+                          **family_gate_kwargs("qwen3moe"))
     r2 = check_model_step(cfg, fast_memory_capacity=8 * 1024 * 1024, tol=3e-2,
-                          **family_gate_kwargs("olmoe"))
+                          **family_gate_kwargs("qwen3moe"))
     levels = {f"A_0_0_{i}": 1 for i in range(cfg.n_layers)}
     r3 = check_model_step(
         cfg, fast_memory_capacity=8 * 1024 * 1024, recompute_levels=levels, tol=3e-2,
-        **family_gate_kwargs("olmoe"),
+        **family_gate_kwargs("qwen3moe"),
     )
     for r in (r1, r2, r3):
         r.assert_ok()
 
 
-def test_olmoe_batch2_packed_sequences_vs_golden():
+def test_qwen3moe_batch2_packed_sequences_vs_golden():
     cfg = _tiny_cfg(batch=2, seq_len=64)
     check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
-                     **family_gate_kwargs("olmoe")).assert_ok()
+                     **family_gate_kwargs("qwen3moe")).assert_ok()
 
 
-def test_olmoe_ga2_matches_reference():
-    """Grad accumulation with the aux objective: per-round CE + per-round
-    aux summed across rounds, ONE backward on the total — engine == the
-    isolated twin (each round is one packed forward, so the twin's
-    forward-global aux IS the engine's round-global default; the runtime
-    accumulates injected aux gradients per round)."""
+def test_qwen3moe_ga2_matches_reference():
+    """Two grad-accum rounds with per-round CE + per-round aux, ONE
+    backward on the total — engine == the isolated twin (each round is
+    one packed forward, so the twin's forward-global aux IS the engine's
+    round-global default)."""
     from dataflow_training.model_families import bridges
     from dataflow_training.run.driver import adamw_field_step
     from dataflow.runtime import Engine
@@ -203,10 +213,10 @@ def test_olmoe_ga2_matches_reference():
     result.close()
 
 
-# --- engine-level gates: poison / interleave / measured-replan / determinism -------
+# --- engine-level gates: determinism / measured-replan / multistep ------------------
 
 
-def _run(engine_kwargs=None, resolver_wrapper=None, program=None, seed=7):
+def _run(engine_kwargs=None, program=None, seed=7, resolver_wrapper=None):
     from dataflow.runtime import Engine
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.runtime.device.fake import FakeBackend
@@ -228,7 +238,8 @@ def _run(engine_kwargs=None, resolver_wrapper=None, program=None, seed=7):
         resolver = resolver_wrapper(resolver, backend)
     from dataflow_training.data.segments import uniform_segments
     result = Engine(backend, **(engine_kwargs or {})).execute(
-        prog, resolver=resolver, initial_buffers=values, pool_prewarm=dry.pool_demand,
+        prog, resolver=resolver,
+        initial_buffers=values, pool_prewarm=dry.pool_demand,
         run_args={"segments": uniform_segments(fam.derive_dims(cfg), prog)},
     )
     out = {}
@@ -254,9 +265,7 @@ def _assert_same(a: dict, b: dict, tol: float = 1e-3):
         assert err < tol, f"{k}: rel_l2={err}"
 
 
-def test_olmoe_fixed_seed_bitwise_deterministic():
-    """Same seed, same plan, twice -> identical LOSS BYTES and weights
-    (routing ties, sort, grouped GEMMs, combine: all deterministic)."""
+def test_qwen3moe_fixed_seed_bitwise_deterministic():
     a = _run()
     b = _run()
     assert a["loss"] == b["loss"]
@@ -265,14 +274,36 @@ def test_olmoe_fixed_seed_bitwise_deterministic():
             assert torch.equal(a[k], b[k]), k
 
 
-def test_olmoe_poison_on_free_changes_nothing():
+def test_qwen3moe_measured_costs_replan_still_golden():
+    from dataflow.runtime.device.cuda import CudaBackend
+    from dataflow_training.model_families.families import resolve_family
+    from dataflow_training.lowering.planning import plan_program
+    from dataflow_training.run.profiling import apply_measured_costs, profile_program
+
+    cfg = _tiny_cfg()
+    fam = resolve_family(cfg)
+    program = fam.lower(cfg)
+    backend = CudaBackend()
+    profiles = profile_program(program, fam.build_resolver(fam.derive_dims(cfg)), backend, soak_seconds=0)
+    measured = apply_measured_costs(program, profiles)
+    assert all("measured" in t.metadata for t in measured.tasks)
+
+    base = _run()
+    replanned = plan_program(measured, fast_memory_capacity=8 * 1024 * 1024).program
+    again = _run(program=replanned)
+    _assert_same(again, base)
+
+
+
+
+def test_qwen3moe_poison_on_free_changes_nothing():
     base = _run()
     poisoned = _run(engine_kwargs={"poison_on_free": True})
     _assert_same(poisoned, base)
     assert poisoned["loss"] == poisoned["loss"]  # not NaN
 
 
-def test_olmoe_interleaving_stress_changes_nothing():
+def test_qwen3moe_interleaving_stress_changes_nothing():
     from dataflow.runtime.device.cuda_spin import SpinKernel
 
     def wrapper(resolver, backend):
@@ -293,29 +324,3 @@ def test_olmoe_interleaving_stress_changes_nothing():
     base = _run()
     jittered = _run(resolver_wrapper=wrapper)
     _assert_same(jittered, base)
-
-
-def test_olmoe_measured_costs_replan_still_golden():
-    """The end-to-end profiling gate: every signature (incl. moeattn_bwd,
-    whose packed ctx carries int32 routing fields) must profile through the
-    profile_fill hook without garbage-index crashes, and re-planning on
-    measured costs must not change the math."""
-    from dataflow.runtime.device.cuda import CudaBackend
-    from dataflow_training.model_families.families import resolve_family
-    from dataflow_training.lowering.planning import plan_program
-    from dataflow_training.run.profiling import apply_measured_costs, profile_program
-
-    cfg = _tiny_cfg()
-    fam = resolve_family(cfg)
-    program = fam.lower(cfg)
-    backend = CudaBackend()
-    profiles = profile_program(program, fam.build_resolver(fam.derive_dims(cfg)), backend, soak_seconds=0)
-    measured = apply_measured_costs(program, profiles)
-    assert all("measured" in t.metadata for t in measured.tasks)
-
-    base = _run()
-    replanned = plan_program(measured, fast_memory_capacity=8 * 1024 * 1024).program
-    again = _run(program=replanned)
-    _assert_same(again, base)
-
-

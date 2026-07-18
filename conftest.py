@@ -45,8 +45,10 @@ def cuda_test_hygiene(request):
     # backends); anything that may keep an in-process threaded server
     # alive across tests (fleet rigs, service suites, example bridges)
     # must not have buffers freed under it
-    if nodeid.startswith(("tests/training", "tests/models",
-                          "tests/runtime", "tests/pretrain")):
+    if nodeid.startswith(("tests/dataflow_training/training",
+                          "tests/dataflow_training/models",
+                          "tests/dataflow/runtime",
+                          "tests/dataflow_training/pretrain")):
         try:
             # raw cudaMalloc slabs leaked by tests that skip
             # close()/free() are invisible to empty_cache — drain them
@@ -55,3 +57,43 @@ def cuda_test_hygiene(request):
         except Exception:
             pass
     torch.cuda.empty_cache()
+
+
+@pytest.fixture(autouse=True, scope="module")
+def cuda_module_hygiene(request):
+    """Server-hosting suites (fleet rigs, service, examples) are
+    excluded from the per-test drain — freeing under a live in-process
+    engine server segfaults. Their leaked slabs still starve LATER
+    suites (the mirrored test order runs examples after service, whose
+    held VRAM broke the RL subprocess daemons). By MODULE end every
+    rig/server is torn down, so draining here is safe and returns the
+    memory."""
+    yield
+    torch = sys.modules.get("torch")
+    if torch is None or not torch.cuda.is_available():
+        return
+    nodeid = getattr(request.node, "nodeid", "")
+    if not nodeid.startswith(("tests/dataflow/service", "tests/fleet",
+                              "tests/examples")):
+        return
+    try:
+        from dataflow.runtime.device.cuda import drain_all_backends
+
+        torch.cuda.synchronize()
+        drain_all_backends()
+        torch.cuda.empty_cache()
+    except Exception:
+        pass
+
+
+def pytest_collection_modifyitems(config, items):
+    """Resource scheduling, not preference: the RL example tests boot
+    4-8 GiB subprocess daemons and must run while the GPU is still
+    empty. The mirrored tree ordered them AFTER the service/workload
+    suites, whose in-process engines leave the parent holding enough
+    VRAM (even post-drain) to starve those subprocess boots — measured
+    as cudaErrorMemoryAllocation only in full-battery order. Examples
+    therefore collect first."""
+    front = [it for it in items if it.nodeid.startswith("tests/examples")]
+    rest = [it for it in items if not it.nodeid.startswith("tests/examples")]
+    items[:] = front + rest

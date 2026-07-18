@@ -1,5 +1,5 @@
 """DeepSeek-V3 family ladder (GPU): golden + full programs through the
-real engine. Block-level MLA/moe pins live in tests/modules/test_mla.py.
+real engine. Block-level MLA/moe pins live in tests/dataflow_training/modules/test_mla.py.
 
 Family-specific pins here: MIXED depth (dense + moe kinds in one chain),
 sigmoid_noaux_tc end to end (bias counts through the dW slot, the sign

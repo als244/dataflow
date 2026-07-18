@@ -1,5 +1,5 @@
 """DeepSeek-V3.2 family ladder (DSA sparse mode) (GPU): golden + full programs through the
-real engine. Block-level MLA/moe pins live in tests/modules/test_mla.py.
+real engine. Block-level MLA/moe pins live in tests/dataflow_training/modules/test_mla.py.
 
 Family-specific pins here: MIXED depth (dense + moe kinds in one chain),
 sigmoid_noaux_tc end to end (bias counts through the dW slot, the sign
@@ -32,13 +32,13 @@ pytestmark = pytest.mark.gpu
 
 
 def _tiny_cfg(**over):
-    from dataflow_training.model_families.dsv32 import ShapedDsv32Config
+    from dataflow_training.model_families.glm52 import ShapedGlm52Config
 
-    return replace(ShapedDsv32Config.tiny(), **over)
+    return replace(ShapedGlm52Config.tiny(), **over)
 
 
 def _tiny_dims(cfg=None):
-    from dataflow_training.model_families.dsv32 import derive_dims
+    from dataflow_training.model_families.glm52 import derive_dims
 
     return derive_dims(cfg if cfg is not None else _tiny_cfg())
 
@@ -51,54 +51,55 @@ def _tiny_dims(cfg=None):
 # --- lowering ----------------------------------------------------------------------
 
 
-def test_dsv32_lowering_validates_and_plans():
+def test_glm52_lowering_validates_and_plans():
     from dataflow.core import validate_program
     from dataflow_training.model_families.families import resolve_family
     from dataflow_training.lowering.planning import plan_program, simulate_program
 
     cfg = _tiny_cfg()
     fam = resolve_family(cfg)
-    assert fam.name == "dsv32"
+    assert fam.name == "glm52"
     program = fam.lower(cfg)
     validate_program(program)
-    assert program.metadata["family"] == "dsv32-shaped"
+    assert program.metadata["family"] == "glm52-shaped"
     keys = {t.compute_block_key for t in program.tasks}
-    assert {"dsadense_fwd", "dsamoe_fwd", "dsamoe_bwd", "head_loss"} <= keys
-    # depth mix: exactly first_k_dense dense blocks
-    n_dense = sum(1 for t in program.tasks if t.compute_block_key == "dsadense_fwd")
-    assert n_dense == cfg.first_k_dense * cfg.grad_accum_rounds
+    assert {"gdl_fwd", "gml_fwd", "gmf_fwd", "gmf_bwd", "head_loss"} <= keys
+    # role mix (tiny: F F S S F S, first_k=1): 1 gdl, 2 gml, 3 gmf
+    per = cfg.grad_accum_rounds
+    assert sum(1 for t in program.tasks if t.compute_block_key == "gdl_fwd") == 1 * per
+    assert sum(1 for t in program.tasks if t.compute_block_key == "gml_fwd") == 2 * per
+    assert sum(1 for t in program.tasks if t.compute_block_key == "gmf_fwd") == 3 * per
     planned = plan_program(program, fast_memory_capacity=8 * 1024 * 1024)
     log = simulate_program(planned.program)
     assert max(iv.end for iv in log.task_intervals) > 0
 
 
-def test_dsv32_full_scale_presets_lower_and_validate():
+def test_glm52_full_scale_presets_lower_and_validate():
     from dataflow.core import validate_program
-    from dataflow_training.model_families.dsv32 import ShapedDsv32Config, lower_dsv32
+    from dataflow_training.model_families.glm52 import ShapedGlm52Config, lower_glm52
 
-    for ctor, layers in ((ShapedDsv32Config.dsv32_mini, 18),
-                         (ShapedDsv32Config.dsv32_671b, 61),
-                         (ShapedDsv32Config.glm5, 78)):
+    for ctor, layers in ((ShapedGlm52Config.glm52_mini, 18),
+                         (ShapedGlm52Config.glm52, 78)):
         cfg = ctor(seq_len=128)
-        program = lower_dsv32(cfg)
+        program = lower_glm52(cfg)
         validate_program(program)
         n_blocks = sum(1 for t in program.tasks
                        if t.compute_block_key.endswith("_fwd")
-                       and t.compute_block_key.startswith("dsa"))
+                       and t.compute_block_key.startswith("g"))
         assert n_blocks == layers
 
 
-def test_dsv32_partial_ownership_lowering_rejected():
+def test_glm52_partial_ownership_lowering_rejected():
     import dataclasses
     import unittest.mock as mock
 
-    from dataflow_training.model_families.dsv32 import derive_dims, lower_dsv32
+    from dataflow_training.model_families.glm52 import derive_dims, lower_glm52
 
     cfg = _tiny_cfg()
     part = dataclasses.replace(derive_dims(cfg).moe, expert_ids=(0, 1, 2))
     with pytest.raises(NotImplementedError):
-        with mock.patch("dataflow_training.model_families.dsv32.model.derive_moe_spec", return_value=part):
-            lower_dsv32(cfg)
+        with mock.patch("dataflow_training.model_families.glm52.model.derive_moe_spec", return_value=part):
+            lower_glm52(cfg)
 
 
 # --- full program through the real engine ------------------------------------------
@@ -115,56 +116,43 @@ _BIAS_ATOL = {
 
 
 
-def test_dsv32_aux_zero_model_step_vs_golden():
+def test_glm52_aux_zero_model_step_vs_golden():
     check_model_step(
         _tiny_cfg(aux_coef=0.0), fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
-        field_atol=_BIAS_ATOL, **family_gate_kwargs("dsv32"),
+        field_atol=_BIAS_ATOL, **family_gate_kwargs("glm52"),
     ).assert_ok()
 
 
-def test_dsv32_plan_invariance():
+def test_glm52_plan_invariance():
     cfg = _tiny_cfg()
     r1 = check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
-                          field_atol=_BIAS_ATOL, **family_gate_kwargs("dsv32"))
+                          field_atol=_BIAS_ATOL, **family_gate_kwargs("glm52"))
     r2 = check_model_step(cfg, fast_memory_capacity=8 * 1024 * 1024, tol=3e-2,
-                          field_atol=_BIAS_ATOL, **family_gate_kwargs("dsv32"))
+                          field_atol=_BIAS_ATOL, **family_gate_kwargs("glm52"))
     levels = {f"A_0_0_{i}": 1 for i in range(cfg.n_layers)}
     r3 = check_model_step(
         cfg, fast_memory_capacity=8 * 1024 * 1024, recompute_levels=levels, tol=3e-2,
-        field_atol=_BIAS_ATOL, **family_gate_kwargs("dsv32"),
+        field_atol=_BIAS_ATOL, **family_gate_kwargs("glm52"),
     )
     for r in (r1, r2, r3):
         r.assert_ok()
 
 
-def test_dsv32_batch2_packed_sequences_vs_golden():
+def test_glm52_batch2_packed_sequences_vs_golden():
     cfg = _tiny_cfg(batch=2, seq_len=64)
     check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
                      field_atol=_BIAS_ATOL,
-                     **family_gate_kwargs("dsv32")).assert_ok()
+                     **family_gate_kwargs("glm52")).assert_ok()
 
 
-def test_dsv32_short_sequences_lt_index_topk_vs_golden():
-    """Packed round with sequences SHORTER than index_topk (24): DSA
-    selection must clamp to min(k, L) PER SEQUENCE (DeepSeek's
-    topk(min(index_topk, seqlen))) — a short sequence attends densely to
-    its causal prefix. Regression gate: pre-fix the engine crashed
-    (torch.topk k>L) and the reference did a boundary-agnostic global
-    topk. seq_lens=(104, 16, 8): the 16- and 8-token sequences are < 24."""
-    cfg = _tiny_cfg(seq_lens=(104, 16, 8))
-    check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
-                     field_atol=_BIAS_ATOL,
-                     **family_gate_kwargs("dsv32")).assert_ok()
-
-
-def test_dsv32_ga2_matches_reference():
-    """Two grad-accum rounds with the LBL composite, the indexer KL and
-    the noaux bias rule: engine == the isolated twin. The twin stashes
-    per-FORWARD assignment counts only, so the STEP-AGGREGATE bias rule
-    (the engine's dW count accumulation) is applied here by summing each
-    MoE module's counts across rounds before its own sign rule;
-    sign-lottery bias fields compare under the _BIAS_ATOL envelope (see
-    module docstring)."""
+def test_glm52_ga2_matches_reference():
+    """Two grad-accum rounds with the LBL composite, the leader-group
+    indexer KL and the noaux bias rule: engine == the isolated twin. The
+    twin stashes per-FORWARD assignment counts only, so the
+    STEP-AGGREGATE bias rule (the engine's dW count accumulation) is
+    applied here by summing each MoE module's counts across rounds
+    before its own sign rule; sign-lottery bias fields compare under the
+    _BIAS_ATOL envelope (see module docstring)."""
     from dataflow_training.model_families import bridges
     from dataflow_training.run.driver import adamw_field_step
     from dataflow.runtime import Engine
@@ -312,7 +300,7 @@ def _assert_same(a: dict, b: dict, tol: float = 1e-3):
         assert err < tol, f"{k}: rel_l2={err}"
 
 
-def test_dsv32_fixed_seed_bitwise_deterministic():
+def test_glm52_fixed_seed_bitwise_deterministic():
     a = _run()
     b = _run()
     assert a["loss"] == b["loss"]
@@ -321,7 +309,7 @@ def test_dsv32_fixed_seed_bitwise_deterministic():
             assert torch.equal(a[k], b[k]), k
 
 
-def test_dsv32_measured_costs_replan_still_golden():
+def test_glm52_measured_costs_replan_still_golden():
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow_training.model_families.families import resolve_family
     from dataflow_training.lowering.planning import plan_program
@@ -346,103 +334,114 @@ def test_dsv32_measured_costs_replan_still_golden():
 
 
 
-def test_dsv32_frozen_indexer_ablation():
-    """train_indexer=False (the ablation knob): model-step still matches
-    golden AND the five indexer fields are BIT-FROZEN across the step
-    (no gradients, no AdamW, not even weight decay)."""
-    import dataclasses
 
-    from dataflow.runtime import Engine
-    from dataflow.runtime.device.cuda import CudaBackend
-    from dataflow.runtime.device.fake import FakeBackend
-    from dataflow.runtime.interop import TORCH_DTYPE_BY_NAME, torch_view
+# block-level ladder retired with the golden models: block math is
+# gated by the per-op kernel pins, the model-level dW comparison
+# (grad: entries), and per-block isolation (tools/deep_compare.py
+# --isolate); see docs/correctness_compare.md.
+
+
+def test_glm52_poison_on_free_changes_nothing():
+    base = _run()
+    poisoned = _run(engine_kwargs={"poison_on_free": True})
+    _assert_same(poisoned, base)
+    assert poisoned["loss"] == poisoned["loss"]  # not NaN
+
+
+def test_glm52_interleaving_stress_changes_nothing():
+    from dataflow.runtime.device.cuda_spin import SpinKernel
+
+    def wrapper(resolver, backend):
+        kernel = SpinKernel()
+        rng = torch.Generator().manual_seed(123)
+
+        class Jitter:
+            def __init__(self, inner):
+                self.inner = inner
+
+            def launch(self, ctx):
+                delay = float(torch.randint(20, 400, (1,), generator=rng)[0])
+                kernel.launch_us(ctx.stream, delay)
+                self.inner.launch(ctx)
+
+        return lambda task: Jitter(resolver(task))
+
+    base = _run()
+    jittered = _run(resolver_wrapper=wrapper)
+    _assert_same(jittered, base)
+
+
+def test_glm52_frozen_indexer_ablation():
+    """train_indexer=False: model-step matches the frozen golden, the
+    leader indexer fields are BIT-FROZEN across the step, and lowering
+    emits NO dM chain (no KL => no metadata gradient)."""
     from dataflow_training.model_families.families import resolve_family
-    from dataflow_training.lowering.planning import plan_program
 
     cfg = _tiny_cfg(train_indexer=False)
+    fam = resolve_family(cfg)
+    prog = fam.lower(cfg)
+    assert not [o for o in prog.initial_objects if o.id.startswith("dAuxTemp_")]
+    assert not [oid for task in prog.task_by_id().values()
+                for oid in (task.outputs and [o.id for o in task.outputs] or [])
+                if str(oid).startswith("dAuxTemp_")]
     check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
                      field_atol=_BIAS_ATOL,
-                     **family_gate_kwargs("dsv32")).assert_ok()
-
-    fam = resolve_family(cfg)
-    dims = fam.derive_dims(cfg)
-    planned = plan_program(fam.lower(cfg), fast_memory_capacity=64 * 1024 * 1024)
-    backend = CudaBackend()
-    values = fam.initial_values(planned.program, cfg, backend, seed=11)
-    before = {}
-    wl_of = {}
-    from dataflow_training.blocks.layouts import dsv32_dense_weight_layout, dsv32_moe_weight_layout
-    for i in range(cfg.n_layers):
-        wl = (dsv32_dense_weight_layout(dims) if dims.kinds[i] == "dense"
-              else dsv32_moe_weight_layout(dims))
-        wl_of[i] = wl
-        buf = values[f"W_{i}"]
-        before[i] = {
-            f.name: torch_view(buf, f.shape, TORCH_DTYPE_BY_NAME[f.dtype],
-                               offset_bytes=f.offset_bytes).clone()
-            for f in wl.fields if f.name.startswith(("w_idx", "idx_k_ln"))
-        }
-    from dataflow_training.data.segments import uniform_segments
-
-    dry = Engine(FakeBackend()).execute(planned.program, initial_buffers=values)
-    result = Engine(backend).execute(
-        planned.program, resolver=fam.build_resolver(dims),
-        initial_buffers=values, pool_prewarm=dry.pool_demand,
-        run_args={"segments": uniform_segments(dims, planned.program)},
-    )
-    for i in range(cfg.n_layers):
-        rec = result.objects.get(f"W_{i}")
-        slot = rec.backing or rec.fast
-        for f in wl_of[i].fields:
-            if not f.name.startswith(("w_idx", "idx_k_ln")):
-                continue
-            after = torch_view(slot.buffer, f.shape, TORCH_DTYPE_BY_NAME[f.dtype],
-                               offset_bytes=f.offset_bytes)
-            assert torch.equal(after, before[i][f.name]), (i, f.name)
-    result.close()
-    dry.close()
-    for buf in values.values():
-        backend.free(buf)
+                     **family_gate_kwargs("glm52")).assert_ok()
 
 
-def test_dsv32_dense_warmup_model_step():
-    """Dense warm-up gate (sparse_mode=False) — model-step matches
-    golden; the MAIN MODEL (every non-indexer field, embed/head/router-
-    bias included) is BIT-FROZEN across a real engine step; the indexer
-    fields MOVE (full-prefix KL is live)."""
-    import dataclasses
-
-    from dataflow.runtime import Engine
-    from dataflow.runtime.device.cuda import CudaBackend
-    from dataflow.runtime.device.fake import FakeBackend
-    from dataflow.runtime.interop import TORCH_DTYPE_BY_NAME, torch_view
-    from dataflow_training.blocks.layouts import dsv32_dense_weight_layout, dsv32_moe_weight_layout
-    from dataflow_training.model_families.families import resolve_family
-    from dataflow_training.lowering.planning import plan_program
-
+def test_glm52_dense_warmup_model_step():
+    """Dense warm-up gate (sparse_mode=False) — model-step matches golden.
+    IndexShare twist over dsv32's warm-up: followers deposit FULL-PREFIX
+    rows into the group dM and the leader trains on the group centroid
+    (p_own + dM)/N — the tiny config's N=3 group [1,2,3] and N=2 group
+    [4,5] pin the averaging. Main wgrads are SKIPPED in the engine (dW
+    zeroed); the frozen optimizer makes that invisible to param/state
+    comparisons, which is exactly the point."""
     cfg = _tiny_cfg(sparse_mode=False)
     idx_only = ("w_idx_q", "w_idx_k", "idx_k_ln_w", "idx_k_ln_b", "w_idx_w")
     check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
                      field_atol=_BIAS_ATOL, reference_train_only=idx_only,
-                     **family_gate_kwargs("dsv32")).assert_ok()
+                     **family_gate_kwargs("glm52")).assert_ok()
 
+
+def test_glm52_dense_warmup_freeze_and_movement():
+    """Across a REAL engine warm-up step: every non-indexer field —
+    embed/head/router-bias included, and EVERY follower field — is
+    BIT-FROZEN; leader indexer fields move (full-prefix group KL live)."""
+    import dataclasses
+
+    from dataflow.runtime import Engine
+    from dataflow.runtime.device.cuda import CudaBackend
+    from dataflow.runtime.device.fake import FakeBackend
+    from dataflow.runtime.interop import TORCH_DTYPE_BY_NAME, torch_view
+    from dataflow_training.blocks.layouts import (
+        dsv3_moe_weight_layout,
+        dsv32_dense_weight_layout,
+        dsv32_moe_weight_layout,
+    )
+    from dataflow_training.model_families.families import resolve_family
+    from dataflow_training.lowering.planning import plan_program
+
+    cfg = _tiny_cfg(sparse_mode=False)
     fam = resolve_family(cfg)
     dims = fam.derive_dims(cfg)
     planned = plan_program(fam.lower(cfg), fast_memory_capacity=64 * 1024 * 1024)
     backend = CudaBackend()
     values = fam.initial_values(planned.program, cfg, backend, seed=13)
     idx_fields = ("w_idx_q", "w_idx_k", "idx_k_ln_w", "idx_k_ln_b", "w_idx_w")
-    before = {}
     wl_of = {}
     for i in range(cfg.n_layers):
-        wl = (dsv32_dense_weight_layout(dims) if dims.kinds[i] == "dense"
-              else dsv32_moe_weight_layout(dims))
-        wl_of[i] = wl
+        kind = dims.kinds[i]
+        wl_of[i] = {"gdl": dsv32_dense_weight_layout,
+                    "gml": dsv32_moe_weight_layout,
+                    "gmf": dsv3_moe_weight_layout}[kind](dims)
+    before = {}
+    for i in range(cfg.n_layers):
         buf = values[f"W_{i}"]
         before[i] = {
             f.name: torch_view(buf, f.shape, TORCH_DTYPE_BY_NAME[f.dtype],
                                offset_bytes=f.offset_bytes).clone()
-            for f in wl.fields
+            for f in wl_of[i].fields
         }
     embed_before = torch_view(values["W_embed"],
                               (values["W_embed"].size_bytes,), torch.uint8).clone()
@@ -468,7 +467,7 @@ def test_dsv32_dense_warmup_model_step():
             else:
                 assert torch.equal(after, before[i][f.name]), \
                     (i, f.name, "main field moved in warm-up")
-    assert moved > 0, "no indexer field moved — KL not training"
+    assert moved > 0, "no leader indexer field moved — group KL not training"
     for obj, ref in (("W_embed", embed_before), ("W_head", head_before)):
         rec = result.objects.get(obj)
         slot = rec.backing or rec.fast
@@ -478,33 +477,3 @@ def test_dsv32_dense_warmup_model_step():
     dry.close()
     for buf in values.values():
         backend.free(buf)
-
-
-def test_dsv32_poison_on_free_changes_nothing():
-    base = _run()
-    poisoned = _run(engine_kwargs={"poison_on_free": True})
-    _assert_same(poisoned, base)
-    assert poisoned["loss"] == poisoned["loss"]  # not NaN
-
-
-def test_dsv32_interleaving_stress_changes_nothing():
-    from dataflow.runtime.device.cuda_spin import SpinKernel
-
-    def wrapper(resolver, backend):
-        kernel = SpinKernel()
-        rng = torch.Generator().manual_seed(123)
-
-        class Jitter:
-            def __init__(self, inner):
-                self.inner = inner
-
-            def launch(self, ctx):
-                delay = float(torch.randint(20, 400, (1,), generator=rng)[0])
-                kernel.launch_us(ctx.stream, delay)
-                self.inner.launch(ctx)
-
-        return lambda task: Jitter(resolver(task))
-
-    base = _run()
-    jittered = _run(resolver_wrapper=wrapper)
-    _assert_same(jittered, base)

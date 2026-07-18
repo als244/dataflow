@@ -51,21 +51,22 @@ CANON = [
 
 # older families keep op/ladder coverage in shared modules — scanned as
 # part of the family's audit surface
+MODULES_DIR = "tests/dataflow_training/modules"
 EXTRA_MODULES = {
-    "dsv3": ["tests/modules/test_mla.py", "tests/modules/test_moe.py"],
-    "dsv32": ["tests/modules/test_dsa.py", "tests/modules/test_moe.py"],
-    "glm52": ["tests/modules/test_dsa.py", "tests/modules/test_moe.py"],
-    "olmoe": ["tests/modules/test_moe.py"],
-    "qwen3moe": ["tests/modules/test_moe.py"],
-    "qwen35moe": ["tests/modules/test_moe.py"],
+    "dsv3": [f"{MODULES_DIR}/test_mla.py", f"{MODULES_DIR}/test_moe.py"],
+    "dsv32": [f"{MODULES_DIR}/test_dsa.py", f"{MODULES_DIR}/test_moe.py"],
+    "glm52": [f"{MODULES_DIR}/test_dsa.py", f"{MODULES_DIR}/test_moe.py"],
+    "olmoe": [f"{MODULES_DIR}/test_moe.py"],
+    "qwen3moe": [f"{MODULES_DIR}/test_moe.py"],
+    "qwen35moe": [f"{MODULES_DIR}/test_moe.py"],
 }
 # fleet-level gates: exercised through the shared engine/runtime tests
 # (they run real programs); a family missing one in ITS module gets a
 # [~] marker, not a failure
 FLEET_MODULES = [
-    "tests/runtime/test_cuda_backend.py",
-    "tests/runtime/test_placement.py",
-    "tests/training/test_planning.py",
+    "tests/dataflow/runtime/test_cuda_backend.py",
+    "tests/dataflow/runtime/test_placement.py",
+    "tests/dataflow_training/training/test_planning.py",
 ]
 FLEET_OK = {"poison-on-free stress", "interleave stress",
             "profiling E2E (measured-costs replan)",
@@ -80,7 +81,7 @@ def main() -> None:
                     help="path to the family's canonical test module "
                          "(external families: your module lives in YOUR "
                          "repo — pass it here; builtin default is "
-                         "tests/models/test_{family}.py)")
+                         "tests/dataflow_training/models/test_{family}.py)")
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--audit-only", action="store_true",
                     help="coverage audit without running the tests")
@@ -99,7 +100,7 @@ def main() -> None:
         return
 
     mod = (Path(args.module) if args.module
-           else REPO / f"tests/models/test_{args.family}.py")
+           else REPO / f"tests/dataflow_training/models/test_{args.family}.py")
     if not mod.exists():
         sys.exit(f"MISSING {mod} — a family without its canonical test "
                  f"module is unverified. Copy the NEWEST family's module "
@@ -126,7 +127,7 @@ def main() -> None:
             print(f"  [ ] {label}")
             missing.append(label)
 
-    trip = (REPO / "tests/training/test_lowering_stability.py").read_text()
+    trip = (REPO / "tests/dataflow_training/training/test_lowering_stability.py").read_text()
     if args.module:
         trip += src  # external families pin tripwires in their own module
     pinned = args.family in trip
@@ -141,7 +142,7 @@ def main() -> None:
 
     print(f"\nrunning pytest {mod.name} ...")
     r = subprocess.run([sys.executable, "-m", "pytest", str(mod),
-                        str(REPO / "tests/training/test_lowering_stability.py"),
+                        str(REPO / "tests/dataflow_training/training/test_lowering_stability.py"),
                         "-q", "-p", "no:warnings"], cwd=REPO)
     print()
     if problems:

@@ -183,7 +183,7 @@ def _qwen35() -> ModelFamily:
     from .qwen35 import ShapedQwen35Config, derive_dims
 
     # heterogeneous (lin/full kinds) — the per-kind block ladders live in
-    # tests/models/test_qwen35.py, so no generic gradcheck bundle here
+    # tests/dataflow_training/models/test_qwen35.py, so no generic gradcheck bundle here
     return ModelFamily(
         name="qwen35",
         config_type=ShapedQwen35Config,
@@ -201,7 +201,7 @@ def _olmoe() -> ModelFamily:
     from .olmoe import ShapedOlmoeConfig, derive_dims, initial_values_olmoe, lower_olmoe
 
     # MoE family — the block ladder needs the aux-loss term in the
-    # reference objective, so it lives in tests/models/test_olmoe.py
+    # reference objective, so it lives in tests/dataflow_training/models/test_olmoe.py
     # rather than the generic check_block_backward harness
     return ModelFamily(
         name="olmoe",
@@ -225,7 +225,7 @@ def _qwen35moe() -> ModelFamily:
     )
 
     # heterogeneous MoE (linmoe/gattnmoe kinds) — per-kind ladders live in
-    # tests/models/test_qwen35moe.py
+    # tests/dataflow_training/models/test_qwen35moe.py
     return ModelFamily(
         name="qwen35moe",
         config_type=ShapedQwen35MoeConfig,
@@ -248,7 +248,7 @@ def _qwen3moe() -> ModelFamily:
     )
 
     # MoE family (aux objective) — block ladder lives in
-    # tests/models/test_qwen3moe.py (no gradcheck bundle)
+    # tests/dataflow_training/models/test_qwen3moe.py (no gradcheck bundle)
     return ModelFamily(
         name="qwen3moe",
         config_type=ShapedQwen3MoeConfig,
@@ -271,7 +271,7 @@ def _dsv3() -> ModelFamily:
     )
 
     # MLA + hybrid dense/MoE depth + sigmoid_noaux_tc — block ladder lives
-    # in tests/modules/test_mla.py, family ladder in tests/models/test_dsv3.py
+    # in tests/dataflow_training/modules/test_mla.py, family ladder in tests/dataflow_training/models/test_dsv3.py
     return ModelFamily(
         name="dsv3",
         config_type=ShapedDsv3Config,
@@ -294,7 +294,7 @@ def _dsv32() -> ModelFamily:
     )
 
     # dsv3 + DSA (lightning indexer, sparse mode) — ladders in
-    # tests/modules/test_dsa.py + tests/models/test_dsv32.py
+    # tests/dataflow_training/modules/test_dsa.py + tests/dataflow_training/models/test_dsv32.py
     return ModelFamily(
         name="dsv32",
         config_type=ShapedDsv32Config,
@@ -318,7 +318,7 @@ def _glm52() -> ModelFamily:
     from dataflow_training.model_families.glm52.blocks import build_glm52_resolver
 
     # IndexShare: cross-layer selection via M/dM objects — ladder in
-    # tests/models/test_glm52.py + tests/models/test_glm52_lowering.py
+    # tests/dataflow_training/models/test_glm52.py + tests/dataflow_training/models/test_glm52_lowering.py
     return ModelFamily(
         name="glm52",
         config_type=ShapedGlm52Config,

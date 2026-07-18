@@ -13,7 +13,7 @@ routing_mode string):
       the load-balance gradient (alpha*E/T)*p*(f - <f,p>) in place; T is
       the per-round token count = logits rows, f = counts/(T*K) detached.
 
-Semantics pinned by tests/modules/test_moe.py against
+Semantics pinned by tests/dataflow_training/modules/test_moe.py against
 ``dataflow_training.blocks.modules.moe.forms``: fp32 routing math from bf16 logits;
 tie-break = SMALLEST expert index in both modes (torch.topk's CUDA
 tie-break picks the larger index — that is why the eager path is

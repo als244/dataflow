@@ -1038,7 +1038,7 @@ add_cases("dsa_pack_bits",
 EXEMPT["dsa_sparse_attn_fwd_absorbed"] = (
     "flashmla impl is shape-specialized to (d_qk, d_v) = (576, 512) and the "
     "library is absent on dev boxes (requires() gates it); the eager anchor "
-    "is plain torch already covered by tests/modules/test_mla.py absorbed "
+    "is plain torch already covered by tests/dataflow_training/modules/test_mla.py absorbed "
     "gates. Audit it when a flashmla-capable box joins CI."
 )
 

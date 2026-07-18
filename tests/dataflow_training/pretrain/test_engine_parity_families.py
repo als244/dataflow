@@ -71,7 +71,7 @@ def test_olmoe_engine_vs_reference_lbl_on():
     CE channels (the pinned scalar convention on BOTH sides) must track.
     The retained-inputs mode has no naive autograd comparator — it is
     router-only by construction (upstream aux dropped) — and is gated at
-    the gradient level in tests/training/test_lbl_modes.py instead."""
+    the gradient level in tests/dataflow_training/training/test_lbl_modes.py instead."""
     if not torch.cuda.is_available():
         pytest.skip("no CUDA")
     from dataclasses import replace
