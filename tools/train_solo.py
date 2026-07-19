@@ -245,6 +245,8 @@ def cmd_engine(args) -> int:
         overrides["opt_policy"] = args.opt
     if args.ga_rounds:
         overrides["grad_accum_rounds"] = args.ga_rounds
+    if args.batch:
+        overrides["batch"] = args.batch
     if overrides:
         cfg = replace(cfg, **overrides)
     recipe = _recipe(args.steps, peak_lr=args.peak_lr)
@@ -280,6 +282,8 @@ def main() -> int:
     e.add_argument("--peak-lr", type=float, default=3e-4)
     e.add_argument("--budget", type=float, default=14.0)
     e.add_argument("--slab", type=float, default=100.0)
+    e.add_argument("--batch", type=int, default=None,
+                   help="override cfg.batch (tokens/round scales)")
     e.add_argument("--ga-rounds", type=int, default=None,
                    help="override grad-accum rounds (tokens/step = "
                         "seq*batch*rounds; 64 -> 512K at the locked "
