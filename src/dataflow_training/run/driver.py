@@ -550,7 +550,8 @@ def run_engine(client, cfg, recipe: Recipe, feed, steps: int, *,
     n_rc = sum(1 for v in (planned.recompute_levels or {}).values() if v)
     log(f"[plan] predicted {planned.makespan_us / 1e6:.2f} s/step "
         f"({'measured' if measured else 'roofline'} costs)  peak fast "
-        f"{planned.peak_fast_bytes / 1024**3:.2f} GiB  recompute "
+        f"{planned.peak_fast_bytes / 1024**3:.2f} GiB  peak backing "
+        f"{planned.peak_backing_bytes / 1024**3:.2f} GiB  recompute "
         f"{n_rc}/{len(planned.recompute_levels or {})} activations")
     prog_dict = program_to_dict(planned.program)
     cd = cfg_dict(cfg)

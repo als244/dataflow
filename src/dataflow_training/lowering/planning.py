@@ -21,6 +21,7 @@ class PlannedProgram:
     makespan_us: float               # simulator-verified makespan of the plan
     peak_fast_bytes: int
     recompute_levels: dict[str, int]
+    peak_backing_bytes: int = 0      # host-side (slab) demand of the plan
     diagnostics: Any = None          # policy diagnostics (policy-specific)
     recompute_result: Any = None     # sim RecomputePlanResult when recompute ran
 
@@ -64,6 +65,7 @@ def plan_program(
     program: Program,
     *,
     fast_memory_capacity: int | None = None,
+    backing_capacity: int | None = None,
     recompute: bool = False,
     build_variant: BuildVariant | None = None,
     max_iters: int = 8,
@@ -88,10 +90,21 @@ def plan_program(
     by the sim and overlapped with early compute. Pass ``"greedy"`` to
     reproduce legacy plans.
     """
+    from dataclasses import replace as dc_replace
+
     from dataflow_sim.engine.simulator import run
     from dataflow_sim.policies.pressurefit import apply_pressurefit_policy
 
     cap = fast_memory_capacity if fast_memory_capacity is not None else program.fast_memory_capacity
+
+    def to_chain(prog: Program) -> Any:
+        """Program -> sim chain, carrying the backing ceiling when set —
+        the SIM enforces it (over-backing schedules fail verification;
+        no graceful stall mechanism, by design)."""
+        chain = to_sim_chain(prog)
+        if backing_capacity is not None:
+            chain = dc_replace(chain, backing_memory_capacity=backing_capacity)
+        return chain
 
     def policy_fn(chain: Any) -> Any:
         return apply_pressurefit_policy(
@@ -111,7 +124,7 @@ def plan_program(
         def build_variant_chain(levels: Mapping[str, int]) -> Any:
             variant = build_variant(levels)
             variants[tuple(sorted(levels.items()))] = variant
-            return to_sim_chain(variant)
+            return to_chain(variant)
 
         result = plan_with_recompute(
             build_variant_chain,
@@ -127,11 +140,12 @@ def plan_program(
             program=annotated,
             makespan_us=result.makespan_us,
             peak_fast_bytes=log.peak_fast_memory_bytes,
+            peak_backing_bytes=log.peak_backing_memory_bytes,
             recompute_levels=dict(result.levels),
             recompute_result=result,
         )
 
-    bare_chain = to_sim_chain(program)
+    bare_chain = to_chain(program)
     annotated_chain = policy_fn(bare_chain)
     log = run(annotated_chain, snapshots=False)
     annotated = apply_chain_annotations(program, annotated_chain)
@@ -140,5 +154,6 @@ def plan_program(
         program=annotated,
         makespan_us=makespan,
         peak_fast_bytes=log.peak_fast_memory_bytes,
+        peak_backing_bytes=log.peak_backing_memory_bytes,
         recompute_levels={},
     )

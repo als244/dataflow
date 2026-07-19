@@ -59,17 +59,20 @@ def measured_variant(fam, cfg, profiles, resolver, levels):
 
 
 def plan_combo(fam, cfg, hw, budget_gib: float, *, measured: bool,
-               recompute: bool, profile_cache: dict):
+               recompute: bool, profile_cache: dict,
+               backing_gib: float | None = None):
     """One (cfg, budget) plan. ``profile_cache`` memoizes profiles per
     geometry (budget changes never re-profile; geometry changes do —
-    task shapes differ)."""
+    task shapes differ). ``backing_gib`` sets the sim's host-side
+    ceiling — over-backing plans fail verification (INFEASIBLE row)."""
     from dataflow_training.lowering.planning import plan_program
 
     cap = int(budget_gib * 1024 ** 3)
+    bk = int(backing_gib * 1024 ** 3) if backing_gib else None
     if not measured:
         return plan_program(
             fam.lower(cfg, hw=hw), fast_memory_capacity=cap,
-            recompute=recompute,
+            backing_capacity=bk, recompute=recompute,
             build_variant=(partial(lower_variant, fam, cfg, hw)
                            if recompute else None))
     from dataflow.runtime.device.cuda import CudaBackend
@@ -85,17 +88,19 @@ def plan_combo(fam, cfg, hw, budget_gib: float, *, measured: bool,
     profiles, resolver = profile_cache[key]
     return plan_program(
         apply_measured_costs(fam.lower(cfg), profiles, resolver),
-        fast_memory_capacity=cap, recompute=recompute,
+        fast_memory_capacity=cap, backing_capacity=bk, recompute=recompute,
         build_variant=(partial(measured_variant, fam, cfg, profiles,
                                resolver) if recompute else None))
 
 
 def combo_row(fam, cfg, hw, budget: float, *, measured: bool,
-              recompute: bool, profile_cache: dict) -> dict:
+              recompute: bool, profile_cache: dict,
+              backing_gib: float | None = None) -> dict:
     from dataflow_training.lowering.flops import flop_report
 
     planned = plan_combo(fam, cfg, hw, budget, measured=measured,
-                         recompute=recompute, profile_cache=profile_cache)
+                         recompute=recompute, profile_cache=profile_cache,
+                         backing_gib=backing_gib)
     rep = flop_report(cfg, planned.program)
     eff, hwf, allin = rep.per_step()
     step_s = planned.makespan_us / 1e6
@@ -111,6 +116,7 @@ def combo_row(fam, cfg, hw, budget: float, *, measured: bool,
         "hw_tfs": hwf / planned.makespan_us / 1e6,
         "all_tfs": allin / planned.makespan_us / 1e6,
         "peak_gib": planned.peak_fast_bytes / 1024 ** 3,
+        "backing_gib": planned.peak_backing_bytes / 1024 ** 3,
         "recompute": sum(1 for v in levels.values() if v),
         "rewritable": len(levels),
         "eff_flops": eff, "hw_flops": hwf,
@@ -120,7 +126,8 @@ def combo_row(fam, cfg, hw, budget: float, *, measured: bool,
 def print_table(rows, *, steps: int | None) -> None:
     hdr = (f"{'seq':>5} {'T_round':>8} {'ga':>4} "
            f"{'tok/step':>9} {'budget':>6} {'s/step':>7} {'tok/s':>8} "
-           f"{'effTF/s':>8} {'hwTF/s':>7} {'peakGiB':>8} {'recomp':>7}")
+           f"{'effTF/s':>8} {'hwTF/s':>7} {'fastGiB':>8} {'bkGiB':>6} "
+           f"{'recomp':>7}")
     if steps:
         hdr += f" {'ETA_h':>6}"
     print(hdr)
@@ -134,7 +141,7 @@ def print_table(rows, *, steps: int | None) -> None:
         line = (head +
                 f"{r['step_s']:>7.2f} {r['tok_s']:>8,.0f} "
                 f"{r['eff_tfs']:>8.1f} {r['hw_tfs']:>7.1f} "
-                f"{r['peak_gib']:>8.2f} "
+                f"{r['peak_gib']:>8.2f} {r['backing_gib']:>6.2f} "
                 f"{str(r['recompute']) + '/' + str(r['rewritable']):>7}")
         if steps:
             line += f" {steps * r['step_s'] / 3600:>6.1f}"
@@ -180,6 +187,10 @@ def main() -> int:
     ap.add_argument("--measured", action="store_true",
                     help="profiled task costs instead of roofline "
                          "(needs the GPU; disk-cached per geometry)")
+    ap.add_argument("--backing", type=float, default=None,
+                    help="host-side (slab) capacity ceiling in GiB — "
+                         "plans whose backing demand exceeds it fail "
+                         "verification and report INFEASIBLE")
     ap.add_argument("--steps", type=int, default=None,
                     help="also print the ETA column for this many steps")
     ap.add_argument("--no-recompute", action="store_true")
@@ -245,7 +256,8 @@ def main() -> int:
                     rows.append(combo_row(fam, cfg, hw, budget,
                                           measured=args.measured,
                                           recompute=recompute,
-                                          profile_cache=profile_cache))
+                                          profile_cache=profile_cache,
+                                          backing_gib=args.backing))
                 except ValueError as exc:
                     # a combo the planner cannot fit is a RESULT, not a crash
                     rows.append({"seq": seq, "ga": ga,
