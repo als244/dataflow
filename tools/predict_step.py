@@ -102,7 +102,7 @@ def combo_row(fam, cfg, hw, budget: float, *, measured: bool,
                          recompute=recompute, profile_cache=profile_cache,
                          backing_gib=backing_gib)
     rep = flop_report(cfg, planned.program)
-    eff, hwf, allin = rep.per_step()
+    eff, hwf = rep.per_step()
     step_s = planned.makespan_us / 1e6
     tokens_step = cfg.tokens * cfg.grad_accum_rounds
     levels = planned.recompute_levels or {}
@@ -114,7 +114,6 @@ def combo_row(fam, cfg, hw, budget: float, *, measured: bool,
         "tok_s": tokens_step / step_s,
         "eff_tfs": eff / planned.makespan_us / 1e6,
         "hw_tfs": hwf / planned.makespan_us / 1e6,
-        "all_tfs": allin / planned.makespan_us / 1e6,
         "peak_gib": planned.peak_fast_bytes / 1024 ** 3,
         "backing_gib": planned.peak_backing_bytes / 1024 ** 3,
         "h2d_gb": (planned.transfer_stats.get("from_slow", {})
@@ -139,7 +138,7 @@ def combo_row(fam, cfg, hw, budget: float, *, measured: bool,
 def print_table(rows, *, steps: int | None) -> None:
     hdr = (f"{'seq':>5} {'T_round':>8} {'ga':>4} "
            f"{'tok/step':>9} {'budget':>6} {'s/step':>7} {'tok/s':>8} "
-           f"{'effTF/s':>8} {'hwTF/s':>7} {'allTF/s':>8} "
+           f"{'effTF/s':>8} {'hwTF/s':>7} "
            f"{'fastGiB':>8} {'bkGiB':>6} "
            f"{'h2dGB':>6} {'h2d%':>5} {'d2hGB':>6} {'d2h%':>5} "
            f"{'rc%':>4} {'idle%':>5} {'recomp':>7}")
@@ -156,7 +155,6 @@ def print_table(rows, *, steps: int | None) -> None:
         line = (head +
                 f"{r['step_s']:>7.2f} {r['tok_s']:>8,.0f} "
                 f"{r['eff_tfs']:>8.1f} {r['hw_tfs']:>7.1f} "
-                f"{r['all_tfs']:>8.1f} "
                 f"{r['peak_gib']:>8.2f} {r['backing_gib']:>6.2f} "
                 f"{r['h2d_gb']:>6.1f} {r['h2d_pct']:>4.0f}% "
                 f"{r['d2h_gb']:>6.1f} {r['d2h_pct']:>4.0f}% "

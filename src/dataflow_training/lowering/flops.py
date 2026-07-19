@@ -5,18 +5,20 @@ family's builder already stamps and the simulator already prices — this
 module never re-derives model math, it READS the same numbers and sorts
 them into the three reported quantities:
 
-- EFFECTIVE flops: algorithmic fwd + bwd. Attention fwd is the causal
-  (triangular) count 0.5*4*sum(s_i^2)*H*hd; attention bwd counts the
-  0.5*8 algorithmic factor — the stamped seeds carry 0.5*10 (flash's
-  in-kernel recompute is real executed work), so effective applies the
-  8/10 correction on the CAUSAL_DENSE kinds whose seeds are known to
-  use it. Planner recompute tasks are excluded (not model work).
+- EFFECTIVE flops: algorithmic work per step — fwd + bwd + optimizer
+  matmuls. Attention fwd is the causal (triangular) count
+  0.5*4*sum(s_i^2)*H*hd; attention bwd counts the 0.5*8 algorithmic
+  factor — the stamped seeds carry 0.5*10 (flash's in-kernel recompute
+  is real executed work), so effective applies the 8/10 correction on
+  the CAUSAL_DENSE kinds whose seeds are known to use it. Optimizer
+  matmul work (muon NS; adamw is elementwise, 0) COUNTS — the sim's
+  makespan includes optimizer-task time, so the ratio stays
+  consistent. Planner recompute tasks are excluded (not model work).
 - HARDWARE flops: everything actually executed — stamped values as-is
-  (attention bwd at 0.5*10) plus recompute-task replays.
-- OPTIMIZER flops: matmul work only, from the weight layouts x the
-  config's OptPolicy — adamw/sgd/sgdm are elementwise (0); muon fields
-  count the Newton-Schulz quintic (5 iterations of X@X^T, A@A, and the
-  polynomial apply). The ALL-IN quantity = hardware + optimizer.
+  (attention bwd at 0.5*10) plus recompute-task replays plus the same
+  optimizer work.
+The OPTIMIZER bucket is also reported on its own (sourced from the
+seeded optimizer-task subops; layouts x OptPolicy walk as fallback).
 
 Variable sequence lengths: attention subops scale by the round's
 quadratic mass ratio sum(l_j^2) / (t * seq_len) — exact for causal
@@ -79,11 +81,11 @@ class FlopReport:
 
     def per_step(self, seq_lens_by_round=None, *, tokens: int = 0,
                  seq_len: int = 0):
-        """(effective, hardware, all_in) flops for ONE step; doc-aware
-        rounds pass {round: [lens]} for the exact quadratic mass.
-        Scaling applies to the whole attention bucket — correct for
-        all-causal families (the ones that run doc-aware today); mixed
-        causal/DSA families should pass None (static)."""
+        """(effective, hardware) flops for ONE step; doc-aware rounds
+        pass {round: [lens]} for the exact quadratic mass. Scaling
+        applies to the causal attention buckets only. Optimizer matmul
+        work counts in BOTH (the sim's makespan includes optimizer-task
+        time — the ratio stays consistent; adamw contributes 0)."""
         scale = 1.0
         if seq_lens_by_round:
             ratios = [seq_sq_ratio(lens, tokens, seq_len)
@@ -94,10 +96,11 @@ class FlopReport:
         a_bwd_hw = self.attn_bwd_hw * scale
         a_rc = self.attn_recompute_hw * scale
         effective = (self.mm_effective + a_fwd + a_bwd_eff
-                     + self.attn_static)
+                     + self.attn_static + self.optimizer)
         hardware = (self.mm_hardware + a_fwd + a_bwd_hw + a_rc
-                    + self.attn_static + self.attn_static_rc_hw)
-        return effective, hardware, hardware + self.optimizer
+                    + self.attn_static + self.attn_static_rc_hw
+                    + self.optimizer)
+        return effective, hardware
 
 
 def _kind_prefix(key: str) -> str:

@@ -293,7 +293,7 @@ def run_reference(cfg, recipe: Recipe, feed, steps: int, *, seed: int = 11,
     from dataflow_training.lowering.flops import flop_report
 
     flops = flop_report(cfg, fam.lower(cfg))
-    f_eff, f_hw, f_all = flops.per_step()
+    f_eff, f_hw = flops.per_step()
     res = RunResult(backend="reference", budget_gib=None,
                     meta={"seed": seed, "grad_checkpoint": grad_checkpoint,
                           "aux_coef": aux_coef,
@@ -301,8 +301,7 @@ def run_reference(cfg, recipe: Recipe, feed, steps: int, *, seed: int = 11,
                           or "adamw",
                           "tokens_per_step": tokens_per_step(cfg),
                           "flops_per_step": {"effective": f_eff,
-                                             "hardware": f_hw,
-                                             "all_in": f_all}})
+                                             "hardware": f_hw}})
     ck_path = None
     if checkpoint_every and checkpoint_dir is not None:
         from pathlib import Path as _Path
@@ -373,13 +372,13 @@ def run_reference(cfg, recipe: Recipe, feed, steps: int, *, seed: int = 11,
         res.losses.append(step_loss)
         res.step_wall_s.append(dt)
         res.tok_per_s.append(tokens_per_step(cfg) / dt)
-        s_eff, s_hw, s_all = flops.per_step(
+        s_eff, s_hw = flops.per_step(
             step_lens or None, tokens=cfg.tokens, seq_len=cfg.seq_len)
         if step % log_every == 0 or step == steps - 1:
             log(f"[reference] step {step:4d}/{steps}  loss {step_loss:.4f}"
                 f"  lr {recipe.lr(step):.2e}  {tokens_per_step(cfg) / dt:.0f} tok/s"
-                f"  eff {s_eff / dt / 1e12:.1f} hw {s_hw / dt / 1e12:.1f} "
-                f"all {s_all / dt / 1e12:.1f} TF/s")
+                f"  eff {s_eff / dt / 1e12:.1f} "
+                f"hw {s_hw / dt / 1e12:.1f} TF/s")
         if ck_path is not None and (step + 1) % checkpoint_every == 0:
             save_reference_checkpoint(ck_path, step + 1, model, opt, res)
             if partial_out is not None:
@@ -597,15 +596,14 @@ def run_engine(client, cfg, recipe: Recipe, feed, steps: int, *,
     from dataflow_training.lowering.flops import flop_report
 
     flops = flop_report(cfg, planned.program)
-    f_eff, f_hw, f_all = flops.per_step()
+    f_eff, f_hw = flops.per_step()
     res = RunResult(backend="engine", budget_gib=budget_gib,
                     meta={"seed": seed, "prog_id": prog_id,
                           "peak_fast_bytes": planned.peak_fast_bytes,
                           "recompute": recompute,
                           "tokens_per_step": tokens_per_step(cfg),
                           "flops_per_step": {"effective": f_eff,
-                                             "hardware": f_hw,
-                                             "all_in": f_all}})
+                                             "hardware": f_hw}})
     persist = sorted(s.id for s in planned.program.initial_objects
                      if s.id.startswith(("W_", "O_")))
     start_step = 0
@@ -650,13 +648,13 @@ def run_engine(client, cfg, recipe: Recipe, feed, steps: int, *,
                 # wire form is cumulative bounds; the flop scaler wants lengths
                 lens_lists = {r: [b[i + 1] - b[i] for i in range(len(b) - 1)]
                               for r, b in lens.items()}
-            s_eff, s_hw, s_all = flops.per_step(
+            s_eff, s_hw = flops.per_step(
                 lens_lists, tokens=cfg.tokens, seq_len=cfg.seq_len)
             log(f"[engine {budget_gib:g}GiB] step {step:4d}/{steps}  "
                 f"loss {step_loss:.4f}  lr {recipe.lr(step):.2e}  "
                 f"{tokens_per_step(cfg) / dt:.0f} tok/s  "
-                f"eff {s_eff / dt / 1e12:.1f} hw {s_hw / dt / 1e12:.1f} "
-                f"all {s_all / dt / 1e12:.1f} TF/s")
+                f"eff {s_eff / dt / 1e12:.1f} "
+                f"hw {s_hw / dt / 1e12:.1f} TF/s")
         step_next = step + 1
         if checkpoint_every and step_next % checkpoint_every == 0 \
                 and checkpoint_dir is not None:
