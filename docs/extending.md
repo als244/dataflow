@@ -372,9 +372,10 @@ family must guarantee:
 4. **Seed optimizer tasks through `optimizer_cost_seed`.** Pass your
    kind's weight-layout fields (`[(f.name, f.shape) for f in
    wl.fields]`) — the helper consults the config's OptPolicy: adamw
-   reproduces the historical 7×-traffic seed byte-identically, muon
-   fields charge m-only traffic PLUS a `"muon_ns"` matmul subop (2-D
-   directly, 3-D expert stacks per slice). The FLOP walker sources the
+   charges the plain 7×-traffic seed (the exact expression the
+   lowering-stability hashes pin), muon fields charge m-only traffic
+   PLUS a `"muon_ns"` matmul subop (2-D directly, 3-D expert stacks
+   per slice). The FLOP walker sources the
    optimizer bucket from those subops (layouts×policy walk only as
    fallback), and optimizer work counts in BOTH reported quantities.
    Every in-tree builder does this — copy any of them.

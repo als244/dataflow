@@ -179,14 +179,14 @@ def optimizer_cost_seed(cfg, hw: ShapedHardware, weight_fields,
                         layer: int | None = None,
                         legacy_params: int | None = None):
     """(optimizer_us, optimizer_subops) for ONE weight object under the
-    config's opt_policy. All-adamw reproduces the historical 7x-traffic
-    seed byte-identically — ``legacy_params`` pins the exact param count
-    the old expression used where it differed from the field sum (the
-    loose head seed ignored final_norm_w); block seeds' sums match and
-    omit it. Muon fields charge m-only traffic PLUS the Newton-Schulz
-    matmul flops (2-D directly; 3-D stacked experts per slice) — the
-    previously missing term that made roofline muon plans under-charge
-    the optimizer."""
+    config's opt_policy. All-adamw charges the plain 7x-traffic seed;
+    ``legacy_params`` pins the exact param count the lowering-stability
+    hashes expect where it differs from the field sum (the loose head
+    seed counts the table only, not final_norm_w); block seeds' sums
+    match and omit it. Muon fields charge m-only traffic PLUS the
+    Newton-Schulz matmul flops (2-D directly; 3-D stacked experts per
+    slice) — without this term, roofline muon plans under-charge the
+    optimizer."""
     from dataflow_training.blocks.optim import resolve_opt_policy
 
     from .flops import muon_ns_flops
