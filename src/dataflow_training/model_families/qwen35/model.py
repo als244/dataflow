@@ -169,14 +169,16 @@ def _kind_specs(cfg: ShapedQwen35Config, hw: ShapedHardware) -> dict[str, LayerK
             {"kind": "roofline", "name": f"{prefix}_mix_bwd", "flops": int(2.5 * attn_flops),
              "memory_bytes": int(2 * (attn_bytes + extra_mem_bytes)), "efficiency": "attention"},
         ]
-        sub_opt = [{"kind": "roofline", "name": "adamw", "flops": 0,
-                    "memory_bytes": int(BF16 * 7 * params), "efficiency": "memory"}]
+        from ...lowering.shaped_program import optimizer_cost_seed
+
+        opt_us, sub_opt = optimizer_cost_seed(
+            cfg, hw, [(f.name, f.shape) for f in wl.fields])
         return LayerKindSpec(
             key_prefix=prefix,
             w_bytes=w_bytes,
             a_bytes=cl.total_bytes,
             fwd_us=fwd, bwd_us=bwd, recompute_us=fwd,
-            optimizer_us=hw.mem_us(BF16 * 7.0 * params),
+            optimizer_us=opt_us,
             fwd_subops=sub_fwd, bwd_subops=sub_bwd,
             recompute_subops=sub_fwd, optimizer_subops=sub_opt,
         )

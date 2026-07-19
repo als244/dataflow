@@ -6,7 +6,7 @@ internals. Swapping the policy later means swapping ``policy_fn`` here.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
 
 from dataflow.core import Program
@@ -22,8 +22,40 @@ class PlannedProgram:
     peak_fast_bytes: int
     recompute_levels: dict[str, int]
     peak_backing_bytes: int = 0      # host-side (slab) demand of the plan
+    # per-direction PCIe summary of the simulated schedule:
+    # {"from_slow"|"to_slow": {"bytes", "busy_us", "n"}} — utilization =
+    # busy_us / makespan_us (the webapp's link panels, as numbers)
+    transfer_stats: dict = field(default_factory=dict)
     diagnostics: Any = None          # policy diagnostics (policy-specific)
     recompute_result: Any = None     # sim RecomputePlanResult when recompute ran
+
+
+def transfer_summary(log: Any, program: Program) -> dict:
+    """Schedule summary from the sim's intervals: per-direction PCIe
+    totals (task_id "direction:OBJ[#n]"; each interval moves the whole
+    object) plus the compute track's busy and recompute-task time —
+    idle = makespan - compute_busy_us (the webapp's panels, as
+    numbers)."""
+    sizes = program.object_sizes()
+    recompute_ids = {t.id for t in program.tasks if t.group == "recompute"}
+    out: dict = {d: {"bytes": 0, "busy_us": 0.0, "n": 0}
+                 for d in ("from_slow", "to_slow")}
+    out["compute_busy_us"] = 0.0
+    out["recompute_us"] = 0.0
+    for iv in log.task_intervals:
+        if iv.track == "compute":
+            out["compute_busy_us"] += iv.end - iv.start
+            if iv.task_id in recompute_ids:
+                out["recompute_us"] += iv.end - iv.start
+            continue
+        if iv.track not in ("from_slow", "to_slow"):
+            continue
+        obj = iv.task_id.split(":", 1)[1].split("#", 1)[0]
+        s = out[iv.track]
+        s["bytes"] += sizes.get(obj, 0)
+        s["busy_us"] += iv.end - iv.start
+        s["n"] += 1
+    return out
 
 
 def _to_sim_rewrites(program: Program) -> list[Any]:
@@ -141,6 +173,7 @@ def plan_program(
             makespan_us=result.makespan_us,
             peak_fast_bytes=log.peak_fast_memory_bytes,
             peak_backing_bytes=log.peak_backing_memory_bytes,
+            transfer_stats=transfer_summary(log, annotated),
             recompute_levels=dict(result.levels),
             recompute_result=result,
         )
@@ -155,5 +188,6 @@ def plan_program(
         makespan_us=makespan,
         peak_fast_bytes=log.peak_fast_memory_bytes,
         peak_backing_bytes=log.peak_backing_memory_bytes,
+        transfer_stats=transfer_summary(log, annotated),
         recompute_levels={},
     )

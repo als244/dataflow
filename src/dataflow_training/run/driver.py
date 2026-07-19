@@ -548,11 +548,18 @@ def run_engine(client, cfg, recipe: Recipe, feed, steps: int, *,
     planned = plan_at_budget(cfg, budget_gib, recompute=recompute,
                              measured=measured)
     n_rc = sum(1 for v in (planned.recompute_levels or {}).values() if v)
+    ts = planned.transfer_stats or {}
+    h2d = ts.get("from_slow", {})
+    d2h = ts.get("to_slow", {})
     log(f"[plan] predicted {planned.makespan_us / 1e6:.2f} s/step "
         f"({'measured' if measured else 'roofline'} costs)  peak fast "
         f"{planned.peak_fast_bytes / 1024**3:.2f} GiB  peak backing "
         f"{planned.peak_backing_bytes / 1024**3:.2f} GiB  recompute "
-        f"{n_rc}/{len(planned.recompute_levels or {})} activations")
+        f"{n_rc}/{len(planned.recompute_levels or {})}  "
+        f"h2d {h2d.get('bytes', 0) / 1e9:.1f} GB "
+        f"({h2d.get('busy_us', 0.0) / planned.makespan_us * 100:.0f}%)  "
+        f"d2h {d2h.get('bytes', 0) / 1e9:.1f} GB "
+        f"({d2h.get('busy_us', 0.0) / planned.makespan_us * 100:.0f}%)")
     prog_dict = program_to_dict(planned.program)
     cd = cfg_dict(cfg)
     fam = resolver_family(cfg)

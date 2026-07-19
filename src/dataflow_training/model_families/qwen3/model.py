@@ -121,7 +121,10 @@ def build_shaped_qwen3(
     )
     return build_shaped_program(
         cfg, hw=hw, family="qwen3-shaped",
-        kinds={"block": roofline_block_kind_spec(cfg, hw)},
+        kinds={"block": roofline_block_kind_spec(
+            cfg, hw,
+            weight_fields=[(f.name, f.shape)
+                           for f in fl_fp.layers[0].weights.fields])},
         fast_memory_capacity=fast_memory_capacity,
         recompute_levels=recompute_levels, name=name,
         freeze=freeze_plan,

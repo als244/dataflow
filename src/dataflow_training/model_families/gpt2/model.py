@@ -203,7 +203,10 @@ def build_shaped_gpt2(
     )
     return build_shaped_program(
         cfg, hw=hw, family="gpt2-shaped",
-        kinds={"block": roofline_block_kind_spec(cfg, hw)},
+        kinds={"block": roofline_block_kind_spec(
+            cfg, hw,
+            weight_fields=[(f.name, f.shape)
+                           for f in gpt2_weight_layout(d).fields])},
         fast_memory_capacity=fast_memory_capacity,
         recompute_levels=recompute_levels, name=name,
         freeze=plan,

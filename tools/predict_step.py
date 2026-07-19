@@ -117,6 +117,19 @@ def combo_row(fam, cfg, hw, budget: float, *, measured: bool,
         "all_tfs": allin / planned.makespan_us / 1e6,
         "peak_gib": planned.peak_fast_bytes / 1024 ** 3,
         "backing_gib": planned.peak_backing_bytes / 1024 ** 3,
+        "h2d_gb": (planned.transfer_stats.get("from_slow", {})
+                   .get("bytes", 0) / 1e9),
+        "h2d_pct": (planned.transfer_stats.get("from_slow", {})
+                    .get("busy_us", 0.0) / planned.makespan_us * 100),
+        "d2h_gb": (planned.transfer_stats.get("to_slow", {})
+                   .get("bytes", 0) / 1e9),
+        "d2h_pct": (planned.transfer_stats.get("to_slow", {})
+                    .get("busy_us", 0.0) / planned.makespan_us * 100),
+        "rc_pct": (planned.transfer_stats.get("recompute_us", 0.0)
+                   / planned.makespan_us * 100),
+        "idle_pct": max(0.0, 100 * (1 - planned.transfer_stats
+                                    .get("compute_busy_us", 0.0)
+                                    / planned.makespan_us)),
         "recompute": sum(1 for v in levels.values() if v),
         "rewritable": len(levels),
         "eff_flops": eff, "hw_flops": hwf,
@@ -127,7 +140,9 @@ def print_table(rows, *, steps: int | None) -> None:
     hdr = (f"{'seq':>5} {'T_round':>8} {'ga':>4} "
            f"{'tok/step':>9} {'budget':>6} {'s/step':>7} {'tok/s':>8} "
            f"{'effTF/s':>8} {'hwTF/s':>7} {'allTF/s':>8} "
-           f"{'fastGiB':>8} {'bkGiB':>6} {'recomp':>7}")
+           f"{'fastGiB':>8} {'bkGiB':>6} "
+           f"{'h2dGB':>6} {'h2d%':>5} {'d2hGB':>6} {'d2h%':>5} "
+           f"{'rc%':>4} {'idle%':>5} {'recomp':>7}")
     if steps:
         hdr += f" {'ETA_h':>6}"
     print(hdr)
@@ -143,6 +158,9 @@ def print_table(rows, *, steps: int | None) -> None:
                 f"{r['eff_tfs']:>8.1f} {r['hw_tfs']:>7.1f} "
                 f"{r['all_tfs']:>8.1f} "
                 f"{r['peak_gib']:>8.2f} {r['backing_gib']:>6.2f} "
+                f"{r['h2d_gb']:>6.1f} {r['h2d_pct']:>4.0f}% "
+                f"{r['d2h_gb']:>6.1f} {r['d2h_pct']:>4.0f}% "
+                f"{r['rc_pct']:>3.0f}% {r['idle_pct']:>4.0f}% "
                 f"{str(r['recompute']) + '/' + str(r['rewritable']):>7}")
         if steps:
             line += f" {steps * r['step_s'] / 3600:>6.1f}"
@@ -209,11 +227,6 @@ def main() -> int:
     base = P.resolve_preset(args.preset)
     if args.opt:
         base = replace(base, opt_policy=args.opt)
-        if args.opt == "muon" and not args.measured:
-            print("NOTE: ROOFLINE optimizer seeds are policy-blind — the "
-                  "makespan under-charges muon NS time (~0.3-0.5 s/step "
-                  "at 1B). --measured profiles the real policy-dispatched "
-                  "optimizer step and is muon-exact.")
     hw = HW_PROFILES[args.hw]
     overrides = {}
     if args.tflops is not None:
@@ -227,6 +240,16 @@ def main() -> int:
     fam = resolve_family(base)
     recompute = not args.no_recompute
     profile_cache: dict = {}
+    if args.opt == "muon" and not args.measured:
+        probe = fam.lower(base)
+        charged = any(op.get("name") == "muon_ns"
+                      for t in probe.tasks if t.group == "optimizer"
+                      for op in (t.metadata or {}).get("cost_subops", []))
+        if not charged:
+            print("NOTE: this family's roofline seeds do not yet charge "
+                  "muon NS time (makespan optimistic ~0.3-0.5 s/step at "
+                  "1B); --measured profiles the real optimizer and is "
+                  "muon-exact")
 
     budgets = ([float(x) for x in args.budgets.split(",")]
                if args.budgets else [args.budget])

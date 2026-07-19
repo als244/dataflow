@@ -158,8 +158,68 @@ class LooseCosts:
         }
 
 
+OPT_TRAFFIC = {  # elements moved per parameter element, by optimizer rule
+    "adamw": 7.0,   # read W, dW, m, v; write W, m, v
+    "sgdm": 5.0,    # read W, dW, m; write W, m
+    "muon": 5.0,    # m-only state; NS compute charged separately
+    "sgd": 3.0,
+    "frozen": 0.0,
+}
+
+
+def optimizer_cost_seed(cfg, hw: ShapedHardware, weight_fields,
+                        ns: str | None = None,
+                        layer: int | None = None):
+    """(optimizer_us, optimizer_subops) for ONE weight object under the
+    config's opt_policy. All-adamw reproduces the historical 7x-traffic
+    seed byte-identically (sum of field elements == the params the old
+    expression used); muon matrix fields charge m-only traffic PLUS the
+    Newton-Schulz matmul flops (the previously missing term — roofline
+    muon plans under-charged the optimizer)."""
+    from dataflow_training.blocks.optim import resolve_opt_policy
+
+    from .flops import muon_ns_flops
+
+    policy = resolve_opt_policy(getattr(cfg, "opt_policy", None) or "adamw")
+    key = (lambda n: f"{ns}.{n}") if ns else (lambda n: n)
+    mem_elems = 0.0
+    ns_flops = 0.0
+    ns_elems = 0
+    pure_adamw = True
+    total = 0
+    for name, shape in weight_fields:
+        n = 1
+        for s in shape:
+            n *= int(s)
+        total += n
+        rule = policy.for_field(key(name), layer, shape)
+        if rule != "adamw":
+            pure_adamw = False
+        mem_elems += OPT_TRAFFIC.get(rule, 7.0) * n
+        if rule == "muon" and len(shape) == 2:
+            ns_flops += muon_ns_flops(int(shape[0]), int(shape[1]))
+            ns_elems += n
+    if pure_adamw:
+        return hw.mem_us(BF16 * 7.0 * total), [
+            {"kind": "roofline", "name": "adamw", "flops": 0,
+             "memory_bytes": int(BF16 * 7 * total), "efficiency": "memory"}]
+    us = hw.mem_us(BF16 * mem_elems)
+    subops = [{"kind": "roofline", "name": "optimizer", "flops": 0,
+               "memory_bytes": int(BF16 * mem_elems),
+               "efficiency": "memory"}]
+    if ns_flops:
+        ns_bytes = BF16 * 4.0 * ns_elems
+        us += hw.matmul_us(ns_flops, ns_bytes)
+        subops.append({"kind": "roofline", "name": "muon_ns",
+                       "flops": int(ns_flops),
+                       "memory_bytes": int(ns_bytes),
+                       "efficiency": "matmul"})
+    return us, subops
+
+
 def roofline_block_kind_spec(cfg, hw: ShapedHardware, *,
-                             key_prefix: str = "block") -> LayerKindSpec:
+                             key_prefix: str = "block",
+                             weight_fields=None) -> LayerKindSpec:
     """Dense-transformer block roofline (attention + SwiGLU MLP): the
     shared cost seed for uniform families (llama3, qwen3). The config
     supplies block_params / kv_dim / d_ff / saved_ctx_width."""
@@ -185,6 +245,11 @@ def roofline_block_kind_spec(cfg, hw: ShapedHardware, *,
         {"kind": "roofline", "name": "block_matmuls_bwd", "flops": int(2 * mm_flops), "memory_bytes": int(2 * mm_bytes), "efficiency": "matmul"},
         {"kind": "roofline", "name": "attention_bwd", "flops": int(2.5 * attn_flops), "memory_bytes": int(2 * attn_bytes), "efficiency": "attention"},
     ]
+    if weight_fields is not None:
+        opt_us, opt_subops = optimizer_cost_seed(cfg, hw, weight_fields)
+    else:
+        opt_us = hw.mem_us(BF16 * 7.0 * cfg.block_params)
+        opt_subops = [{"kind": "roofline", "name": "adamw", "flops": 0, "memory_bytes": int(BF16 * 7 * cfg.block_params), "efficiency": "memory"}]
     return LayerKindSpec(
         key_prefix=key_prefix,
         w_bytes=BF16 * cfg.block_params,
@@ -192,11 +257,11 @@ def roofline_block_kind_spec(cfg, hw: ShapedHardware, *,
         fwd_us=fwd_us,
         bwd_us=bwd_us,
         recompute_us=fwd_us,
-        optimizer_us=hw.mem_us(BF16 * 7.0 * cfg.block_params),
+        optimizer_us=opt_us,
         fwd_subops=fwd_subops,
         bwd_subops=bwd_subops,
         recompute_subops=list(fwd_subops),
-        optimizer_subops=[{"kind": "roofline", "name": "adamw", "flops": 0, "memory_bytes": int(BF16 * 7 * cfg.block_params), "efficiency": "memory"}],
+        optimizer_subops=opt_subops,
     )
 
 
