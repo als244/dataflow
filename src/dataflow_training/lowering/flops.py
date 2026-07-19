@@ -41,10 +41,13 @@ EXEMPT = {
     "family_init",         # init program task
 }
 
-# (family kind key_prefix) whose seeds use the shared dense-causal
-# roofline (fwd 0.5*4, bwd 0.5*10): these get the effective 8/10
-# attention-bwd correction and the varlen quadratic scaling
-CAUSAL_DENSE_PREFIXES = {"block", "tp_block"}
+# (family kind key_prefix) whose attention subops are TRUE causal
+# softmax with the pinned factors (fwd 0.5*4*sum(s^2)*H*hd, bwd
+# 0.5*10): these get the effective 8/10 bwd correction and the varlen
+# quadratic scaling. Kinds NOT here (DeltaNet scans, DSA selected-
+# prefix) keep stamped values, effective == hardware, never scaled —
+# a linear-in-t or sparsity-owned cost has no quadratic mass to scale.
+CAUSAL_DENSE_PREFIXES = {"block", "tp_block", "gattn"}
 
 ATTN_BWD_EFFECTIVE_OVER_HARDWARE = 8.0 / 10.0
 
@@ -62,10 +65,15 @@ class FlopReport:
 
     mm_effective: float = 0.0        # matmul subops, fwd+bwd (no recompute)
     mm_hardware: float = 0.0         # + recompute-task matmuls
+    # CAUSAL buckets (CAUSAL_DENSE kinds): varlen-scalable, 8/10 split
     attn_fwd: float = 0.0            # stamped causal fwd (uniform static)
     attn_bwd_hw: float = 0.0         # stamped 0.5*10 bwd (uniform static)
-    attn_bwd_eff: float = 0.0        # 0.5*8 correction where known
-    attn_recompute_hw: float = 0.0   # recompute-task attention replays
+    attn_bwd_eff: float = 0.0        # the 0.5*8 correction
+    attn_recompute_hw: float = 0.0   # recompute-task causal replays
+    # STATIC attention-class buckets (linear scans, DSA selection):
+    # stamped as-is, effective == hardware, never varlen-scaled
+    attn_static: float = 0.0         # fwd + bwd of non-causal kinds
+    attn_static_rc_hw: float = 0.0   # their recompute replays (hw only)
     optimizer: float = 0.0           # NS matmuls (muon fields); adamw 0
     by_group: dict = field(default_factory=dict)
 
@@ -85,8 +93,10 @@ class FlopReport:
         a_bwd_eff = self.attn_bwd_eff * scale
         a_bwd_hw = self.attn_bwd_hw * scale
         a_rc = self.attn_recompute_hw * scale
-        effective = self.mm_effective + a_fwd + a_bwd_eff
-        hardware = self.mm_hardware + a_fwd + a_bwd_hw + a_rc
+        effective = (self.mm_effective + a_fwd + a_bwd_eff
+                     + self.attn_static)
+        hardware = (self.mm_hardware + a_fwd + a_bwd_hw + a_rc
+                    + self.attn_static + self.attn_static_rc_hw)
         return effective, hardware, hardware + self.optimizer
 
 
@@ -161,12 +171,16 @@ def flop_report(cfg, program) -> FlopReport:
                 continue
             rep.by_group[task.group] = rep.by_group.get(task.group, 0.0) + fl
             if op.get("efficiency") == "attention":
-                if is_recompute:
+                if not causal:
+                    if is_recompute:
+                        rep.attn_static_rc_hw += fl
+                    else:
+                        rep.attn_static += fl
+                elif is_recompute:
                     rep.attn_recompute_hw += fl
                 elif key.endswith("_bwd"):
                     rep.attn_bwd_hw += fl
-                    rep.attn_bwd_eff += fl * (
-                        ATTN_BWD_EFFECTIVE_OVER_HARDWARE if causal else 1.0)
+                    rep.attn_bwd_eff += fl * ATTN_BWD_EFFECTIVE_OVER_HARDWARE
                 else:
                     rep.attn_fwd += fl
             else:

@@ -79,6 +79,28 @@ def test_optimizer_bucket_policy_aware():
     assert muon_ns_flops(8, 4) == muon_ns_flops(4, 8)   # orientation swap
 
 
+def test_hybrid_split_causal_vs_static():
+    """qwen35 (DeltaNet + gated-attention hybrid): the softmax layers'
+    quadratic mass lands in the CAUSAL buckets (8/10 split, varlen-
+    scalable) while the linear-attention scans land in the STATIC
+    bucket (effective == hardware, NEVER scaled — a linear-in-t
+    recurrence has no quadratic mass)."""
+    fam = family("qwen35")
+    cfg = fam.config_type.tiny()
+    rep = flop_report(cfg, fam.lower(cfg))
+    assert rep.attn_fwd > 0            # gattn layers, causal
+    assert rep.attn_static > 0         # linattn scans, static
+    assert (abs(rep.attn_bwd_eff / rep.attn_bwd_hw
+                - ATTN_BWD_EFFECTIVE_OVER_HARDWARE) < 1e-9)
+    eff_u, hw_u, _ = rep.per_step()
+    lens = {"0": [cfg.seq_len // 2] * (2 * cfg.tokens // cfg.seq_len)}
+    eff_r, hw_r, _ = rep.per_step(lens, tokens=cfg.tokens,
+                                  seq_len=cfg.seq_len)
+    causal_eff = rep.attn_fwd + rep.attn_bwd_eff
+    # only the causal share halves; the static share is untouched
+    assert abs((eff_u - eff_r) - 0.5 * causal_eff) / causal_eff < 1e-9
+
+
 @pytest.mark.parametrize("name", sorted(_FAMILIES))
 def test_every_family_walks(name):
     """Completeness: every registered family's tiny program walks with
