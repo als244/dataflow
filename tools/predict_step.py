@@ -7,10 +7,13 @@ Single point:
     python tools/predict_step.py --preset gpt2_124m --ga-rounds 64 \
         --budget 14 --hw 3090 --steps 10000
 
-Sweep (a table row per budget x geometry combination):
+Sweep (a table row per budget x geometry combination; geometry speaks
+T_round — the round token budget — with ga derived from --tokens-step;
+"batch" is internal arithmetic under varlen packing, never an input):
 
     python tools/predict_step.py --preset gpt2_124m --hw 3090 \
-        --budgets 16,8,4,2 --ga-batch 64x8,16x32,8x64 --measured
+        --budgets 16,8,4,2 --t-rounds 8192,32768,65536 \
+        --tokens-step 524288 --measured
 
 Per row: the plan's simulator-verified makespan (predicted s/step),
 tok/s, EFFECTIVE and HARDWARE TFLOPs/s (lowering/flops.py — the same
@@ -99,6 +102,7 @@ def combo_row(fam, cfg, hw, budget: float, *, measured: bool,
     tokens_step = cfg.tokens * cfg.grad_accum_rounds
     levels = planned.recompute_levels or {}
     return {
+        "seq": cfg.seq_len,
         "ga": cfg.grad_accum_rounds, "batch": cfg.batch,
         "t_round": cfg.tokens, "tokens_step": tokens_step,
         "budget": budget, "step_s": step_s,
@@ -114,20 +118,20 @@ def combo_row(fam, cfg, hw, budget: float, *, measured: bool,
 
 
 def print_table(rows, *, steps: int | None) -> None:
-    hdr = (f"{'ga':>4} {'batch':>5} {'T_round':>8} {'tok/step':>9} "
-           f"{'budget':>6} {'s/step':>7} {'tok/s':>8} {'effTF/s':>8} "
-           f"{'hwTF/s':>7} {'peakGiB':>8} {'recomp':>7}")
+    hdr = (f"{'seq':>5} {'T_round':>8} {'ga':>4} "
+           f"{'tok/step':>9} {'budget':>6} {'s/step':>7} {'tok/s':>8} "
+           f"{'effTF/s':>8} {'hwTF/s':>7} {'peakGiB':>8} {'recomp':>7}")
     if steps:
         hdr += f" {'ETA_h':>6}"
     print(hdr)
     for r in rows:
+        head = (f"{r['seq']:>5} {r['t_round']:>8,} {r['ga']:>4} "
+                f"{r['tokens_step']:>9,} "
+                f"{r['budget']:>6g} ")
         if "infeasible" in r:
-            print(f"{r['ga']:>4} {r['batch']:>5} {r['t_round']:>8,} "
-                  f"{r['tokens_step']:>9,} {r['budget']:>6g} "
-                  f"  INFEASIBLE: {r['infeasible']}")
+            print(head + f"  INFEASIBLE: {r['infeasible']}")
             continue
-        line = (f"{r['ga']:>4} {r['batch']:>5} {r['t_round']:>8,} "
-                f"{r['tokens_step']:>9,} {r['budget']:>6g} "
+        line = (head +
                 f"{r['step_s']:>7.2f} {r['tok_s']:>8,.0f} "
                 f"{r['eff_tfs']:>8.1f} {r['hw_tfs']:>7.1f} "
                 f"{r['peak_gib']:>8.2f} "
@@ -143,18 +147,29 @@ def main() -> int:
 
     ap = argparse.ArgumentParser()
     ap.add_argument("--preset", default="l3_1b")
+    ap.add_argument("--t-round", type=int, default=None,
+                    help="single-point round token budget (must be a "
+                         "multiple of seq_len)")
+    ap.add_argument("--t-rounds", default=None,
+                    help="SWEEP: comma list of round token budgets, e.g. "
+                         "8192,32768,65536 — ga derives from --tokens-step")
+    ap.add_argument("--tokens-step", type=int, default=None,
+                    help="tokens per optimizer step (default: the "
+                         "preset's); ga = tokens-step / t_round per row")
     ap.add_argument("--ga-rounds", type=int, default=None,
-                    help="single-point ga override")
-    ap.add_argument("--batch", type=int, default=None,
-                    help="single-point batch override (T_round scales)")
+                    help="single-point ga override (alternative to "
+                         "--t-round; preset round budget)")
     ap.add_argument("--budget", type=float, default=14.0,
                     help="single-point device budget (GiB)")
     ap.add_argument("--budgets", default=None,
                     help="SWEEP: comma list of budgets, e.g. 16,8,4,2")
-    ap.add_argument("--ga-batch", default=None,
-                    help="SWEEP: comma list of gaXbatch combos, e.g. "
-                         "64x8,16x32,8x64 (each row keeps its own "
-                         "tokens/step = ga*batch*seq_len)")
+    ap.add_argument("--seq-len", type=int, default=None,
+                    help="override cfg.seq_len (T_round and tokens/step "
+                         "scale; families with learned positions grow "
+                         "their table when n_ctx follows seq_len)")
+    ap.add_argument("--seq-lens", default=None,
+                    help="SWEEP: comma list of seq_lens — a third axis "
+                         "over the ga-batch x budgets grid")
     ap.add_argument("--hw", choices=sorted(HW_PROFILES), default="5090")
     ap.add_argument("--tflops", type=float, default=None,
                     help="override peak bf16 TFLOPs")
@@ -187,39 +202,57 @@ def main() -> int:
     recompute = not args.no_recompute
     profile_cache: dict = {}
 
-    combos = []
-    if args.ga_batch:
-        for tok in args.ga_batch.split(","):
-            ga_s, b_s = tok.lower().split("x")
-            combos.append((int(ga_s), int(b_s)))
-    else:
-        ga = args.ga_rounds or base.grad_accum_rounds
-        b = args.batch or base.batch
-        combos.append((ga, b))
     budgets = ([float(x) for x in args.budgets.split(",")]
                if args.budgets else [args.budget])
+    seqs = ([int(x) for x in args.seq_lens.split(",")] if args.seq_lens
+            else [args.seq_len or base.seq_len])
+    t_rounds = ([int(x) for x in args.t_rounds.split(",")]
+                if args.t_rounds
+                else [args.t_round] if args.t_round else None)
 
-    sweep = bool(args.ga_batch or args.budgets)
+    def geometry(seq: int) -> list[tuple[int, int]]:
+        """(ga, batch) rows for one seq_len — batch is INTERNAL
+        arithmetic (T_round / seq_len); the interface speaks T_round."""
+        tokens_step = args.tokens_step or (base.tokens
+                                           * base.grad_accum_rounds)
+        if t_rounds is None:
+            ga = args.ga_rounds or base.grad_accum_rounds
+            return [(ga, tokens_step // (ga * seq))] \
+                if args.tokens_step or args.ga_rounds else \
+                [(base.grad_accum_rounds, base.batch)]
+        out = []
+        for tr in t_rounds:
+            if tr % seq:
+                raise SystemExit(f"--t-round {tr} not a multiple of "
+                                 f"seq_len {seq}")
+            if tokens_step % tr:
+                raise SystemExit(f"--tokens-step {tokens_step} not a "
+                                 f"multiple of t_round {tr}")
+            out.append((tokens_step // tr, tr // seq))
+        return out
+
+    sweep = bool(args.t_rounds or args.budgets or args.seq_lens)
     print(f"preset {args.preset}  family {fam.name}  hw {args.hw}: "
           f"{hw.peak_bf16_tflops:.0f} TF bf16 x {hw.matmul_eff:.2f}, "
           f"{hw.mem_bw_gbs:.0f} GB/s, pcie {hw.pcie_gbs:.0f} GB/s  "
           f"costs={'MEASURED (profiled)' if args.measured else 'roofline'}")
     rows = []
-    for ga, b in combos:
-        cfg = replace(base, grad_accum_rounds=ga, batch=b)
-        for budget in budgets:
-            try:
-                rows.append(combo_row(fam, cfg, hw, budget,
-                                      measured=args.measured,
-                                      recompute=recompute,
-                                      profile_cache=profile_cache))
-            except ValueError as exc:
-                # a combo the planner cannot fit is a RESULT, not a crash
-                rows.append({"ga": ga, "batch": b,
-                             "t_round": cfg.tokens,
-                             "tokens_step": cfg.tokens * ga,
-                             "budget": budget,
-                             "infeasible": str(exc).splitlines()[0][:60]})
+    for seq in seqs:
+        for ga, b in geometry(seq):
+            cfg = replace(base, seq_len=seq, grad_accum_rounds=ga, batch=b)
+            for budget in budgets:
+                try:
+                    rows.append(combo_row(fam, cfg, hw, budget,
+                                          measured=args.measured,
+                                          recompute=recompute,
+                                          profile_cache=profile_cache))
+                except ValueError as exc:
+                    # a combo the planner cannot fit is a RESULT, not a crash
+                    rows.append({"seq": seq, "ga": ga,
+                                 "t_round": cfg.tokens,
+                                 "tokens_step": cfg.tokens * ga,
+                                 "budget": budget,
+                                 "infeasible": str(exc).splitlines()[0][:60]})
     print_table(rows, steps=args.steps)
 
     if not sweep:
