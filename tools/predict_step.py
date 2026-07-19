@@ -126,8 +126,8 @@ def combo_row(fam, cfg, hw, budget: float, *, measured: bool,
 def print_table(rows, *, steps: int | None) -> None:
     hdr = (f"{'seq':>5} {'T_round':>8} {'ga':>4} "
            f"{'tok/step':>9} {'budget':>6} {'s/step':>7} {'tok/s':>8} "
-           f"{'effTF/s':>8} {'hwTF/s':>7} {'fastGiB':>8} {'bkGiB':>6} "
-           f"{'recomp':>7}")
+           f"{'effTF/s':>8} {'hwTF/s':>7} {'allTF/s':>8} "
+           f"{'fastGiB':>8} {'bkGiB':>6} {'recomp':>7}")
     if steps:
         hdr += f" {'ETA_h':>6}"
     print(hdr)
@@ -141,6 +141,7 @@ def print_table(rows, *, steps: int | None) -> None:
         line = (head +
                 f"{r['step_s']:>7.2f} {r['tok_s']:>8,.0f} "
                 f"{r['eff_tfs']:>8.1f} {r['hw_tfs']:>7.1f} "
+                f"{r['all_tfs']:>8.1f} "
                 f"{r['peak_gib']:>8.2f} {r['backing_gib']:>6.2f} "
                 f"{str(r['recompute']) + '/' + str(r['rewritable']):>7}")
         if steps:
@@ -154,6 +155,13 @@ def main() -> int:
 
     ap = argparse.ArgumentParser()
     ap.add_argument("--preset", default="l3_1b")
+    ap.add_argument("--opt", choices=["adamw", "muon"], default=None,
+                    help="override the preset's opt_policy. Sizes O (and "
+                         "so backing) correctly — muon matrices carry m "
+                         "only — and the all-in TF/s column counts NS "
+                         "work; CAVEAT: the roofline optimizer_us seed is "
+                         "adamw-shaped, so the MAKESPAN under-charges "
+                         "muon's NS matmul time (~0.3-0.5 s/step at 1B)")
     ap.add_argument("--t-round", type=int, default=None,
                     help="single-point round token budget (must be a "
                          "multiple of seq_len)")
@@ -199,6 +207,12 @@ def main() -> int:
     args = ap.parse_args()
 
     base = P.resolve_preset(args.preset)
+    if args.opt:
+        base = replace(base, opt_policy=args.opt)
+        if args.opt == "muon":
+            print("NOTE: makespan under-charges muon NS matmul time "
+                  "(adamw-shaped optimizer_us seed); all-in TF/s and O "
+                  "sizes are muon-correct")
     hw = HW_PROFILES[args.hw]
     overrides = {}
     if args.tflops is not None:
