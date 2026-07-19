@@ -209,10 +209,11 @@ def main() -> int:
     base = P.resolve_preset(args.preset)
     if args.opt:
         base = replace(base, opt_policy=args.opt)
-        if args.opt == "muon":
-            print("NOTE: makespan under-charges muon NS matmul time "
-                  "(adamw-shaped optimizer_us seed); all-in TF/s and O "
-                  "sizes are muon-correct")
+        if args.opt == "muon" and not args.measured:
+            print("NOTE: ROOFLINE optimizer seeds are policy-blind — the "
+                  "makespan under-charges muon NS time (~0.3-0.5 s/step "
+                  "at 1B). --measured profiles the real policy-dispatched "
+                  "optimizer step and is muon-exact.")
     hw = HW_PROFILES[args.hw]
     overrides = {}
     if args.tflops is not None:
