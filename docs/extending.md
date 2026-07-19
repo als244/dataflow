@@ -333,6 +333,54 @@ Gates, in order:
    (`dataflow_training/run/profiling.py`) — stale cached task costs
    silently skew both sim and the planner's recompute choices.
 
+### FLOP accounting requirements
+
+`lowering/flops.py` reports per-step effective / hardware / all-in
+TFLOPs by walking the lowered program's `metadata["cost_subops"]` — the
+SAME roofline numbers the simulator prices, so accounting is correct
+exactly when your cost seeds are. What a family must guarantee:
+
+1. **Every emitted task carries `cost_subops`.** Families lowering
+   through `build_shaped_program` with populated `LayerKindSpec` subop
+   lists and `LooseCosts` get this for free (the shared
+   `roofline_block_kind_spec` covers dense-causal blocks). A custom
+   emitter must stamp `{"name", "flops", "memory_bytes", "efficiency"}`
+   dicts per subop, or add its zero-flop plumbing keys to
+   `flops.EXEMPT` with a reason. An unstamped, non-exempt task
+   HARD-FAILS the accounting (the completeness tripwire) — a new
+   family cannot silently report wrong numbers.
+2. **Tag attention as `efficiency: "attention"`.** That tag is how the
+   walker separates the attention bucket (effective/hardware split,
+   varlen scaling) from plain matmuls. Everything else sums into the
+   matmul bucket; `flops: 0` entries (gathers, elementwise) are
+   ignored.
+3. **Causal-dense attention follows the pinned factors.** Stamp fwd at
+   the triangular count `0.5 · 4 · Σ sᵢ² · H · hd` (uniform form:
+   `2·t·seq·d`) and bwd at `0.5 · 10` (flash's in-kernel recompute is
+   executed work). If your kind's `key_prefix` is in
+   `flops.CAUSAL_DENSE_PREFIXES` the walker derives the effective bwd
+   (`0.5 · 8`) via the 8/10 correction and scales the bucket by the
+   round's actual `Σ ℓⱼ² / (t·seq)` under varlen feeds — ADD your
+   prefix there when your seeds use these factors. Kinds with other
+   attention structure (selected-prefix DSA, linear attention) stamp
+   their own true counts and are reported as-is (effective ==
+   hardware for that bucket; no varlen scaling).
+4. **Optimizer counting needs the uniform `weight_layout` slot.** The
+   all-in bucket walks `ModelFamily.weight_layout(dims, layer=...)` ×
+   the config's OptPolicy: 2-D fields under a `muon` rule count the
+   Newton-Schulz quintic; adamw/sgd fields are elementwise (0).
+   Heterogeneous families without the uniform slot currently report
+   optimizer = 0 (a documented v1 limitation, fine for adamw).
+5. **Recompute is free.** Planner-inserted recompute tasks carry their
+   own subops and land in HARDWARE flops automatically; the walk sees
+   the frozen-form program, so FreezePlan-pruned work is excluded
+   without any family effort.
+
+Gate: `tests/dataflow_training/pretrain/test_flops.py` — the
+parametrized `test_every_family_walks` picks up your family from the
+registry automatically; add a hand-formula check if your kind's math
+is novel.
+
 ## 6. Optimizers: per-field choice, per-optimizer state
 
 Nothing in a family hardcodes AdamW. The optimizer executable
@@ -550,6 +598,9 @@ The family test module's canonical ladder (copy the newest family's —
 10. multistep loss-decreases + fixed-seed determinism twice
     (byte-compare; view bf16 pairs as fp32 bit patterns —
     `torch.equal` treats equal-byte NaNs as unequal).
+11. FLOP accounting walk (`test_flops.py` picks the family up from the
+    registry): every task stamped or exempt, attention tagged, causal
+    prefixes registered — see "FLOP accounting requirements" in §5.
 
 Known name-couplings to check when the family's TASK/OBJECT NAMES
 differ (all fail loudly, none silently):
