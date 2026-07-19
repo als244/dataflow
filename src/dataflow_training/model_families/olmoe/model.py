@@ -31,7 +31,7 @@ from dataflow_training.blocks.layouts import (
 from dataflow_training.blocks.modules.moe.spec import MoESpec, moe_aux_layout, moe_aux_temp_layout
 
 from ...lowering.emit import FamilyLayouts, LayerLayout, apply_exact_sizes, initial_values_from_layouts, object_size_factory
-from ...lowering.shaped_program import BF16, LayerKindSpec, ShapedHardware, build_shaped_program
+from ...lowering.shaped_program import optimizer_cost_seed, BF16, LayerKindSpec, ShapedHardware, build_shaped_program
 
 
 @dataclass(frozen=True)
@@ -150,6 +150,10 @@ def _kind_spec(cfg: ShapedOlmoeConfig, hw: ShapedHardware) -> LayerKindSpec:
     q, kv, f, k = cfg.q_dim, cfg.kv_dim, cfg.d_ff_expert, cfg.top_k
 
     total_params = sum(int(math.prod(fl.shape)) for fl in wl.fields)
+
+    opt_us, sub_opt = optimizer_cost_seed(
+
+        cfg, hw, [(f.name, f.shape) for f in wl.fields])
     active_mm = d * q + 2 * d * kv + q * d + d * cfg.n_experts + k * 3 * f * d
     mm_flops = 2.0 * t * active_mm
     # weight bytes: the FULL expert stack is read; activation bytes include
@@ -180,11 +184,9 @@ def _kind_spec(cfg: ShapedOlmoeConfig, hw: ShapedHardware) -> LayerKindSpec:
         aux_temp_bytes=moe_aux_temp_layout(dims, dims.moe).total_bytes,
         aux_bytes=moe_aux_layout(dims, dims.moe).total_bytes,
         fwd_us=fwd, bwd_us=bwd, recompute_us=fwd,
-        optimizer_us=hw.mem_us(BF16 * 7.0 * total_params),
+        optimizer_us=opt_us,
         fwd_subops=sub_fwd, bwd_subops=sub_bwd, recompute_subops=list(sub_fwd),
-        optimizer_subops=[{"kind": "roofline", "name": "adamw", "flops": 0,
-                           "memory_bytes": int(BF16 * 7 * total_params),
-                           "efficiency": "memory"}],
+        optimizer_subops=sub_opt,
     )
 
 

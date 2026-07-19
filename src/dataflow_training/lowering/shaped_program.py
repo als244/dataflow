@@ -136,13 +136,20 @@ class LooseCosts:
             + hw.matmul_us(2.0 * head_flops, 2.0 * head_bytes)
         )
 
-        def opt_us(params: int) -> float:
-            # read W, dW, m, v; write W, m, v (all bf16 here)
-            return hw.mem_us(BF16 * 7.0 * params)
-
+        # policy-consulted embed/head seeds over the canonical tables
+        # ((V, d) + the head's final norm) — legacy_params pins adamw
+        # byte-identity to the historical cfg.*_params expressions.
+        # Exactness boundary: exotic per-field routing on family-extra
+        # embed fields (e.g. a muon'd position table) is not modeled.
+        embed_opt_us, embed_opt_sub = optimizer_cost_seed(
+            cfg, hw, [("w", (cfg.vocab_size, d))], ns="embed",
+            legacy_params=cfg.embed_params)
+        head_opt_us, head_opt_sub = optimizer_cost_seed(
+            cfg, hw, [("w", (cfg.vocab_size, d)), ("final_norm_w", (d,))],
+            ns="head", legacy_params=cfg.head_params)
         self.optimizer_us = {
-            "embed": opt_us(cfg.embed_params),
-            "head": opt_us(cfg.head_params),
+            "embed": embed_opt_us,
+            "head": head_opt_us,
         }
 
         self.subops = {
@@ -153,8 +160,8 @@ class LooseCosts:
                 {"kind": "roofline", "name": "ce_loss", "flops": 0, "memory_bytes": int(BF16 * 2 * t * cfg.vocab_size), "efficiency": "memory"},
                 {"kind": "roofline", "name": "lm_head_bwd", "flops": int(2 * head_flops), "memory_bytes": int(2 * head_bytes), "efficiency": "matmul"},
             ],
-            "optimizer_embed": [{"kind": "roofline", "name": "adamw", "flops": 0, "memory_bytes": int(BF16 * 7 * cfg.embed_params), "efficiency": "memory"}],
-            "optimizer_head": [{"kind": "roofline", "name": "adamw", "flops": 0, "memory_bytes": int(BF16 * 7 * cfg.head_params), "efficiency": "memory"}],
+            "optimizer_embed": embed_opt_sub,
+            "optimizer_head": head_opt_sub,
         }
 
 
@@ -169,13 +176,17 @@ OPT_TRAFFIC = {  # elements moved per parameter element, by optimizer rule
 
 def optimizer_cost_seed(cfg, hw: ShapedHardware, weight_fields,
                         ns: str | None = None,
-                        layer: int | None = None):
+                        layer: int | None = None,
+                        legacy_params: int | None = None):
     """(optimizer_us, optimizer_subops) for ONE weight object under the
     config's opt_policy. All-adamw reproduces the historical 7x-traffic
-    seed byte-identically (sum of field elements == the params the old
-    expression used); muon matrix fields charge m-only traffic PLUS the
-    Newton-Schulz matmul flops (the previously missing term — roofline
-    muon plans under-charged the optimizer)."""
+    seed byte-identically — ``legacy_params`` pins the exact param count
+    the old expression used where it differed from the field sum (the
+    loose head seed ignored final_norm_w); block seeds' sums match and
+    omit it. Muon fields charge m-only traffic PLUS the Newton-Schulz
+    matmul flops (2-D directly; 3-D stacked experts per slice) — the
+    previously missing term that made roofline muon plans under-charge
+    the optimizer."""
     from dataflow_training.blocks.optim import resolve_opt_policy
 
     from .flops import muon_ns_flops
@@ -196,13 +207,20 @@ def optimizer_cost_seed(cfg, hw: ShapedHardware, weight_fields,
         if rule != "adamw":
             pure_adamw = False
         mem_elems += OPT_TRAFFIC.get(rule, 7.0) * n
-        if rule == "muon" and len(shape) == 2:
-            ns_flops += muon_ns_flops(int(shape[0]), int(shape[1]))
-            ns_elems += n
+        if rule == "muon":
+            if len(shape) == 2:
+                ns_flops += muon_ns_flops(int(shape[0]), int(shape[1]))
+                ns_elems += n
+            elif len(shape) == 3:
+                # stacked expert matrices: NS runs per expert slice
+                ns_flops += int(shape[0]) * muon_ns_flops(int(shape[1]),
+                                                          int(shape[2]))
+                ns_elems += n
     if pure_adamw:
-        return hw.mem_us(BF16 * 7.0 * total), [
+        legacy = legacy_params if legacy_params is not None else total
+        return hw.mem_us(BF16 * 7.0 * legacy), [
             {"kind": "roofline", "name": "adamw", "flops": 0,
-             "memory_bytes": int(BF16 * 7 * total), "efficiency": "memory"}]
+             "memory_bytes": int(BF16 * 7 * legacy), "efficiency": "memory"}]
     us = hw.mem_us(BF16 * mem_elems)
     subops = [{"kind": "roofline", "name": "optimizer", "flops": 0,
                "memory_bytes": int(BF16 * mem_elems),

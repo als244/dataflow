@@ -170,6 +170,12 @@ def flop_report(cfg, program) -> FlopReport:
             if fl == 0.0:
                 continue
             rep.by_group[task.group] = rep.by_group.get(task.group, 0.0) + fl
+            if task.group == "optimizer":
+                # muon NS subops (the seeds carry them since the
+                # policy-consulted optimizer roofline): optimizer work,
+                # never model fwd/bwd flops
+                rep.optimizer += fl
+                continue
             if op.get("efficiency") == "attention":
                 if not causal:
                     if is_recompute:
@@ -187,5 +193,8 @@ def flop_report(cfg, program) -> FlopReport:
                 rep.mm_hardware += fl
                 if not is_recompute:
                     rep.mm_effective += fl
-    rep.optimizer = optimizer_flops(cfg)
+    if rep.optimizer == 0.0:
+        # program without seeded optimizer flops (builder not yet on the
+        # policy-consulted seed): fall back to the layouts x policy walk
+        rep.optimizer = optimizer_flops(cfg)
     return rep

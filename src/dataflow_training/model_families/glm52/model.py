@@ -62,6 +62,7 @@ from dataflow_training.blocks.modules.moe.spec import MoESpec, moe_aux_layout
 
 from ...lowering.emit import FamilyLayouts, LayerLayout, apply_exact_sizes, initial_values_from_layouts, object_size_factory
 from ...lowering.shaped_program import (
+    optimizer_cost_seed,
     BF16,
     LayerKindSpec,
     AuxShare,
@@ -369,6 +370,8 @@ def _kind_specs(cfg: ShapedGlm52Config, hw: ShapedHardware) -> dict[str, LayerKi
     def spec(prefix, leader, wl, cl, ffn_active, extra_traffic,
              aux_temp_bytes=0, aux_bytes=0):
         total_params = sum(int(math.prod(fl.shape)) for fl in wl.fields)
+        opt_us, sub_opt = optimizer_cost_seed(
+            cfg, hw, [(f.name, f.shape) for f in wl.fields])
         attn_flops = core_flops + (idx_flops if leader else 0.0)
         attn_bytes = BF16 * t * 4 * h * qk + s_bytes
         mm_active = mla_active + ffn_active + (idx_active if leader else 0)
@@ -399,11 +402,9 @@ def _kind_specs(cfg: ShapedGlm52Config, hw: ShapedHardware) -> dict[str, LayerKi
             aux_temp_bytes=aux_temp_bytes,
             aux_bytes=aux_bytes,
             fwd_us=fwd, bwd_us=bwd, recompute_us=fwd,
-            optimizer_us=hw.mem_us(BF16 * 7.0 * total_params),
+            optimizer_us=opt_us,
             fwd_subops=sub_fwd, bwd_subops=sub_bwd, recompute_subops=list(sub_fwd),
-            optimizer_subops=[{"kind": "roofline", "name": "adamw", "flops": 0,
-                               "memory_bytes": int(BF16 * 7 * total_params),
-                               "efficiency": "memory"}],
+            optimizer_subops=sub_opt,
         )
 
     f, fs, k = cfg.d_ff_expert, cfg.d_ff_shared, cfg.top_k

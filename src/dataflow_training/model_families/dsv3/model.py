@@ -47,7 +47,7 @@ from dataflow_training.blocks.optim import freeze
 from dataflow_training.blocks.modules.moe.spec import MoESpec, moe_aux_layout, moe_aux_temp_layout
 
 from ...lowering.emit import FamilyLayouts, LayerLayout, apply_exact_sizes, initial_values_from_layouts, object_size_factory
-from ...lowering.shaped_program import BF16, LayerKindSpec, ShapedHardware, build_shaped_program
+from ...lowering.shaped_program import optimizer_cost_seed, BF16, LayerKindSpec, ShapedHardware, build_shaped_program
 
 _DSV3_DTYPES = DTypePolicy(overrides=(
     # the balance bias is fp32 end-to-end: bf16 ulp at bias ~0.1 is half
@@ -256,6 +256,8 @@ def _kind_specs(cfg: ShapedDsv3Config, hw: ShapedHardware) -> dict[str, LayerKin
     def spec(prefix, wl, cl, ffn_active, extra_traffic, aux_temp_bytes=0,
              aux_bytes=0):
         total_params = sum(int(math.prod(fl.shape)) for fl in wl.fields)
+        opt_us, sub_opt = optimizer_cost_seed(
+            cfg, hw, [(f.name, f.shape) for f in wl.fields])
         mm_flops = 2.0 * t * (mla_active + ffn_active)
         mm_bytes = BF16 * (total_params + 4 * t * d) + extra_traffic
         fwd = hw.matmul_us(mm_flops, mm_bytes) + hw.attn_us(attn_flops, attn_bytes)
@@ -280,11 +282,9 @@ def _kind_specs(cfg: ShapedDsv3Config, hw: ShapedHardware) -> dict[str, LayerKin
             aux_temp_bytes=aux_temp_bytes,
             aux_bytes=aux_bytes,
             fwd_us=fwd, bwd_us=bwd, recompute_us=fwd,
-            optimizer_us=hw.mem_us(BF16 * 7.0 * total_params),
+            optimizer_us=opt_us,
             fwd_subops=sub_fwd, bwd_subops=sub_bwd, recompute_subops=list(sub_fwd),
-            optimizer_subops=[{"kind": "roofline", "name": "adamw", "flops": 0,
-                               "memory_bytes": int(BF16 * 7 * total_params),
-                               "efficiency": "memory"}],
+            optimizer_subops=sub_opt,
         )
 
     dense = spec(
