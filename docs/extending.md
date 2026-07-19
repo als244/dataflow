@@ -335,10 +335,14 @@ Gates, in order:
 
 ### FLOP accounting requirements
 
-`lowering/flops.py` reports per-step effective / hardware / all-in
-TFLOPs by walking the lowered program's `metadata["cost_subops"]` — the
-SAME roofline numbers the simulator prices, so accounting is correct
-exactly when your cost seeds are. What a family must guarantee:
+`lowering/flops.py` reports per-step EFFECTIVE (algorithmic fwd + bwd
++ optimizer matmuls — the sim's makespan includes optimizer-task time,
+so its work counts in the numerator too) and HARDWARE (+ recompute
+replays + flash-internal recompute) TFLOPs by walking the lowered
+program's `metadata["cost_subops"]` — the SAME roofline numbers the
+simulator prices, so accounting is correct exactly when your cost
+seeds are (see "Task cost contract" in program_schema.md). What a
+family must guarantee:
 
 1. **Every emitted task carries `cost_subops`.** Families lowering
    through `build_shaped_program` with populated `LayerKindSpec` subop
@@ -365,12 +369,15 @@ exactly when your cost seeds are. What a family must guarantee:
    attention structure (selected-prefix DSA, linear attention) stamp
    their own true counts and are reported as-is (effective ==
    hardware for that bucket; no varlen scaling).
-4. **Optimizer counting needs the uniform `weight_layout` slot.** The
-   all-in bucket walks `ModelFamily.weight_layout(dims, layer=...)` ×
-   the config's OptPolicy: 2-D fields under a `muon` rule count the
-   Newton-Schulz quintic; adamw/sgd fields are elementwise (0).
-   Heterogeneous families without the uniform slot currently report
-   optimizer = 0 (a documented v1 limitation, fine for adamw).
+4. **Seed optimizer tasks through `optimizer_cost_seed`.** Pass your
+   kind's weight-layout fields (`[(f.name, f.shape) for f in
+   wl.fields]`) — the helper consults the config's OptPolicy: adamw
+   reproduces the historical 7×-traffic seed byte-identically, muon
+   fields charge m-only traffic PLUS a `"muon_ns"` matmul subop (2-D
+   directly, 3-D expert stacks per slice). The FLOP walker sources the
+   optimizer bucket from those subops (layouts×policy walk only as
+   fallback), and optimizer work counts in BOTH reported quantities.
+   Every in-tree builder does this — copy any of them.
 5. **Recompute is free.** Planner-inserted recompute tasks carry their
    own subops and land in HARDWARE flops automatically; the walk sees
    the frozen-form program, so FreezePlan-pruned work is excluded

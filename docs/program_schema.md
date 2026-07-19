@@ -48,6 +48,41 @@ The three `*_after` directive fields are what planning ADDS — a bare
 program has them empty; PressureFit fills them. `TransferDirective` is
 `(object_id, runtime_us)`.
 
+### Task cost contract: `runtime_us` + `metadata["cost_subops"]`
+
+Every emitted task carries its cost twice, with a strict division of
+roles:
+
+- **`runtime_us`** (scalar): what the planner and simulator SCHEDULE
+  with. Seeded from the roofline at lowering; `apply_measured_costs`
+  REPLACES it with profiled truth (the subops are preserved untouched).
+- **`metadata["cost_subops"]`** (list of dicts): the analytic
+  decomposition the scalar was seeded from, and the source of FLOP
+  accounting (`lowering/flops.py`). Uniform shape:
+
+      {"kind": "roofline", "name": "<label>",
+       "flops": int, "memory_bytes": int,
+       "efficiency": "matmul" | "attention" | "memory"}
+
+  `efficiency` selects the ShapedHardware converter that priced the
+  subop (`matmul_us` / `attn_us` / `mem_us`); `runtime_us` at seed time
+  is their sum. Special names the FLOP walker keys on: subops tagged
+  `efficiency: "attention"` form the attention buckets (causal kinds
+  get the 8/10 effective-bwd split and varlen quadratic scaling);
+  `"muon_ns"` marks optimizer Newton-Schulz matmul work (the optimizer
+  seeds are OPT-POLICY-CONSULTED — adamw is pure `"memory"` traffic
+  with `flops: 0`). Zero-cost plumbing (round prologue, init) carries
+  an EMPTY list; a task with NO `cost_subops` metadata hard-fails FLOP
+  accounting unless exempted.
+
+Invariants and non-invariants: the stamping covers all four task
+groups (forward/backward/recompute/optimizer) in every family — the
+completeness tripwire in `tests/dataflow_training/pretrain/test_flops.py`
+enforces it. Nothing structurally forces `runtime_us` to equal the
+subop-derived sum after lowering: measured programs DIVERGE them by
+design (`runtime_us` = profiled, subops = analytic FLOP truth), which
+is exactly why FLOP reporting stays valid on measured plans.
+
 ## ObjectSpec / OutputSpec
 
 | field | type | meaning |
