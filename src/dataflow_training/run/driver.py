@@ -484,17 +484,34 @@ def daemon_client(slab_gib: float = 100.0, *, socket: str | None = None,
             log(f"[daemon] teardown warning: {e}")
 
 
-def plan_at_budget(cfg, budget_gib: float, *, recompute: bool = True):
+def plan_at_budget(cfg, budget_gib: float, *, recompute: bool = True,
+                   measured: bool = False):
     """Plan the single-step program at a device budget (GiB). Returns the
     PlannedProgram; its placement is baked in -> a budget-specific prog_id.
     With recompute, the planner re-lowers the program at candidate recompute
-    levels (``build_variant``) to fit tight budgets (roofline costs)."""
+    levels (``build_variant``). ``measured`` swaps the roofline cost seeds
+    for PROFILED task costs (load_or_profile, disk-cached) — the plan's
+    makespan_us then IS the true-profiling simulator prediction."""
     from dataflow_training.model_families.families import resolve_family
     from dataflow_training.lowering.planning import plan_program
 
     fam = resolve_family(cfg)
-    variant = (lambda levels: fam.lower(cfg, recompute_levels=levels)) if recompute else None
-    return plan_program(fam.lower(cfg),
+    if not measured:
+        variant = (lambda levels: fam.lower(cfg, recompute_levels=levels)) if recompute else None
+        return plan_program(fam.lower(cfg),
+                            fast_memory_capacity=int(budget_gib * 1024 ** 3),
+                            recompute=recompute, build_variant=variant)
+    from dataflow.runtime.device.cuda import CudaBackend
+    from dataflow_training.run.profiling import apply_measured_costs, load_or_profile
+
+    backend = CudaBackend()
+    dims = fam.derive_dims(cfg)
+    resolver = fam.build_resolver(dims)
+    profiles = load_or_profile(fam.lower(cfg), resolver, backend)
+    variant = ((lambda levels: apply_measured_costs(
+        fam.lower(cfg, recompute_levels=levels), profiles, resolver))
+        if recompute else None)
+    return plan_program(apply_measured_costs(fam.lower(cfg), profiles, resolver),
                         fast_memory_capacity=int(budget_gib * 1024 ** 3),
                         recompute=recompute, build_variant=variant)
 
@@ -511,6 +528,7 @@ def latest_engine_checkpoint(ckpt_dir) -> Path | None:
 
 def run_engine(client, cfg, recipe: Recipe, feed, steps: int, *,
                budget_gib: float, seed: int = 11, recompute: bool = True,
+               measured: bool = False,
                log=print, log_every: int = 10,
                checkpoint_every: int | None = None,
                checkpoint_dir=None, keep_last: int = 3,
@@ -527,7 +545,13 @@ def run_engine(client, cfg, recipe: Recipe, feed, steps: int, *,
 
     from dataflow.core.jsonio import program_to_dict
 
-    planned = plan_at_budget(cfg, budget_gib, recompute=recompute)
+    planned = plan_at_budget(cfg, budget_gib, recompute=recompute,
+                             measured=measured)
+    n_rc = sum(1 for v in (planned.recompute_levels or {}).values() if v)
+    log(f"[plan] predicted {planned.makespan_us / 1e6:.2f} s/step "
+        f"({'measured' if measured else 'roofline'} costs)  peak fast "
+        f"{planned.peak_fast_bytes / 1024**3:.2f} GiB  recompute "
+        f"{n_rc}/{len(planned.recompute_levels or {})} activations")
     prog_dict = program_to_dict(planned.program)
     cd = cfg_dict(cfg)
     fam = resolver_family(cfg)

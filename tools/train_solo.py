@@ -262,6 +262,7 @@ def cmd_engine(args) -> int:
     with daemon_client(slab_gib=args.slab, log=_log) as client:
         res = run_engine(client, cfg, recipe, feed, args.steps,
                          budget_gib=args.budget, seed=11, log=_log,
+                         measured=args.measured,
                          checkpoint_every=args.checkpoint_every,
                          checkpoint_dir=ck_dir, resume=args.resume)
     out = Path(args.out)
@@ -290,6 +291,10 @@ def main() -> int:
                         "8192-token round)")
     e.add_argument("--checkpoint-every", type=int, default=None)
     e.add_argument("--resume", action="store_true")
+    e.add_argument("--measured", action="store_true",
+                   help="plan with PROFILED task costs (disk-cached) — the "
+                        "[plan] line's prediction becomes the true-profiling "
+                        "simulator expectation")
     e.add_argument("--data", choices=["block", "doc"], default="block",
                    help="block = llm.c fixed windows; doc = EOT-split "
                         "doc-aware varlen packing")
