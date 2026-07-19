@@ -110,6 +110,15 @@ def main() -> int:
     print(f"peak fast {planned.peak_fast_bytes / 1024**3:.2f} GiB   "
           f"recompute {n_recompute}/{len(levels) or 0} rewritable "
           f"activations")
+    from dataflow_training.lowering.flops import flop_report
+
+    rep = flop_report(cfg, planned.program)
+    eff, hwf, allin = rep.per_step()
+    print(f"model flops/step: eff {eff / 1e12:.1f} TF  hw {hwf / 1e12:.1f} TF"
+          f"  opt {rep.optimizer / 1e12:.2f} TF  all-in {allin / 1e12:.1f} TF")
+    print(f"expected throughput: eff {eff / planned.makespan_us / 1e6:.1f}"
+          f" TF/s  hw {hwf / planned.makespan_us / 1e6:.1f} TF/s  "
+          f"all-in {allin / planned.makespan_us / 1e6:.1f} TF/s")
     worst = sorted(tasks, key=lambda t: -t.runtime_us)[:args.top]
     for t in worst:
         print(f"  top task {t.runtime_us / 1e3:8.2f} ms  {t.id}")
