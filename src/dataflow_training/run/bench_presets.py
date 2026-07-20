@@ -1,15 +1,15 @@
 """Bench preset registry — the seam external families use to add named
-configs to tools/bench_train.py without editing it.
+configs to the benchmark tools without editing them.
 
-A plugin module (imported via DATAFLOW_PLUGINS, see
-docs/extending_external.md) calls::
+A plugin module (imported via DATAFLOW_PLUGINS or a tool's ``--plugin``
+flag, see docs/extending_external.md) calls::
 
     from dataflow_training.run.bench_presets import register_bench_config
     register_bench_config("mymodel-tiny-s1k-bs8ga2", cfg)
 
-bench_train merges these over its builtin CONFIGS at startup, so the
-name works everywhere a builtin config name does (bench_train,
-bench_frontier cells, best_config comparisons).
+``run.presets.resolve_preset`` consults this registry, so the name
+works everywhere a builtin preset name does (train_solo, predict_step,
+measure_step, nsys_profile).
 """
 from __future__ import annotations
 

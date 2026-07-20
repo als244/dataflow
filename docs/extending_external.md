@@ -90,8 +90,8 @@ packed-byte truth + seeded init (`lowering.emit` — `FamilyLayouts`,
    ```
 
 2. **Dev loop (uninstalled code)** — the family-aware tools take
-   `--plugin` (repeatable): `verify_family.py`, `best_config.py`,
-   `bench_frontier.py` — and the DAEMON takes it too:
+   `--plugin` (repeatable): `verify_family.py`, `predict_step.py`,
+   `measure_step.py` — and the DAEMON takes it too:
 
    ```bash
    python tools/verify_family.py --plugin mypkg.dataflow_plugin --family mymodel ...
@@ -127,7 +127,7 @@ python tools/verify_family.py --plugin mypkg.dataflow_plugin \
     --family mymodel --module mypkg/tests/test_mymodel.py
 
 # 2. throughput sweeps (register_bench_config names work everywhere)
-python tools/bench_frontier.py --plugin mypkg.dataflow_plugin \
+python tools/measure_step.py --plugin mypkg.dataflow_plugin \
     --presets mymodel-mini --device-gib 12,16,20 --shapes oracle --run \
     --out-dir results/bench/mymodel
 ```
@@ -220,7 +220,7 @@ debugging a mysterious plugin failure:
 
 Small, cosmetic, and shrinking — none block a working external family:
 
-- `tools/window_plans.py` name regexes assert full task-name coverage;
+- planner/tooling name regexes assert full task-name coverage;
   keep the `prefix_{step}_{round}_{layer}` naming shape (any prefix)
   and they hold.
 - The builtin lowering-stability tripwire file

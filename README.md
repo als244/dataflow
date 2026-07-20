@@ -21,46 +21,38 @@ resolves the sibling simulator; `cuda` pulls the real device backend.)
 
 ### Quickstart: benchmark training throughput under tight GPU memory budgets
 
-One command sweeps the throughput-vs-memory frontier — models ×
-device-memory budgets at a given sequence length and batch size (in
-sequences per optimizer step) — picking each model's best
-batch/accumulation shape with a fresh profiling oracle, enforcing that
-every measured device peak stays under its budget, and rendering the
-results table with per-cell provenance:
-
-A full list of builtin model architecture families and preset configs can be found at [builtin_models](docs/builtin_models.md)
+Three tools cover the throughput workflow in escalating cost — predict
+(CPU, instant), measure (GPU, minutes), profile (GPU, one capture).
+Full guide: [docs/benchmarking.md](docs/benchmarking.md); builtin model
+families and preset configs: [builtin_models](docs/builtin_models.md).
 
 ```bash
-python tools/bench_frontier.py \
-    --presets llama3-8b,qwen35-9b,glm52-mini --seq-len 4096 --seqs-per-step 16 \
-    --device-gib 12,16,20,24,28 --num-steps 3 --shapes oracle --run \
-    --out-dir results/bench/quickstart
+# 1. Predict: simulated sweep over geometry x memory budgets — per cell
+#    s/step, tok/s, effective/hardware TFLOPs/s, fast/backing memory
+#    peaks, PCIe traffic + link %, recompute/idle %
+python tools/predict_step.py --preset gpt2_124m --hw 3090 \
+    --t-rounds 8192,32768,65536 --tokens-step 524288 --budgets 16,8,4,2
+
+# 2. Measure: the same grid, each cell RUN on the real engine — the
+#    warmed measurement lands beside the prediction for that cell's plan
+python tools/measure_step.py --preset gpt2_124m \
+    --t-rounds 8192,65536 --tokens-step 524288 --budgets 16,4 --steps 12
+
+# 3. Profile: the same run under Nsight Systems, capture bracketed to
+#    exact warmed steps via the daemon's profiler_control verb
+python tools/nsys_profile.py --preset gpt2_124m --steps 10 --start 5 --stop 8
 ```
 
-Output: 
-- `TABLES.md` 
-    - Per Cell: real tok/s throughput, sim tok/s prediction, measured memory peak, chosen micro batch/grad accum shape, recompute task fraction
-- Per-Cell Files:
-    - The exact dataflow program (`program.json`)
-    - Its annotated plan (`plan.json`)
-    - The measured summary row (`measured.json`)
-
-After the sweep, everything is inspectable in the
-[webapp simulator](https://dataflowsim.sunshein.net/). Upload a cell's
-`program.json` to see the SIMULATOR's expectations for that exact
-plan — the predicted task/transfer timeline and memory trace, priced
-from the profiled/estimated task costs. (The cell's `measured.json` is the
-TRUE summary row from actual runtime — real tok/s, peaks, fidelity — not an event
-log.) To inspect the true timeline of a real run, generate the
-event-log bundle for the cell you care about:
-`tools/gap_analysis.py` re-runs its plan with tracing, and
-`tools/export_measured_run.py` packages the measured event log
-together with the sim's prediction into one uploadable file — the
-webapp renders the real run in the same panels and diffs the two,
-which is exactly how the sim-vs-real fidelity gap is inspected
-(full guide: [docs/exporting_runs.md](docs/exporting_runs.md)).
-
-For other benchmarking reference see: [docs/benchmarking.md](docs/benchmarking.md) (or `--help`).
+Everything is inspectable in the
+[webapp simulator](https://dataflowsim.sunshein.net/):
+`tools/export_program.py` writes any preset's exact program, annotated
+plan, and predicted timeline as uploadable files — the simulator's
+expectations for that plan, priced from profiled/estimated task costs.
+For the true timeline of a real run, `tools/trace_real_run.py` drives a
+few real steps through the daemon and emits the measured event log next
+to the sim's prediction; the webapp renders both in the same panels and
+diffs them, which is exactly how the sim-vs-real fidelity gap is
+inspected (full guide: [docs/exporting_runs.md](docs/exporting_runs.md)).
 
 ---
 

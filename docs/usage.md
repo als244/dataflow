@@ -87,8 +87,7 @@ Visualize any program in the webapp simulator:
 uploads too: `tools/trace_real_run.py` drives a few daemon steps with the
 run verb's trace and packages the measured event log together with the
 sim's prediction of the same plan into one `*.measured.json` the webapp
-renders side by side (see also `tools/export_measured_run.py`,
-[exporting_runs.md](exporting_runs.md)).
+renders side by side (see [exporting_runs.md](exporting_runs.md)).
 
 ## The CLI instead
 
@@ -97,8 +96,8 @@ python tools/train_solo.py smoke                       # tiny real-vocab referen
 python tools/train_solo.py parity --preset l3_125m ... # one preset, reference + engine at N budgets
 python tools/train_solo.py scaling --preset l3_1b ...  # the ladder, loss curves
 python tools/train_fleet.py train --preset l3_1b --steps 1000 --rounds 6,2 ...  # data-parallel fleet
-python tools/bench_frontier.py --presets llama3-8b --device-gib 12,16,20 \
-    --shapes oracle --run --out-dir results/bench/llama3   # throughput sweeps
+python tools/measure_step.py --preset l3_1b --t-rounds 8192,32768 \
+    --budgets 14,6 --steps 12          # measured throughput sweeps
 ```
 
 Sweep rows report real AND wall tok/s plus `placement_escapes` /
@@ -119,7 +118,6 @@ on the stream timelines. GPU metrics sampling
 `tools/nsys_profile.py` packages that recipe (capture limited to the
 training-steps NVTX range so planning/setup stay out of the report;
 `--stats` for the summary tables) — note it still shells out to the
-RETIRED `bench_train` driver and needs re-pointing at the current
 drivers before use.
 
 The annotation layer is vendor-portable (`runtime/device/annotate.py`):

@@ -96,7 +96,12 @@ from dataflow_training.model_families.qwen35moe.presets import (  # noqa: E402,F
 def resolve_preset(name: str):
     """Preset name -> config, across families ('qwen35' -> the hybrid preset,
     'dsv3_2b'/'dsv3_2b_nolbl' -> the MoE study preset, otherwise the
-    llama3 ladder)."""
+    llama3 ladder). Plugin-registered bench configs
+    (run.bench_presets.register_bench_config) resolve here too."""
+    from dataflow_training.run.bench_presets import EXTRA_CONFIGS
+
+    if name in EXTRA_CONFIGS:
+        return EXTRA_CONFIGS[name]
     if name in ("qwen35", "q35"):
         return qwen35_preset()
     if name == "dsv3_2b":

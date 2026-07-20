@@ -528,6 +528,7 @@ def latest_engine_checkpoint(ckpt_dir) -> Path | None:
 def run_engine(client, cfg, recipe: Recipe, feed, steps: int, *,
                budget_gib: float, seed: int = 11, recompute: bool = True,
                measured: bool = False,
+               profile: dict | None = None,
                log=print, log_every: int = 10,
                checkpoint_every: int | None = None,
                checkpoint_dir=None, keep_last: int = 3,
@@ -622,7 +623,12 @@ def run_engine(client, cfg, recipe: Recipe, feed, steps: int, *,
         res.meta["resumed_from"] = str(ck)
         log(f"[engine] resumed @ step {start_step} from {ck}")
     fetch = [f"loss_0_{r}" for r in range(R)]
+    prof_start = profile.get("start") if profile else None
+    prof_stop = profile.get("stop") if profile else None
     for step in range(start_step, steps):
+        if prof_start is not None and step == prof_start:
+            client.profiler_control("start")
+            log(f"[engine] profiler capture STARTED before step {step}")
         if step > 0:
             for r in range(R):
                 put_round(step, r)
@@ -655,6 +661,9 @@ def run_engine(client, cfg, recipe: Recipe, feed, steps: int, *,
                 f"{tokens_per_step(cfg) / dt:.0f} tok/s  "
                 f"eff {s_eff / dt / 1e12:.1f} "
                 f"hw {s_hw / dt / 1e12:.1f} TF/s")
+        if prof_stop is not None and step == prof_stop:
+            client.profiler_control("stop")
+            log(f"[engine] profiler capture STOPPED after step {step}")
         step_next = step + 1
         if checkpoint_every and step_next % checkpoint_every == 0 \
                 and checkpoint_dir is not None:

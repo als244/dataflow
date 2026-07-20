@@ -324,11 +324,10 @@ Gates, in order:
    (different plans, identical math) is the highest-leverage async check;
 2. `tests/dataflow/runtime/test_engine_stress.py` style poison-on-free +
    interleaving-stress runs;
-3. throughput: add presets, then run a sweep (`tools/bench_frontier.py
-   --presets <yours> --shapes oracle --run --out-dir
-   results/bench/<name>`) — shape selection, envelope legality, tables,
-   and per-cell provenance are the sweep's job, not yours. Full
-   protocol: `docs/benchmarking.md`.
+3. throughput: predict the geometry x budget grid
+   (`tools/predict_step.py`), then measure it for real
+   (`tools/measure_step.py` — prediction and warmed measurement side
+   by side per cell). Full protocol: `docs/benchmarking.md`.
 4. if the family added or changed KERNELS, bump `PROFILE_CACHE_REV`
    (`dataflow_training/run/profiling.py`) — stale cached task costs
    silently skew both sim and the planner's recompute choices.
@@ -613,10 +612,10 @@ The family test module's canonical ladder (copy the newest family's —
 Known name-couplings to check when the family's TASK/OBJECT NAMES
 differ (all fail loudly, none silently):
 
-- `tools/window_plans.py` `_TASK_RE`/`_OBJ_RE` — the seam analyzer
-  asserts full name coverage and raises on unknown ids (the tool's
-  CLI still keys on the retired bench_train config registry — its
-  regexes are the coupling to respect);
+- the FLOP walker (`dataflow_training/lowering/flops.py`) buckets
+  attention by task-group prefix (`CAUSAL_DENSE_PREFIXES`) — a new
+  causal-dense attention prefix must be registered there or its
+  backward keeps the as-executed factor in the effective count;
 - the drivers (`dataflow_training/run/driver.py`, `tools/train_solo.py`)
   read the `loss_{s}_{r}` / `tokens_{s}_{r}` / `targets_{s}_{r}`
   conventions (round data puts, loss fetches).

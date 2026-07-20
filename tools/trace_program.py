@@ -24,8 +24,8 @@ destination charge — the transfer-lane twin of a task reserve),
 transfer_enqueue / transfer_end, release, offload_*, pressure_evict,
 placement_escape.
 
-For a REAL-GPU trace of a training run, use tools/gap_analysis.py
-(trace.json) — that path fills real weights and measures real timings.
+For a REAL-GPU trace of a training run, use tools/trace_real_run.py —
+that path fills real weights and measures real timings.
 """
 from __future__ import annotations
 

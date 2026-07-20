@@ -1,141 +1,105 @@
-"""Run a training point under Nsight Systems with device metrics + NVTX.
+#!/usr/bin/env python
+"""nsys capture of a solo ENGINE run — the profiling rig's single-box
+entry point.
 
-Wraps the exact sweep pipeline (tools/bench_train.py) in `nsys profile` with:
+Wraps ``tools/train_solo.py engine`` in ``nsys profile`` with the
+fleet's canonical trace set and cudaProfilerApi capture range: the run
+brackets the requested step window via the daemon's ``profiler_control``
+verb (annotator start/stop -> cudaProfilerStart/Stop), so the report
+holds exactly those steps — warmed, no boot noise.
 
-- ``--trace=cuda,nvtx,osrt`` and ``--cuda-memory-usage=true``
-- ``--gpu-metrics-devices=all`` (SM occupancy/throughput/PCIe counters on
-  the timeline; needs profiling permission — see the hint printed on
-  failure, or pass --no-gpu-metrics)
-- NVTX ranges from the runtime's annotator abstraction
-  (``DATAFLOW_NVTX=1``): one range per task (task ids like
-  ``block_bwd_0_3_16``), one per transfer (``from_slow:A_0_3_16``), one per
-  optimizer step (``step:N``) — nsys's projection view attributes them onto
-  the streams that executed the work. The annotator is vendor-portable
-  (device/annotate.py): an AMD roctx implementation plugs into the same
-  three calls.
-- by default, capture is limited to the training steps
-  (``--capture-range=nvtx`` on the ``train_steps`` range), so planning /
-  profiling / setup do not bloat the report.
+    python tools/nsys_profile.py --preset gpt2_124m --ga-rounds 8 \
+        --batch 64 --data doc --budget 16 --slab 16 \
+        --steps 10 --start 5 --stop 8 --out gpt2_124m_ga8
 
-Profiles and PCIe measurements come from the disk caches, so the traced
-process spends its time in the part you care about.
-
-Usage:
-    python tools/nsys_profile.py                       # bs8/ga8 @ 24 GiB
-    python tools/nsys_profile.py --config 8b-s1k-bs2ga32 --budget 16
-    python tools/nsys_profile.py --capture full --stats
+writes results/pretrain/logs/<out>.nsys-rep. Extra train_solo engine
+flags append verbatim as trailing arguments.
 """
 from __future__ import annotations
 
 import argparse
-import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
+_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_ROOT))
 
-def build_nsys_cmd(args, report: Path) -> list[str]:
-    cmd = [
-        "nsys", "profile",
-        f"--output={report}",
-        "--force-overwrite=true",
-        "--trace=cuda,nvtx,osrt",
-        "--cuda-memory-usage=true",
-    ]
-    if args.gpu_metrics:
-        cmd += [
-            "--gpu-metrics-devices=all",
-            f"--gpu-metrics-frequency={args.gpu_metrics_frequency}",
-        ]
-    if args.capture == "steps":
-        # start at the runtime's train_steps NVTX range; stop when it pops.
-        # NSYS_NVTX_PROFILER_REGISTER_ONLY=0: we push plain (unregistered)
-        # NVTX strings; without this, the trigger silently never matches and
-        # nsys generates NO report.
-        cmd += [
-            "--capture-range=nvtx",
-            "--nvtx-capture=train_steps",
-            "--capture-range-end=stop",
-            "--env-var=NSYS_NVTX_PROFILER_REGISTER_ONLY=0",
-        ]
-    cmd += [
-        sys.executable, "tools/bench_train.py",
-        "--config", args.config,
-        "--device-gib", f"{args.budget:g}",
-        "--steps", str(args.steps),
-        "--recompute",
-        "--out", str(args.out / "run-artifacts"),
-    ]
-    if args.backing_gib:
-        cmd += ["--backing-gib", f"{args.backing_gib:g}"]
-    if args.annotated is not None:
-        cmd += ["--annotated", str(args.annotated)]
-    return cmd
+# the fleet's canonical trace set (distributed/hostops.py NSYS_TRACE):
+# nsys 2025.5 rejects a 'nccl' trace value — NCCL activity arrives via
+# cuda kernels + its NVTX ranges
+NSYS_TRACE = "cuda,nvtx,osrt,cublas,cudnn"
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="nsys report for one training point (device metrics + NVTX)"
-    )
-    parser.add_argument("--config", default="8b-s1k-bs8ga8")
-    parser.add_argument("--budget", type=float, default=24.0)
-    parser.add_argument("--steps", type=int, default=3)
-    parser.add_argument("--backing-gib", type=float, default=None,
-                        help="pinned-host cap in GiB; default None = unlimited, matching bench_train")
-    parser.add_argument("--out", type=Path, default=Path("artifacts/nsys"))
-    parser.add_argument("--capture", choices=["steps", "full"], default="steps",
-                        help="steps: only the training loop (default); "
-                             "full: the whole process incl. planning")
-    parser.add_argument("--no-gpu-metrics", dest="gpu_metrics", action="store_false",
-                        help="skip --gpu-metrics-devices (no perf-counter permission)")
-    parser.add_argument("--gpu-metrics-frequency", type=int, default=10000)
-    parser.add_argument("--stats", action="store_true",
-                        help="run `nsys stats` summaries after profiling")
-    parser.add_argument("--annotated", type=Path, default=None,
-                        help="profile an exact SAVED plan (passed through to "
-                             "bench_train --annotated; --config must match)")
-    args = parser.parse_args()
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--preset", default="l3_1b")
+    ap.add_argument("--steps", type=int, default=10)
+    ap.add_argument("--start", type=int, default=5,
+                    help="capture starts BEFORE this step")
+    ap.add_argument("--stop", type=int, default=8,
+                    help="capture stops AFTER this step")
+    ap.add_argument("--ga-rounds", type=int, default=None)
+    ap.add_argument("--batch", type=int, default=None)
+    ap.add_argument("--data", choices=["block", "doc"], default="block")
+    ap.add_argument("--opt", choices=["adamw", "muon"], default=None)
+    ap.add_argument("--budget", type=float, default=14.0)
+    ap.add_argument("--slab", type=float, default=16.0)
+    ap.add_argument("--out", default=None,
+                    help="report stem under results/pretrain/logs/ "
+                         "(default: <preset>)")
+    ap.add_argument("--nsys", default="nsys", help="nsys binary")
+    ap.add_argument("extra", nargs="*",
+                    help="extra train_solo engine flags, passed through")
+    args = ap.parse_args()
 
-    if shutil.which("nsys") is None:
-        sys.exit("nsys not found on PATH (install NVIDIA Nsight Systems)")
-    if not Path("tools/bench_train.py").exists():
-        sys.exit("run from the repository root")
+    if shutil.which(args.nsys) is None:
+        print(f"error: {args.nsys!r} not on PATH", file=sys.stderr)
+        return 2
+    if not 0 <= args.start <= args.stop < args.steps:
+        print(f"error: need 0 <= start <= stop < steps "
+              f"(got {args.start}/{args.stop}/{args.steps})",
+              file=sys.stderr)
+        return 2
 
-    args.out.mkdir(parents=True, exist_ok=True)
-    report = args.out / f"{args.config}-{args.budget:g}gib-{args.steps}steps"
-    cmd = build_nsys_cmd(args, report)
-    env = {**os.environ, "DATAFLOW_NVTX": "1"}
+    out_dir = _ROOT / "results" / "pretrain" / "logs"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out = out_dir / (args.out or args.preset)
+    run_json = out_dir / f"{out.name}_profile_run.json"
 
-    print("+", " ".join(cmd))
-    proc = subprocess.run(cmd, env=env)
-    if proc.returncode != 0:
-        if args.gpu_metrics:
-            print(
-                "\nnsys failed. If the error mentions GPU performance counter "
-                "permission (ERR_NVGPUCTRPERM), either rerun with "
-                "--no-gpu-metrics or enable counters for all users:\n"
-                "  echo 'options nvidia NVreg_RestrictProfilingToAdminUsers=0' "
-                "| sudo tee /etc/modprobe.d/nvidia-prof.conf && reboot",
-                file=sys.stderr,
-            )
-        sys.exit(proc.returncode)
+    train = [sys.executable, "-u", str(_ROOT / "tools" / "train_solo.py"),
+             "engine", "--preset", args.preset,
+             "--steps", str(args.steps),
+             "--budget", str(args.budget), "--slab", str(args.slab),
+             "--data", args.data,
+             "--profile",
+             "--profile-start-before-step", str(args.start),
+             "--profile-stop-after-step", str(args.stop),
+             "--out", str(run_json)]
+    if args.ga_rounds:
+        train += ["--ga-rounds", str(args.ga_rounds)]
+    if args.batch:
+        train += ["--batch", str(args.batch)]
+    if args.opt:
+        train += ["--opt", args.opt]
+    train += list(args.extra)
 
-    rep_file = Path(str(report) + ".nsys-rep")  # with_suffix mangles dotted budgets (23.5)
-    if not rep_file.exists():
-        sys.exit(
-            f"nsys exited 0 but {rep_file} was not generated — with "
-            f"--capture steps this means the train_steps NVTX range never "
-            f"triggered capture. Try --capture full to bisect."
-        )
-    print(f"\nreport: {rep_file}")
-    if args.stats:
-        subprocess.run([
-            "nsys", "stats",
-            "--report", "nvtx_sum,cuda_gpu_kern_sum,cuda_gpu_mem_time_sum",
-            str(rep_file),
-        ])
+    cmd = [args.nsys, "profile", f"--trace={NSYS_TRACE}",
+           "--capture-range=cudaProfilerApi", "--capture-range-end=stop",
+           "--gpu-metrics-devices=0",
+           "-o", str(out), "--force-overwrite", "true"] + train
+    print("[nsys_profile]", " ".join(cmd), flush=True)
+    rc = subprocess.run(cmd, cwd=_ROOT).returncode
+    rep = out.with_suffix(".nsys-rep")
+    if rc == 0 and rep.exists():
+        print(f"[nsys_profile] report -> {rep}")
+    else:
+        print(f"[nsys_profile] FAILED (rc {rc}); report "
+              f"{'present' if rep.exists() else 'missing'}",
+              file=sys.stderr)
+    return rc
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

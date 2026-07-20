@@ -97,7 +97,7 @@ stages, kernels) at the standard 16×4K run shape; other run shapes:
 Notes:
 - Aliases share the exact architecture shape of an earlier preset
   (e.g. Kimi K2.5/2.6/2.7 are shape-identical to K2; GLM 5.1 to 5).
-- `bench_train`/`bench_frontier` config names compose as
+- benchmark geometry composes as
   `{preset-prefix}-s{seq}k-bs{B}ga{G}` — see docs/benchmarking.md.
 - Correctness: `python tools/verify_family.py --family <name>`.
 

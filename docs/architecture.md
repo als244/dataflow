@@ -51,7 +51,7 @@ reference_models/            TRUTH — isolated pure-torch twins (repo root,
                              imports; the per-family equivalence bar)
 
 tools/                       CLIs over both packages (dataflowd, train_solo,
-tests/                       train_fleet, bench_frontier, verify_family, …);
+tests/                       train_fleet, measure_step, verify_family, …);
                              tests mirror the split (tests/dataflow/,
                              tests/dataflow_training/, tests/reference_models/)
 ```
@@ -121,7 +121,7 @@ reverse:
 - `dataflow.core.convert` — schema converters (`to_sim_chain`,
   `to_webapp_program`), lazily imported so `dataflow.core` stays
   dependency-free.
-- tools (`export_program`, `export_measured_run`, `trace_real_run`)
+- tools (`export_program`, `trace_real_run`)
   and the parity/convert tests import it directly (out of R4's scope).
 
 ## End-to-end flow
@@ -146,7 +146,7 @@ ShapedConfig (family + shapes)
 
 Drivers: `tools/train_solo.py` (single box, reference-vs-engine
 parity + scaling), `tools/train_fleet.py` (data-parallel fleet),
-`tools/bench_frontier.py` (throughput sweeps).
+`tools/predict_step.py` / `tools/measure_step.py` (simulated and measured throughput sweeps).
 
 ## Simulator semantics the runtime reproduces
 

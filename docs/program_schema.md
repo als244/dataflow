@@ -23,7 +23,7 @@ Field additions bump the schema version; don't hand-write JSON.
 | `backing_memory_capacity` | int | pinned-host budget in bytes |
 | `bandwidth_from_slow` / `bandwidth_to_slow` | float | bytes/s for the two transfer directions (planning + sim costs) |
 | `recompute_rewrites` | tuple[RecomputeRewrite] | optional declarations the recompute planner may exercise (training chains; empty for custom programs) |
-| `metadata` | dict | free-form provenance (lowering tag, measured-costs stamp, ...). Saved plans from `bench_train`/`gap_analysis` stamp their capacities here — `budget_gib` + `budget_semantics` (device envelope vs ledger), `planned_budget_gib` (the ledger the plan was fit to), `backing_plan_cap_gib` + `backing_cap_source` (flag vs auto-host), `placement` — so every plan is tied to the capacities it was planned for. |
+| `metadata` | dict | free-form provenance (lowering tag, measured-costs stamp, ...). Saved plans stamp their capacities here — `budget_gib` + `budget_semantics` (device envelope vs ledger), `planned_budget_gib` (the ledger the plan was fit to), `backing_plan_cap_gib` + `backing_cap_source` (flag vs auto-host), `placement` — so every plan is tied to the capacities it was planned for. |
 | `schema_version` | str | `"dataflow-rt/v1"` |
 
 ## TaskSpec

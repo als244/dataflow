@@ -260,9 +260,13 @@ def cmd_engine(args) -> int:
          f"tokens/step={cfg.seq_len * cfg.batch * cfg.grad_accum_rounds} "
          f"ckpt={args.checkpoint_every or 'off'}")
     with daemon_client(slab_gib=args.slab, log=_log) as client:
+        profile = None
+        if args.profile:
+            profile = {"start": args.profile_start_before_step,
+                       "stop": args.profile_stop_after_step}
         res = run_engine(client, cfg, recipe, feed, args.steps,
                          budget_gib=args.budget, seed=11, log=_log,
-                         measured=args.measured,
+                         measured=args.measured, profile=profile,
                          checkpoint_every=args.checkpoint_every,
                          checkpoint_dir=ck_dir, resume=args.resume)
     out = Path(args.out)
@@ -291,6 +295,12 @@ def main() -> int:
                         "8192-token round)")
     e.add_argument("--checkpoint-every", type=int, default=None)
     e.add_argument("--resume", action="store_true")
+    e.add_argument("--profile", action="store_true",
+                   help="bracket a step window with profiler_control "
+                        "(cudaProfilerStart/Stop) — run under "
+                        "tools/nsys_profile.py to capture it")
+    e.add_argument("--profile-start-before-step", type=int, default=3)
+    e.add_argument("--profile-stop-after-step", type=int, default=6)
     e.add_argument("--measured", action="store_true",
                    help="plan with PROFILED task costs (disk-cached) — the "
                         "[plan] line's prediction becomes the true-profiling "

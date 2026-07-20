@@ -171,6 +171,8 @@ def main() -> int:
 
     ap = argparse.ArgumentParser()
     ap.add_argument("--preset", default="l3_1b")
+    ap.add_argument("--plugin", action="append", default=None,
+                    help="external-family plugin module(s) to load")
     ap.add_argument("--opt", choices=["adamw", "muon"], default=None,
                     help="override the preset's opt_policy. Sizes O (and "
                          "so backing) correctly — muon matrices carry m "
@@ -222,6 +224,9 @@ def main() -> int:
                     help="single-point mode: most expensive tasks shown")
     args = ap.parse_args()
 
+    if args.plugin:
+        from dataflow_training.model_families.families import load_plugins
+        load_plugins(args.plugin)
     base = P.resolve_preset(args.preset)
     if args.opt:
         base = replace(base, opt_policy=args.opt)

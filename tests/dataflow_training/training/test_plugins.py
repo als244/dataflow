@@ -71,10 +71,13 @@ def test_explicit_plugin_load_end_to_end(tmp_path, monkeypatch):
         # the EXTERNAL family, not llama3
         assert F.resolve_family(cfg).name == "stubfam"
         assert fam.lower(cfg).task_by_id()
-        # the bench preset is registered the way bench_train merges it
+        # registered bench presets resolve by name everywhere the
+        # tools resolve builtin preset names
         from dataflow_training.run.bench_presets import EXTRA_CONFIGS
+        from dataflow_training.run.presets import resolve_preset
 
         assert type(EXTRA_CONFIGS["stubfam-tiny"]) is stub_plugin.ShapedStubConfig
+        assert resolve_preset("stubfam-tiny") is EXTRA_CONFIGS["stubfam-tiny"]
         # the structural contract validator accepts it
         assert F.validate_family("stubfam") == []
     finally:
