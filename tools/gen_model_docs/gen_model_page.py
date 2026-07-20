@@ -1,6 +1,6 @@
 """Generate ONE model reference page at a chosen run shape:
 
-    python tools/gen_model_page.py --preset glm52_mini \\
+    python tools/gen_model_docs/gen_model_page.py --preset glm52_mini \\
         --microbatch 8 --seq-len 8192 [--out-dir docs/models] [--family glm52]
 
 Writes `<out-dir>/<family>/<preset>_<bs>x<seq>.md` (e.g.

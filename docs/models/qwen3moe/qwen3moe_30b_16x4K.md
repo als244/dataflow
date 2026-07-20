@@ -1,6 +1,6 @@
 # qwen3moe / `qwen3moe_30b` @ 16x4K: tasks, objects, kernels
 
-GENERATED from `ShapedQwen3MoeConfig.qwen3moe_30b()` at run shape microbatch 16 × seq 4096 — regenerate with `python tools/gen_model_page.py --preset qwen3moe_30b --microbatch 16 --seq-len 4096`. All presets: [builtin_models.md](../../builtin_models.md); task-kind fleet index: [task_kinds.md](../../task_kinds.md).
+GENERATED from `ShapedQwen3MoeConfig.qwen3moe_30b()` at run shape microbatch 16 × seq 4096 — regenerate with `python tools/gen_model_docs/gen_model_page.py --preset qwen3moe_30b --microbatch 16 --seq-len 4096`. All presets: [builtin_models.md](../../builtin_models.md); task-kind fleet index: [task_kinds.md](../../task_kinds.md).
 
 Layer kinds (48 layers): `block block block block block block block block block block block block block block block block block block block block block block block block block block block block block block block block block block block block block block block block block block block block block block block block`
 

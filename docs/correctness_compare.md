@@ -29,7 +29,7 @@ Run in this order; each level sharpens the previous one.
    param/buffer (rel_l2 + cosine), and EVERY gradient in dW space
    (`grad:{name}` entries). dW space is the sharp instrument — see
    gotchas 1–2 for why params and updates are not.
-3. **Deep compare** (`tools/deep_compare.py`): forward divergence by
+3. **Deep compare** (`tools/verify/deep_compare.py`): forward divergence by
    depth with per-token hot-row decomposition; per-block gradient
    medians; MoE counts parity. Separates smooth precision drift from
    discrete relocations and localizes anomalies to a block.
@@ -241,7 +241,7 @@ probe fails it; a whole-entry envelope would have hidden it.
    load + byte-identity assert. The grad extraction reuses it as-is.
 3. Gates: family rows in the parity suite (uniform + ragged), per-field
    ladder entries, counts parity if MoE, freeze allowlists if phased.
-4. Run the deep treatment: full matrix row (`tools/sweep_ladder3.py`),
+4. Run the deep treatment: full matrix row (`tools/verify/sweep_ladder3.py`),
    then `deep_compare.py` both shapes, then `--isolate` any block whose
    kind is new. Compare against the reference table below; every excess
    over the floor must decompose into cataloged mechanisms (flips you

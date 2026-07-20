@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""REAL throughput sweeps — the measured twin of tools/predict_step.py.
+"""REAL throughput sweeps — the measured twin of tools/bench/predict_step.py.
 
 Same grid interface (T_round-speaking geometry, budgets, seq_lens); each
 cell RUNS the engine for --steps steps through one shared daemon
@@ -7,7 +7,7 @@ cell RUNS the engine for --steps steps through one shared daemon
 extents don't accumulate) and reports the warmed measurement next to
 the simulator's prediction for the same plan:
 
-    python tools/measure_step.py --preset gpt2_124m --hw 3090 \
+    python tools/bench/measure_step.py --preset gpt2_124m --hw 3090 \
         --t-rounds 8192,32768,65536 --tokens-step 524288 \
         --budgets 16,4 --steps 12 --data doc
 
@@ -26,7 +26,7 @@ import sys
 from dataclasses import replace
 from pathlib import Path
 
-_ROOT = Path(__file__).resolve().parents[1]
+_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_ROOT))
 
 WARMUP_STEPS = 3      # excluded from the measured tail

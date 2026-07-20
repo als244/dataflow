@@ -33,7 +33,7 @@ registration functions:
 - `validate_family("mymodel")` — structural contract check in seconds,
   no GPU math: presets exist, lowering runs and keeps the naming shape,
   the resolver covers every emitted task with a `.launch`
-  (`tools/verify_family.py` runs it as level 0).
+  (`tools/verify/verify_family.py` runs it as level 0).
 - Custom OPTIMIZERS register through
   `dataflow_training.blocks.optim.register_optimizer` (state slots +
   step rule; per-field assignment via the config's `opt_policy` —
@@ -94,8 +94,8 @@ packed-byte truth + seeded init (`lowering.emit` — `FamilyLayouts`,
    `measure_step.py` — and the DAEMON takes it too:
 
    ```bash
-   python tools/verify_family.py --plugin mypkg.dataflow_plugin --family mymodel ...
-   python tools/dataflowd.py start --plugin mypkg.dataflow_plugin ...
+   python tools/verify/verify_family.py --plugin mypkg.dataflow_plugin --family mymodel ...
+   python tools/train/dataflowd.py start --plugin mypkg.dataflow_plugin ...
    ```
 
    A running daemon can also load one at runtime:
@@ -123,13 +123,13 @@ PY
 # 1. correctness: per-op, per-task (fwd/recompute/bwd), per-model —
 #    your test module follows the ladder canon (extending.md §8);
 #    verify_family runs it + the contract check + the coverage audit
-python tools/verify_family.py --plugin mypkg.dataflow_plugin \
+python tools/verify/verify_family.py --plugin mypkg.dataflow_plugin \
     --family mymodel --module mypkg/tests/test_mymodel.py
 
 # 2. throughput sweeps (register_bench_config names resolve as --preset)
-python tools/predict_step.py --plugin mypkg.dataflow_plugin \
+python tools/bench/predict_step.py --plugin mypkg.dataflow_plugin \
     --preset mymodel-mini --budgets 12,16,20
-python tools/measure_step.py --plugin mypkg.dataflow_plugin \
+python tools/bench/measure_step.py --plugin mypkg.dataflow_plugin \
     --preset mymodel-mini --budgets 12,16 --steps 12
 ```
 

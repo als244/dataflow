@@ -1,6 +1,6 @@
 # dsv3 / `kimi_k26` @ 16x4K: tasks, objects, kernels
 
-GENERATED from `ShapedDsv3Config.kimi_k26()` at run shape microbatch 16 × seq 4096 — regenerate with `python tools/gen_model_page.py --preset kimi_k26 --microbatch 16 --seq-len 4096`. All presets: [builtin_models.md](../../builtin_models.md); task-kind fleet index: [task_kinds.md](../../task_kinds.md).
+GENERATED from `ShapedDsv3Config.kimi_k26()` at run shape microbatch 16 × seq 4096 — regenerate with `python tools/gen_model_docs/gen_model_page.py --preset kimi_k26 --microbatch 16 --seq-len 4096`. All presets: [builtin_models.md](../../builtin_models.md); task-kind fleet index: [task_kinds.md](../../task_kinds.md).
 
 Layer kinds (61 layers): `dense moe moe moe moe moe moe moe moe moe moe moe moe moe moe moe moe moe moe moe moe moe moe moe moe moe moe moe moe moe moe moe moe moe moe moe moe moe moe moe moe moe moe moe moe moe moe moe moe moe moe moe moe moe moe moe moe moe moe moe moe`
 

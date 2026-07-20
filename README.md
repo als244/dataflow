@@ -33,25 +33,25 @@ families and preset configs: [builtin_models](docs/builtin_models.md).
 # 1. Predict: simulated sweep over geometry x memory budgets — per cell
 #    s/step, tok/s, effective/hardware TFLOPs/s, fast/backing memory
 #    peaks, PCIe traffic + link %, recompute/idle %
-python tools/predict_step.py --preset gpt2_124m --hw 3090 \
+python tools/bench/predict_step.py --preset gpt2_124m --hw 3090 \
     --t-rounds 8192,32768,65536 --tokens-step 524288 --budgets 16,8,4,2
 
 # 2. Measure: the same grid, each cell RUN on the real engine — the
 #    warmed measurement lands beside the prediction for that cell's plan
-python tools/measure_step.py --preset gpt2_124m \
+python tools/bench/measure_step.py --preset gpt2_124m \
     --t-rounds 8192,65536 --tokens-step 524288 --budgets 16,4 --steps 12
 
 # 3. Profile: the same run under Nsight Systems, capture bracketed to
 #    exact warmed steps via the daemon's profiler_control verb
-python tools/nsys_profile.py --preset gpt2_124m --steps 10 --start 5 --stop 8
+python tools/bench/nsys_profile.py --preset gpt2_124m --steps 10 --start 5 --stop 8
 ```
 
 Everything is inspectable in the
 [webapp simulator](https://dataflowsim.sunshein.net/):
-`tools/export_program.py` writes any preset's exact program, annotated
+`tools/export/export_program.py` writes any preset's exact program, annotated
 plan, and predicted timeline as uploadable files — the simulator's
 expectations for that plan, priced from profiled/estimated task costs.
-For the true timeline of a real run, `tools/trace_real_run.py` drives a
+For the true timeline of a real run, `tools/export/trace_real_run.py` drives a
 few real steps through the daemon and emits the measured event log next
 to the sim's prediction; the webapp renders both in the same panels and
 diffs them, which is exactly how the sim-vs-real fidelity gap is
@@ -60,12 +60,12 @@ inspected (full guide: [docs/exporting_runs.md](docs/exporting_runs.md)).
 ### Running training
 
 Execution goes through a persistent engine-service daemon
-(`tools/dataflowd.py`, [docs/engine_service.md](docs/engine_service.md))
+(`tools/train/dataflowd.py`, [docs/engine_service.md](docs/engine_service.md))
 that owns the GPU and pinned host memory; training state lives in its
-object store between steps. `tools/train_solo.py` drives single-GPU
+object store between steps. `tools/train/train_solo.py` drives single-GPU
 pretraining (engine and pure-torch reference legs, doc-aware fineweb
 feed, checkpoints/resume, AdamW or Muon per-field optimizer policy —
-walkthrough: [docs/usage.md](docs/usage.md)), and `tools/train_fleet.py`
+walkthrough: [docs/usage.md](docs/usage.md)), and `tools/train/train_fleet.py`
 drives data-parallel fleets (weighted round distribution, ZeRO-1
 optimizer sharding, fleet checkpoints —
 [docs/distributed_training.md](docs/distributed_training.md)).
@@ -173,7 +173,7 @@ task kinds per distinct layer type):
 
 Correctness of every family is pinned against isolated plain-autograd
 reference models at three levels (per op, per task, per model step);
-`python tools/verify_family.py --family <name>` runs the whole
+`python tools/verify/verify_family.py --family <name>` runs the whole
 ladder. 
 
 

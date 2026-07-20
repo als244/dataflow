@@ -1,7 +1,7 @@
 """Enumerate builtin model families and presets as grouped markdown
 tables — the generator behind docs/builtin_models.md.
 
-    python tools/list_models.py > docs/builtin_models.md
+    python tools/gen_model_docs/list_models.py > docs/builtin_models.md
 
 One section per family; each family's preset table carries, beyond the
 common columns, that family's UNIQUE configuration axes (each family is
@@ -20,7 +20,7 @@ from dataflow_training.model_families import families as F
 
 HEADER = """# Builtin model families and presets
 
-GENERATED — regenerate with `python tools/list_models.py >
+GENERATED — regenerate with `python tools/gen_model_docs/list_models.py >
 docs/builtin_models.md` after adding a family or preset. Families
 register in `dataflow_training/model_families/families.py`; presets are classmethods on each
 family's Shaped config (external families: docs/extending_external.md).
@@ -34,7 +34,7 @@ One section per family; the extra columns in each table are that
 family's OWN configuration axes (fields no other family shares).
 Each preset name links to its generated deep reference (objects,
 stages, kernels) at the standard 16×4K run shape; other run shapes:
-`tools/gen_model_page.py`. Index: [models/](models/README.md).
+`tools/gen_model_docs/gen_model_page.py`. Index: [models/](models/README.md).
 """
 
 # run-shape knobs, policies, and the cross-family commons — never
@@ -158,7 +158,7 @@ Notes:
 - every preset name in this table resolves as `--preset` in the tools
   (predict_step, measure_step, nsys_profile, train_solo, ...); names
   shared by several families qualify as `family:preset` (`gpt2:tiny`).
-- Correctness: `python tools/verify_family.py --family <name>`.
+- Correctness: `python tools/verify/verify_family.py --family <name>`.
 """)
     print("\n".join(out))
 

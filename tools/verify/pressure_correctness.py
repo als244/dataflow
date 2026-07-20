@@ -7,7 +7,7 @@ against the golden eager-torch trajectory. The point: memory pressure
 (offload/prefetch/recompute churn) must not perturb the math at all —
 errors stay at bf16 noise regardless of budget.
 
-Usage: python tools/pressure_correctness.py [--out artifacts/correctness.json]
+Usage: python tools/verify/pressure_correctness.py [--out artifacts/correctness.json]
 """
 from __future__ import annotations
 

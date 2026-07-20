@@ -101,13 +101,13 @@ def read_pidfile(pidfile):
 
 
 def test_daemonize_detach_and_group_kill(tmp_path):
-    """Launch a process tree via tools/daemonize.py: the launcher must
+    """Launch a process tree via tools/train/daemonize.py: the launcher must
     return immediately with the daemon pid, the daemon must be a
     process-group leader in its own session with stdio detached, and
     one signal to the pgid must take down the whole tree."""
     pidfile = str(tmp_path / "d.pid")
     logfile = str(tmp_path / "d.log")
-    script = str(repo_root() / "tools" / "daemonize.py")
+    script = str(repo_root() / "tools" / "train" / "daemonize.py")
     t0 = time.monotonic()
     out = subprocess.run(
         [sys.executable, script, "--pidfile", pidfile,

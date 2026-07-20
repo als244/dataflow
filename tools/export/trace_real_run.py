@@ -17,7 +17,7 @@ and writes under --out:
 
 plus a one-line real-vs-sim parity summary (task coverage + makespan).
 
-    python tools/trace_real_run.py --preset smoke --steps 3 --out examples/
+    python tools/export/trace_real_run.py --preset smoke --steps 3 --out examples/
 """
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ import json
 import sys
 from pathlib import Path
 
-_ROOT = Path(__file__).resolve().parents[1]
+_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_ROOT))
 
 

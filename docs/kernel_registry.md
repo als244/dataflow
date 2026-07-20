@@ -1,6 +1,6 @@
 # Kernel registry
 
-GENERATED — regenerate with `python tools/list_kernels.py >
+GENERATED — regenerate with `python tools/gen_model_docs/list_kernels.py >
 docs/kernel_registry.md` after registering ops or implementations.
 The registry (`dataflow_training/kernels/registry.py`) selects, per op, the
 highest-priority implementation whose `requires(caps)` passes on this

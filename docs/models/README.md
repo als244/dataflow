@@ -1,6 +1,6 @@
 # Model references — one page per (family, preset)
 
-GENERATED — `python tools/gen_model_docs.py` regenerates everything (`--family X [--preset P]` narrows; `--no-record` skips kernel tracing on CPU-only machines). Default pages use the standard documentation run shape (microbatch 16 × seq 4096 — the `_16x4K` filename suffix); pages at other shapes: `tools/gen_model_page.py`. New families — builtin or plugin — appear automatically.
+GENERATED — `python tools/gen_model_docs/gen_model_docs.py` regenerates everything (`--family X [--preset P]` narrows; `--no-record` skips kernel tracing on CPU-only machines). Default pages use the standard documentation run shape (microbatch 16 × seq 4096 — the `_16x4K` filename suffix); pages at other shapes: `tools/gen_model_docs/gen_model_page.py`. New families — builtin or plugin — appear automatically.
 
 - **gpt2**: [gpt2_124m](gpt2/gpt2_124m_16x4K.md) · [tiny](gpt2/tiny_16x4K.md) · [tiny_nobias](gpt2/tiny_nobias_16x4K.md) · [tiny_tied](gpt2/tiny_tied_16x4K.md)
 - **llama3**: [llama3_8b](llama3/llama3_8b_16x4K.md) · [tiny](llama3/tiny_16x4K.md)

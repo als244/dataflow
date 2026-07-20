@@ -153,9 +153,9 @@ ShapedConfig (family + shapes)
   → trace / report                  real + wall tok/s vs sim; webapp exports
 ```
 
-Drivers: `tools/train_solo.py` (single box, reference-vs-engine
-parity + scaling), `tools/train_fleet.py` (data-parallel fleet),
-`tools/predict_step.py` / `tools/measure_step.py` (simulated and measured throughput sweeps).
+Drivers: `tools/train/train_solo.py` (single box, reference-vs-engine
+parity + scaling), `tools/train/train_fleet.py` (data-parallel fleet),
+`tools/bench/predict_step.py` / `tools/bench/measure_step.py` (simulated and measured throughput sweeps).
 
 ## Simulator semantics the runtime reproduces
 
@@ -181,10 +181,10 @@ Every layer sits behind a standing gate:
 - engine-vs-sim parity on the fake backend, exact
   (`tests/dataflow/runtime/test_parity_vs_sim.py`);
 - real-GPU synthetic execution vs the simulator's prediction
-  (`tools/engine_gate.py`);
+  (`tools/verify/engine_gate.py`);
 - per-op / per-block / per-model correctness ladders
   (`tests/dataflow_training/modules/`, `tests/dataflow_training/models/`;
-  `tools/verify_family.py` audits the canon per family) against the
+  `tools/verify/verify_family.py` audits the canon per family) against the
   isolated twins in `reference_models/`
   ([correctness_compare.md](correctness_compare.md));
 - engine stress — poison-on-free, interleaving, measured-cost replan

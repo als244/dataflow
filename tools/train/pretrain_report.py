@@ -13,7 +13,7 @@ import statistics
 import sys
 from pathlib import Path
 
-_ROOT = Path(__file__).resolve().parents[1]
+_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_ROOT))
 
 from dataflow_training.run import parity, scaling
@@ -701,7 +701,7 @@ def gpt2_optimizer_section(R: dict) -> str | None:
             "non-matrix params (embeddings, head, norms, biases) stay "
             "on adamw at the shared lr in both muon legs. Validation "
             "is 10.5M held-out fineweb-val tokens "
-            "(tools/eval_checkpoint.py). Context, not a comparison "
+            "(tools/train/train_solo.py eval). Context, not a comparison "
             "claim: llm.c's 124M reaches ~3.29 val at 10B tokens — "
             "twice this study's 5.24B token budget.</p>")
     return (f"<section><h2>Optimizer study: adamw vs muon at 512K "

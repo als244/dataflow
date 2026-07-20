@@ -9,9 +9,9 @@ examples/):
     <name>.summary.json            makespan / peak-fast / chosen recompute levels
 
 Usage:
-    python tools/export_program.py --preset llama3:tiny --fast-gib 0.0006
-    python tools/export_program.py --preset llama3_8b --fast-gib 16 --recompute
-    python tools/export_program.py --preset gpt2_124m --fast-gib 4 --recompute
+    python tools/export/export_program.py --preset llama3:tiny --fast-gib 0.0006
+    python tools/export/export_program.py --preset llama3_8b --fast-gib 16 --recompute
+    python tools/export/export_program.py --preset gpt2_124m --fast-gib 4 --recompute
 """
 from __future__ import annotations
 

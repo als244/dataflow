@@ -1,9 +1,9 @@
 """Engine service daemon CLI: start / status / stop.
 
-    python tools/dataflowd.py start --socket ~/.dataflow/dataflowd.sock \
+    python tools/train/dataflowd.py start --socket ~/.dataflow/dataflowd.sock \
         --slab-gib auto --device 0
-    python tools/dataflowd.py status
-    python tools/dataflowd.py stop
+    python tools/train/dataflowd.py status
+    python tools/train/dataflowd.py stop
 
 `start` runs in the foreground (use systemd/tmux/nohup for
 backgrounding); --fake boots without CUDA for tests/dev.
@@ -15,7 +15,7 @@ import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from dataflow.service import DEFAULT_SOCKET, EngineClient, EngineConfig, Server
 

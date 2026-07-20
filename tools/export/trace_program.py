@@ -1,7 +1,7 @@
 """Trace an arbitrary dataflow program's runtime event timeline.
 
-    python tools/trace_program.py --program plan.annotated.json
-    python tools/trace_program.py --program cells/<cell>/plan.json \\
+    python tools/export/trace_program.py --program plan.annotated.json
+    python tools/export/trace_program.py --program cells/<cell>/plan.json \\
         --kinds reserve,transfer_reserve,pressure_evict --out events.jsonl
 
 Executes the program on the FAKE backend — no GPU, no kernels, no
@@ -24,7 +24,7 @@ destination charge — the transfer-lane twin of a task reserve),
 transfer_enqueue / transfer_end, release, offload_*, pressure_evict,
 placement_escape.
 
-For a REAL-GPU trace of a training run, use tools/trace_real_run.py —
+For a REAL-GPU trace of a training run, use tools/export/trace_real_run.py —
 that path fills real weights and measures real timings.
 """
 from __future__ import annotations

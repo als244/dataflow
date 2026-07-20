@@ -20,3 +20,6 @@ datasets/
 
 # per-setup fleet topology (see topology.example.toml)
 topology.toml
+
+# internal kernel microbenches (maintainer-local, not part of the repo surface)
+tools/bench/internal/

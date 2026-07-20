@@ -1,6 +1,6 @@
 # llama3 / `llama3_8b` @ 16x4K: tasks, objects, kernels
 
-GENERATED from `ShapedLlamaConfig.llama3_8b()` at run shape microbatch 16 × seq 4096 — regenerate with `python tools/gen_model_page.py --preset llama3_8b --microbatch 16 --seq-len 4096`. All presets: [builtin_models.md](../../builtin_models.md); task-kind fleet index: [task_kinds.md](../../task_kinds.md).
+GENERATED from `ShapedLlamaConfig.llama3_8b()` at run shape microbatch 16 × seq 4096 — regenerate with `python tools/gen_model_docs/gen_model_page.py --preset llama3_8b --microbatch 16 --seq-len 4096`. All presets: [builtin_models.md](../../builtin_models.md); task-kind fleet index: [task_kinds.md](../../task_kinds.md).
 
 Layer kinds (32 layers): `block block block block block block block block block block block block block block block block block block block block block block block block block block block block block block block block`
 

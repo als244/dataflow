@@ -2,7 +2,7 @@
 daemons launched from topology.toml (skipped when absent or without a
 remote host), warm-up dance, weighted 6:2 round split, 12 lockstep DP
 steps; asserts the loss drops and the curve stays finite. The 1B
-flagship runs the same code path via tools/train_fleet.py."""
+flagship runs the same code path via tools/train/train_fleet.py."""
 import math
 
 import pytest

@@ -1,6 +1,6 @@
 # olmoe / `olmoe_7b` @ 16x4K: tasks, objects, kernels
 
-GENERATED from `ShapedOlmoeConfig.olmoe_7b()` at run shape microbatch 16 × seq 4096 — regenerate with `python tools/gen_model_page.py --preset olmoe_7b --microbatch 16 --seq-len 4096`. All presets: [builtin_models.md](../../builtin_models.md); task-kind fleet index: [task_kinds.md](../../task_kinds.md).
+GENERATED from `ShapedOlmoeConfig.olmoe_7b()` at run shape microbatch 16 × seq 4096 — regenerate with `python tools/gen_model_docs/gen_model_page.py --preset olmoe_7b --microbatch 16 --seq-len 4096`. All presets: [builtin_models.md](../../builtin_models.md); task-kind fleet index: [task_kinds.md](../../task_kinds.md).
 
 Layer kinds (16 layers): `block block block block block block block block block block block block block block block block`
 

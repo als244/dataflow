@@ -16,7 +16,7 @@ import traceback
 from dataclasses import replace
 from pathlib import Path
 
-_ROOT = Path(__file__).resolve().parents[1]
+_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_ROOT))
 
 FAMILIES = ("gpt2", "llama3", "qwen3", "olmoe", "dsv3", "dsv32", "glm52",

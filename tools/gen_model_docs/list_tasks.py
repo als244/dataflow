@@ -1,7 +1,7 @@
 """Enumerate every family's task kinds (compute keys -> executables)
 as a markdown table — the generator behind docs/task_kinds.md.
 
-    python tools/list_tasks.py > docs/task_kinds.md
+    python tools/gen_model_docs/list_tasks.py > docs/task_kinds.md
 
 For each builtin family: lower the tiny preset, collect the unique
 compute_block_keys the chain emits (forward/recompute/backward per
@@ -21,7 +21,7 @@ from dataflow_training.model_families import families as F
 
 HEADER = """# Task kinds: compute keys and executables
 
-GENERATED — regenerate with `python tools/list_tasks.py >
+GENERATED — regenerate with `python tools/gen_model_docs/list_tasks.py >
 docs/task_kinds.md` after adding a family or layer kind. Dispatch is
 the resolver ABI (`resolver(task) -> executable.launch(ctx)`, keyed on
 `task.compute_block_key`) — family-scoped by design; this table is the

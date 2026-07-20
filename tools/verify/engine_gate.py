@@ -7,9 +7,9 @@ physically true) -> compare makespan/intervals, quantify host-side overhead
 (GPU idle gaps between consecutive compute tasks), and measure overlap.
 
 Usage:
-    python tools/engine_gate.py --config small --fast-gib 2
-    python tools/engine_gate.py --config 8b --fast-gib 16 [--recompute]
-    python tools/engine_gate.py ... --completion-mode hostfn   # compare token modes
+    python tools/verify/engine_gate.py --config small --fast-gib 2
+    python tools/verify/engine_gate.py --config 8b --fast-gib 16 [--recompute]
+    python tools/verify/engine_gate.py ... --completion-mode hostfn   # compare token modes
 """
 from __future__ import annotations
 

@@ -6,7 +6,7 @@ on THIS box before any transport code exists —
 2. ibv_reg_mr ACCEPTS cudaHostAlloc'd memory (ctypes libibverbs on a
    real pinned buffer) and reports registration throughput.
 
-Usage: python tools/rdma_preflight.py [--device mlx5_0] [--mib 512]
+Usage: python tools/verify/rdma_preflight.py [--device mlx5_0] [--mib 512]
 """
 import argparse
 import ctypes

@@ -1,20 +1,20 @@
 # Exporting measured runs (real timeline → webapp)
 
 One tool turns a real training run into inspectable artifacts:
-`tools/trace_real_run.py` drives a few REAL steps through the engine
+`tools/export/trace_real_run.py` drives a few REAL steps through the engine
 daemon and writes the full webapp bundle, measured vs simulated side
 by side — a single uploadable file the
 [webapp simulator](https://dataflowsim.sunshein.net/) renders as a
 TRUE event timeline diffed against the simulator's prediction.
 
 (Naming note: exporting *programs* needs no run —
-`tools/export_program.py` lowers any preset CPU-only and writes its
+`tools/export/export_program.py` lowers any preset CPU-only and writes its
 program/annotated/summary JSONs plus the webapp upload
 (`<stem>.webapp.json`), priced from roofline costs; `save_program`
 serializes any Program — see [program_schema.md](program_schema.md).
 This doc is about exporting measured RUNS.)
 
-## `tools/trace_real_run.py` — real steps → measured bundle
+## `tools/export/trace_real_run.py` — real steps → measured bundle
 
 Every engine run already records a RunTrace; the daemon's run verb
 returns it on request. The tool runs `--steps` steps of a preset on a
@@ -34,7 +34,7 @@ plus a one-line real-vs-sim parity summary (task coverage +
 makespan).
 
 ```bash
-python tools/trace_real_run.py --preset smoke --steps 3 --out examples/
+python tools/export/trace_real_run.py --preset smoke --steps 3 --out examples/
 ```
 
 | flag | meaning |
@@ -52,7 +52,7 @@ trace, utilization summary), side by side with the sim's expectation —
 this is the primary instrument for inspecting the sim-vs-real
 fidelity gap. For a capture of what the GPU actually executed
 (kernels, streams, PCIe) rather than the engine's event log, escalate
-to `tools/nsys_profile.py` ([benchmarking.md](benchmarking.md)).
+to `tools/bench/nsys_profile.py` ([benchmarking.md](benchmarking.md)).
 
 ## The three artifact kinds, disambiguated
 

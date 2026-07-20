@@ -107,7 +107,7 @@ def launch_daemon(host: HostSpec, *, lane: str = "fleet",
                   slab_gib: float, peer_port: int | None = None,
                   extra_flags: str = "", wrap: str = "",
                   extra_env: dict | None = None) -> dict:
-    """Start the host's dataflowd detached (tools/daemonize.py). The
+    """Start the host's dataflowd detached (tools/train/daemonize.py). The
     optional ``wrap`` prefix (e.g. nsys_command(...)) runs INSIDE the
     daemonized session, so profiler helpers can never hold the
     launching ssh session open. Returns the daemon's runtime paths."""
@@ -117,7 +117,7 @@ def launch_daemon(host: HostSpec, *, lane: str = "fleet",
     # env(1) rather than shell VAR=... syntax: the daemonizer execs
     # argv directly, so assignments would be taken as the program
     inner = (f"{env_prefix}{wrap} {host.python} -u "
-             f"{host.repo}/tools/dataflowd.py "
+             f"{host.repo}/tools/train/dataflowd.py "
              f"start --socket {paths['sock']} --slab-gib {slab_gib} "
              f"--device {host.device} "
              f"--peer-name {host.name} "
@@ -125,7 +125,7 @@ def launch_daemon(host: HostSpec, *, lane: str = "fleet",
              f"{extra_flags}").strip()
     run_on(host,
            f"rm -f {paths['sock']} {paths['log']}; "
-           f"{host.python} {host.repo}/tools/daemonize.py "
+           f"{host.python} {host.repo}/tools/train/daemonize.py "
            f"--pidfile {paths['pid']} --logfile {paths['log']} "
            f"--cwd {host.repo} -- {inner}",
            timeout=60.0)

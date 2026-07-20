@@ -1,6 +1,6 @@
 # Task kinds: compute keys and executables
 
-GENERATED — regenerate with `python tools/list_tasks.py >
+GENERATED — regenerate with `python tools/gen_model_docs/list_tasks.py >
 docs/task_kinds.md` after adding a family or layer kind. Dispatch is
 the resolver ABI (`resolver(task) -> executable.launch(ctx)`, keyed on
 `task.compute_block_key`) — family-scoped by design; this table is the

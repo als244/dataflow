@@ -21,8 +21,8 @@ What the canonical module covers, per docs/extending.md:
   determinism twice (byte-compare).
 
 Usage:
-    python tools/verify_family.py --family glm52
-    python tools/verify_family.py --list
+    python tools/verify/verify_family.py --family glm52
+    python tools/verify/verify_family.py --list
 """
 from __future__ import annotations
 

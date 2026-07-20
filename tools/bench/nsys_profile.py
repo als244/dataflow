@@ -2,13 +2,13 @@
 """nsys capture of a solo ENGINE run — the profiling rig's single-box
 entry point.
 
-Wraps ``tools/train_solo.py engine`` in ``nsys profile`` with the
+Wraps ``tools/train/train_solo.py engine`` in ``nsys profile`` with the
 fleet's canonical trace set and cudaProfilerApi capture range: the run
 brackets the requested step window via the daemon's ``profiler_control``
 verb (annotator start/stop -> cudaProfilerStart/Stop), so the report
 holds exactly those steps — warmed, no boot noise.
 
-    python tools/nsys_profile.py --preset gpt2_124m --ga-rounds 8 \
+    python tools/bench/nsys_profile.py --preset gpt2_124m --ga-rounds 8 \
         --batch 64 --data doc --budget 16 --slab 16 \
         --steps 10 --start 5 --stop 8 --out gpt2_124m_ga8
 
@@ -23,7 +23,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-_ROOT = Path(__file__).resolve().parents[1]
+_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_ROOT))
 
 # the fleet's canonical trace set (distributed/hostops.py NSYS_TRACE):
@@ -68,7 +68,7 @@ def main() -> int:
     out = out_dir / (args.out or args.preset)
     run_json = out_dir / f"{out.name}_profile_run.json"
 
-    train = [sys.executable, "-u", str(_ROOT / "tools" / "train_solo.py"),
+    train = [sys.executable, "-u", str(_ROOT / "tools" / "train" / "train_solo.py"),
              "engine", "--preset", args.preset,
              "--steps", str(args.steps),
              "--budget", str(args.budget), "--slab", str(args.slab),

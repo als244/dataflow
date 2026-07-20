@@ -28,7 +28,7 @@ A program registers with a `resolver_spec` dict. The engine
 - `register_program_resolver(kind, build)` — workloads call this at
   import time. The daemon default-loads
   `dataflow_training.register.register_all` (which registers the one
-  builtin kind, `"model_family"`); `tools/dataflowd.py
+  builtin kind, `"model_family"`); `tools/train/dataflowd.py
   --no-default-workloads` boots a bare engine, and `--plugin` /
   the `load_plugin` verb import modules that register more kinds.
 - `lookup_resolver(spec)` — resolves `spec["kind"]` to its build and

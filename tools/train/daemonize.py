@@ -2,7 +2,7 @@
 with no ties to the launching session, plus a pidfile handle for
 clean teardown. Pure stdlib — portable to any Linux box (no systemd).
 
-    python tools/daemonize.py --pidfile P --logfile L [--cwd DIR] -- CMD ARGS...
+    python tools/train/daemonize.py --pidfile P --logfile L [--cwd DIR] -- CMD ARGS...
 
 Prints the daemon pid on stdout and exits once the daemon is exec'd.
 The daemon runs in its own session with stdio on /dev/null + the

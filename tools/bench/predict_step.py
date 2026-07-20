@@ -4,14 +4,14 @@
 
 Single point:
 
-    python tools/predict_step.py --preset gpt2_124m --ga-rounds 64 \
+    python tools/bench/predict_step.py --preset gpt2_124m --ga-rounds 64 \
         --budget 14 --hw 3090 --steps 10000
 
 Sweep (a table row per budget x geometry combination; geometry speaks
 T_round — the round token budget — with ga derived from --tokens-step;
 "batch" is internal arithmetic under varlen packing, never an input):
 
-    python tools/predict_step.py --preset gpt2_124m --hw 3090 \
+    python tools/bench/predict_step.py --preset gpt2_124m --hw 3090 \
         --budgets 16,8,4,2 --t-rounds 8192,32768,65536 \
         --tokens-step 524288 --measured
 
@@ -33,7 +33,7 @@ from dataclasses import replace
 from functools import partial
 from pathlib import Path
 
-_ROOT = Path(__file__).resolve().parents[1]
+_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_ROOT))
 
 from dataflow_training.lowering.shaped_program import ShapedHardware

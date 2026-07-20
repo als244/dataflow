@@ -2,9 +2,15 @@
 """Pretraining orchestration: reference-vs-engine parity + scaling runs.
 
 Subcommands:
-  smoke    tiny real-vocab model, reference vs service engine — the infra gate
-  parity   one preset, reference + engine at N device budgets -> curves + report
-  scaling  the ladder, one backend/budget -> loss curves for the scaling study
+  engine     engine-only long run (checkpoints/resume, doc-aware feed, profile)
+  reference  pure-torch twin long run (same recipe/feed conventions)
+  smoke      tiny real-vocab model, reference vs service engine — the infra gate
+  parity     one preset, reference + engine at N device budgets -> curves + report
+  scaling    the ladder, one backend/budget -> loss curves for the scaling study
+  peek       read an in-flight run's loss curve from its newest checkpoint
+
+(`tools/train/eval_checkpoint.py` computes a checkpoint's fineweb-VAL
+loss — the nanogpt-comparable axis.)
 
 All backends share the deterministic fineweb feed, the cosine recipe, and a
 byte-identical seeded init (the reference bridges the engine's packed bytes).
@@ -17,7 +23,7 @@ import sys
 import time
 from pathlib import Path
 
-_ROOT = Path(__file__).resolve().parents[1]
+_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_ROOT))
 
 from dataflow_training.run import parity, presets as P
@@ -279,6 +285,50 @@ def cmd_engine(args) -> int:
     return 0
 
 
+CKPTS = _ROOT / "results" / "pretrain" / "checkpoints"
+
+
+def newest_checkpoint(run: str, step: int | None):
+    """The run's checkpoint dir at ``step`` (or newest complete), or None."""
+    run_dir = CKPTS / run
+    if step is not None:
+        ck = run_dir / f"step_{step:06d}"
+        return ck if (ck / "manifest.json").is_file() else None
+    manifests = sorted(run_dir.glob("step_*/manifest.json"))
+    return manifests[-1].parent if manifests else None
+
+
+def cmd_peek(args) -> int:
+    """Newest checkpoint's embedded loss curve -> summary + partial json."""
+    import json
+
+    ck = newest_checkpoint(args.run, None)
+    if ck is None:
+        print(f"no complete checkpoints under {CKPTS / args.run}",
+              file=sys.stderr)
+        return 1
+    manifest = json.loads((ck / "manifest.json").read_text())
+    meta = manifest.get("client_meta", {})
+    losses = [float(x) for x in meta.get("losses", [])]
+    if not losses:
+        print(f"{ck} carries no loss curve", file=sys.stderr)
+        return 1
+    ema_v = losses[0]
+    for x in losses:
+        ema_v = args.ema * ema_v + (1 - args.ema) * x
+    out = _ROOT / "results" / "pretrain" / f"{args.run}_partial.json"
+    out.write_text(json.dumps({
+        "backend": "engine", "partial_through_step": int(meta["step"]),
+        "losses": losses, "meta": {"source": str(ck / "manifest.json")},
+    }, indent=2))
+    print(f"{args.run}: {len(losses)} steps recorded "
+          f"(through step {meta['step']})")
+    print(f"  last loss {losses[-1]:.4f}   EMA({args.ema}) {ema_v:.4f}   "
+          f"min {min(losses):.4f}")
+    print(f"  partial curve -> {out}")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -304,7 +354,7 @@ def main() -> int:
     e.add_argument("--profile", action="store_true",
                    help="bracket a step window with profiler_control "
                         "(cudaProfilerStart/Stop) — run under "
-                        "tools/nsys_profile.py to capture it")
+                        "tools/bench/nsys_profile.py to capture it")
     e.add_argument("--profile-start-before-step", type=int, default=3)
     e.add_argument("--profile-stop-after-step", type=int, default=6)
     e.add_argument("--measured", action="store_true",
@@ -358,6 +408,12 @@ def main() -> int:
     sc.add_argument("--slab", type=float, default=100.0)
     sc.add_argument("--grad-checkpoint", action="store_true")
     sc.set_defaults(fn=cmd_scaling)
+
+    pk = sub.add_parser("peek")
+    pk.add_argument("run", help="run name (the --out stem; a directory "
+                                "under results/pretrain/checkpoints/)")
+    pk.add_argument("--ema", type=float, default=0.98)
+    pk.set_defaults(fn=cmd_peek)
 
     args = ap.parse_args()
     return args.fn(args)

@@ -11,7 +11,7 @@ directly. The workload<->engine seam every family ultimately rides:
 [program_contract.md](program_contract.md).
 
 Verifying correctness at every level is one command:
-`python tools/verify_family.py --family <name>` — runs the family's
+`python tools/verify/verify_family.py --family <name>` — runs the family's
 canonical test module (per-op pins, per-task fwd/recompute/bwd ladders
 vs the reference, per-model step vs the isolated twin) and audits it
 for the 11-gate canon. Perf: docs/benchmarking.md. The chain of
@@ -38,7 +38,7 @@ test module.** One package under
 | `model_families/<family>/presets.py` | preset builders (study/smoke shapes; `tiny()` classmethod lives on the config itself) |
 | `reference_models/<family>.py` | the ISOLATED pure-torch twin — torch-only, self-contained, no dataflow imports (`reference_models/README.md`) |
 | `model_families/families.py` | ONE registry entry (`_FAMILIES["<family>"]`) tying it together (§7) |
-| `tests/dataflow_training/models/test_<family>.py` | the family's 11-gate ladder (the canonical module `tools/verify_family.py` runs) |
+| `tests/dataflow_training/models/test_<family>.py` | the family's 11-gate ladder (the canonical module `tools/verify/verify_family.py` runs) |
 
 Shared machinery a family composes but never edits: the family-neutral
 executables and task templates (`dataflow_training/blocks/base_blocks.py`),
@@ -153,7 +153,7 @@ recompute boundary is only as tight as your last emission. The
 generated inventory of every family's compute keys and executables:
 [task_kinds.md](task_kinds.md); the per-family DEEP references
 (object field tables, stage lists, measured kernel sequences —
-regenerated per family by `tools/gen_model_docs.py`, plugins
+regenerated per family by `tools/gen_model_docs/gen_model_docs.py`, plugins
 included): [models/](models/README.md).
 
 The rest of the block contract:
@@ -319,7 +319,7 @@ Execution is the ENGINE SERVICE ([engine_service.md](engine_service.md)):
 register the planned program with the family's resolver spec, seed
 W/O via init-as-program, then `run()` per step —
 `dataflow_training/run/driver.py` (`daemon_client`, `init_model`,
-`run_engine`) is the reference driver, and `tools/train_solo.py`
+`run_engine`) is the reference driver, and `tools/train/train_solo.py`
 wraps it.
 
 Gates, in order:
@@ -328,8 +328,8 @@ Gates, in order:
 2. `tests/dataflow/runtime/test_engine_stress.py` style poison-on-free +
    interleaving-stress runs;
 3. throughput: predict the geometry x budget grid
-   (`tools/predict_step.py`), then measure it for real
-   (`tools/measure_step.py` — prediction and warmed measurement side
+   (`tools/bench/predict_step.py`), then measure it for real
+   (`tools/bench/measure_step.py` — prediction and warmed measurement side
    by side per cell). Full protocol: `docs/benchmarking.md`.
 4. if the family added or changed KERNELS, bump `PROFILE_CACHE_REV`
    (`dataflow_training/run/profiling.py`) — stale cached task costs
@@ -482,7 +482,7 @@ call `register_family()` from a plugin module discovered via a
 **`validate_family("name")`** structurally checks the whole surface in
 seconds, no GPU math: presets exist, lowering runs and keeps the naming
 shape, the resolver covers every emitted task with a `.launch`.
-`tools/verify_family.py` runs it as level 0 before the test module; run
+`tools/verify/verify_family.py` runs it as level 0 before the test module; run
 it directly while wiring a new family — it catches plumbing mistakes
 (missing resolver keys, misnamed tasks) long before a ladder would.
 
@@ -517,11 +517,11 @@ What adding a family actually touches, in order:
    published HF config (param-count match is the acceptance test).
 7. Ladder 3 + gates (§5); a frontier sweep for quoted numbers.
 8. Regenerate the GENERATED docs — the family appears in all of them
-   automatically (plugins included): `python tools/list_models.py >
-   docs/builtin_models.md`, `python tools/list_tasks.py >
-   docs/task_kinds.md`, `python tools/gen_model_docs.py --family
-   <name>` (and `tools/list_kernels.py` if you added registry ops);
-   pages at non-standard run shapes: `tools/gen_model_page.py`.
+   automatically (plugins included): `python tools/gen_model_docs/list_models.py >
+   docs/builtin_models.md`, `python tools/gen_model_docs/list_tasks.py >
+   docs/task_kinds.md`, `python tools/gen_model_docs/gen_model_docs.py --family
+   <name>` (and `tools/gen_model_docs/list_kernels.py` if you added registry ops);
+   pages at non-standard run shapes: `tools/gen_model_docs/gen_model_page.py`.
    Beyond the standard contract the generators need: no-arg preset
    CLASSMETHODS (`tiny()` mandatory — it is also the kernel-TRACING
    scale); an `_aux_temp_layout` dispatch entry in gen_model_docs if
@@ -619,7 +619,7 @@ differ (all fail loudly, none silently):
   attention by task-group prefix (`CAUSAL_DENSE_PREFIXES`) — a new
   causal-dense attention prefix must be registered there or its
   backward keeps the as-executed factor in the effective count;
-- the drivers (`dataflow_training/run/driver.py`, `tools/train_solo.py`)
+- the drivers (`dataflow_training/run/driver.py`, `tools/train/train_solo.py`)
   read the `loss_{s}_{r}` / `tokens_{s}_{r}` / `targets_{s}_{r}`
   conventions (round data puts, loss fetches).
 

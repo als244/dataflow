@@ -14,9 +14,9 @@ device/host memory peaks).
 Start it:
 
 ```bash
-python tools/dataflowd.py start --socket /tmp/dfd.sock --slab-gib 145
-python tools/dataflowd.py status
-python tools/dataflowd.py stop
+python tools/train/dataflowd.py start --socket /tmp/dfd.sock --slab-gib 145
+python tools/train/dataflowd.py status
+python tools/train/dataflowd.py stop
 ```
 
 `--slab-gib` is the ONE pinned budget (default `auto`): residents AND
@@ -57,7 +57,7 @@ one-task init program and runs it through the ordinary verbs — its
 task resolves through the `"model_family"` kind's `family_init`
 compute key, so server-side init needs no engine vocabulary. Family
 enumeration is likewise workload-side:
-`dataflow_training.model_families.families` / `tools/list_models.py`.
+`dataflow_training.model_families.families` / `tools/gen_model_docs/list_models.py`.
 Task-cost profiling never needs the daemon at all — it drives
 executables in-process: `dataflow_training.run.profiling
 .load_or_profile` / `apply_measured_costs`.)
@@ -160,7 +160,7 @@ the fast path even mid-run, as do `list_objects` / `list_programs` /
 `profiler_control("start"/"stop")` flips the annotation layer and
 `cudaProfilerStart/Stop` — under `nsys
 --capture-range=cudaProfilerApi` the capture holds exactly the
-bracketed steps; `tools/nsys_profile.py` packages the recipe
+bracketed steps; `tools/bench/nsys_profile.py` packages the recipe
 ([benchmarking.md](benchmarking.md)).
 
 **Traces.** Every run records a per-task `RunTrace`; the daemon keeps

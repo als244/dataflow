@@ -1,15 +1,15 @@
 """Generate docs/models/<family>/<preset>_<bs>x<seq>.md — per-preset
 references derived entirely from the code (no hand-maintained content):
 
-    python tools/gen_model_docs.py                     # every (family, preset)
-    python tools/gen_model_docs.py --family glm52
-    python tools/gen_model_docs.py --family glm52 --preset glm52_mini
-    python tools/gen_model_docs.py --no-record         # CPU-only (skip traces)
+    python tools/gen_model_docs/gen_model_docs.py                     # every (family, preset)
+    python tools/gen_model_docs/gen_model_docs.py --family glm52
+    python tools/gen_model_docs/gen_model_docs.py --family glm52 --preset glm52_mini
+    python tools/gen_model_docs/gen_model_docs.py --no-record         # CPU-only (skip traces)
 
 Default pages use the STANDARD documentation run shape (microbatch 16 ×
 seq 4096 → files named `<preset>_16x4K.md`) so object tables compare
 across presets and families. For a page at a DIFFERENT run shape, use
-`tools/gen_model_page.py --preset <p> --microbatch B --seq-len S`.
+`tools/gen_model_docs/gen_model_page.py --preset <p> --microbatch B --seq-len S`.
 
 Per page: dims; per-object and aggregate size summaries (dM counts
 toward dW — metadata gradients are gradients); per-layer-kind
@@ -36,7 +36,7 @@ from pathlib import Path
 
 from dataflow_training.model_families import families as F
 
-REPO = Path(__file__).resolve().parent.parent
+REPO = Path(__file__).resolve().parents[2]
 
 DOC_SEQ_LEN = 4096
 DOC_BATCH = 16
@@ -349,7 +349,7 @@ def gen_page(name: str, preset: str, record: bool,
            "",
            f"GENERATED from `{cls.__name__}.{preset}()` at run shape "
            f"microbatch {batch} × seq {seq_len} — regenerate with "
-           f"`python tools/gen_model_page.py --preset {preset} "
+           f"`python tools/gen_model_docs/gen_model_page.py --preset {preset} "
            f"--microbatch {batch} --seq-len {seq_len}`. All presets: "
            f"[builtin_models.md](../../builtin_models.md); task-kind "
            f"fleet index: [task_kinds.md](../../task_kinds.md).",
@@ -582,13 +582,13 @@ def main() -> None:
     kern_cache: dict = {}
     index = ["# Model references — one page per (family, preset)",
              "",
-             f"GENERATED — `python tools/gen_model_docs.py` regenerates "
+             f"GENERATED — `python tools/gen_model_docs/gen_model_docs.py` regenerates "
              f"everything (`--family X [--preset P]` narrows; "
              f"`--no-record` skips kernel tracing on CPU-only machines). "
              f"Default pages use the standard documentation run shape "
              f"(microbatch {DOC_BATCH} × seq {DOC_SEQ_LEN} — the "
              f"`_{tag}` filename suffix); pages at other shapes: "
-             f"`tools/gen_model_page.py`. New families — builtin or "
+             f"`tools/gen_model_docs/gen_model_page.py`. New families — builtin or "
              f"plugin — appear automatically.",
              ""]
     for name in names:

@@ -1,7 +1,7 @@
 """Enumerate the kernel registry as a markdown table — the generator
 behind docs/kernel_registry.md.
 
-    python tools/list_kernels.py > docs/kernel_registry.md
+    python tools/gen_model_docs/list_kernels.py > docs/kernel_registry.md
 
 Per op: every registered implementation (impl id, priority,
 deterministic flag, workspace style, allocator discipline), which impl
@@ -19,7 +19,7 @@ from dataflow_training import kernels as K   # noqa: F401  (imports register all
 
 HEADER = """# Kernel registry
 
-GENERATED — regenerate with `python tools/list_kernels.py >
+GENERATED — regenerate with `python tools/gen_model_docs/list_kernels.py >
 docs/kernel_registry.md` after registering ops or implementations.
 The registry (`dataflow_training/kernels/registry.py`) selects, per op, the
 highest-priority implementation whose `requires(caps)` passes on this

@@ -1,4 +1,4 @@
-# Throughput estimation — `tools/predict_step.py`
+# Throughput estimation — `tools/bench/predict_step.py`
 
 The first line of attack for "how fast should this train, and at what
 memory shape?" — before any long run. It lowers the true program (all
@@ -10,12 +10,12 @@ webapp draws, as table columns.
 
 Single point (detail view — compute sums, model flops, top tasks):
 
-    python tools/predict_step.py --preset gpt2_124m --ga-rounds 64 \
+    python tools/bench/predict_step.py --preset gpt2_124m --ga-rounds 64 \
         --budget 14 --hw 3090 --steps 10000
 
 Sweep — one row per (seq_len × T_round × budget) combination:
 
-    python tools/predict_step.py --preset gpt2_124m --hw 3090 \
+    python tools/bench/predict_step.py --preset gpt2_124m --hw 3090 \
         --t-rounds 8192,32768,65536 --tokens-step 524288 \
         --budgets 16,8,4,2 --measured --steps 10000
 

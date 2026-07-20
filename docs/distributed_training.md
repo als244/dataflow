@@ -4,7 +4,7 @@ This guide explains how multi-daemon training works end to end: the
 communication layer, the sharding API that expresses *who owns what*,
 the parallelism configurations built on it, and how checkpointing and
 resume behave for each. Everything here is driven from
-`tools/train_fleet.py` and configured by `topology.toml` — no machine
+`tools/train/train_fleet.py` and configured by `topology.toml` — no machine
 facts live in code.
 
 ## 1. The pieces
@@ -74,7 +74,7 @@ which is exactly what the fleet warm-up does.
 ### Plain data parallelism (default)
 
 ```
-python tools/train_fleet.py train --preset l3_1b --steps 1000 \
+python tools/train/train_fleet.py train --preset l3_1b --steps 1000 \
     --rounds 6,2 --out results/pretrain/run.json
 ```
 
@@ -180,7 +180,7 @@ reproduces training exactly.
 ### Fleet checkpoints
 
 ```
-python tools/train_fleet.py train ... \
+python tools/train/train_fleet.py train ... \
     --checkpoint-every 100 \
     --checkpoint-redundancy 2 \
     --checkpoint-keep-last 3 \
@@ -220,7 +220,7 @@ every host after each new one lands.
 ### Resume
 
 ```
-python tools/train_fleet.py train ... --resume auto --out results/pretrain/myrun.json
+python tools/train/train_fleet.py train ... --resume auto --out results/pretrain/myrun.json
 ```
 
 `--resume auto` picks the newest *complete* checkpoint for the run
@@ -276,7 +276,7 @@ compare` overlays the loss curves of finished runs.
 ### Profiling a fleet run
 
 ```
-python tools/train_fleet.py train --preset l3_1b --steps 10 \
+python tools/train/train_fleet.py train --preset l3_1b --steps 10 \
     --rounds 6,2 --profile --profile-start-before-step 5 \
     --profile-stop-after-step 8 --out results/pretrain/prof.json
 ```
@@ -284,7 +284,7 @@ python tools/train_fleet.py train --preset l3_1b --steps 10 \
 `--profile` wraps every launched daemon in Nsight Systems with the
 canonical trace set, brackets the requested step window on each rank
 through its daemon's `profiler_control` verb (the same
-cudaProfilerApi mechanism as `tools/nsys_profile.py`,
+cudaProfilerApi mechanism as `tools/bench/nsys_profile.py`,
 [benchmarking.md](benchmarking.md)), and fetches the per-rank
 `.nsys-rep` reports back to the conductor's log directory.
 
@@ -322,7 +322,7 @@ python -m pytest -q
 **Rung 2 — single-GPU training sanity.**
 
 ```
-python tools/train_solo.py smoke --steps 20
+python tools/train/train_solo.py smoke --steps 20
 ```
 
 (one engine, one GPU, real fineweb tokens — no fleet machinery).
@@ -341,7 +341,7 @@ python -m pytest -m fleet -q \
 world 2 (`--group` of two members), then the full node:
 
 ```
-python tools/train_fleet.py train --preset l3_125m --steps 60 \
+python tools/train/train_fleet.py train --preset l3_125m --steps 60 \
     --group node --backend nccl --rounds 1,1,1,1,1,1,1,1 \
     --out results/pretrain/node_smoke.json
 ```
@@ -353,7 +353,7 @@ handshake, link probes, and warm-up dance run automatically.
 **Rung 5 — the real run, sharded + checkpointed.**
 
 ```
-python tools/train_fleet.py train --preset l3_1b --steps 1000 \
+python tools/train/train_fleet.py train --preset l3_1b --steps 1000 \
     --group node --backend nccl --rounds 1,1,1,1,1,1,1,1 \
     --opt-shard zero1rs \
     --checkpoint-every 100 --checkpoint-keep-last 3 \
