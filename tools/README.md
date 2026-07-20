@@ -1,54 +1,25 @@
 # Tools
 
 One directory per purpose; every tool runs from the repo root as
-`python tools/<dir>/<name>.py`.
+`python tools/<dir>/<name>.py`. Each directory's README describes its
+tools' purposes and CLI arguments in full.
 
-## train/ — running training
-| tool | purpose |
+| directory | contents |
 |---|---|
-| `train_solo.py` | single-GPU pretraining: `engine` and `reference` legs (checkpoints/resume, doc-aware data, profiler bracketing), `smoke`/`parity`/`scaling` studies, `peek` (in-flight loss curve from the newest checkpoint) |
-| `eval_checkpoint.py` | fineweb-VAL loss of a solo-run checkpoint (the nanogpt-comparable axis) |
-| `train_fleet.py` | data-parallel fleet twin: `train` (multi-daemon launch, per-rank logs, `--profile` per-rank nsys reports), `compare` (overlay finished runs), `sweep` (single-GPU vs distributed comparison grid) |
-| `dataflowd.py` | engine service daemon CLI: start / status / stop |
-| `daemonize.py` | launch-and-detach (POSIX double fork) for long runs |
-| `pretrain_report.py` | build the pretraining study reports (self-contained HTML) |
+| [train/](train/README.md) | running training: `train_solo` (engine/reference legs, smoke/parity/scaling studies, `peek`), `train_fleet` (DP fleets, `compare`, `sweep`), `dataflowd`, `daemonize`, `eval_checkpoint`, `pretrain_report` |
+| [bench/](bench/README.md) | throughput, in escalating cost: `predict_step` (simulated sweeps — the first line of attack), `measure_step` (real sweeps), `nsys_profile` (bracketed Nsight capture); `bench/internal/` holds gitignored maintainer-local kernel microbenches |
+| [verify/](verify/README.md) | correctness gates: `verify_family`, `engine_gate`, `pressure_correctness`, `deep_compare`, `sweep_ladder3`, `rdma_preflight` |
+| [export/](export/README.md) | run analysis & webapp export: `export_program`, `trace_real_run`, `trace_program` |
+| [gen_model_docs/](gen_model_docs/README.md) | generated docs: `gen_model_docs`, `gen_model_page`, `list_models`, `list_kernels`, `list_tasks` |
 
-## bench/ — throughput: predict → measure → profile
-The escalating-cost workflow ([benchmarking.md](../docs/benchmarking.md)):
-| tool | purpose |
-|---|---|
-| `predict_step.py` | FIRST LINE OF ATTACK (CPU, instant): simulated sweeps over geometry × memory — s/step, tok/s, effective/hardware TFLOPs/s, memory peaks, PCIe traffic, recompute/idle % ([throughput.md](../docs/throughput.md)) |
-| `measure_step.py` | the measured twin (GPU, minutes): same grid, each cell RUN on the engine — measured s/step beside the prediction for that cell's plan |
-| `nsys_profile.py` | one Nsight Systems capture of a solo engine run, bracketed to exact warmed steps |
+`battery.sh` (this directory) is the rsync-driven remote battery
+runner for cross-box validation
+(`tools/battery.sh <remote-host> <remote-path>`).
 
-`bench/internal/` holds maintainer-local kernel microbenches
-(gitignored — not part of the repo surface).
-
-## verify/ — correctness gates
-| tool | purpose |
-|---|---|
-| `verify_family.py` | one-command family correctness: canonical ladder + canon audit ([extending.md](../docs/extending.md) §8) |
-| `engine_gate.py` | real-GPU synthetic execution vs simulator prediction |
-| `pressure_correctness.py` | math invariance under memory pressure: engine at descending tight budgets vs the plain-torch golden trajectory |
-| `deep_compare.py` | deep correctness-compare treatment for one family × shape ([correctness_compare.md](../docs/correctness_compare.md)) |
-| `sweep_ladder3.py` | ladder-3 measurement sweep across families |
-| `rdma_preflight.py` | RDMA peer-plane preflight checks |
-
-## export/ — run analysis & webapp export
-| tool | purpose |
-|---|---|
-| `export_program.py` | CPU-only end-to-end for any preset: shaped program → plan → sim → webapp exports |
-| `trace_real_run.py` | a few REAL steps through the daemon → measured-vs-simulated webapp bundle ([exporting_runs.md](../docs/exporting_runs.md)) |
-| `trace_program.py` | event-timeline trace of ANY program on the fake backend (reserves, transfer charges, evictions/escapes) — plan debugging without a GPU |
-
-## gen_model_docs/ — generated docs
-| tool | purpose |
-|---|---|
-| `gen_model_docs.py` | regenerate docs/models/ (every family × preset) |
-| `gen_model_page.py` | one model page at an arbitrary run shape |
-| `list_models.py` | regenerate docs/builtin_models.md |
-| `list_kernels.py` | regenerate docs/kernel_registry.md |
-| `list_tasks.py` | regenerate docs/task_kinds.md |
-
-`battery.sh` (this directory) is the rsync-driven remote battery runner
-for cross-box validation.
+The doc-side guides these tools implement:
+[benchmarking.md](../docs/benchmarking.md),
+[throughput.md](../docs/throughput.md),
+[distributed_training.md](../docs/distributed_training.md),
+[exporting_runs.md](../docs/exporting_runs.md),
+[extending.md](../docs/extending.md) §8,
+[engine_service.md](../docs/engine_service.md).

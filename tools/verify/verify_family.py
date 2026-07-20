@@ -32,7 +32,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parent.parent
+REPO = Path(__file__).resolve().parents[2]
 
 # the canon: (label, regex over the family test module source)
 CANON = [
