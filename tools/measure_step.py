@@ -2,9 +2,10 @@
 """REAL throughput sweeps — the measured twin of tools/predict_step.py.
 
 Same grid interface (T_round-speaking geometry, budgets, seq_lens); each
-cell RUNS the engine for --steps steps through one shared daemon and
-reports the warmed measurement next to the simulator's prediction for
-the same plan:
+cell RUNS the engine for --steps steps through one shared daemon
+(programs unregistered and the store wiped between cells, so device
+extents don't accumulate) and reports the warmed measurement next to
+the simulator's prediction for the same plan:
 
     python tools/measure_step.py --preset gpt2_124m --hw 3090 \
         --t-rounds 8192,32768,65536 --tokens-step 524288 \
@@ -151,6 +152,8 @@ def main() -> int:
                               f"{tokens_step:>9,} {budget:>6g}   "
                               f"FAILED: {str(exc).splitlines()[0][:60]}",
                               flush=True)
+                    for entry in client.list_programs():
+                        client.unregister_program(entry["prog_id"])
                     client.wipe("all", force=True)
     return 0
 
