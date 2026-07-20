@@ -35,7 +35,7 @@ The escalating-cost workflow ([benchmarking.md](../docs/benchmarking.md)):
 |---|---|
 | `verify_family.py` | one-command family correctness: canonical ladder + canon audit ([extending.md](../docs/extending.md) §8) |
 | `engine_gate.py` | real-GPU synthetic execution vs simulator prediction |
-| `pressure_correctness.py` | PressureFit plan legality regression |
+| `pressure_correctness.py` | math invariance under memory pressure: engine at descending tight budgets vs the plain-torch golden trajectory |
 | `deep_compare.py` | deep correctness-compare treatment for one family × shape ([correctness_compare.md](../docs/correctness_compare.md)) |
 | `sweep_ladder3.py` | ladder-3 measurement sweep across families |
 | `rdma_preflight.py` | RDMA peer-plane preflight checks |
@@ -43,7 +43,7 @@ The escalating-cost workflow ([benchmarking.md](../docs/benchmarking.md)):
 ## Run analysis & export
 | tool | purpose |
 |---|---|
-| `export_program.py` | CPU-only end-to-end: shaped program → plan → sim → webapp exports |
+| `export_program.py` | CPU-only end-to-end for any preset: shaped program → plan → sim → webapp exports |
 | `trace_real_run.py` | a few REAL steps through the daemon → measured-vs-simulated webapp bundle ([exporting_runs.md](../docs/exporting_runs.md)) |
 | `trace_program.py` | event-timeline trace of ANY program on the fake backend (reserves, transfer charges, evictions/escapes) — plan debugging without a GPU |
 

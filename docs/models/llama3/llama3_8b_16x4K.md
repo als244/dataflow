@@ -4,7 +4,7 @@ GENERATED from `ShapedLlamaConfig.llama3_8b()` at run shape microbatch 16 × seq
 
 Layer kinds (32 layers): `block block block block block block block block block block block block block block block block block block block block block block block block block block block block block block block block`
 
-**Run shape**: microbatch 16 × seq_len 4096 = **65,536 tokens per round** (× 1 grad-accum round(s) per step). `A_*`/`M_*` objects are sized per round; bytes/token figures transfer to any run shape.
+**Run shape**: microbatch 16 × seq_len 4096 = **65,536 tokens per round** (× 1 grad-accum round(s) per step). `A_*`/`AuxTemp_*` objects are sized per round; bytes/token figures transfer to any run shape.
 
 ## Object summary
 

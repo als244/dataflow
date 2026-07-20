@@ -65,3 +65,28 @@ def test_smoke_preset_lowers_and_plans():
     prog = resolve_family(cfg).lower(cfg)
     planned = plan_program(prog, fast_memory_capacity=8 * GIB)
     assert planned.peak_fast_bytes <= 8 * GIB
+
+
+def test_resolve_preset_bare_unique_names_across_families():
+    assert type(P.resolve_preset("gpt2_124m")).__name__ == "ShapedGpt2Config"
+    assert type(P.resolve_preset("l3_1b")).__name__ == "ShapedLlamaConfig"
+    assert type(P.resolve_preset("llama3_8b")).__name__ == "ShapedLlamaConfig"
+    assert type(P.resolve_preset("olmoe_7b")).__name__ == "ShapedOlmoeConfig"
+    assert (type(P.resolve_preset("qwen35moe_20l")).__name__
+            == "ShapedQwen35MoeConfig")
+
+
+def test_resolve_preset_ambiguous_name_lists_qualified_forms():
+    with pytest.raises(KeyError, match="gpt2:tiny"):
+        P.resolve_preset("tiny")
+
+
+def test_resolve_preset_qualified_name_disambiguates():
+    assert type(P.resolve_preset("gpt2:tiny")).__name__ == "ShapedGpt2Config"
+    assert (type(P.resolve_preset("llama3:tiny")).__name__
+            == "ShapedLlamaConfig")
+
+
+def test_resolve_preset_unknown_name_points_at_the_table():
+    with pytest.raises(KeyError, match="builtin_models"):
+        P.resolve_preset("nope_123")

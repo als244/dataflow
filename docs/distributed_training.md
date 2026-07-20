@@ -27,7 +27,7 @@ enforced because the failure modes of skew are silent (mixed-version
 collectives corrupt quietly; version-skewed kernels break replicated
 compute — see §3, tensor parallelism).
 
-## 2. The sharding API (`dataflow/pretrain/sharding.py`)
+## 2. The sharding API (`dataflow_training/distributed/sharding.py`)
 
 A `ShardPlan` is a group-scoped list of assignments over the packed
 weight layouts:
@@ -91,8 +91,8 @@ optimizer state is partitioned by owner (field-snapped near-equal
 buckets; single-matrix roots like embed/head split by rows). Each
 optimizer task reduces every sharded gradient region to its owner,
 the owner updates, and the updated params broadcast back. Per-rank
-optimizer bytes halve (world 2); certified bitwise-equal to plain DP
-and at the 1000-step horizon.
+optimizer bytes halve (world 2); the loopback gates hold it
+bitwise-equal to plain DP.
 
 Field-snapped buckets lose balance as world approaches the per-root
 field count (a llama3 block has ~7 large fields; at world 8 the
@@ -150,13 +150,13 @@ replica mode (no reduce — a sum would double them).
 
 **Hard requirement: arch-homogeneous ranks.** TP's correctness
 depends on the replicated compute actually replicating. Different
-GPU generations run different kernels (measured on this fleet:
-3–5e-4 nats/round forward divergence at identical weights between
-sm86 and sm120), and TP then sums a mixture of two model-variants
-every layer — training degrades deterministically. DP and ZeRO-1 do
-not care (the grad allreduce collapses ranks onto one trajectory);
-TP does. The certification run used two ranks on one GPU; a matched
-pair or an H100 node is a valid substrate, a mixed pair is not.
+GPU generations run different kernels (expect ~3-5e-4 nats/round
+forward divergence at identical weights between generations), and TP
+then sums a mixture of two model-variants every layer — training
+degrades deterministically. DP and ZeRO-1 do not care (the grad
+allreduce collapses ranks onto one trajectory); TP does. Valid TP
+substrates are architecture-homogeneous: a matched pair or a
+same-generation node, never a mixed pair.
 
 ## 4. Checkpointing
 
@@ -172,9 +172,10 @@ returns the stored `client_meta`.
 
 The engine is **stateless per step**: all trajectory state lives in
 store objects (weights `W_*`, optimizer state `O_*`) plus the
-driver-supplied step index. That is why a resume manifest is tiny —
-`{step, seed, cfg, prog_id}` — and why restore + re-register +
-continue reproduces training exactly.
+driver-supplied step index. That is why a resume manifest is small — the step counter, seed,
+fleet layout, and artifact locations; config and program re-derive
+from the invocation — and why restore + re-register + continue
+reproduces training exactly.
 
 ### Fleet checkpoints
 
@@ -192,7 +193,7 @@ on that rank's own disk — the run name is your `--out` stem), waits
 for all writers, then writes `fleet.json` on the conductor **last**.
 That file is the completeness marker: a crash mid-snapshot leaves no
 marker and the checkpoint is invisible to resume. It records the
-fleet layout (hosts, rounds, budgets, backend, seed), the save plan,
+fleet layout (hosts, rounds, backend, seed), the save plan,
 artifact locations, and the loss curve so far.
 
 ### The SavePlan: who saves what
@@ -207,7 +208,7 @@ the parallelism — derived automatically from the run's plan:
 | TP        | —                                  | each rank's `W_*` + `O_*` shards |
 
 Data objects (`tokens_*`, `targets_*`, `loss_*`) are never saved:
-resume re-derives them from the deterministic stream position, which
+resume re-derives them from the deterministic feed position, which
 is a pure function of the step index.
 
 `--checkpoint-redundancy k` additionally copies the shared artifact
@@ -240,23 +241,52 @@ SavePlan configuration reserved for future migration tooling).
 
 Restore fidelity is exact: the first resumed step reproduces the
 uninterrupted run's step **bitwise**. Beyond that, fleet runs have
-inherent run-to-run nondeterminism (~1e-4 loss-level by step 12 at
-125M, from execution-order-sensitive kernels — e.g. embedding
-scatter-add atomics), so two continuations of the same checkpoint
-can drift within that envelope while remaining statistically
-identical. All certifications use EMA bands, which are far above
-this floor.
+inherent run-to-run nondeterminism (~1e-4 loss-level within a dozen
+steps at 125M scale, from execution-order-sensitive kernels — e.g.
+embedding scatter-add atomics), so two continuations of the same
+checkpoint can drift within that envelope while remaining
+statistically identical. Parity judgments therefore use EMA bands,
+which sit far above this floor.
 
 ## 5. Verifying a setup
 
 - `tests/fleet/test_checkpoint_drill.py` — single-daemon
   snapshot/kill/restore/resume, bitwise gate.
-- The fleet drill sequence (see the CK entries in the findings
-  ledger): checkpointed run → kill → `--resume auto` → compare
-  against the run's own continuation.
+- The fleet drill sequence: run with checkpointing → kill the fleet
+  mid-run → relaunch with `--resume auto` → compare the resumed curve
+  against the run's own uninterrupted continuation.
 - `tests/fleet/test_coll_dtypes_crossbox.py` — per-(backend, dtype)
   verified collectives on the real wire.
 - The handshake runs automatically at every fleet launch.
+
+## Fleet flags beyond the basics
+
+`train_fleet.py train` composes the run from `topology.toml` plus
+per-rank overrides: `--group` picks the topology group, `--rounds`
+assigns per-rank round counts (rank order = member order, weighted
+data distribution), `--budgets`/`--slabs` override the topology's
+per-rank device budgets and host slabs, `--backend {hostmem,nccl,auto}`
+overrides the group backend, `--opt-shard` selects the optimizer
+sharding mode, and `--tp-mlp` switches to tensor-parallel MLPs
+through the sharding API. `--attach HOST=SOCK` (repeatable) attaches
+to pre-launched daemons instead of launching them — the profiling
+rigs use this to nsys-wrap each daemon themselves. `train_fleet.py
+compare` overlays the loss curves of finished runs.
+
+### Profiling a fleet run
+
+```
+python tools/train_fleet.py train --preset l3_1b --steps 10 \
+    --rounds 6,2 --profile --profile-start-before-step 5 \
+    --profile-stop-after-step 8 --out results/pretrain/prof.json
+```
+
+`--profile` wraps every launched daemon in Nsight Systems with the
+canonical trace set, brackets the requested step window on each rank
+through its daemon's `profiler_control` verb (the same
+cudaProfilerApi mechanism as `tools/nsys_profile.py`,
+[benchmarking.md](benchmarking.md)), and fetches the per-rank
+`.nsys-rep` reports back to the conductor's log directory.
 
 ## 6. Bringing up a new machine (single node, N GPUs)
 

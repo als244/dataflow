@@ -158,7 +158,7 @@ class CudaBackend:
 
     @property
     def annotator(self):
-        # cached; DATAFLOW_NVTX=1 enables NVTX ranges (nsys wrapper sets it)
+        # cached; capture windows (profiler_control) switch annotations on
         a = getattr(self, "_annotator", None)
         if a is None:
             from .annotate import annotator_from_env

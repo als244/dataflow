@@ -94,10 +94,16 @@ from dataflow_training.model_families.qwen35moe.presets import (  # noqa: E402,F
 
 
 def resolve_preset(name: str):
-    """Preset name -> config, across families ('qwen35' -> the hybrid preset,
-    'dsv3_2b'/'dsv3_2b_nolbl' -> the MoE study preset, otherwise the
-    llama3 ladder). Plugin-registered bench configs
-    (run.bench_presets.register_bench_config) resolve here too."""
+    """Preset name -> config, across families.
+
+    Resolution order: plugin-registered bench configs
+    (run.bench_presets.register_bench_config), a few short aliases
+    ('qwen35', 'gpt2', 'dsv3_2b'/'dsv3_2b_nolbl'), the llama3 ladder
+    ('l3_125m'..'l3_1b'), then ANY zero-arg preset classmethod on a
+    registered family's config by its bare name ('olmoe_7b',
+    'qwen35moe_20l', 'llama3_8b', ...). Names shared by several
+    families (e.g. 'tiny') must be qualified as 'family:preset'
+    ('gpt2:tiny'). The full table: docs/builtin_models.md."""
     from dataflow_training.run.bench_presets import EXTRA_CONFIGS
 
     if name in EXTRA_CONFIGS:
@@ -110,7 +116,43 @@ def resolve_preset(name: str):
         return dsv3_2b_preset(load_balance=False)
     if name in ("gpt2_124m", "gpt2"):
         return gpt2_preset()
-    return preset(name)
+    try:
+        return preset(name)
+    except KeyError:
+        return family_preset(name)
+
+
+def family_preset(name: str):
+    """'olmoe_7b' or 'gpt2:tiny' -> config, via the named (or unique)
+    family's zero-arg preset classmethod — the same discovery rule the
+    docs/builtin_models.md generator uses, so every preset in that
+    table resolves here."""
+    from dataflow_training.model_families import families as F
+
+    fam_filter, sep, pname = name.partition(":")
+    if not sep:
+        fam_filter, pname = "", name
+    hits = []
+    for fname in F._FAMILIES:
+        if fam_filter and fname != fam_filter:
+            continue
+        cls = F.family(fname).config_type
+        if not isinstance(cls.__dict__.get(pname), classmethod):
+            continue
+        try:
+            hits.append((fname, getattr(cls, pname)()))
+        except TypeError:
+            continue          # needs arguments: not a plain preset
+    if len(hits) == 1:
+        return hits[0][1]
+    if not hits:
+        raise KeyError(
+            f"unknown preset {name!r} — see docs/builtin_models.md "
+            f"for the full table")
+    qualified = ", ".join(f"'{f}:{pname}'" for f, _ in hits)
+    raise KeyError(
+        f"preset {pname!r} exists in several families — qualify it as "
+        f"one of: {qualified}")
 
 
 RESOLVER_FAMILY_BY_TYPE = {

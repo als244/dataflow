@@ -36,11 +36,17 @@ result = engine.execute(
                             # every initial object (weights, inputs, ...)
     pool_prewarm=...,       # {(location, size): count} from a prior run's
                             # pool_demand — kills first-step allocation churn
-    placement=None,         # precomputed static placement (else computed)
+    placement=None,         # precomputed static placement (else the
+                            # dynamic pool/slab allocation path)
     record_placement=None,  # PlacementRecorder: harvest lifetimes (dry runs)
-    vmm=False,              # non-contiguous arena placement (see
-                            # docs/benchmarking.md, placement modes)
-    annotate_rename=None,   # display-name hook for traces
+    vmm=False,              # non-contiguous arena placement
+                            # (runtime/device/vmm.py)
+    run_args=None,          # opaque per-run values -> TaskContext.run_args
+                            # (step, lr, seq_lens, ... — tasks interpret)
+    groups=None,            # per-run peer-group handles -> TaskContext.groups
+    cancel_event=None,      # threading.Event: cancel at the next task
+                            # boundary (the service's cancel_run)
+    annotate_rename=None,   # Callable[[str], str]: NVTX display names
 )
 ```
 
@@ -67,7 +73,7 @@ result = engine.execute(
 |---|---|
 | `makespan_us` | wall time of the run (compute clock) |
 | `trace` | per-task/per-transfer timeline (feeds replay-fidelity + webapp export) |
-| `peak_fast_bytes` / `peak_backing_bytes` | measured memory peaks (ledger view; see docs/benchmarking.md for the full device-peak accounting) |
+| `peak_fast_bytes` / `peak_backing_bytes` | measured memory peaks (ledger view) |
 | `objects` | final object table — read results (losses, updated weights) through `result.objects[id]` views after the run |
 | `pool_demand` | exact `(location, size) -> count` buffer demand; feed to the next run's `pool_prewarm` |
 | `final_location_violations` | replay-contract breaches (empty unless `strict_final_locations=False`) |
@@ -80,7 +86,7 @@ lifetime.
 
 ## The two-phase pattern
 
-Nearly every caller (train loop, gradcheck, the RL examples) runs:
+Nearly every caller (the engine service, gradcheck, the RL examples) runs:
 
 ```python
 dry = Engine(FakeBackend()).execute(program, initial_buffers=values)

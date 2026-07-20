@@ -25,8 +25,9 @@ class Segments:
     ``.on(device)``:
       - ``cu``        (n_seq + 1,) int32 cumulative segment boundaries
       - ``positions`` (tokens,)    int32 per-sequence rope indices
-    ``.on`` is called exactly once per round in the engine's run prologue
-    (and once per golden forward); every stage/op downstream then reads
+    ``.on`` is called once per round by the FIRST consuming task
+    (resolve_segments caches the result in ctx.run_values; once per
+    golden forward on the reference side); every stage/op downstream reads
     ``seg.cu`` / ``seg.positions`` as plain attributes. Nothing rebuilds a
     device tensor from host data mid-round — that would be a hidden
     host->device sync (the aten-hidden-syncs discipline). ``cu`` /

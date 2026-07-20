@@ -3,7 +3,9 @@
 The runtime hands an executable everything it may touch and nothing else:
 buffers for declared inputs/outputs/mutates (+ optional workspace), the
 compute stream, and the backend. The executable must only enqueue
-device work on `ctx.stream` — no allocation, no synchronization, no globals.
+device work on `ctx.stream` — no synchronization, no globals; scratch
+allocation only through torch's caching allocator, declared via the
+kernel registry's `allocates=`/`workspace=` fields (docs/task-contract.md).
 
 The tasks layer provides real implementations resolved by
 `(compute_block_key, block_params)`. `SyntheticExecutable` models a task of

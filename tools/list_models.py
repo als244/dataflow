@@ -22,7 +22,7 @@ HEADER = """# Builtin model families and presets
 
 GENERATED — regenerate with `python tools/list_models.py >
 docs/builtin_models.md` after adding a family or preset. Families
-register in `training/families.py`; presets are classmethods on each
+register in `dataflow_training/model_families/families.py`; presets are classmethods on each
 family's Shaped config (external families: docs/extending_external.md).
 
 Params are computed from the lowered weight layouts at each preset's
@@ -155,8 +155,9 @@ def main() -> None:
 Notes:
 - Aliases share the exact architecture shape of an earlier preset
   (e.g. Kimi K2.5/2.6/2.7 are shape-identical to K2; GLM 5.1 to 5).
-- benchmark geometry composes as
-  `{preset-prefix}-s{seq}k-bs{B}ga{G}` — see docs/benchmarking.md.
+- every preset name in this table resolves as `--preset` in the tools
+  (predict_step, measure_step, nsys_profile, train_solo, ...); names
+  shared by several families qualify as `family:preset` (`gpt2:tiny`).
 - Correctness: `python tools/verify_family.py --family <name>`.
 """)
     print("\n".join(out))

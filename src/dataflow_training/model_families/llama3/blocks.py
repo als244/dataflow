@@ -6,9 +6,7 @@ Buffer-order contract with the lowering (positional, per compute_block_key):
     block_fwd        in (x, W)                          out (y, A) | (y,) when recomputed
     block_recompute  in (x, W)                          out (A,)
     block_bwd        in (dy, A, x, W[, dW])             out (dx[, dW]) ; mutates dW when accumulating
-    head_fwd         in (y_last, W_head)                out (logits,)
-    loss_bwd         in (logits, targets)               out (dlogits, loss)
-    head_bwd         in (dlogits, y_last, W_head[, dW]) out (dy_last[, dW]) ; mutates dW when accumulating
+    head_loss        in (y_last, targets, W_head[, dW])  out (dy_last, loss[, dW]) ; fused norm+head+CE+head-bwd, mutates dW when accumulating
     embed_bwd        in (dy_embed, tokens[, dW])        out ([dW]) ; mutates dW when accumulating
     optimizer_*      in (W, dW, O) mutates (W, O)       block_params: step (1-based)
 

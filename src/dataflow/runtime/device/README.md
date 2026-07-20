@@ -17,10 +17,11 @@ CUDA∩HIP common subset so an AMD backend is a mechanical addition.
   measure execution, not allocation. `event_complete(event)` is the
   non-blocking pending-check (guard hygiene in the pool; legal on pending
   events, unlike `event_time_us`).
-- **Annotation** (`annotate.py`): a 3-method vendor-portable protocol
-  (`range_push` / `range_pop` / `mark`), `DATAFLOW_NVTX=1` selects the NVTX
-  implementation (an AMD backend plugs roctx into the same calls);
-  `RecordingAnnotator` is the test double. Display names may be rewritten
+- **Annotation** (`annotate.py`): a vendor-portable protocol
+  (`range_push` / `range_pop` / `mark` + `start_capture` / `stop_capture`),
+  OFF by default; the daemon's `profiler_control` verb switches it on for
+  a bracketed capture window (an AMD annotator would plug roctx into the
+  same calls); `RecordingAnnotator` is the test double. Display names may be rewritten
   per run via `Engine.execute(annotate_rename=)` — trace/plan ids never
   change.
 - **Virtual-time hooks**: `advance_stream` / `align_stream_to_host` exist for

@@ -39,8 +39,9 @@ src/dataflow_training/       WORKLOAD — builds programs, registers resolvers
 │                            moe/dsa/mla modules, adamw comm variants
 ├── kernels/                 registry op implementations (eager/triton/…)
 ├── lowering/                shaped programs, exact sizes, freeze plans,
-│                            PressureFit planning (the dataflow_sim consumer)
-├── data/                    segments (varlen), fineweb stream, packing
+│                            FLOP accounting (flops.py), PressureFit
+│                            planning (the dataflow_sim consumer)
+├── data/                    segments (varlen), fineweb feed, packing
 ├── run/                     drivers (reference + engine service), presets,
 │                            recipes, profiling
 ├── distributed/             topology, fleet conductor, sharding
@@ -50,10 +51,18 @@ reference_models/            TRUTH — isolated pure-torch twins (repo root,
                              torch-only, no dataflow imports, no cross-
                              imports; the per-family equivalence bar)
 
+examples/                    runnable custom-Program demos (rl_training/
+                             — the executable companion of
+                             extending_programs.md; CI-gated)
+
 tools/                       CLIs over both packages (dataflowd, train_solo,
 tests/                       train_fleet, measure_step, verify_family, …);
                              tests mirror the split (tests/dataflow/,
-                             tests/dataflow_training/, tests/reference_models/)
+                             tests/dataflow_training/) plus tests/fleet/
+                             (multi-daemon opt-in lane), tests/examples/,
+                             tests/fixtures/, and the root-level seam gates
+                             (test_external_family, test_import_boundaries,
+                             test_program_hashes)
 ```
 
 Tools and tests sit OUTSIDE all three packages and may cross the seam;

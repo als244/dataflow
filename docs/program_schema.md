@@ -21,9 +21,9 @@ Field additions bump the schema version; don't hand-write JSON.
 | `final_locations` | dict[str, str] | where each persistent object must END; the replay contract: equal to its initial location ⇒ one annotated program replays every step |
 | `fast_memory_capacity` | int | device budget in bytes (the ledger the planners fill) |
 | `backing_memory_capacity` | int | pinned-host budget in bytes |
-| `bandwidth_from_slow` / `bandwidth_to_slow` | float | bytes/s for the two transfer directions (planning + sim costs) |
+| `bandwidth_from_slow` / `bandwidth_to_slow` | int | bytes per MICROSECOND for the two transfer directions (planning + sim costs; transfer duration = size_bytes // bandwidth) |
 | `recompute_rewrites` | tuple[RecomputeRewrite] | optional declarations the recompute planner may exercise (training chains; empty for custom programs) |
-| `metadata` | dict | free-form provenance (lowering tag, measured-costs stamp, ...). Saved plans stamp their capacities here — `budget_gib` + `budget_semantics` (device envelope vs ledger), `planned_budget_gib` (the ledger the plan was fit to), `backing_plan_cap_gib` + `backing_cap_source` (flag vs auto-host), `placement` — so every plan is tied to the capacities it was planned for. |
+| `metadata` | dict | free-form provenance. The lowerings stamp `family`, `primary_unit`/`primary_count` (tokens per step), and the `config` dict; `apply_measured_costs` stamps per-TASK `measured` metadata beside the profiled `runtime_us`. |
 | `schema_version` | str | `"dataflow-rt/v1"` |
 
 ## TaskSpec
@@ -58,7 +58,7 @@ roles:
   REPLACES it with profiled truth (the subops are preserved untouched).
 - **`metadata["cost_subops"]`** (list of dicts): the analytic
   decomposition the scalar was seeded from, and the source of FLOP
-  accounting (`lowering/flops.py`). Uniform shape:
+  accounting (`dataflow_training/lowering/flops.py`). Uniform shape:
 
       {"kind": "roofline", "name": "<label>",
        "flops": int, "memory_bytes": int,
@@ -68,7 +68,9 @@ roles:
   subop (`matmul_us` / `attn_us` / `mem_us`); `runtime_us` at seed time
   is their sum. Special names the FLOP walker keys on: subops tagged
   `efficiency: "attention"` form the attention buckets (causal kinds
-  get the 8/10 effective-bwd split and varlen quadratic scaling);
+  get the 8/10 effective-bwd split — flash backward EXECUTES the
+  0.5*10 recompute-inclusive count while the algorithmic cost is
+  0.5*8 — and varlen quadratic scaling);
   `"muon_ns"` marks optimizer Newton-Schulz matmul work (the optimizer
   seeds are OPT-POLICY-CONSULTED — adamw is pure `"memory"` traffic
   with `flops: 0`). Zero-cost plumbing (round prologue, init) carries
@@ -91,7 +93,7 @@ is exactly why FLOP reporting stays valid on measured plans.
 | `size_bytes` | int | ≥ 1; sizes are packed-layout truth, never ad-hoc math |
 | `location` | one of `("fast", "backing")` | where the object starts (ObjectSpec) / is created (OutputSpec) |
 | `role` | one of `("parameter", "gradient", "optimizer_state", "activation", "input", "output", "temp", "other")` | semantic tag for tooling/placement heuristics |
-| `tensor` | TensorMeta \| None | optional `(dtype, shape, strides)` for display; byte size is authoritative |
+| `tensor` | TensorMeta \| None | optional `(dtype, shape, strides)` for display and cross-checking (a dense meta must agree with `size_bytes`; byte size is authoritative) |
 
 ## RecomputeRewrite / RecomputeOption
 
@@ -111,13 +113,13 @@ planner reads these; the engine never does.
 zero/negative sizes, unknown locations/roles, tasks referencing
 undeclared objects, outputs colliding with existing objects,
 `final_locations` naming objects that never exist, and
-mutation-ordering violations. Run it after any hand construction —
+mutated objects not declared as inputs. Run it after any hand construction —
 the builtin lowerings and planners validate what they emit.
 
 ## What is NOT schema
 
 Naming conventions (`W_i`, `A_{s}_{r}_{i}`, task-id shapes), the
-metadata-object grammar (`M_*`/`dM_*`), and grad-accumulation
+aux-object grammar (`Aux_*`/`AuxTemp_*`/`dAuxTemp_*`), and grad-accumulation
 create-vs-mutate patterns are conventions of the TRAINING WRAPPERS and
 builtin executables (see the README and
 [extending_programs.md](extending_programs.md)). The engine and this

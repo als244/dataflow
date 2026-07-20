@@ -19,11 +19,18 @@ Sweep — one row per (seq_len × T_round × budget) combination:
         --t-rounds 8192,32768,65536 --tokens-step 524288 \
         --budgets 16,8,4,2 --measured --steps 10000
 
+`--plugin` loads external families ([extending_external.md](extending_external.md)),
+`--no-recompute` pins the plan to zero recompute, `--top N` sizes the
+per-cell top-task breakdown.
+
 Geometry speaks **T_round** (the round token budget) with `ga` derived
 from `--tokens-step`; "batch" is internal arithmetic under varlen
 packing (`T_round / seq_len`), never an input. `--seq-len/--seq-lens`
 is the third axis; `--opt {adamw,muon}` sizes optimizer state (and its
-NS work) correctly; `--backing N` sets the host-slab ceiling — the
+NS work) correctly — though roofline mode under-charges muon's
+Newton-Schulz TIME (~0.3-0.5 s/step at 1B; `--measured` is
+muon-exact, and the tool prints the same note on muon runs);
+`--backing N` sets the host-slab ceiling — the
 planner escalates recompute to fit BOTH ceilings, and combos it cannot
 fit report as INFEASIBLE rows, not crashes.
 

@@ -21,7 +21,7 @@ HEADER = """# Kernel registry
 
 GENERATED — regenerate with `python tools/list_kernels.py >
 docs/kernel_registry.md` after registering ops or implementations.
-The registry (`tasks/kernels/registry.py`) selects, per op, the
+The registry (`dataflow_training/kernels/registry.py`) selects, per op, the
 highest-priority implementation whose `requires(caps)` passes on this
 machine; `DATAFLOW_KERNELS=eager` forces the priority-0 fallbacks for
 bisection. The chosen set is stamped into profiles (measured costs are

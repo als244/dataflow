@@ -63,8 +63,9 @@ resolution, not mid-launch (see `ToyResolver` below).
 everything it may touch and nothing else — buffers for the declared
 inputs/outputs/mutates (+ optional workspace), the compute stream, the
 backend, and the opaque per-run values. `launch(ctx)` may only
-**enqueue device work on `ctx.stream`** — no allocation, no
-synchronization, no globals. The full rulebook (with the measured
+**enqueue device work on `ctx.stream`** — no synchronization, no
+globals; scratch allocation only through torch's caching allocator,
+declared via the kernel registry's `allocates=`/`workspace=` fields. The full rulebook (with the measured
 incidents behind each rule) is [task-contract.md](task-contract.md).
 
 ### 4. Buffers bind positionally
@@ -124,8 +125,8 @@ is an ordinary program with one task:
 - `init_model(client, family, cfg_dict, ...)`
   (`src/dataflow_training/run/driver.py`) is the client-side sugar:
   build, register, run, unregister — the daemon's final-object capture
-  persists every `W_/O_/Aux_/data` object into the store. It replaces
-  the retired `materialize_group` verb.
+  persists every `W_/O_/Aux_/data` object into the store — server-side
+  init with zero engine vocabulary.
 
 ### 9. `run_args` are opaque per-run values; tasks interpret them
 

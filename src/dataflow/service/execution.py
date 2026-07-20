@@ -155,7 +155,7 @@ def store_buffer(store, rec):
 
 def prepare_placement(program, values):
     """Placement + pool demand, computed once per registered program
-    (train_loop does this once per train(); we cache per prog_id)."""
+    and cached per prog_id."""
     from dataflow.runtime import Engine
     from dataflow.runtime.device.fake import FakeBackend
     from dataflow.runtime.placement import PlacementRecorder, compute_placement
@@ -167,29 +167,6 @@ def prepare_placement(program, values):
     demand = dict(dry.pool_demand)
     dry.close()
     return placement, demand
-
-
-def check_pool_headroom(pool_demand: dict) -> None:
-    """A run's transient backing (session pool) is cudaHostAlloc'd
-    OUTSIDE the store slab in S1. Refuse (CAPACITY) instead of letting
-    the host OOM: projected pool bytes must fit in MemAvailable minus
-    the system reserve. Removed when pools draw from the slab."""
-    from .hostmem import GIB, PinnedSlab, meminfo_available_bytes
-    from .wire import ServiceError
-
-    projected = sum(int(size) * int(count)
-                    for (loc, size), count in (pool_demand or {}).items()
-                    if loc == "backing")
-    avail = meminfo_available_bytes()
-    reserve = int(PinnedSlab.SYSTEM_RESERVE_GIB * GIB)
-    if projected > max(0, avail - reserve):
-        raise ServiceError(
-            "CAPACITY",
-            f"run refused: session pool needs {projected / GIB:.1f} GiB "
-            f"pinned but only {avail / GIB:.1f} GiB available "
-            f"({reserve / GIB:.0f} GiB system reserve). Unregister idle "
-            f"programs or boot with a smaller slab.",
-            {"projected_pool_bytes": projected, "available": avail})
 
 
 def execute_run(program, resolver, values, *, prog_id, store=None,

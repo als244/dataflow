@@ -105,11 +105,6 @@ class LayerKindSpec:
     # W/O; zeroed at round 0 by the round prologue, accumulated by every
     # round's fwd, read by the LAST round's bwd). 0 = no Aux object.
     aux_bytes: int = 0
-    # per-layer PERSISTENT Aux object (Aux_{i}) bytes: the per-step +
-    # all-of-training expert-assignment counts (host-backed resident like
-    # W/O; zeroed at round 0 by the round prologue, accumulated by every
-    # round's fwd, read by the LAST round's bwd). 0 = no Aux object.
-    aux_bytes: int = 0
 
 
 class LooseCosts:

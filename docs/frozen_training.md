@@ -64,10 +64,10 @@ Three cooperating layers, each consuming the same policy oracle
    layer is FULLY frozen, derivation returns `None` and the program is
    byte-identical to an unfrozen build (partial layers need no
    structural change).
-Every family's builder derives its plan (all nine — the derivation
-returns `None` on default policies, so unfrozen programs are
-byte-identical), and the DSA families derive CE plans in sparse mode
-too, so structural freezes compose with sparse attention.
+   Every family's builder derives its plan (the derivation returns
+   `None` on default policies, so unfrozen programs are
+   byte-identical), and the DSA families derive CE plans in sparse
+   mode too, so structural freezes compose with sparse attention.
 
 3. **The surgery** (`dataflow_training/lowering/freeze_program.py`, dispatched by
    `build_shaped_program(freeze=plan)`): drops truncated layers'
@@ -133,8 +133,7 @@ L_I, permanently detached from CE). This is expressed as a freeze
 configuration, not a separate system:
 
 - `sparse_mode=False` (presets: `dsv32_mini_warmup`,
-  `glm52_mini_warmup`; bench configs `glm52-dense-warmup`,
-  `glm5-dense-warmup`) injects `opt_policy = frozen-everything except
+  `glm52_mini_warmup`) injects `opt_policy = frozen-everything except
   the indexer fields (adamw)` and derives a FreezePlan with
   `objective="indexer_kl"`.
 - The surgery then produces the specialized program: NO head, NO

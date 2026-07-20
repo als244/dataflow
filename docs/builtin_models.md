@@ -16,6 +16,15 @@ Each preset name links to its generated deep reference (objects,
 stages, kernels) at the standard 16×4K run shape; other run shapes:
 `tools/gen_model_page.py`. Index: [models/](models/README.md).
 
+## gpt2 — `ShapedGpt2Config`
+
+| preset | layers | d_model | vocab | seq default | `d_ff` | `init_policy` | `n_ctx` | `tied_embeddings` | `use_bias` | params |
+|---|---|---|---|---|---|---|---|---|---|---|
+| [`gpt2_124m`](models/gpt2/gpt2_124m_16x4K.md) | 12 | 768 | 50304 | 1024 | 3072 | - | - | no | yes | 163.1M |
+| [`tiny`](models/gpt2/tiny_16x4K.md) | 2 | 64 | 512 | 64 | 160 | - | - | no | yes | 146K |
+| [`tiny_nobias`](models/gpt2/tiny_nobias_16x4K.md) | 2 | 64 | 512 | 64 | 160 | - | - | no | no | 144K |
+| [`tiny_tied`](models/gpt2/tiny_tied_16x4K.md) | 2 | 64 | 512 | 64 | 160 | - | - | yes | yes | 113K |
+
 ## llama3 — `ShapedLlamaConfig`
 
 | preset | layers | d_model | vocab | seq default | `d_ff` | `n_kv_heads` | params |
@@ -40,27 +49,27 @@ stages, kernels) at the standard 16×4K run shape; other run shapes:
 
 ## olmoe — `ShapedOlmoeConfig`
 
-| preset | layers | d_model | vocab | seq default | `aux_coef` | `d_ff_expert` | `head_dim` | `n_experts` | `n_kv_heads` | `rope_base` | `routing_mode` | `top_k` | params |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| [`olmoe_7b`](models/olmoe/olmoe_7b_16x4K.md) | 16 | 2048 | 50304 | 4096 | 0.01 | 1024 | 128 | 64 | 16 | 10000.0 | softmax_the... | 8 | 6.92B |
-| [`tiny`](models/olmoe/tiny_16x4K.md) | 2 | 128 | 512 | 128 | 0.01 | 128 | 32 | 8 | 4 | 10000.0 | softmax_the... | 2 | 1.1M |
+| preset | layers | d_model | vocab | seq default | `aux_coef` | `d_ff_expert` | `head_dim` | `lbl_retained_inputs` | `n_experts` | `n_kv_heads` | `rope_base` | `routing_mode` | `top_k` | params |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| [`olmoe_7b`](models/olmoe/olmoe_7b_16x4K.md) | 16 | 2048 | 50304 | 4096 | 0.01 | 1024 | 128 | no | 64 | 16 | 10000.0 | softmax_the... | 8 | 6.92B |
+| [`tiny`](models/olmoe/tiny_16x4K.md) | 2 | 128 | 512 | 128 | 0.01 | 128 | 32 | no | 8 | 4 | 10000.0 | softmax_the... | 2 | 1.1M |
 
 ## qwen35moe — `ShapedQwen35MoeConfig`
 
-| preset | layers | d_model | vocab | seq default | `aux_coef` | `d_ff_expert` | `d_ff_shared` | `full_attention_interval` | `head_dim` | `lin_conv_kernel` | `lin_k_head_dim` | `lin_k_heads` | `lin_v_head_dim` | `lin_v_heads` | `n_experts` | `n_kv_heads` | `n_shared_experts` | `partial_rotary_factor` | `rope_base` | `routing_mode` | `tied_embeddings` | `top_k` | params |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| [`qwen35moe_20l`](models/qwen35moe/qwen35moe_20l_16x4K.md) | 20 | 2048 | 248320 | 4096 | 0.001 | 512 | 512 | 4 | 256 | 4 | 128 | 16 | 128 | 32 | 256 | 2 | 1 | 0.25 | 10000000.0 | topk_then_s... | no | 8 | 17.84B |
-| [`qwen35moe_35b`](models/qwen35moe/qwen35moe_35b_16x4K.md) | 40 | 2048 | 248320 | 4096 | 0.001 | 512 | 512 | 4 | 256 | 4 | 128 | 16 | 128 | 32 | 256 | 2 | 1 | 0.25 | 10000000.0 | topk_then_s... | no | 8 | 34.66B |
-| [`tiny`](models/qwen35moe/tiny_16x4K.md) | 4 | 256 | 512 | 128 | 0.001 | 128 | 128 | 4 | 64 | 4 | 32 | 2 | 32 | 4 | 8 | 2 | 1 | 0.25 | 10000000.0 | topk_then_s... | no | 2 | 4.5M |
+| preset | layers | d_model | vocab | seq default | `aux_coef` | `d_ff_expert` | `d_ff_shared` | `full_attention_interval` | `head_dim` | `lbl_retained_inputs` | `lin_conv_kernel` | `lin_k_head_dim` | `lin_k_heads` | `lin_v_head_dim` | `lin_v_heads` | `n_experts` | `n_kv_heads` | `n_shared_experts` | `partial_rotary_factor` | `rope_base` | `routing_mode` | `tied_embeddings` | `top_k` | params |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| [`qwen35moe_20l`](models/qwen35moe/qwen35moe_20l_16x4K.md) | 20 | 2048 | 248320 | 4096 | 0.001 | 512 | 512 | 4 | 256 | no | 4 | 128 | 16 | 128 | 32 | 256 | 2 | 1 | 0.25 | 10000000.0 | topk_then_s... | no | 8 | 17.84B |
+| [`qwen35moe_35b`](models/qwen35moe/qwen35moe_35b_16x4K.md) | 40 | 2048 | 248320 | 4096 | 0.001 | 512 | 512 | 4 | 256 | no | 4 | 128 | 16 | 128 | 32 | 256 | 2 | 1 | 0.25 | 10000000.0 | topk_then_s... | no | 8 | 34.66B |
+| [`tiny`](models/qwen35moe/tiny_16x4K.md) | 4 | 256 | 512 | 128 | 0.001 | 128 | 128 | 4 | 64 | no | 4 | 32 | 2 | 32 | 4 | 8 | 2 | 1 | 0.25 | 10000000.0 | topk_then_s... | no | 2 | 4.5M |
 
 ## qwen3moe — `ShapedQwen3MoeConfig`
 
-| preset | layers | d_model | vocab | seq default | `aux_coef` | `d_ff_expert` | `head_dim` | `n_experts` | `n_kv_heads` | `rope_base` | `routing_mode` | `top_k` | params |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| [`qwen3moe_235b`](models/qwen3moe/qwen3moe_235b_16x4K.md) | 94 | 4096 | 151936 | 4096 | 0.001 | 1536 | 128 | 128 | 4 | 1000000.0 | topk_then_s... | 8 | 235.09B |
-| [`qwen3moe_30b`](models/qwen3moe/qwen3moe_30b_16x4K.md) | 48 | 2048 | 151936 | 4096 | 0.001 | 768 | 128 | 128 | 4 | 1000000.0 | topk_then_s... | 8 | 30.53B |
-| [`qwen3moe_30b_24l`](models/qwen3moe/qwen3moe_30b_24l_16x4K.md) | 24 | 2048 | 151936 | 4096 | 0.001 | 768 | 128 | 128 | 4 | 1000000.0 | topk_then_s... | 8 | 15.58B |
-| [`tiny`](models/qwen3moe/tiny_16x4K.md) | 2 | 128 | 512 | 128 | 0.001 | 64 | 32 | 8 | 2 | 1000000.0 | topk_then_s... | 2 | 626K |
+| preset | layers | d_model | vocab | seq default | `aux_coef` | `d_ff_expert` | `head_dim` | `lbl_retained_inputs` | `n_experts` | `n_kv_heads` | `rope_base` | `routing_mode` | `top_k` | params |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| [`qwen3moe_235b`](models/qwen3moe/qwen3moe_235b_16x4K.md) | 94 | 4096 | 151936 | 4096 | 0.001 | 1536 | 128 | no | 128 | 4 | 1000000.0 | topk_then_s... | 8 | 235.09B |
+| [`qwen3moe_30b`](models/qwen3moe/qwen3moe_30b_16x4K.md) | 48 | 2048 | 151936 | 4096 | 0.001 | 768 | 128 | no | 128 | 4 | 1000000.0 | topk_then_s... | 8 | 30.53B |
+| [`qwen3moe_30b_24l`](models/qwen3moe/qwen3moe_30b_24l_16x4K.md) | 24 | 2048 | 151936 | 4096 | 0.001 | 768 | 128 | no | 128 | 4 | 1000000.0 | topk_then_s... | 8 | 15.58B |
+| [`tiny`](models/qwen3moe/tiny_16x4K.md) | 2 | 128 | 512 | 128 | 0.001 | 64 | 32 | no | 8 | 2 | 1000000.0 | topk_then_s... | 2 | 626K |
 
 ## dsv3 — `ShapedDsv3Config`
 
@@ -97,7 +106,8 @@ stages, kernels) at the standard 16×4K run shape; other run shapes:
 Notes:
 - Aliases share the exact architecture shape of an earlier preset
   (e.g. Kimi K2.5/2.6/2.7 are shape-identical to K2; GLM 5.1 to 5).
-- benchmark geometry composes as
-  `{preset-prefix}-s{seq}k-bs{B}ga{G}` — see docs/benchmarking.md.
+- every preset name in this table resolves as `--preset` in the tools
+  (predict_step, measure_step, nsys_profile, train_solo, ...); names
+  shared by several families qualify as `family:preset` (`gpt2:tiny`).
 - Correctness: `python tools/verify_family.py --family <name>`.
 

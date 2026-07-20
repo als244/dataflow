@@ -3,15 +3,16 @@
 One tool turns a real training run into inspectable artifacts:
 `tools/trace_real_run.py` drives a few REAL steps through the engine
 daemon and writes the full webapp bundle, measured vs simulated side
-by side — a single uploadable file the webapp simulator (webapp/)
-renders as a TRUE event timeline diffed against the simulator's
-prediction.
+by side — a single uploadable file the
+[webapp simulator](https://dataflowsim.sunshein.net/) renders as a
+TRUE event timeline diffed against the simulator's prediction.
 
-(Naming note: exporting *programs* needs no tool —
-`tools/export_program.py` writes any preset's webapp-uploadable
-`program.json` CPU-only, and `save_program` serializes any Program;
-see [program_schema.md](program_schema.md). This doc is about
-exporting measured RUNS.)
+(Naming note: exporting *programs* needs no run —
+`tools/export_program.py` lowers any preset CPU-only and writes its
+program/annotated/summary JSONs plus the webapp upload
+(`<stem>.webapp.json`), priced from roofline costs; `save_program`
+serializes any Program — see [program_schema.md](program_schema.md).
+This doc is about exporting measured RUNS.)
 
 ## `tools/trace_real_run.py` — real steps → measured bundle
 
@@ -43,7 +44,7 @@ python tools/trace_real_run.py --preset smoke --steps 3 --out examples/
 | `--budget` | fast-memory plan budget in GiB |
 | `--slab` | daemon slab size in GiB |
 | `--out` | output directory |
-| `--name` | output stem (default: the preset name) |
+| `--name` | output stem (default: `trace-<preset>`) |
 
 Upload `<stem>.measured.json` to the webapp: the real run renders in
 the same panels used for simulations (task/transfer timelines, memory
@@ -57,6 +58,6 @@ to `tools/nsys_profile.py` ([benchmarking.md](benchmarking.md)).
 
 | artifact | produced by | upload shows |
 |---|---|---|
-| `program.json` | `export_program` | the SIMULATOR's expected timeline for a plan (measured task costs) |
-| run curve JSONs | `train_solo` / `measure_step` | nothing to upload — numeric summaries (tok/s, TF/s, peaks) |
+| `<stem>.webapp.json` | `export_program` | the SIMULATOR's expected timeline for a plan (roofline costs) |
+| run curve JSONs | `train_solo --out` | nothing to upload — numeric summaries (loss, tok/s, TF/s) |
 | `*.measured.json` | `trace_real_run` | the TRUE measured timeline, diffed against the sim's prediction |

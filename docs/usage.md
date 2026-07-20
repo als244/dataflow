@@ -37,6 +37,11 @@ planned = plan_program(apply_measured_costs(program, profiles),
                            lower_llama3(cfg, recompute_levels=lv), profiles))
 ```
 
+(The maintained one-call version of steps 1-3 — measured bandwidths
+threaded onto every recompute variant too — is
+`dataflow_training.run.driver.plan_at_budget(cfg, budget_gib,
+measured=True)`; the drivers all go through it.)
+
 Execution goes through the ENGINE SERVICE (`dataflowd` — the runtime
 engine hosted behind a store of persistent objects;
 [engine_service.md](engine_service.md)): register the planned program
@@ -46,14 +51,14 @@ the daemon's store and evolve in place between runs. The reference
 driver wraps the whole loop:
 
 ```python
-from dataflow_training.data.fineweb import make_stream
+from dataflow_training.data.fineweb import make_feed
 from dataflow_training.run.driver import daemon_client, run_engine
 from dataflow_training.run.recipe import Recipe
 
 recipe = Recipe(peak_lr=3e-4, min_lr=3e-5, warmup_steps=10, total_steps=100)
-stream = make_stream(cfg.tokens)                    # deterministic fineweb rounds
+feed = make_feed(cfg.tokens)                        # deterministic fineweb rounds
 with daemon_client(slab_gib=60.0) as client:        # boots an in-process dataflowd
-    res = run_engine(client, cfg, recipe, stream, steps=100,
+    res = run_engine(client, cfg, recipe, feed, steps=100,
                      budget_gib=16.0)               # plans + registers + runs
 print(res.losses)
 # quote wall tok/s in results: res.tok_per_s times the whole run verb
@@ -94,35 +99,50 @@ renders side by side (see [exporting_runs.md](exporting_runs.md)).
 ```
 python tools/train_solo.py smoke                       # tiny real-vocab reference-vs-engine gate
 python tools/train_solo.py parity --preset l3_125m ... # one preset, reference + engine at N budgets
-python tools/train_solo.py scaling --preset l3_1b ...  # the ladder, loss curves
-python tools/train_fleet.py train --preset l3_1b --steps 1000 --rounds 6,2 ...  # data-parallel fleet
+python tools/train_solo.py scaling --presets l3_125m,l3_1b ...  # the ladder, loss curves
+python tools/train_solo.py reference --preset gpt2_124m --data doc \
+    --checkpoint-every 250 --out results/pretrain/ref.json   # pure-torch leg
+python tools/train_solo.py engine --preset gpt2_124m --data doc \
+    --budget 14 --resume --out results/pretrain/eng.json     # engine leg
+python tools/train_fleet.py train --preset l3_1b --steps 1000 --rounds 6,2 \
+    --out results/pretrain/fleet.json                        # data-parallel fleet
 python tools/measure_step.py --preset l3_1b --t-rounds 8192,32768 \
     --budgets 14,6 --steps 12          # measured throughput sweeps
 ```
 
-Sweep rows report real AND wall tok/s plus `placement_escapes` /
-`pressure_evictions` (both 0 in healthy runs) with per-cell provenance —
-protocol: [benchmarking.md](benchmarking.md).
+The `reference` and `engine` legs are the long-run pretraining pair:
+same recipe, same deterministic feed, overlaid loss curves. `--data
+doc` selects the doc-aware feed (sequences split at document EOT
+boundaries, positions restarting per document) over fixed-size block
+packing; both legs support checkpointing (`--checkpoint-every`) and
+`--resume`. Sweep rows from `measure_step` report the plan's predicted
+s/step beside the measurement (`pred_s meas_s ratio tok/s effTF/s
+hwTF/s recomp`) — tool guide: [benchmarking.md](benchmarking.md).
 
 ## Profiling a run with Nsight Systems (device metrics + NVTX)
 
-The engine annotates every task, transfer, and step boundary with NVTX
-ranges when `DATAFLOW_NVTX=1` (task ids like
-`block_bwd_{step}_{round}_{layer}`, transfers like
-`from_slow:A_{step}_3_16`), so wrapping ANY driver in `nsys profile
---trace=cuda,nvtx,osrt` gives per-task timeline attribution — open the
-report in the nsys GUI and use the NVTX projection rows to read ranges
-on the stream timelines. GPU metrics sampling
-(`--gpu-metrics-devices=all`) needs perf-counter permission.
+Annotations are OFF in normal runs. The annotation layer
+(`runtime/device/annotate.py`) is a switchable, vendor-portable
+protocol (`range_push`/`range_pop`/`mark` plus
+`start_capture`/`stop_capture`); the daemon's `profiler_control` verb
+flips it on for a bracketed window of steps, and inside that window
+the engine annotates every task launch (ids like
+`block_bwd_{step}_{round}_{layer}`) and transfer (like
+`from_slow:A_{step}_3_16`). An AMD annotator slots into the same
+protocol with roctx.
 
-`tools/nsys_profile.py` packages that recipe (capture limited to the
-training-steps NVTX range so planning/setup stay out of the report;
-`--stats` for the summary tables) — note it still shells out to the
-drivers before use.
+`tools/nsys_profile.py` packages the whole recipe: it wraps a
+`train_solo.py engine` run in `nsys profile` with
+`--capture-range=cudaProfilerApi`, and the run brackets steps
+`--start` through `--stop` via `profiler_control` — so the report
+holds exactly those warmed steps, with planning/boot noise excluded.
+Open the report in the nsys GUI and use the NVTX projection rows to
+read task ranges on the stream timelines. GPU metrics sampling
+(`--gpu-metrics-devices`) needs perf-counter permission.
 
-The annotation layer is vendor-portable (`runtime/device/annotate.py`):
-the engine calls a 3-method protocol (`range_push/range_pop/mark`),
-enabled by `DATAFLOW_NVTX=1`. An AMD backend implements the same protocol
-with roctx and the same script structure wraps `rocprofv3`.
+    python tools/nsys_profile.py --preset gpt2_124m --steps 10 \
+        --start 5 --stop 8 --out gpt2_capture
 
-For benchmarking (which tool, standard recipes, row semantics, placement modes, profile cache): see [benchmarking.md](benchmarking.md).
+For the rest of the benchmarking workflow (predict → measure →
+profile, profile-cache discipline): see
+[benchmarking.md](benchmarking.md).

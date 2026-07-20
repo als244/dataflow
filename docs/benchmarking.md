@@ -15,13 +15,19 @@ geometry). Full guide: [throughput.md](throughput.md).
         --t-rounds 8192,32768,65536 --tokens-step 524288 \
         --budgets 16,8,4,2 --steps 10000
 
+Both sweep tools take any `resolve_preset` name (the table:
+[builtin_models.md](builtin_models.md)) and `--plugin` for external
+families.
+
 ## 2. Measure — `tools/measure_step.py` (GPU, ~minutes)
 
 The measured twin: the same grid interface, but each cell RUNS the
 engine for `--steps` steps through one shared daemon (store wiped
 between cells) and reports the warmed measurement beside the
 prediction for that cell's plan — `pred_s`, `meas_s`, their ratio,
-tok/s, and TFLOPs/s from real wall time. This is the ground truth the
+tok/s, and TFLOPs/s from real wall time (the first 3 steps of each
+cell are warmup, excluded from the mean; `--measured-plan` prices the
+prediction column from profiled task costs instead of roofline). This is the ground truth the
 sim calibrates against; a persistent prediction/measurement gap at
 some geometry is a finding (see the calibration table in
 throughput.md), not a tolerance to widen.
@@ -44,7 +50,8 @@ under `results/pretrain/logs/`.
         --out gpt2_124m_ga8
 
 Fleet-scale profiling (multi-daemon, per-rank reports) is
-`tools/train_fleet.py --profile ...` — see the peer-plane docs.
+`tools/train_fleet.py train --profile ...` — see
+[distributed_training.md](distributed_training.md).
 
 ## Discipline
 

@@ -19,15 +19,15 @@ them explicitly. Every arrow is plain data (`dataflow.core.Program`).
 | cost | `apply_measured_costs(prog, profiles)` from `load_or_profile`, or hand-set `runtime_us` | bare Program | same Program, per-task measured costs (sim + PressureFit quality depend on these) |
 | recompute planning | `plan_program(..., recompute=True, build_variant=...)` | Program + `recompute_rewrites` + a variant re-builder | Program re-lowered at the chosen recompute levels. **Standard-training only** — see below |
 | PressureFit | `plan_program(prog, fast_memory_capacity=cap)` | costed Program + device budget | ANNOTATED Program: per-task `offload_after` / `prefetch_after` / `releases_after` transfer directives + sim makespan (`PlannedProgram`) |
-| placement | engine-side (static packing or `vmm`) | annotated Program | physical offsets (extent reported; see docs/benchmarking.md for envelope semantics) |
+| placement | engine-side (static packing or `vmm`) | annotated Program | physical offsets (extent reported; see engine_api.md) |
 | execute | `Engine(backend).execute(prog, resolver=..., initial_buffers=...)` | annotated Program + resolver + pinned host buffers | `RunResult` (timings, pool stats, readbacks via object views) |
 
 Notes:
 
 - **The engine is name-agnostic.** Task/object ids are free-form at this
   level; the `<prefix>_{step}_{round}_{layer}` shape is a convention of
-  the TRAINING WRAPPERS (the drivers' loss/data readback, NVTX renaming,
-  window analyzers), not the engine. Keep the shape if you want those
+  the TRAINING WRAPPERS (the drivers' loss/data readback, NVTX
+  renaming, the FLOP walker's prefixes), not the engine. Keep the shape if you want those
   tools; ignore it if you drive `Engine.execute` yourself.
 - **Recompute planning is standard-training only.** The planner's greedy
   selection assumes the family chain grammar and a `build_variant` that
@@ -47,7 +47,7 @@ Construct through `dataflow.core` (`Program`, `TaskSpec`, `ObjectSpec`
 simulator. The engine surface it feeds: [engine_api.md](engine_api.md).
 
 ```python
-from dataflow.core import ObjectSpec, Program, TaskSpec
+from dataflow.core import ObjectSpec, OutputSpec, Program, TaskSpec
 
 objects = [
     ObjectSpec(id="W_0", size_bytes=..., location="backing", role="parameter"),
@@ -58,7 +58,7 @@ tasks = [
     TaskSpec(
         id="block_recompute_0_0_0",
         inputs=("x_ckpt_0", "W_0", "AuxTemp_0_0_0"),
-        outputs=("A_0_0_0",),
+        outputs=(OutputSpec(id="A_0_0_0", size_bytes=...),),
         mutates=(),
         runtime_us=1800.0,              # hand-set, or profile (below)
         compute_block_key="dsamoe_recompute",   # binds a builtin executable
@@ -105,7 +105,7 @@ You do NOT need new executables for standard blocks. Build the family's
 resolver and let your custom program's tasks carry the same
 `compute_block_key`/`block_params` the family emits — recompute and
 backward tasks then bind to the exact same battle-tested executables
-(stage grammar, MetaState, in-place kernels, determinism contract):
+(stage grammar, the `*AuxTempState` machinery, in-place kernels, determinism contract):
 
 ```python
 from dataflow_training.model_families.families import family
@@ -123,6 +123,13 @@ dispatches yours and falls back to the family's for the rest.
 
 ## Worked example: RL post-training without a forward pass
 
+(This example is implemented and CI-gated at `examples/rl_training/`
+— builder, harness, and per-family `run.py` scripts; its README calls
+itself the executable companion of this doc. For varlen/packed
+sequence metadata in custom programs — `run_args["seq_lens"]`, the
+`Segments` value object — see §9 of
+[program_contract.md](program_contract.md).)
+
 Motivating scenario: an inference engine generated the rollout and
 saved, per layer, an **activation checkpoint** (the block INPUT
 `x_ckpt_i`), plus the **routing pack** and (for sparse-attention
@@ -133,7 +140,7 @@ Training then:
 1. takes a reward signal + the last block's output,
 2. computes an RL loss at the head (the one genuinely custom op),
 3. walks the layers in REVERSE: recompute layer i's float context from
-   `x_ckpt_i` (+ its `M` — selection/routing are reused, never
+   `x_ckpt_i` (+ its `AuxTemp` — selection/routing are reused, never
    re-derived, which also guarantees the backward sees the inference
    engine's exact choices), then backward through layer i,
 4. interleaves optimizer tasks after each dW's last mutation.
@@ -162,7 +169,7 @@ tasks:   rl_head_loss(y_last, reward, W_head) -> dy, loss     [custom op]
              optimizer_i(dW_i) mutates W_i, O_i               [builtin]
 ```
 
-What to verify, in order: `validate(prog)` → FakeBackend dry-run
+What to verify, in order: `validate_program(prog)` → FakeBackend dry-run
 (`Engine(FakeBackend()).execute`) → CUDA with `poison_on_free=True` →
 byte-compare a step against a plain-torch replica of the same math (the
 golden habit — for this program the "golden" is autograd over the
@@ -174,7 +181,7 @@ Yes, with discipline: every artifact in this repo's own results flows
 through it (annotated replay, webapp upload, per-cell `program.json`),
 it round-trips via `save_program`/`load_program`, and changes bump
 `dataflow.core.SCHEMA_VERSION`. Recommendation for external authors:
-**construct in Python** (the constructors + `validate()` are the stable
+**construct in Python** (the constructors + `validate_program()` are the stable
 surface); treat the JSON as the versioned serialization, not something
 to hand-write.
 

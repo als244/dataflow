@@ -359,7 +359,7 @@ def gen_page(name: str, preset: str, record: bool,
            f"**Run shape**: microbatch {cfg.batch} × seq_len "
            f"{cfg.seq_len} = **{dims.tokens:,} tokens per round** "
            f"(× {cfg.grad_accum_rounds} grad-accum round(s) per step). "
-           f"`A_*`/`M_*` objects are sized per round; bytes/token "
+           f"`A_*`/`AuxTemp_*` objects are sized per round; bytes/token "
            f"figures transfer to any run shape.",
            ""]
 

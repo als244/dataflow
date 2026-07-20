@@ -16,8 +16,11 @@ From your Python environment of choice (3.12+), with a sibling
 uv pip install -e ".[sim,cuda]"
 ```
 
-(`pip install -e ".[sim,cuda]"` works identically. The `sim` extra
-resolves the sibling simulator; `cuda` pulls the real device backend.)
+(`uv sync` also works. The `sim` extra resolves the SIBLING
+`dataflow_sim` checkout through `[tool.uv.sources]` — plain pip does
+not read that table, so under pip install the sibling editable first:
+`pip install -e ../dataflow_sim -e ".[sim,cuda]"`. The `cuda` extra
+pulls the real device backend.)
 
 ### Quickstart: benchmark training throughput under tight GPU memory budgets
 
@@ -53,6 +56,21 @@ few real steps through the daemon and emits the measured event log next
 to the sim's prediction; the webapp renders both in the same panels and
 diffs them, which is exactly how the sim-vs-real fidelity gap is
 inspected (full guide: [docs/exporting_runs.md](docs/exporting_runs.md)).
+
+### Running training
+
+Execution goes through a persistent engine-service daemon
+(`tools/dataflowd.py`, [docs/engine_service.md](docs/engine_service.md))
+that owns the GPU and pinned host memory; training state lives in its
+object store between steps. `tools/train_solo.py` drives single-GPU
+pretraining (engine and pure-torch reference legs, doc-aware fineweb
+feed, checkpoints/resume, AdamW or Muon per-field optimizer policy —
+walkthrough: [docs/usage.md](docs/usage.md)), and `tools/train_fleet.py`
+drives data-parallel fleets (weighted round distribution, ZeRO-1
+optimizer sharding, fleet checkpoints —
+[docs/distributed_training.md](docs/distributed_training.md)).
+Correctness of every family is pinned against the isolated pure-torch
+twins in [reference_models/](reference_models/README.md).
 
 ---
 
@@ -91,7 +109,7 @@ the program and the resolver, not in the engine.
 ## Building a Dataflow Program for ML Training
 
 The initial intended workload is high-throughput DNN training in low
-GPU-memory regimes. A library of builtin model families (Llama 3,
+GPU-memory regimes. A library of builtin model families (GPT-2, Llama 3,
 OLMoE, Qwen 3, Qwen 3 MoE, Qwen 3.5, Qwen 3.5 MoE, DeepSeek V3,
 DeepSeek V3.2, GLM 5.2 — full preset table with parameter counts:
 [docs/builtin_models.md](docs/builtin_models.md); per-family deep
@@ -104,16 +122,22 @@ policy) into the Program format the engine expects.
 Lowering decomposes each training step into tasks over named objects.
 Notation: `i` is the layer index — the intra-round task id equals the
 layer id, and every block task is named `{kind}_{step}_{round}_{layer}`
-(e.g. `block_fwd_0_1_7`). The objects:
+(e.g. `block_fwd_0_1_7`). Hidden states are written `x_i` below; their
+chain object ids carry the same step/round suffixes (`y_embed_{s}_{r}`,
+`y_{s}_{r}_{i}`, gradients `dy_{s}_{r}_{i}`). The objects:
 
 - `W_i` (parameters) and `O_i` (optimizer state) — persistent across
   the whole run; updated in place by optimizer tasks.
 - `dW_i` (parameter gradients) — created fresh each step (round 0
   creates, later grad-accumulation rounds accumulate into it).
 - `A_i` (saved activation context) — one per (step, round).
-- `M_i` — computed metadata that shouldn't be recomputed (MoE router
-  assignments, sparse-attention index selections); one per
-  (step, round) where the layer makes discrete choices.
+- `AuxTemp_i` — computed metadata that must not be re-derived (MoE
+  router assignments, sparse-attention index selections); one per
+  (step, round) where the layer makes discrete choices; recompute and
+  backward consume it VERBATIM.
+- `Aux_i` — persistent per-layer auxiliary state (e.g. the expert-load
+  counts driving MoE load balancing): zeroed at round 0, accumulated
+  by every round's forward, read by the last round's backward.
 
 Task kinds, in chain order (heterogeneous models get distinct block
 task kinds per distinct layer type):
@@ -123,7 +147,7 @@ task kinds per distinct layer type):
   - outputs: the first hidden state `x_0`
 - **Forward** (per layer)
   - inputs: layer input hidden state `x_i`, parameters `W_i`
-  - outputs: next hidden state `x_{i+1}`, `A_i` (+ optionally `M_i`)
+  - outputs: next hidden state `x_{i+1}`, `A_i` (+ optionally `AuxTemp_i`)
 - **Head + Loss** — a SINGLE fused task: final norm + LM head forward
   + loss + head backward, rowwise token-chunked so no (tokens, vocab) tensor
   is ever materialized
@@ -131,10 +155,10 @@ task kinds per distinct layer type):
   - outputs: `loss`, the first upstream gradient = `dy_L`; `dW_head` on round 0
   - mutates: `dW_head` on later rounds (accumulation)
 - **Recompute** (per layer; only where the plan dropped `A_i`)
-  - inputs: `x_i` and `W_i` (+ optionally `M_i`)
+  - inputs: `x_i` and `W_i` (+ optionally `AuxTemp_i`)
   - outputs: `A_i`, repopulated with same activations as seen during forwards
 - **Backward** (per layer)
-  - inputs: upstream gradient `dy_{i+1}`, `A_i` (+ optionally `M_i`), `W_i`, `x_i`
+  - inputs: upstream gradient `dy_{i+1}`, `A_i` (+ optionally `AuxTemp_i`), `W_i`, `x_i`
   - outputs: downstream gradient `dy_i`; `dW_i` on round 0
   - mutates: `dW_i` on later rounds (accumulation)
 - **Embed Backward**

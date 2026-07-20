@@ -24,7 +24,7 @@ been violated at least once by accident, and the cost was measured, so the
 
 ## The contract
 
-Three nested layers sign it: kernel implementations (`tasks/kernels/registry.py`
+Three nested layers sign it: kernel implementations (`dataflow_training/kernels/registry.py`
 ABI), task executables (`runtime/executable.py` `launch()`), and resolve-time
 code (capability probes, warmup).
 
@@ -56,8 +56,7 @@ code (capability probes, warmup).
 **MAY**
 - Allocate scratch through torch's caching allocator (`allocates="torch"`,
   `workspace=internal(...)`) — steady-state cache hits are async; the
-  profiler measures the peak and the planner reserves it. (This supersedes
-  the older "no allocation" phrasing in `executable.py`.)
+  profiler measures the peak and the planner reserves it.
 - Compose many kernels/aten calls — count is irrelevant; blocking is what's
   banned.
 - Write through into context views; mutate declared `mutates` in place.
@@ -74,7 +73,7 @@ inside a measured or executed step.
 | violation | mechanism | measured cost |
 |---|---|---|
 | `torch.bincount` in `moe_sort` (hidden D2H of validation `min()`) | host blocks until the compute stream drains to the readback point; queue past it can't be enqueued → GPU starves after | 22 ms drain per recompute task; rc tasks 48% GPU-idle inside their own windows |
-| `F.grouped_mm` (reads `offs` to host every call to build cutlass group descriptors) | same, ×4 per bwd task, ×1-2 per fwd/rc | the entire bs64 envelope-curve inversion; real-vs-sim −5..−18%, plan-dependent; fixed by the device-offset triton kernel → curve monotone, ±5% |
+| `F.grouped_mm` (reads `offs` to host every call to build cutlass group descriptors) | same, ×4 per bwd task, ×1-2 per fwd/rc | a whole batch-64 throughput-vs-budget sweep whose measured curve INVERTED across budgets; real-vs-sim −5..−18%, plan-dependent; fixed by the device-offset triton kernel → curve monotone, ±5% |
 | any host block in `launch()` | the dispatcher **is** the transfer engine driver: while blocked, no tokens are processed, no queued transfer starts, no directive fires — the overlap schedule the planner counted on collapses machine-wide, not just on the compute lane | (same incidents; the single-thread coupling is why a "small" sync is never small) |
 | why profiles can't save you | back-to-back reps keep the queue deep on *both* sides of a sync — drain cost ≈ 0 in the profile, large and queue-depth-dependent in the strict-paced run | profiled recompute 44.8 ms ≈ pure kernel sum; in-run 73-82 ms |
 
@@ -95,8 +94,9 @@ registered for A/B only: demoted priority + `allocates="vendor"`.
 - **cublasLt / cuBLAS on host-static shapes** (dense projections, router,
   shared expert — everything whose M/N/K is fixed at lowering): **legal**.
   Descriptors are built from plan-time constants; nothing reads the device.
-  flextrain's `matmul_dispatcher` (ctypes cublasLt with heuristic caching)
-  would be a clean registry impl for dense ops *after* a spin-audit of its
+  the `matmul_dispatcher` of flextrain (a host-offload trainer studied
+  for these patterns; ctypes cublasLt with heuristic caching) would be a
+  clean registry impl for dense ops *after* a spin-audit of its
   steady state, with first-call heuristic queries pushed to resolve/profile
   warmup.
 - **cublasLt / cuBLAS grouped over dynamic expert segments**: **illegal
@@ -129,9 +129,8 @@ rising order of engine change:
   beyond cap — breaks dropless exactness/parity). `MoESpec`/
   `moe_local_rows` is the seam where this policy already lives; EP
   capacity policies may force it anyway.
-- **A. Host-visible outputs (the principled dynamic option).** Two design
-  design-review corrections shaped this (2026-07-06), replacing an earlier
-  transfer-directive sketch: (1) the first-order mechanism separating a
+- **A. Host-visible outputs (the principled dynamic option).** Two
+  observations shape this design: (1) the first-order mechanism separating a
   benign readback from aten's pathology is **pinned vs. pageable** — a
   kernel-write or memcpy into pinned host memory never blocks the calling
   thread; pageable D2H blocks *at the call*, at a library-chosen stream
@@ -175,9 +174,8 @@ rising order of engine change:
 
 ### The rejected alternative, argued honestly: a sanctioned early block
 
-A design-review challenge (2026-07-06): flextrain's dispatch thread just
-`.synchronize()`s after the sort and reads pinned counts — why not allow
-that? The concession first: **it would work today, at ~1%/step.** Strict
+flextrain's dispatch thread just `.synchronize()`s after the sort and
+reads pinned counts — why not allow that? The concession first: **it would work today, at ~1%/step.** Strict
 pacing is precisely what makes a *deliberate early* sync cheap — the
 compute queue is empty at task start, so the drain is the task's own
 prefix (~0.3-1 ms), not the 22 ms tail-position drain aten paid; pinned
@@ -205,7 +203,7 @@ Why the contract still says no:
    dispatcher is the transfer driver). Bounded by block length today;
    grows with anything that puts more in flight.
 
-The readback directive is the same information with the wait relocated
-into the token loop — where every other wait in this engine lives — at
+The host-visible-output design (A) is the same information with the wait
+relocated into the token loop — where every other wait in this engine lives — at
 lower latency (~20-100 µs token round-trip vs 0.3-1 ms block), with zero
 compute-stream involvement, and it stays correct under dispatch-ahead.

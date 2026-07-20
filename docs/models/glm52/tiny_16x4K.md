@@ -4,7 +4,7 @@ GENERATED from `ShapedGlm52Config.tiny()` at run shape microbatch 16 × seq 4096
 
 Layer kinds (6 layers): `gdl gml gmf gmf gml gmf`
 
-**Run shape**: microbatch 16 × seq_len 4096 = **65,536 tokens per round** (× 1 grad-accum round(s) per step). `A_*`/`M_*` objects are sized per round; bytes/token figures transfer to any run shape.
+**Run shape**: microbatch 16 × seq_len 4096 = **65,536 tokens per round** (× 1 grad-accum round(s) per step). `A_*`/`AuxTemp_*` objects are sized per round; bytes/token figures transfer to any run shape.
 
 ## Object summary
 

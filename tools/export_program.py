@@ -1,51 +1,67 @@
 """Golden path: shaped program -> PressureFit (+ recompute) -> sim -> exports.
 
-Produces, under --out (default examples/):
+Works for ANY preset (`run.presets.resolve_preset` name — the full
+table is docs/builtin_models.md). Produces, under --out (default
+examples/):
     <name>.program.json            bare program (core IR)
     <name>.annotated.json          planner-annotated program (core IR)
     <name>.webapp.json             DataflowProgram v1 (upload at the webapp)
     <name>.summary.json            makespan / peak-fast / chosen recompute levels
 
 Usage:
-    python tools/export_program.py --config tiny --fast-gib 0.0006
-    python tools/export_program.py --config 8b --fast-gib 16 --recompute
+    python tools/export_program.py --preset llama3:tiny --fast-gib 0.0006
+    python tools/export_program.py --preset llama3_8b --fast-gib 16 --recompute
+    python tools/export_program.py --preset gpt2_124m --fast-gib 4 --recompute
 """
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import time
+from dataclasses import replace
 from pathlib import Path
 
 from dataflow.core import save_program, validate_program
-from dataflow.core.jsonio import program_to_dict
 from dataflow.core.convert import to_webapp_program
 from dataflow_training.lowering.planning import plan_program, simulate_program
-from dataflow_training.model_families.llama3 import ShapedLlamaConfig, build_shaped_llama3
+from dataflow_training.model_families.families import load_plugins, resolve_family
+from dataflow_training.run.presets import resolve_preset
 
 GIB = 1024**3
 
 
+def lower_variant(fam, cfg, levels):
+    return fam.lower(cfg, recompute_levels=levels)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", choices=["tiny", "8b"], default="tiny")
+    parser.add_argument("--preset", default="llama3:tiny",
+                        help="any resolve_preset name (docs/builtin_models.md)")
+    parser.add_argument("--plugin", action="append", default=None,
+                        help="external-family plugin module(s) to load")
     parser.add_argument("--fast-gib", type=float, required=True)
     parser.add_argument("--recompute", action="store_true")
-    parser.add_argument("--seq-len", type=int, default=4096)
-    parser.add_argument("--batch", type=int, default=1)
-    parser.add_argument("--grad-accum-rounds", type=int, default=1)
+    parser.add_argument("--seq-len", type=int, default=None)
+    parser.add_argument("--batch", type=int, default=None)
+    parser.add_argument("--grad-accum-rounds", type=int, default=None)
     parser.add_argument("--out", type=Path, default=Path("examples"))
     args = parser.parse_args()
 
-    if args.config == "tiny":
-        cfg = ShapedLlamaConfig.tiny()
-    else:
-        cfg = ShapedLlamaConfig.llama3_8b(
-            seq_len=args.seq_len, batch=args.batch, grad_accum_rounds=args.grad_accum_rounds
-        )
+    if args.plugin:
+        load_plugins(explicit=args.plugin)
+    cfg = resolve_preset(args.preset)
+    overrides = {k: v for k, v in (("seq_len", args.seq_len),
+                                   ("batch", args.batch),
+                                   ("grad_accum_rounds", args.grad_accum_rounds))
+                 if v is not None}
+    if overrides:
+        cfg = replace(cfg, **overrides)
+    fam = resolve_family(cfg)
 
     cap = int(args.fast_gib * GIB)
-    program = build_shaped_llama3(cfg)
+    program = fam.lower(cfg)
     validate_program(program)
 
     t0 = time.perf_counter()
@@ -53,7 +69,7 @@ def main() -> None:
         program,
         fast_memory_capacity=cap,
         recompute=args.recompute,
-        build_variant=(lambda levels: build_shaped_llama3(cfg, recompute_levels=levels))
+        build_variant=functools.partial(lower_variant, fam, cfg)
         if args.recompute
         else None,
     )

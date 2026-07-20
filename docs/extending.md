@@ -26,8 +26,9 @@ its math is pinned to an autograd reference.
 
 ## Where a family's files live (the layout contract)
 
-**A new family is three files + one twin + one registry line.** One
-package under `src/dataflow_training/model_families/<family>/`:
+**A new family is four files + one twin + one registry line + one
+test module.** One package under
+`src/dataflow_training/model_families/<family>/`:
 
 | file | contents |
 |---|---|
@@ -190,8 +191,10 @@ on the family's `LayerKindSpec`:
 Blocks opt in via a `*AuxTempState` mixin (`_aux_temp_state(ctx)` —
 `MoEAuxTempState`, `Glm52AuxTempState`); launches stay the base-class
 ones, locating A/dW/AuxTemp buffers by id PREFIX. The fleet invariant:
-NO family overrides the base `launch` (custom launches are how
-ctx-ABI drift starts). `*ProfileFill` mixins must seed VALID
+no aux/MoE opt-in requires overriding the base `launch` (custom
+launches are how ctx-ABI drift starts; the one sanctioned exception
+is dsv32's dense-warm-up KL backward, which replaces the objective
+wholesale). `*ProfileFill` mixins must seed VALID
 routing/index content into the AuxTemp buffers (garbage int fields =
 illegal memory access in profiled bwd; concentrated routing =
 unreproducible costs). Trade-off to know: recompute frees less memory
@@ -347,8 +350,8 @@ family must guarantee:
    through `build_shaped_program` with populated `LayerKindSpec` subop
    lists and `LooseCosts` get this for free (the shared
    `roofline_block_kind_spec` covers dense-causal blocks). A custom
-   emitter must stamp `{"name", "flops", "memory_bytes", "efficiency"}`
-   dicts per subop, or add its zero-flop plumbing keys to
+   emitter must stamp `{"kind": "roofline", "name", "flops",
+   "memory_bytes", "efficiency"}` dicts per subop, or add its zero-flop plumbing keys to
    `flops.EXEMPT` with a reason. An unstamped, non-exempt task
    HARD-FAILS the accounting (the completeness tripwire) — a new
    family cannot silently report wrong numbers.
@@ -539,7 +542,7 @@ Variants the fleet already exercises — reuse, don't reinvent:
 - **Tied embeddings**: a config flag (`tied_embeddings=True`). The chain
   builder emits no `W_head`/`O_head`/`optimizer_head`; head tasks read
   `W_embed` (packed `[table | final_norm_w]` via `head_weight_layout`);
-  round-0 `head_bwd` CREATES the shared `dW_embed` and `embed_bwd`
+  round-0 `head_loss` CREATES the shared `dW_embed` and `embed_bwd`
   accumulates into it.
 - **Third-party fused kernels** (fla, flash-attn, ...): pin the exact
   fwd/bwd contracts in the family's test module BEFORE the blocks call

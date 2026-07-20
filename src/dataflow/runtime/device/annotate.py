@@ -11,8 +11,8 @@ range to the stream that executed the work — which is the per-stream
 timeline people actually read in nsys ("NVTX projected onto GPU").
 
 Annotation is off by default (a push/pop pair costs ~1 us of host time and
-strict-pacing dispatch is host-latency sensitive); the nsys wrapper enables
-it via DATAFLOW_NVTX=1.
+strict-pacing dispatch is host-latency sensitive); the daemon's
+profiler_control verb switches it on for a bracketed capture window.
 """
 from __future__ import annotations
 

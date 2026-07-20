@@ -237,7 +237,7 @@ probe fails it; a whole-entry envelope would have hidden it.
    discrete chooser;
    expose `step_counts`-style counters for every counted selection;
    declare `AUX_FORM`; stash per-forward aux terms.
-2. Bridge in `pretrain/bridges/`: `to_reference_state_dict` + strict
+2. Bridge in `model_families/<family>/bridge.py`: `to_reference_state_dict` + strict
    load + byte-identity assert. The grad extraction reuses it as-is.
 3. Gates: family rows in the parity suite (uniform + ragged), per-field
    ladder entries, counts parity if MoE, freeze allowlists if phased.
