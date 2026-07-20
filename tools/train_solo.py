@@ -33,9 +33,11 @@ from dataflow_training.run.recipe import Recipe
 RESULTS = _ROOT / "results" / "pretrain"
 
 
-def _recipe(steps: int, *, peak_lr: float = 3e-4) -> Recipe:
+def _recipe(steps: int, *, peak_lr: float = 3e-4,
+            muon_lr: float | None = None) -> Recipe:
     return Recipe(peak_lr=peak_lr, min_lr=peak_lr / 10,
-                  warmup_steps=max(1, steps // 10), total_steps=steps)
+                  warmup_steps=max(1, steps // 10), total_steps=steps,
+                  muon_lr=muon_lr)
 
 
 def _feed(cfg, data_mode: str):
@@ -249,7 +251,8 @@ def cmd_engine(args) -> int:
         overrides["batch"] = args.batch
     if overrides:
         cfg = replace(cfg, **overrides)
-    recipe = _recipe(args.steps, peak_lr=args.peak_lr)
+    recipe = _recipe(args.steps, peak_lr=args.peak_lr,
+                     muon_lr=args.muon_lr)
     feed = _feed(cfg, args.data)
     ck_dir = None
     if args.checkpoint_every:
@@ -285,6 +288,9 @@ def main() -> int:
     e.add_argument("--steps", type=int, default=P.TRAIN_STEPS)
     e.add_argument("--opt", choices=["adamw", "muon"], default=None)
     e.add_argument("--peak-lr", type=float, default=3e-4)
+    e.add_argument("--muon-lr", type=float, default=None,
+                   help="muon params' own PEAK lr (rides the same "
+                        "warmup+cosine shape; default: share --peak-lr)")
     e.add_argument("--budget", type=float, default=14.0)
     e.add_argument("--slab", type=float, default=100.0)
     e.add_argument("--batch", type=int, default=None,
