@@ -56,6 +56,7 @@ At this run shape (65,536 tokens/round). Token-scaled objects show per-token siz
 | `seq_len` | 4096 |
 | `rope_base` | 10000000.0 |
 | `opt_policy` | adamw |
+| `kinds` | ('lin', 'lin', 'lin', 'full') |
 
 ## Objects, per layer kind
 
@@ -125,7 +126,7 @@ At this run shape (65,536 tokens/round). Token-scaled objects show per-token siz
 | `rstd_k` | fp32 | (131072,) | 512.00 KiB |
 | `gate` | bf16 | (65536, 256) | 32.00 MiB |
 | `v` | bf16 | (65536, 128) | 16.00 MiB |
-| `lse` | fp32 | (64, 4096) | 1.00 MiB |
+| `lse` | fp32 | (4, 65536) | 1.00 MiB |
 | `attn_out` | bf16 | (65536, 256) | 32.00 MiB |
 | `xo` | bf16 | (65536, 256) | 32.00 MiB |
 | `rstd_ffn` | fp32 | (65536,) | 256.00 KiB |
@@ -214,18 +215,16 @@ At this run shape (65,536 tokens/round). Token-scaled objects show per-token siz
     - `qknorm_rope`:
         2. `rmsnorm_fwd ×2`
         3. `rope_fwd ×2`
-    - `attn`:
-        4. `_scaled_dot_product_flash_attention`
     - `gate_o`:
-        5. `addmm`
+        4. `addmm`
     - `ffn_norm`:
-        6. `rmsnorm_fwd`
+        5. `rmsnorm_fwd`
     - `up_proj`:
-        7. `mm ×2`
+        6. `mm ×2`
     - `swiglu`:
-        8. `swiglu_fwd_out`
+        7. `swiglu_fwd_out`
     - `down_resid`:
-        9. `addmm`
+        8. `addmm`
 
 ### `head_loss` — `HeadLoss`
 
@@ -256,7 +255,7 @@ At this run shape (65,536 tokens/round). Token-scaled objects show per-token siz
     6. `mm ×2`
     7. `rmsnorm_apply ×2`
     8. `rope_fwd ×2`
-    9. `_scaled_dot_product_flash_attention_backward`
+    9. `_flash_attention_backward`
     10. `rope_bwd ×2`
     11. `rmsnorm_bwd ×2`
     12. `rmsnorm_apply`

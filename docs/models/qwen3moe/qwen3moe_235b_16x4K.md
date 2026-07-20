@@ -80,7 +80,7 @@ At this run shape (65,536 tokens/round). Token-scaled objects show per-token siz
 | `rstd_q` | fp32 | (4194304,) | 16.00 MiB |
 | `rstd_k` | fp32 | (262144,) | 1.00 MiB |
 | `v` | bf16 | (65536, 512) | 64.00 MiB |
-| `lse` | fp32 | (1024, 4096) | 16.00 MiB |
+| `lse` | fp32 | (64, 65536) | 16.00 MiB |
 | `attn_out` | bf16 | (65536, 8192) | 1.00 GiB |
 | `h_mid` | bf16 | (65536, 4096) | 512.00 MiB |
 | `rstd_ffn` | fp32 | (65536,) | 256.00 KiB |
@@ -105,6 +105,13 @@ At this run shape (65,536 tokens/round). Token-scaled objects show per-token siz
 
 ## Tasks
 
+### `prologue_round` — `RoundPrologue`
+
+- example task: `prologue_round_0_0`
+- inputs: `Aux_0` (1.50 KiB), `Aux_1` (1.50 KiB), `Aux_2` (1.50 KiB), `Aux_3` (1.50 KiB), `Aux_4` (1.50 KiB), `Aux_5` (1.50 KiB), `Aux_6` (1.50 KiB), `Aux_7` (1.50 KiB), `Aux_8` (1.50 KiB), `Aux_9` (1.50 KiB), `Aux_10` (1.50 KiB), `Aux_11` (1.50 KiB), `Aux_12` (1.50 KiB), `Aux_13` (1.50 KiB), `Aux_14` (1.50 KiB), `Aux_15` (1.50 KiB), `Aux_16` (1.50 KiB), `Aux_17` (1.50 KiB), `Aux_18` (1.50 KiB), `Aux_19` (1.50 KiB), `Aux_20` (1.50 KiB), `Aux_21` (1.50 KiB), `Aux_22` (1.50 KiB), `Aux_23` (1.50 KiB), `Aux_24` (1.50 KiB), `Aux_25` (1.50 KiB), `Aux_26` (1.50 KiB), `Aux_27` (1.50 KiB), `Aux_28` (1.50 KiB), `Aux_29` (1.50 KiB), `Aux_30` (1.50 KiB), `Aux_31` (1.50 KiB), `Aux_32` (1.50 KiB), `Aux_33` (1.50 KiB), `Aux_34` (1.50 KiB), `Aux_35` (1.50 KiB), `Aux_36` (1.50 KiB), `Aux_37` (1.50 KiB), `Aux_38` (1.50 KiB), `Aux_39` (1.50 KiB), `Aux_40` (1.50 KiB), `Aux_41` (1.50 KiB), `Aux_42` (1.50 KiB), `Aux_43` (1.50 KiB), `Aux_44` (1.50 KiB), `Aux_45` (1.50 KiB), `Aux_46` (1.50 KiB), `Aux_47` (1.50 KiB), `Aux_48` (1.50 KiB), `Aux_49` (1.50 KiB), `Aux_50` (1.50 KiB), `Aux_51` (1.50 KiB), `Aux_52` (1.50 KiB), `Aux_53` (1.50 KiB), `Aux_54` (1.50 KiB), `Aux_55` (1.50 KiB), `Aux_56` (1.50 KiB), `Aux_57` (1.50 KiB), `Aux_58` (1.50 KiB), `Aux_59` (1.50 KiB), `Aux_60` (1.50 KiB), `Aux_61` (1.50 KiB), `Aux_62` (1.50 KiB), `Aux_63` (1.50 KiB), `Aux_64` (1.50 KiB), `Aux_65` (1.50 KiB), `Aux_66` (1.50 KiB), `Aux_67` (1.50 KiB), `Aux_68` (1.50 KiB), `Aux_69` (1.50 KiB), `Aux_70` (1.50 KiB), `Aux_71` (1.50 KiB), `Aux_72` (1.50 KiB), `Aux_73` (1.50 KiB), `Aux_74` (1.50 KiB), `Aux_75` (1.50 KiB), `Aux_76` (1.50 KiB), `Aux_77` (1.50 KiB), `Aux_78` (1.50 KiB), `Aux_79` (1.50 KiB), `Aux_80` (1.50 KiB), `Aux_81` (1.50 KiB), `Aux_82` (1.50 KiB), `Aux_83` (1.50 KiB), `Aux_84` (1.50 KiB), `Aux_85` (1.50 KiB), `Aux_86` (1.50 KiB), `Aux_87` (1.50 KiB), `Aux_88` (1.50 KiB), `Aux_89` (1.50 KiB), `Aux_90` (1.50 KiB), `Aux_91` (1.50 KiB), `Aux_92` (1.50 KiB), `Aux_93` (1.50 KiB)
+- outputs: `current_round_0_0` (4 B)
+- mutates: `Aux_0`, `Aux_1`, `Aux_2`, `Aux_3`, `Aux_4`, `Aux_5`, `Aux_6`, `Aux_7`, `Aux_8`, `Aux_9`, `Aux_10`, `Aux_11`, `Aux_12`, `Aux_13`, `Aux_14`, `Aux_15`, `Aux_16`, `Aux_17`, `Aux_18`, `Aux_19`, `Aux_20`, `Aux_21`, `Aux_22`, `Aux_23`, `Aux_24`, `Aux_25`, `Aux_26`, `Aux_27`, `Aux_28`, `Aux_29`, `Aux_30`, `Aux_31`, `Aux_32`, `Aux_33`, `Aux_34`, `Aux_35`, `Aux_36`, `Aux_37`, `Aux_38`, `Aux_39`, `Aux_40`, `Aux_41`, `Aux_42`, `Aux_43`, `Aux_44`, `Aux_45`, `Aux_46`, `Aux_47`, `Aux_48`, `Aux_49`, `Aux_50`, `Aux_51`, `Aux_52`, `Aux_53`, `Aux_54`, `Aux_55`, `Aux_56`, `Aux_57`, `Aux_58`, `Aux_59`, `Aux_60`, `Aux_61`, `Aux_62`, `Aux_63`, `Aux_64`, `Aux_65`, `Aux_66`, `Aux_67`, `Aux_68`, `Aux_69`, `Aux_70`, `Aux_71`, `Aux_72`, `Aux_73`, `Aux_74`, `Aux_75`, `Aux_76`, `Aux_77`, `Aux_78`, `Aux_79`, `Aux_80`, `Aux_81`, `Aux_82`, `Aux_83`, `Aux_84`, `Aux_85`, `Aux_86`, `Aux_87`, `Aux_88`, `Aux_89`, `Aux_90`, `Aux_91`, `Aux_92`, `Aux_93`
+
 ### `embed_fwd` — `EmbedFwd`
 
 - example task: `embed_fwd_0_0`
@@ -117,9 +124,9 @@ At this run shape (65,536 tokens/round). Token-scaled objects show per-token siz
 ### `q3moeattn_fwd` — `Qwen3MoeBlockFwd`
 
 - example task: `block_fwd_0_0_0`
-- inputs: `y_embed_0_0` (512.00 MiB), `W_0` (4.63 GiB)
-- outputs: `y_0_0_0` (512.00 MiB), `A_0_0_0` (5.67 GiB), `M_0_0_0` (5.00 MiB)
-- mutates: —
+- inputs: `y_embed_0_0` (512.00 MiB), `W_0` (4.63 GiB), `current_round_0_0` (4 B), `Aux_0` (1.50 KiB)
+- outputs: `y_0_0_0` (512.00 MiB), `A_0_0_0` (5.67 GiB), `AuxTemp_0_0_0` (5.00 MiB)
+- mutates: `Aux_0`
 - stages (name — emitted ctx fields):
     0. `attn_norm` — rstd_attn
     1. `qkv_qknorm` — qm, km, rstd_q, rstd_k, v
@@ -138,14 +145,13 @@ At this run shape (65,536 tokens/round). Token-scaled objects show per-token siz
         2. `rmsnorm_fwd ×2`
     - `rope`:
         3. `rope_fwd ×2`
-    - `attn`:
-        4. `_scaled_dot_product_flash_attention`
     - `resid1_norm2`:
-        5. `addmm`
-        6. `rmsnorm_fwd`
+        4. `addmm`
+        5. `rmsnorm_fwd`
     - `moe_route`:
-        7. `mm`
-        8. `moe_topk_softmax`
+        6. `mm`
+        7. `moe_topk_softmax`
+        8. `scatter_add_ ×2`
     - `moe_dispatch`:
         9. `moe_sort`
         10. `moe_dispatch_fwd`
@@ -181,7 +187,7 @@ At this run shape (65,536 tokens/round). Token-scaled objects show per-token siz
 ### `q3moeattn_bwd` — `Qwen3MoeBlockBwd`
 
 - example task: `block_bwd_0_0_93`
-- inputs: `dy_0_0_93` (512.00 MiB), `A_0_0_93` (5.67 GiB), `y_0_0_92` (512.00 MiB), `W_93` (4.63 GiB), `M_0_0_93` (5.00 MiB)
+- inputs: `dy_0_0_93` (512.00 MiB), `A_0_0_93` (5.67 GiB), `y_0_0_92` (512.00 MiB), `W_93` (4.63 GiB), `AuxTemp_0_0_93` (5.00 MiB), `Aux_93` (1.50 KiB)
 - outputs: `dy_0_0_92` (512.00 MiB), `dW_0_93` (4.63 GiB)
 - mutates: —
 - kernel calls:
@@ -204,7 +210,7 @@ At this run shape (65,536 tokens/round). Token-scaled objects show per-token siz
     16. `mm ×2`
     17. `rmsnorm_apply ×2`
     18. `rope_fwd ×2`
-    19. `_scaled_dot_product_flash_attention_backward`
+    19. `_flash_attention_backward`
     20. `rope_bwd ×2`
     21. `rmsnorm_bwd ×2`
     22. `rmsnorm_apply`

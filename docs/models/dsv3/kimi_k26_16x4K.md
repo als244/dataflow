@@ -54,7 +54,6 @@ At this run shape (65,536 tokens/round). Token-scaled objects show per-token siz
 | `tokens` | 65536 |
 | `seq_len` | 4096 |
 | `rope_base` | 50000.0 |
-| `opt_policy` | adamw |
 
 ## Objects, per layer kind
 
@@ -88,7 +87,7 @@ At this run shape (65,536 tokens/round). Token-scaled objects show per-token siz
 | `rstd_qa` | fp32 | (65536,) | 256.00 KiB |
 | `kv_a` | bf16 | (65536, 576) | 72.00 MiB |
 | `rstd_kva` | fp32 | (65536,) | 256.00 KiB |
-| `lse` | fp32 | (1024, 4096) | 16.00 MiB |
+| `lse` | fp32 | (64, 65536) | 16.00 MiB |
 | `attn_out` | bf16 | (65536, 8192) | 1.00 GiB |
 | `h_mid` | bf16 | (65536, 7168) | 896.00 MiB |
 | `rstd_ffn` | fp32 | (65536,) | 256.00 KiB |
@@ -126,7 +125,7 @@ At this run shape (65,536 tokens/round). Token-scaled objects show per-token siz
 | `rstd_qa` | fp32 | (65536,) | 256.00 KiB |
 | `kv_a` | bf16 | (65536, 576) | 72.00 MiB |
 | `rstd_kva` | fp32 | (65536,) | 256.00 KiB |
-| `lse` | fp32 | (1024, 4096) | 16.00 MiB |
+| `lse` | fp32 | (64, 65536) | 16.00 MiB |
 | `attn_out` | bf16 | (65536, 8192) | 1.00 GiB |
 | `h_mid` | bf16 | (65536, 7168) | 896.00 MiB |
 | `rstd_ffn` | fp32 | (65536,) | 256.00 KiB |
@@ -151,6 +150,13 @@ At this run shape (65,536 tokens/round). Token-scaled objects show per-token siz
 | `final_norm_w` | bf16 | (7168,) | 14.00 KiB |
 
 ## Tasks
+
+### `prologue_round` — `RoundPrologue`
+
+- example task: `prologue_round_0_0`
+- inputs: `Aux_1` (4.50 KiB), `Aux_2` (4.50 KiB), `Aux_3` (4.50 KiB), `Aux_4` (4.50 KiB), `Aux_5` (4.50 KiB), `Aux_6` (4.50 KiB), `Aux_7` (4.50 KiB), `Aux_8` (4.50 KiB), `Aux_9` (4.50 KiB), `Aux_10` (4.50 KiB), `Aux_11` (4.50 KiB), `Aux_12` (4.50 KiB), `Aux_13` (4.50 KiB), `Aux_14` (4.50 KiB), `Aux_15` (4.50 KiB), `Aux_16` (4.50 KiB), `Aux_17` (4.50 KiB), `Aux_18` (4.50 KiB), `Aux_19` (4.50 KiB), `Aux_20` (4.50 KiB), `Aux_21` (4.50 KiB), `Aux_22` (4.50 KiB), `Aux_23` (4.50 KiB), `Aux_24` (4.50 KiB), `Aux_25` (4.50 KiB), `Aux_26` (4.50 KiB), `Aux_27` (4.50 KiB), `Aux_28` (4.50 KiB), `Aux_29` (4.50 KiB), `Aux_30` (4.50 KiB), `Aux_31` (4.50 KiB), `Aux_32` (4.50 KiB), `Aux_33` (4.50 KiB), `Aux_34` (4.50 KiB), `Aux_35` (4.50 KiB), `Aux_36` (4.50 KiB), `Aux_37` (4.50 KiB), `Aux_38` (4.50 KiB), `Aux_39` (4.50 KiB), `Aux_40` (4.50 KiB), `Aux_41` (4.50 KiB), `Aux_42` (4.50 KiB), `Aux_43` (4.50 KiB), `Aux_44` (4.50 KiB), `Aux_45` (4.50 KiB), `Aux_46` (4.50 KiB), `Aux_47` (4.50 KiB), `Aux_48` (4.50 KiB), `Aux_49` (4.50 KiB), `Aux_50` (4.50 KiB), `Aux_51` (4.50 KiB), `Aux_52` (4.50 KiB), `Aux_53` (4.50 KiB), `Aux_54` (4.50 KiB), `Aux_55` (4.50 KiB), `Aux_56` (4.50 KiB), `Aux_57` (4.50 KiB), `Aux_58` (4.50 KiB), `Aux_59` (4.50 KiB), `Aux_60` (4.50 KiB)
+- outputs: `current_round_0_0` (4 B)
+- mutates: `Aux_1`, `Aux_2`, `Aux_3`, `Aux_4`, `Aux_5`, `Aux_6`, `Aux_7`, `Aux_8`, `Aux_9`, `Aux_10`, `Aux_11`, `Aux_12`, `Aux_13`, `Aux_14`, `Aux_15`, `Aux_16`, `Aux_17`, `Aux_18`, `Aux_19`, `Aux_20`, `Aux_21`, `Aux_22`, `Aux_23`, `Aux_24`, `Aux_25`, `Aux_26`, `Aux_27`, `Aux_28`, `Aux_29`, `Aux_30`, `Aux_31`, `Aux_32`, `Aux_33`, `Aux_34`, `Aux_35`, `Aux_36`, `Aux_37`, `Aux_38`, `Aux_39`, `Aux_40`, `Aux_41`, `Aux_42`, `Aux_43`, `Aux_44`, `Aux_45`, `Aux_46`, `Aux_47`, `Aux_48`, `Aux_49`, `Aux_50`, `Aux_51`, `Aux_52`, `Aux_53`, `Aux_54`, `Aux_55`, `Aux_56`, `Aux_57`, `Aux_58`, `Aux_59`, `Aux_60`
 
 ### `embed_fwd` — `EmbedFwd`
 
@@ -189,24 +195,22 @@ At this run shape (65,536 tokens/round). Token-scaled objects show per-token siz
         6. `rmsnorm_fwd`
         7. `rope_fwd`
         8. `mm`
-    - `mla_attn`:
-        9. `_scaled_dot_product_flash_attention`
     - `resid1_norm2`:
-        10. `addmm`
-        11. `rmsnorm_fwd`
+        9. `addmm`
+        10. `rmsnorm_fwd`
     - `up_proj`:
-        12. `mm ×2`
+        11. `mm ×2`
     - `swiglu`:
-        13. `swiglu_fwd_out`
+        12. `swiglu_fwd_out`
     - `down_resid`:
-        14. `addmm`
+        13. `addmm`
 
 ### `mlamoe_fwd` — `Dsv3MoeBlockFwd`
 
 - example task: `block_fwd_0_0_1`
-- inputs: `y_0_0_0` (896.00 MiB), `W_1` (31.78 GiB)
-- outputs: `y_0_0_1` (896.00 MiB), `A_0_0_1` (6.70 GiB), `M_0_0_1` (5.00 MiB)
-- mutates: —
+- inputs: `y_0_0_0` (896.00 MiB), `W_1` (31.78 GiB), `current_round_0_0` (4 B), `Aux_1` (4.50 KiB)
+- outputs: `y_0_0_1` (896.00 MiB), `A_0_0_1` (6.70 GiB), `AuxTemp_0_0_1` (5.00 MiB)
+- mutates: `Aux_1`
 - stages (name — emitted ctx fields):
     0. `attn_norm` — rstd_attn
     1. `mla_q` — q_a, rstd_qa
@@ -231,14 +235,13 @@ At this run shape (65,536 tokens/round). Token-scaled objects show per-token siz
         6. `rmsnorm_fwd`
         7. `rope_fwd`
         8. `mm`
-    - `mla_attn`:
-        9. `_scaled_dot_product_flash_attention`
     - `resid1_norm2`:
-        10. `addmm`
-        11. `rmsnorm_fwd`
+        9. `addmm`
+        10. `rmsnorm_fwd`
     - `moe_route`:
-        12. `mm`
-        13. `moe_topk_sigmoid_noaux`
+        11. `mm`
+        12. `moe_topk_sigmoid_noaux`
+        13. `scatter_add_ ×2`
     - `moe_dispatch`:
         14. `moe_sort`
         15. `moe_dispatch_fwd`
@@ -278,9 +281,9 @@ At this run shape (65,536 tokens/round). Token-scaled objects show per-token siz
 ### `mlamoe_bwd` — `Dsv3MoeBlockBwd`
 
 - example task: `block_bwd_0_0_60`
-- inputs: `dy_0_0_60` (896.00 MiB), `A_0_0_60` (6.70 GiB), `y_0_0_59` (896.00 MiB), `W_60` (31.78 GiB), `M_0_0_60` (5.00 MiB)
+- inputs: `dy_0_0_60` (896.00 MiB), `A_0_0_60` (6.70 GiB), `y_0_0_59` (896.00 MiB), `W_60` (31.78 GiB), `AuxTemp_0_0_60` (5.00 MiB), `Aux_60` (4.50 KiB)
 - outputs: `dy_0_0_59` (896.00 MiB), `dW_0_60` (31.78 GiB)
-- mutates: —
+- mutates: `W_60`
 - kernel calls:
     0. `rmsnorm_apply`
     1. `moe_dispatch_fwd ×2`
@@ -309,7 +312,7 @@ At this run shape (65,536 tokens/round). Token-scaled objects show per-token siz
     24. `rmsnorm_apply`
     25. `rope_fwd`
     26. `mm`
-    27. `_scaled_dot_product_flash_attention_backward`
+    27. `_flash_attention_backward`
     28. `rope_bwd`
     29. `mm ×2`
     30. `rmsnorm_bwd`
@@ -349,7 +352,7 @@ At this run shape (65,536 tokens/round). Token-scaled objects show per-token siz
     10. `rmsnorm_apply`
     11. `rope_fwd`
     12. `mm`
-    13. `_scaled_dot_product_flash_attention_backward`
+    13. `_flash_attention_backward`
     14. `rope_bwd`
     15. `mm ×2`
     16. `rmsnorm_bwd`

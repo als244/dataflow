@@ -80,7 +80,7 @@ At this run shape (65,536 tokens/round). Token-scaled objects show per-token siz
 | `rstd_q` | fp32 | (65536,) | 256.00 KiB |
 | `rstd_k` | fp32 | (65536,) | 256.00 KiB |
 | `v` | bf16 | (65536, 2048) | 256.00 MiB |
-| `lse` | fp32 | (256, 4096) | 4.00 MiB |
+| `lse` | fp32 | (16, 65536) | 4.00 MiB |
 | `attn_out` | bf16 | (65536, 2048) | 256.00 MiB |
 | `h_mid` | bf16 | (65536, 2048) | 256.00 MiB |
 | `rstd_ffn` | fp32 | (65536,) | 256.00 KiB |
@@ -105,6 +105,13 @@ At this run shape (65,536 tokens/round). Token-scaled objects show per-token siz
 
 ## Tasks
 
+### `prologue_round` — `RoundPrologue`
+
+- example task: `prologue_round_0_0`
+- inputs: `Aux_0` (768 B), `Aux_1` (768 B), `Aux_2` (768 B), `Aux_3` (768 B), `Aux_4` (768 B), `Aux_5` (768 B), `Aux_6` (768 B), `Aux_7` (768 B), `Aux_8` (768 B), `Aux_9` (768 B), `Aux_10` (768 B), `Aux_11` (768 B), `Aux_12` (768 B), `Aux_13` (768 B), `Aux_14` (768 B), `Aux_15` (768 B)
+- outputs: `current_round_0_0` (4 B)
+- mutates: `Aux_0`, `Aux_1`, `Aux_2`, `Aux_3`, `Aux_4`, `Aux_5`, `Aux_6`, `Aux_7`, `Aux_8`, `Aux_9`, `Aux_10`, `Aux_11`, `Aux_12`, `Aux_13`, `Aux_14`, `Aux_15`
+
 ### `embed_fwd` — `EmbedFwd`
 
 - example task: `embed_fwd_0_0`
@@ -117,9 +124,9 @@ At this run shape (65,536 tokens/round). Token-scaled objects show per-token siz
 ### `moeattn_fwd` — `OlmoeBlockFwd`
 
 - example task: `block_fwd_0_0_0`
-- inputs: `y_embed_0_0` (256.00 MiB), `W_0` (800.27 MiB)
-- outputs: `y_0_0_0` (256.00 MiB), `A_0_0_0` (3.26 GiB), `M_0_0_0` (5.00 MiB)
-- mutates: —
+- inputs: `y_embed_0_0` (256.00 MiB), `W_0` (800.27 MiB), `current_round_0_0` (4 B), `Aux_0` (768 B)
+- outputs: `y_0_0_0` (256.00 MiB), `A_0_0_0` (3.26 GiB), `AuxTemp_0_0_0` (5.00 MiB)
+- mutates: `Aux_0`
 - stages (name — emitted ctx fields):
     0. `attn_norm` — rstd_attn
     1. `qkv_qknorm` — qm, km, rstd_q, rstd_k, v
@@ -138,14 +145,13 @@ At this run shape (65,536 tokens/round). Token-scaled objects show per-token siz
         2. `rmsnorm_fwd ×2`
     - `rope`:
         3. `rope_fwd ×2`
-    - `attn`:
-        4. `_scaled_dot_product_flash_attention`
     - `resid1_norm2`:
-        5. `addmm`
-        6. `rmsnorm_fwd`
+        4. `addmm`
+        5. `rmsnorm_fwd`
     - `moe_route`:
-        7. `mm`
-        8. `moe_topk_softmax`
+        6. `mm`
+        7. `moe_topk_softmax`
+        8. `scatter_add_ ×2`
     - `moe_dispatch`:
         9. `moe_sort`
         10. `moe_dispatch_fwd`
@@ -181,7 +187,7 @@ At this run shape (65,536 tokens/round). Token-scaled objects show per-token siz
 ### `moeattn_bwd` — `OlmoeBlockBwd`
 
 - example task: `block_bwd_0_0_15`
-- inputs: `dy_0_0_15` (256.00 MiB), `A_0_0_15` (3.26 GiB), `y_0_0_14` (256.00 MiB), `W_15` (800.27 MiB), `M_0_0_15` (5.00 MiB)
+- inputs: `dy_0_0_15` (256.00 MiB), `A_0_0_15` (3.26 GiB), `y_0_0_14` (256.00 MiB), `W_15` (800.27 MiB), `AuxTemp_0_0_15` (5.00 MiB), `Aux_15` (768 B)
 - outputs: `dy_0_0_14` (256.00 MiB), `dW_0_15` (800.27 MiB)
 - mutates: —
 - kernel calls:
@@ -204,7 +210,7 @@ At this run shape (65,536 tokens/round). Token-scaled objects show per-token siz
     16. `mm ×2`
     17. `rmsnorm_apply ×2`
     18. `rope_fwd ×2`
-    19. `_scaled_dot_product_flash_attention_backward`
+    19. `_flash_attention_backward`
     20. `rope_bwd ×2`
     21. `rmsnorm_bwd ×2`
     22. `rmsnorm_apply`

@@ -135,7 +135,7 @@ At this run shape (65,536 tokens/round). Token-scaled objects show per-token siz
 | `rstd_k` | fp32 | (131072,) | 512.00 KiB |
 | `gate` | bf16 | (65536, 4096) | 512.00 MiB |
 | `v` | bf16 | (65536, 512) | 64.00 MiB |
-| `lse` | fp32 | (256, 4096) | 4.00 MiB |
+| `lse` | fp32 | (16, 65536) | 4.00 MiB |
 | `attn_out` | bf16 | (65536, 4096) | 512.00 MiB |
 | `xo` | bf16 | (65536, 2048) | 256.00 MiB |
 | `rstd_ffn` | fp32 | (65536,) | 256.00 KiB |
@@ -153,6 +153,13 @@ At this run shape (65,536 tokens/round). Token-scaled objects show per-token siz
 
 ## Tasks
 
+### `prologue_round` — `RoundPrologue`
+
+- example task: `prologue_round_0_0`
+- inputs: `Aux_0` (3.00 KiB), `Aux_1` (3.00 KiB), `Aux_2` (3.00 KiB), `Aux_3` (3.00 KiB), `Aux_4` (3.00 KiB), `Aux_5` (3.00 KiB), `Aux_6` (3.00 KiB), `Aux_7` (3.00 KiB), `Aux_8` (3.00 KiB), `Aux_9` (3.00 KiB), `Aux_10` (3.00 KiB), `Aux_11` (3.00 KiB), `Aux_12` (3.00 KiB), `Aux_13` (3.00 KiB), `Aux_14` (3.00 KiB), `Aux_15` (3.00 KiB), `Aux_16` (3.00 KiB), `Aux_17` (3.00 KiB), `Aux_18` (3.00 KiB), `Aux_19` (3.00 KiB), `Aux_20` (3.00 KiB), `Aux_21` (3.00 KiB), `Aux_22` (3.00 KiB), `Aux_23` (3.00 KiB), `Aux_24` (3.00 KiB), `Aux_25` (3.00 KiB), `Aux_26` (3.00 KiB), `Aux_27` (3.00 KiB), `Aux_28` (3.00 KiB), `Aux_29` (3.00 KiB), `Aux_30` (3.00 KiB), `Aux_31` (3.00 KiB), `Aux_32` (3.00 KiB), `Aux_33` (3.00 KiB), `Aux_34` (3.00 KiB), `Aux_35` (3.00 KiB), `Aux_36` (3.00 KiB), `Aux_37` (3.00 KiB), `Aux_38` (3.00 KiB), `Aux_39` (3.00 KiB)
+- outputs: `current_round_0_0` (4 B)
+- mutates: `Aux_0`, `Aux_1`, `Aux_2`, `Aux_3`, `Aux_4`, `Aux_5`, `Aux_6`, `Aux_7`, `Aux_8`, `Aux_9`, `Aux_10`, `Aux_11`, `Aux_12`, `Aux_13`, `Aux_14`, `Aux_15`, `Aux_16`, `Aux_17`, `Aux_18`, `Aux_19`, `Aux_20`, `Aux_21`, `Aux_22`, `Aux_23`, `Aux_24`, `Aux_25`, `Aux_26`, `Aux_27`, `Aux_28`, `Aux_29`, `Aux_30`, `Aux_31`, `Aux_32`, `Aux_33`, `Aux_34`, `Aux_35`, `Aux_36`, `Aux_37`, `Aux_38`, `Aux_39`
+
 ### `embed_fwd` — `EmbedFwd`
 
 - example task: `embed_fwd_0_0`
@@ -165,9 +172,9 @@ At this run shape (65,536 tokens/round). Token-scaled objects show per-token siz
 ### `linmoe_fwd` — `Qwen35MoeLinBlockFwd`
 
 - example task: `block_fwd_0_0_0`
-- inputs: `y_embed_0_0` (256.00 MiB), `W_0` (1.57 GiB)
-- outputs: `y_0_0_0` (256.00 MiB), `A_0_0_0` (3.68 GiB), `M_0_0_0` (5.00 MiB)
-- mutates: —
+- inputs: `y_embed_0_0` (256.00 MiB), `W_0` (1.57 GiB), `current_round_0_0` (4 B), `Aux_0` (3.00 KiB)
+- outputs: `y_0_0_0` (256.00 MiB), `A_0_0_0` (3.68 GiB), `AuxTemp_0_0_0` (5.00 MiB)
+- mutates: `Aux_0`
 - stages (name — emitted ctx fields):
     0. `attn_norm` — rstd_attn
     1. `proj` — qkvz, ba
@@ -200,27 +207,28 @@ At this run shape (65,536 tokens/round). Token-scaled objects show per-token siz
     - `moe_route`:
         8. `mm`
         9. `moe_topk_softmax`
+        10. `scatter_add_ ×2`
     - `moe_dispatch`:
-        10. `moe_sort`
-        11. `moe_dispatch_fwd`
+        11. `moe_sort`
+        12. `moe_dispatch_fwd`
     - `moe_experts13`:
-        12. `moe_grouped_mm_fwd`
+        13. `moe_grouped_mm_fwd`
     - `moe_shared`:
-        13. `mm ×2`
+        14. `mm ×2`
     - `moe_experts2_combine`:
-        14. `swiglu_packed_fwd`
-        15. `moe_grouped_mm_fwd`
-        16. `swiglu_packed_fwd`
-        17. `mm`
-        18. `moe_scale_rows`
-        19. `moe_combine_fwd`
+        15. `swiglu_packed_fwd`
+        16. `moe_grouped_mm_fwd`
+        17. `swiglu_packed_fwd`
+        18. `mm`
+        19. `moe_scale_rows`
+        20. `moe_combine_fwd`
 
 ### `gattnmoe_fwd` — `Qwen35MoeAttnBlockFwd`
 
 - example task: `block_fwd_0_0_3`
-- inputs: `y_0_0_2` (256.00 MiB), `W_3` (1.56 GiB)
-- outputs: `y_0_0_3` (256.00 MiB), `A_0_0_3` (3.04 GiB), `M_0_0_3` (5.00 MiB)
-- mutates: —
+- inputs: `y_0_0_2` (256.00 MiB), `W_3` (1.56 GiB), `current_round_0_0` (4 B), `Aux_3` (3.00 KiB)
+- outputs: `y_0_0_3` (256.00 MiB), `A_0_0_3` (3.04 GiB), `AuxTemp_0_0_3` (5.00 MiB)
+- mutates: `Aux_3`
 - stages (name — emitted ctx fields):
     0. `attn_norm` — rstd_attn
     1. `qkv_gate` — qm, km, gate, v
@@ -241,15 +249,14 @@ At this run shape (65,536 tokens/round). Token-scaled objects show per-token siz
     - `qknorm_rope`:
         2. `rmsnorm_fwd ×2`
         3. `rope_fwd ×2`
-    - `attn`:
-        4. `_scaled_dot_product_flash_attention`
     - `gate_o`:
-        5. `addmm`
+        4. `addmm`
     - `ffn_norm`:
-        6. `rmsnorm_fwd`
+        5. `rmsnorm_fwd`
     - `moe_route`:
-        7. `mm`
-        8. `moe_topk_softmax`
+        6. `mm`
+        7. `moe_topk_softmax`
+        8. `scatter_add_ ×2`
     - `moe_dispatch`:
         9. `moe_sort`
         10. `moe_dispatch_fwd`
@@ -290,7 +297,7 @@ At this run shape (65,536 tokens/round). Token-scaled objects show per-token siz
 ### `gattnmoe_bwd` — `Qwen35MoeAttnBlockBwd`
 
 - example task: `block_bwd_0_0_39`
-- inputs: `dy_0_0_39` (256.00 MiB), `A_0_0_39` (3.04 GiB), `y_0_0_38` (256.00 MiB), `W_39` (1.56 GiB), `M_0_0_39` (5.00 MiB)
+- inputs: `dy_0_0_39` (256.00 MiB), `A_0_0_39` (3.04 GiB), `y_0_0_38` (256.00 MiB), `W_39` (1.56 GiB), `AuxTemp_0_0_39` (5.00 MiB), `Aux_39` (3.00 KiB)
 - outputs: `dy_0_0_38` (256.00 MiB), `dW_0_39` (1.56 GiB)
 - mutates: —
 - kernel calls:
@@ -320,7 +327,7 @@ At this run shape (65,536 tokens/round). Token-scaled objects show per-token siz
     23. `mm ×2`
     24. `rmsnorm_apply ×2`
     25. `rope_fwd ×2`
-    26. `_scaled_dot_product_flash_attention_backward`
+    26. `_flash_attention_backward`
     27. `rope_bwd ×2`
     28. `rmsnorm_bwd ×2`
     29. `rmsnorm_apply`
@@ -339,7 +346,7 @@ At this run shape (65,536 tokens/round). Token-scaled objects show per-token siz
 ### `linmoe_bwd` — `Qwen35MoeLinBlockBwd`
 
 - example task: `block_bwd_0_0_38`
-- inputs: `dy_0_0_38` (256.00 MiB), `A_0_0_38` (3.68 GiB), `y_0_0_37` (256.00 MiB), `W_38` (1.57 GiB), `M_0_0_38` (5.00 MiB)
+- inputs: `dy_0_0_38` (256.00 MiB), `A_0_0_38` (3.68 GiB), `y_0_0_37` (256.00 MiB), `W_38` (1.57 GiB), `AuxTemp_0_0_38` (5.00 MiB), `Aux_38` (3.00 KiB)
 - outputs: `dy_0_0_37` (256.00 MiB), `dW_0_38` (1.57 GiB)
 - mutates: —
 - kernel calls:

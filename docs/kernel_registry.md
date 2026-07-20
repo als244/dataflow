@@ -2,7 +2,7 @@
 
 GENERATED — regenerate with `python tools/list_kernels.py >
 docs/kernel_registry.md` after registering ops or implementations.
-The registry (`dataflow_training/kernels/registry.py`) selects, per op, the
+The registry (`tasks/kernels/registry.py`) selects, per op, the
 highest-priority implementation whose `requires(caps)` passes on this
 machine; `DATAFLOW_KERNELS=eager` forces the priority-0 fallbacks for
 bisection. The chosen set is stamped into profiles (measured costs are
@@ -33,6 +33,11 @@ profiling).
 | `embed_bwd_accum` | triton(10), eager(0) | triton | yes | internal | torch | `(kctx, tokens, dy, dw_embed, *, zero_first)` | Deterministic embedding-gradient accumulation |
 | `gated_rmsnorm_bwd` | fla-fused(10), eager(0) | fla-fused | yes | internal | torch | `(kctx, dy, o, z, w, rstd, do_out, dz_out, dw_out, y_out)` | gated_rmsnorm family: silu(z) * rmsnorm(o) * w over lin_v_head_dim rows |
 | `gated_rmsnorm_fwd` | fla-fused(10), eager(0) | fla-fused | yes | internal | torch | `(kctx, o, z, w, out, rstd_out)` | gated_rmsnorm family: silu(z) * rmsnorm(o) * w over lin_v_head_dim rows |
+| `gelu_bwd` | eager(0) | eager | yes | internal | torch | `(kctx, dy, x, dx_out)` | gelu family (gpt2): the tanh approximation, aten-backed |
+| `gelu_fwd_out` | eager(0) | eager | yes | internal | torch | `(kctx, x, out)` | gelu family (gpt2): the tanh approximation, aten-backed |
+| `layernorm_apply` | triton(10), eager(0) | triton | yes | none | none | `(kctx, x, mean, rstd, w, b, out)` | layernorm family (gpt2): fused Triton (default) + eager fallback |
+| `layernorm_bwd` | triton(10), eager(0) | triton | yes | internal | torch | `(kctx, dy, x, mean, rstd, w, dx_out, dw_out, db_out)` | layernorm family (gpt2): fused Triton (default) + eager fallback |
+| `layernorm_fwd` | triton(10), eager(0) | triton | yes | none | none | `(kctx, x, w, b, out, mean_out, rstd_out)` | layernorm family (gpt2): fused Triton (default) + eager fallback |
 | `moe_aux_lb_grad` | triton(10), eager(0) | triton | yes | none | none | `(kctx, logits, counts, dlogits, *, alpha, top_k)` | MoE router ops: fused top-k+softmax, router backward, aux-loss gradient |
 | `moe_combine_fwd` | triton(10), eager(0) | triton | yes | none | none | `(kctx, yp, slot_of, route_w, resid, out)` | MoE dispatch/combine ops — the expert-parallelism seam |
 | `moe_dispatch_bwd` | triton(10), eager(0) | triton | yes | none | none | `(kctx, dxp, slot_of, out)` | MoE dispatch/combine ops — the expert-parallelism seam |

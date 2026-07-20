@@ -78,7 +78,7 @@ At this run shape (65,536 tokens/round). Token-scaled objects show per-token siz
 | `rstd_q` | fp32 | (2097152,) | 8.00 MiB |
 | `rstd_k` | fp32 | (524288,) | 2.00 MiB |
 | `v` | bf16 | (65536, 1024) | 128.00 MiB |
-| `lse` | fp32 | (512, 4096) | 8.00 MiB |
+| `lse` | fp32 | (32, 65536) | 8.00 MiB |
 | `attn_out` | bf16 | (65536, 4096) | 512.00 MiB |
 | `h_mid` | bf16 | (65536, 4096) | 512.00 MiB |
 | `rstd_ffn` | fp32 | (65536,) | 256.00 KiB |
@@ -126,17 +126,15 @@ At this run shape (65,536 tokens/round). Token-scaled objects show per-token siz
         2. `rmsnorm_fwd ×2`
     - `rope`:
         3. `rope_fwd ×2`
-    - `attn`:
-        4. `_scaled_dot_product_flash_attention`
     - `resid1_norm2`:
-        5. `addmm`
-        6. `rmsnorm_fwd`
+        4. `addmm`
+        5. `rmsnorm_fwd`
     - `up_proj`:
-        7. `mm ×2`
+        6. `mm ×2`
     - `swiglu`:
-        8. `swiglu_fwd_out`
+        7. `swiglu_fwd_out`
     - `down_resid`:
-        9. `addmm`
+        8. `addmm`
 
 ### `head_loss` — `HeadLoss`
 
@@ -176,7 +174,7 @@ At this run shape (65,536 tokens/round). Token-scaled objects show per-token siz
     6. `mm ×2`
     7. `rmsnorm_apply ×2`
     8. `rope_fwd ×2`
-    9. `_scaled_dot_product_flash_attention_backward`
+    9. `_flash_attention_backward`
     10. `rope_bwd ×2`
     11. `rmsnorm_bwd ×2`
     12. `rmsnorm_apply`
