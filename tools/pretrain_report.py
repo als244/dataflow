@@ -447,7 +447,8 @@ th:first-child, td:first-child {{ text-align: left; }}
 .sub {{ opacity: 0.75; font-size: 0.9rem; }}
 nav a {{ margin-right: 1rem; }}
 </style></head><body>
-<nav><a href="index.html">index</a><a href="llama3.html">llama3</a>
+<nav><a href="index.html">index</a><a href="gpt2.html">gpt2</a>
+<a href="llama3.html">llama3</a>
 <a href="qwen35.html">qwen35</a><a href="dsv3_2b.html">dsv3_2b</a>
 <a href="l3_1b_distperf.html">distributed perf</a></nav>
 <h1>{title}</h1>
@@ -590,6 +591,124 @@ COMMON_SUB = ("fineweb10B (gpt2, vocab 50304), 64K tokens/step, seq 2048, "
               "Byte-identical init + one deterministic data stream.")
 
 
+def ema_curve(xs: list[float], alpha: float = 0.98) -> list[float]:
+    out, m = [], xs[0]
+    for x in xs:
+        m = alpha * m + (1 - alpha) * x
+        out.append(m)
+    return out
+
+
+def gpt2_pair_section(R: dict) -> str | None:
+    """gpt2 reference-vs-engine agreement: the 1000-step certified pair
+    (reference + engine on one box) plus the long-run engine's first
+    1000 steps from the second box (cross-box reproduction)."""
+    import json as json_mod
+
+    pair_dir = RESULTS / "gpt2_pair"
+    ref_p = pair_dir / "reference_1k.json"
+    eng_p = pair_dir / "engine_tubingen_1k.json"
+    long_run = R.get("gpt2_124m_engine_t512k_adamw_10k")
+    if not (ref_p.exists() and eng_p.exists()):
+        return None
+    ref = json_mod.loads(ref_p.read_text())["losses"]
+    eng = json_mod.loads(eng_p.read_text())["losses"]
+
+    series = [Series(label="reference (pytorch, 3090)",
+                     x=list(range(len(ref))), y=ref,
+                     color=PALETTE[0], dashed=True),
+              Series(label="engine @16 GiB (3090)",
+                     x=list(range(len(eng))), y=eng, color=PALETTE[1])]
+    rep = parity.compare(ref, eng, a_label="reference", b_label="engine")
+    prows = [["engine vs pytorch reference (same box)",
+              f"{rep.step0_abs:.4f}", f"{rep.max_abs:.4f}",
+              f"{rep.final_abs:.4f}", f"{rep.ema_abs:.4f}",
+              "ALIGNED" if rep.passed else "DIVERGED"]]
+    if long_run is not None:
+        chi = long_run.losses[:len(eng)]
+        series.append(Series(label="engine @16 GiB (5090, long-run leg)",
+                             x=list(range(len(chi))), y=chi,
+                             color=PALETTE[2]))
+        rep2 = parity.compare(eng, chi, a_label="engine-3090",
+                              b_label="engine-5090")
+        prows.append(["engine 5090 vs engine 3090 (cross-box, "
+                      "sm120 vs sm86)",
+                      f"{rep2.step0_abs:.4f}", f"{rep2.max_abs:.4f}",
+                      f"{rep2.final_abs:.4f}", f"{rep2.ema_abs:.4f}",
+                      "ALIGNED" if rep2.passed else "DIVERGED"])
+    svg = svg_line_chart(series,
+                         title="gpt2_124m — cross-entropy vs step "
+                               "(first 1000 steps)",
+                         xlabel="optimizer step", ylabel="mean CE loss")
+    tbl = table_html(prows, ["comparison", "step0 Δ", "max Δ",
+                             "final Δ", "ema Δ", "verdict"])
+    note = ("<p>Same recipe, seed, and doc-aware token feed on every "
+            "curve; byte-identical init through the weight bridge. The "
+            "engine legs run different round geometries on different "
+            "GPU generations — the loss trajectory is invariant to "
+            "both (budget/geometry invariance), so the curves overlay "
+            "within the cross-process numeric band.</p>")
+    return (f"<section><h2>Reference agreement "
+            f"(pytorch twin, two boxes)</h2>{note}"
+            f"<div class='chart'>{svg}</div>{tbl}</section>")
+
+
+def gpt2_optimizer_section(R: dict) -> str | None:
+    """The 10k-step optimizer study: adamw baseline, shared-schedule
+    muon twin, and the practice-lr muon leg, on identical init/data."""
+    import json as json_mod
+
+    legs = [("gpt2_124m_engine_t512k_adamw_10k", "adamw", PALETTE[0]),
+            ("gpt2_124m_engine_t512k_muon_10k",
+             "muon (shared schedule)", PALETTE[1]),
+            ("gpt2_124m_engine_t512k_muon_hot_10k",
+             "muon (practice lr 1.8e-3)", PALETTE[2])]
+    have = [(k, R[k], lbl, c) for k, lbl, c in legs if k in R]
+    if not have:
+        return None
+    evals_p = RESULTS / "gpt2_124m_evals.json"
+    evals = (json_mod.loads(evals_p.read_text())
+             if evals_p.exists() else {})
+
+    series, rows = [], []
+    for key, run, lbl, color in have:
+        smooth = ema_curve(run.losses)
+        series.append(Series(label=lbl,
+                             x=list(range(len(smooth))), y=smooth,
+                             color=color))
+        ev = evals.get(key, {})
+        val = ev.get("val_10000")
+        rows.append([lbl, f"{smooth[-1]:.4f}", f"{min(run.losses):.4f}",
+                     f"{val:.4f}" if val else "—",
+                     f"{math.exp(val):.2f}" if val else "—",
+                     f"{ev.get('val_9500'):.4f}"
+                     if ev.get("val_9500") else "—"])
+    svg = svg_line_chart(series,
+                         title="gpt2_124m 10k × 512K tokens/step — "
+                               "train CE, EMA(0.98)",
+                         xlabel="optimizer step", ylabel="mean CE loss")
+    tbl = table_html(rows, ["optimizer", "train EMA final", "train min",
+                            "fineweb-val @10000", "val ppl",
+                            "val @9500"])
+    note = ("<p>Identical init (seed 11), token order, llm.c recipe "
+            "(peak 6e-4, warmup 1000, cosine to 6e-5, betas 0.9/0.95, "
+            "wd 0.1, no clip) on every leg; the optimizer is the only "
+            "variable. The practice-lr leg gives muon matrices their "
+            "own peak lr of 1.8e-3 riding the same schedule shape — "
+            "the exact update-RMS of the first Muon speedrun record "
+            "(their lr 3.6e-4 under a √max(r,c) scale ≡ 1.8e-3 under "
+            "this repo's 0.2·√max(r,c) scale, any matrix shape); "
+            "non-matrix params (embeddings, head, norms, biases) stay "
+            "on adamw at the shared lr in both muon legs. Validation "
+            "is 10.5M held-out fineweb-val tokens "
+            "(tools/eval_checkpoint.py). Context, not a comparison "
+            "claim: llm.c's 124M reaches ~3.29 val at 10B tokens — "
+            "twice this study's 5.24B token budget.</p>")
+    return (f"<section><h2>Optimizer study: adamw vs muon at 512K "
+            f"tokens/step</h2>{note}"
+            f"<div class='chart'>{svg}</div>{tbl}</section>")
+
+
 def write_report(name: str, title: str, subtitle: str,
                  sections: list) -> None:
     body = "\n".join(s for s in sections if s) or "<p>no results yet</p>"
@@ -608,6 +727,15 @@ def main() -> int:
         "llama3-shaped dense (l3_1b = 1.2B). " + COMMON_SUB,
         [parity_section(R, "l3_1b"), dp_section(R), scaling_section(R),
          throughput_section(R, ("l3_", "scaling_", "smoke"))])
+
+    write_report(
+        "gpt2", "gpt2 124M pretraining: reference agreement + "
+        "optimizer study",
+        "llm.c GPT-2 124M (LayerNorm+bias, learned positions, "
+        "GELU-tanh, vocab 50304) — the nanogpt-speedrun baseline "
+        "family. 512K tokens/step, doc-aware fineweb feed.",
+        [gpt2_pair_section(R), gpt2_optimizer_section(R),
+         throughput_section(R, ("gpt2_124m_engine",))])
 
     write_report(
         "qwen35", "qwen3.5 pretraining: parity",
