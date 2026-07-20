@@ -16,10 +16,11 @@ from dataflow_training.run.profiling import apply_measured_costs, cached_pcie, l
 cfg = ShapedLlamaConfig.llama3_8b(seq_len=1024, batch=8, grad_accum_rounds=8)
 backend = CudaBackend()
 
-# 1. the machine, measured ONCE and disk-cached (PCIe directions contend on
-#    desktop platforms — plan with the bidirectional numbers; re-measuring
-#    per run makes plans non-reproducible: bandwidth noise flips recompute
-#    choices)
+# 1. the machine, measured ONCE and disk-cached (re-measuring per run
+#    makes plans non-reproducible: bandwidth noise flips recompute
+#    choices). Plan with the BIDI numbers — the conservative doctrine:
+#    each lane priced at its concurrent-saturation rate makes the
+#    prediction a floor, and reality comes in at or better than it.
 pcie = cached_pcie(backend)
 
 # 2. lower with layout-exact sizes; install measured bandwidths

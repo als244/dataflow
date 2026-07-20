@@ -483,14 +483,39 @@ def daemon_client(slab_gib: float = 100.0, *, socket: str | None = None,
             log(f"[daemon] teardown warning: {e}")
 
 
+def measured_variant(fam, cfg, profiles, resolver, pcie, levels):
+    """One re-lowered recompute variant with profiled task costs AND
+    the executing box's measured PCIe bandwidths installed — the same
+    treatment the base program gets, so the recompute search prices
+    transfers honestly."""
+    from dataclasses import replace as dc_replace
+
+    from dataflow_training.run.profiling import apply_measured_costs
+
+    prog = apply_measured_costs(fam.lower(cfg, recompute_levels=levels),
+                                profiles, resolver)
+    return dc_replace(prog, bandwidth_from_slow=pcie.bidi_h2d,
+                      bandwidth_to_slow=pcie.bidi_d2h)
+
+
 def plan_at_budget(cfg, budget_gib: float, *, recompute: bool = True,
                    measured: bool = False):
     """Plan the single-step program at a device budget (GiB). Returns the
     PlannedProgram; its placement is baked in -> a budget-specific prog_id.
     With recompute, the planner re-lowers the program at candidate recompute
     levels (``build_variant``). ``measured`` swaps the roofline cost seeds
-    for PROFILED task costs (load_or_profile, disk-cached) — the plan's
-    makespan_us then IS the true-profiling simulator prediction."""
+    for PROFILED task costs (load_or_profile, disk-cached) AND the
+    lowering's default transfer bandwidths for the box's measured PCIe
+    numbers (cached_pcie) — the plan's makespan_us then IS the
+    true-profiling simulator prediction. BIDI rates by doctrine
+    (conservative): each lane is priced at its concurrent-saturation
+    bandwidth, so predictions are floors and reality comes in at or
+    better than expected (chain-ordered plans alternate directions
+    enough that lanes often achieve uni rates — up to ~20% better
+    than the bidi-priced prediction at the tightest budgets)."""
+    import functools
+    from dataclasses import replace as dc_replace
+
     from dataflow_training.model_families.families import resolve_family
     from dataflow_training.lowering.planning import plan_program
 
@@ -501,16 +526,22 @@ def plan_at_budget(cfg, budget_gib: float, *, recompute: bool = True,
                             fast_memory_capacity=int(budget_gib * 1024 ** 3),
                             recompute=recompute, build_variant=variant)
     from dataflow.runtime.device.cuda import CudaBackend
-    from dataflow_training.run.profiling import apply_measured_costs, load_or_profile
+    from dataflow_training.run.profiling import (apply_measured_costs,
+                                                 cached_pcie,
+                                                 load_or_profile)
 
     backend = CudaBackend()
     dims = fam.derive_dims(cfg)
     resolver = fam.build_resolver(dims)
     profiles = load_or_profile(fam.lower(cfg), resolver, backend)
-    variant = ((lambda levels: apply_measured_costs(
-        fam.lower(cfg, recompute_levels=levels), profiles, resolver))
-        if recompute else None)
-    return plan_program(apply_measured_costs(fam.lower(cfg), profiles, resolver),
+    pcie = cached_pcie(backend)
+    variant = (functools.partial(measured_variant, fam, cfg, profiles,
+                                 resolver, pcie)
+               if recompute else None)
+    base = dc_replace(apply_measured_costs(fam.lower(cfg), profiles, resolver),
+                      bandwidth_from_slow=pcie.bidi_h2d,
+                      bandwidth_to_slow=pcie.bidi_d2h)
+    return plan_program(base,
                         fast_memory_capacity=int(budget_gib * 1024 ** 3),
                         recompute=recompute, build_variant=variant)
 

@@ -329,9 +329,12 @@ class CudaBackend:
 
         On this class of platform the two directions are NOT independent:
         concurrent h2d+d2h can collapse to ~half each (shared host-memory /
-        link budget), and h2d may be slower than d2h even alone. Plans should
-        normally use the bidirectional numbers — under memory pressure both
-        directions run concurrently most of the time.
+        link budget), and h2d may be slower than d2h even alone. Plans
+        use the BIDI numbers by doctrine — conservative pricing makes
+        predictions floors rather than promises. Chain-ordered plans
+        alternate offload-heavy and reload-heavy phases, so lanes often
+        achieve their uni rates and reality beats the bidi-priced
+        prediction (traced: up to ~20% at the tightest budgets).
         """
         s1 = self.create_stream("h2d")
         s2 = self.create_stream("d2h")

@@ -70,11 +70,14 @@ Calibration (gpt2_124m + l3_1b, 2026-07-19):
   costs the sim does not charge).
 - roofline: ~12–19 % off, either direction (l3_1b measured BEAT its
   roofline).
-- tight budgets add unmodeled transfer pressure: at 2 GiB expect
-  ~10–15 % pessimism on top of any prediction (per-transfer fixed
-  costs + kernel slowdown under concurrent DMA; the sim models both
-  FIFO links and capacity-blocked queues, but moves bytes at pure
-  size/bandwidth with a zero-latency scheduler).
+- measured plans price transfers at the box's measured BIDI PCIe
+  rates (conservative doctrine: predictions are floors). At tight
+  budgets, where transfers reach the critical path, reality typically
+  comes in AT OR BETTER than the prediction — up to ~20 % better at
+  2 GiB, because chain-ordered plans alternate directions and lanes
+  often achieve their uni rates. The residual measured-over-predicted
+  at mid budgets (~5-7 %) is kernel slowdown under concurrent DMA,
+  which the sim deliberately does not model per-task.
 - the two cost models can produce DIFFERENT PLANS near memory edges
   (roofline picked recompute where measured picked streaming, and
   measured rejected a combo roofline accepted) — trust `--measured`
