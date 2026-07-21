@@ -290,6 +290,7 @@ def run(global_cfg, recipe: Recipe, pipeline, steps: int, *,
                                            / f"dp_prof_{host.name}")
                     else:
                         rig.prof_out = f"/tmp/dp_prof_{host.name}"
+                    os.makedirs(prof_dir, exist_ok=True)
                     wrap = daemons.nsys_command(host, rig.prof_out)
                 daemons.kill(host)
                 rdma_flag = (f"--peer-rdma-device {host.ib_dev}"

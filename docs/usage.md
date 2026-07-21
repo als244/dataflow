@@ -8,12 +8,13 @@ budget, as exercised by `tools/train/train.py` and the drivers in
 import torch
 from dataclasses import replace
 from dataflow.runtime.device.cuda import CudaBackend
-from dataflow_training.model_families.llama3 import ShapedLlamaConfig, derive_dims, lower_llama3
+from dataflow_training.model_families.llama3 import derive_dims, lower_llama3
+from dataflow_training.run.presets import resolve_preset
 from dataflow_training.model_families.llama3.blocks import build_resolver
 from dataflow_training.lowering.planning import plan_program
 from dataflow_training.run.profiling import apply_measured_costs, cached_pcie, load_or_profile
 
-cfg = ShapedLlamaConfig.gpt2_124m(seq_len=1024, batch=8, grad_accum_rounds=8)
+cfg = resolve_preset("l3_125m")
 backend = CudaBackend()
 
 # 1. the machine, measured ONCE and disk-cached (re-measuring per run
@@ -102,14 +103,14 @@ renders side by side (see [exporting_runs.md](exporting_runs.md)).
 python tools/train/train.py smoke                       # tiny real-vocab reference-vs-engine gate
 python tools/train/train.py parity --preset l3_125m --fast-budget 6,14 ...  # reference + engine at N budgets
 python tools/train/train.py scaling --presets l3_125m,l3_1b ...  # the ladder, loss curves
-python tools/train/train.py reference --preset gpt2_124m \
+python tools/train/train.py reference --preset gpt2_124m --steps 1000 \
     --checkpoint-every 250 --out results/pretrain/ref.json   # pure-torch leg
 python tools/train/train.py train --preset gpt2_124m \
     --fast-budget 14 --resume auto --out results/pretrain/eng.json  # solo; resume needs a prior checkpointed run
 python tools/train/train.py train --preset l3_1b --steps 1000 --topology topology.toml --rounds 6,2 \
     --out results/pretrain/dp_fleet.json                        # data-parallel fleet
-python tools/bench/measure_step.py --preset l3_1b --t-rounds 8192,32768 \
-    --budgets 14,6 --steps 12          # measured throughput sweeps
+python tools/bench/measure_step.py --preset l3_1b --t-round 8192,32768 \
+    --budget 14,6 --backing-gib 24 --steps 12          # measured throughput sweeps
 ```
 
 The `reference` and `engine` legs are the long-run pretraining pair:
