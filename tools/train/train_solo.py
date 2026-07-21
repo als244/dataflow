@@ -9,10 +9,10 @@ Subcommands:
   scaling    the ladder, one backend/budget -> loss curves for the scaling study
   peek       read an in-flight run's loss curve from its newest checkpoint
 
-(`tools/train/eval_checkpoint.py` computes a checkpoint's fineweb-VAL
-loss — the nanogpt-comparable axis.)
+(`tools/train/eval_checkpoint.py` computes a checkpoint's held-out
+val loss — the published-curve axis.)
 
-All backends share the deterministic fineweb feed, the cosine recipe, and a
+All backends share one deterministic data pipeline, the cosine recipe, and a
 byte-identical seeded init (the reference bridges the engine's packed bytes).
 """
 from __future__ import annotations

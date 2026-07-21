@@ -41,7 +41,8 @@ src/dataflow_training/       WORKLOAD — builds programs, registers resolvers
 ├── lowering/                shaped programs, exact sizes, freeze plans,
 │                            FLOP accounting (flops.py), PressureFit
 │                            planning (the dataflow_sim consumer)
-├── data/                    segments (varlen), fineweb feed, packing
+├── data/                    the per-sequence data plane: sources,
+│                            feed, packer (docs/data_feeds.md)
 ├── run/                     drivers (reference + engine service), presets,
 │                            recipes, profiling
 ├── distributed/             topology, fleet conductor, sharding

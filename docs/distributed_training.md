@@ -325,7 +325,7 @@ python -m pytest -q
 python tools/train/train_solo.py smoke --steps 20
 ```
 
-(one engine, one GPU, real fineweb tokens — no fleet machinery).
+(one engine, one GPU, real corpus tokens — no fleet machinery).
 
 **Rung 3 — the fleet lane on this node.** Loopback gates boot real
 daemons and exercise groups, sharding, and checkpointing end to end:

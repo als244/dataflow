@@ -52,14 +52,15 @@ the daemon's store and evolve in place between runs. The reference
 driver wraps the whole loop:
 
 ```python
-from dataflow_training.data.fineweb import make_feed
+from dataflow_training.data.pipeline import pipeline_from_args
 from dataflow_training.run.driver import daemon_client, run_engine
 from dataflow_training.run.recipe import Recipe
 
 recipe = Recipe(peak_lr=3e-4, min_lr=3e-5, warmup_steps=10, total_steps=100)
-feed = make_feed(cfg.tokens)                        # deterministic fineweb rounds
+pipeline = pipeline_from_args(cfg, None)   # the default shard corpus;
+                                           # any --data spec works here
 with daemon_client(slab_gib=60.0) as client:        # boots an in-process dataflowd
-    res = run_engine(client, cfg, recipe, feed, steps=100,
+    res = run_engine(client, cfg, recipe, pipeline, steps=100,
                      budget_gib=16.0)               # plans + registers + runs
 print(res.losses)
 # quote wall tok/s in results: res.tok_per_s times the whole run verb
@@ -112,11 +113,10 @@ python tools/bench/measure_step.py --preset l3_1b --t-rounds 8192,32768 \
 ```
 
 The `reference` and `engine` legs are the long-run pretraining pair:
-same recipe, same deterministic feed, overlaid loss curves. `--data
-doc` selects the doc-aware feed (sequences split at document EOT
-boundaries, positions restarting per document) over fixed-size block
-packing; both legs support checkpointing (`--checkpoint-every`) and
-`--resume`. Sweep rows from `measure_step` report the plan's predicted
+same recipe, same deterministic data pipeline, overlaid loss curves.
+`--data` selects any source spec ([data_feeds.md](data_feeds.md));
+both legs support checkpointing (`--checkpoint-every`) and
+`--resume` (the data cursor rides every checkpoint). Sweep rows from `measure_step` report the plan's predicted
 s/step beside the measurement (`pred_s meas_s ratio tok/s effTF/s
 hwTF/s recomp`) — tool guide: [benchmarking.md](benchmarking.md).
 

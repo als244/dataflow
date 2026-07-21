@@ -1,8 +1,8 @@
 #!/usr/bin/env python
-"""Fineweb-VAL loss of a solo-run checkpoint — the nanogpt-comparable axis.
+"""Held-out validation loss of a solo-run checkpoint.
 
-llm.c / modded-nanogpt speedrun curves report held-out loss on the
-fineweb val shard; our training logs record train CE. This loads W_*
+Published pretraining curves report loss on a held-out val split;
+our training logs record train CE. This loads W_*
 straight from a snapshot payload into the family's pure-torch
 reference twin and evaluates val CE, so an in-flight or finished run
 can be placed on the published axis at any checkpoint.
@@ -97,7 +97,7 @@ def main() -> int:
             total_nll += float(loss) * valid
             total_valid += valid
     val = total_nll / total_valid
-    print(f"{args.run} @ step {payload.step}: fineweb-val loss "
+    print(f"{args.run} @ step {payload.step}: val loss "
           f"{val:.4f}  (ppl {torch.tensor(val).exp():.2f}; "
           f"{total_valid} tokens)")
     return 0

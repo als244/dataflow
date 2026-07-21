@@ -5,7 +5,7 @@ commands run from the repo root.
 
 ## train_solo.py — single-GPU pretraining orchestration
 
-Subcommand-driven; every leg shares the deterministic fineweb feed,
+Subcommand-driven; every leg shares one deterministic data pipeline,
 the warmup+cosine recipe, and byte-identical seeded init.
 
 **`engine`** — engine-only long run through the service daemon.
@@ -23,13 +23,15 @@ the warmup+cosine recipe, and byte-identical seeded init.
 | `--checkpoint-every` | host-local snapshot every N steps (keep-last-3) |
 | `--resume` | continue from the newest complete checkpoint |
 | `--measured` | plan with PROFILED task costs + measured PCIe (the `[plan]` line becomes the true-profiling sim prediction) |
-| `--data {block,doc}` | llm.c fixed windows vs EOT-split doc-aware varlen packing |
+| `--data SPEC` | data source spec ([data_feeds.md](../../docs/data_feeds.md)); default: the in-repo shard corpus, per-document |
+| `--packing-policy {ffd,greedy}` / `--allow-round-split` / `--capture PATH` | packing policy, legacy exact-fill split, sequence capture for replay |
 | `--profile` + `--profile-start-before-step N` / `--profile-stop-after-step M` | bracket a step window via the daemon's `profiler_control` (run under `tools/bench/nsys_profile.py` to capture) |
 | `--out` | run-curve JSON (also names the checkpoint dir) |
 
 **`reference`** — the pure-torch twin leg (same conventions):
 `--preset --steps --opt --peak-lr --ga-rounds --grad-checkpoint
---checkpoint-every --resume --data --out`.
+--checkpoint-every --resume --data/--packing-policy/
+--allow-round-split/--capture --out`.
 
 **`smoke`** — tiny real-vocab reference-vs-engine gate
 (`--steps --budget --slab`).
@@ -45,9 +47,9 @@ the warmup+cosine recipe, and byte-identical seeded init.
 from its newest checkpoint manifest; prints last/EMA/min and writes
 `results/pretrain/<RUN>_partial.json` (`--ema`, default 0.98).
 
-## eval_checkpoint.py — fineweb-VAL loss of a checkpoint
+## eval_checkpoint.py — held-out val loss of a checkpoint
 
-The nanogpt-comparable axis: loads `W_*` straight from a snapshot
+The published-curve axis: loads `W_*` straight from a snapshot
 payload into the family's pure-torch twin and evaluates held-out val
 CE.
 
@@ -99,6 +101,16 @@ foreground — background it with `daemonize.py`, systemd, or tmux.
 POSIX double-fork detach for long runs:
 `python tools/train/daemonize.py --pidfile P --logfile L [--cwd D] -- CMD ARGS...`
 (the pidfile's process group is the kill handle).
+
+## fetch_dataset.py — materialize a hub dataset locally
+
+    python tools/train/fetch_dataset.py openai/gsm8k --config main
+
+Writes `datasets/<name>/<split>.jsonl` (gitignored): text columns
+pass through; prompt/response shapes normalize to a joined "text"
+plus the kept pair. Idempotent (`--force` to redo); `--field`,
+`--split`, `--revision`, `--limit`, `--target` as needed. The result
+trains via `--data jsonl:datasets/<name>/<split>.jsonl,tokenizer=...`.
 
 ## pretrain_report.py — study reports
 

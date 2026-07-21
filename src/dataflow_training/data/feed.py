@@ -1,27 +1,36 @@
-"""DataFeed: hands the packer ready sequences; owns requeue + cursor.
+"""DataFeed: hands the packer ready sequences; owns the ingest
+worker, requeue, and the cursor.
 
 CONTRACT:
 - Hand-out order == source order, with requeued items FIRST (FIFO of
-  deferral). This implementation is synchronous; the background
-  worker arrives as a pure refactor once the semantics are gated —
-  by contract the threaded feed's output is identical.
+  deferral). The background worker is an implementation detail
+  (prefetch): DataFeed's hand-out stream is identical to driving the
+  source inline — ``prefetch_sequences=0`` runs synchronously and the
+  equality is gated.
 - ``requeue(seqs)`` returns packer remainders to the FRONT of the
   line in the order given.
 - ``cursor()`` is the resume point BEFORE everything not yet handed
-  back out: the source cursor of the next unpulled sequence plus the
-  CONTENT of requeued sequences (they were consumed from the source
-  already, so their bytes ride the cursor — small, bounded by the
-  packer lookahead, JSON-clean for client_meta).
+  back out: the source cursor after the LAST HANDED-OUT sequence
+  (prefetched-but-unhanded items are re-derived on resume) plus the
+  CONTENT of requeued sequences (already consumed from the source,
+  so their bytes ride the cursor — small, bounded by the packer
+  lookahead, JSON-clean for client_meta).
+- Worker errors (source IO, tokenizer) surface on the next
+  next_sequence() call, never silently.
 - Single consumer (the packer); not a general concurrent queue.
 """
 from __future__ import annotations
 
+import queue as queue_mod
+import threading
 from collections import deque
 from pathlib import Path
 
 import numpy as np
 
 from dataflow_training.data.sequence import PackedStep, Sequence
+
+STOP = object()
 
 
 def sequence_to_json(seq: Sequence) -> dict:
@@ -38,9 +47,39 @@ def sequence_from_json(d: dict) -> Sequence:
         extras={k: np.asarray(v) for k, v in d.get("extras", {}).items()})
 
 
+class IngestWorker(threading.Thread):
+    """Drains source.sequences(cursor) into a bounded queue of
+    (sequence, cursor_after) pairs. Backpressure = the put blocks;
+    errors park in ``error`` and surface on the consumer side."""
+
+    def __init__(self, source, start_cursor, depth: int):
+        super().__init__(daemon=True, name="datafeed-ingest")
+        self.iter = source.sequences(start_cursor)
+        self.out: queue_mod.Queue = queue_mod.Queue(maxsize=depth)
+        self.stop_event = threading.Event()
+        self.error: BaseException | None = None
+
+    def run(self) -> None:
+        try:
+            for item in self.iter:
+                while True:
+                    if self.stop_event.is_set():
+                        return
+                    try:
+                        self.out.put(item, timeout=0.2)
+                        break
+                    except queue_mod.Full:
+                        continue
+            self.out.put(STOP)          # finite source exhausted
+        except BaseException as exc:
+            self.error = exc
+            self.out.put(STOP)
+
+
 class DataFeed:
     def __init__(self, source, *, start_cursor: dict | None = None,
-                 capture: str | Path | None = None):
+                 capture: str | Path | None = None,
+                 prefetch_sequences: int = 256):
         self.source = source
         cursor = dict(start_cursor) if start_cursor else None
         self.pending: deque[Sequence] = deque()
@@ -48,15 +87,37 @@ class DataFeed:
             for d in cursor["requeued"]:
                 self.pending.append(sequence_from_json(d))
         source_cursor = cursor.get("source") if cursor else None
-        self.iter = source.sequences(source_cursor)
         self.source_cursor = source_cursor
+        self.worker: IngestWorker | None = None
+        self.iter = None
+        if prefetch_sequences > 0:
+            self.worker = IngestWorker(source, source_cursor,
+                                       prefetch_sequences)
+            self.worker.start()
+        else:
+            self.iter = source.sequences(source_cursor)
+        self.exhausted = False
         self.capture_fh = open(capture, "ab") if capture else None
+
+    def pull(self):
+        """One (sequence, cursor_after) from the worker or the inline
+        iterator; raises StopIteration on a finite source's end and
+        re-raises worker errors."""
+        if self.worker is not None:
+            item = self.worker.out.get()
+            if item is STOP:
+                self.exhausted = True
+                if self.worker.error is not None:
+                    raise self.worker.error
+                raise StopIteration
+            return item
+        return next(self.iter)
 
     def next_sequence(self) -> Sequence:
         if self.pending:
             seq = self.pending.popleft()
         else:
-            seq, self.source_cursor = next(self.iter)
+            seq, self.source_cursor = self.pull()
         if self.capture_fh is not None:
             from dataflow_training.data.sources.capture import write_record
 
@@ -72,6 +133,15 @@ class DataFeed:
                 "requeued": [sequence_to_json(s) for s in self.pending]}
 
     def close(self) -> None:
+        if self.worker is not None:
+            self.worker.stop_event.set()
+            while True:                 # unblock a full queue
+                try:
+                    self.worker.out.get_nowait()
+                except queue_mod.Empty:
+                    break
+            self.worker.join(timeout=5.0)
+            self.worker = None
         if self.capture_fh is not None:
             self.capture_fh.close()
             self.capture_fh = None

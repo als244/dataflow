@@ -6,7 +6,7 @@ tools' purposes and CLI arguments in full.
 
 | directory | contents |
 |---|---|
-| [train/](train/README.md) | running training: `train_solo` (engine/reference legs, smoke/parity/scaling studies, `peek`), `train_fleet` (DP fleets, `compare`, `sweep`), `dataflowd`, `daemonize`, `eval_checkpoint`, `pretrain_report` |
+| [train/](train/README.md) | running training: `train_solo` (engine/reference legs, smoke/parity/scaling studies, `peek`), `train_fleet` (DP fleets, `compare`, `sweep`), `dataflowd`, `daemonize`, `eval_checkpoint`, `fetch_dataset`, `pretrain_report` |
 | [bench/](bench/README.md) | throughput, in escalating cost: `predict_step` (simulated sweeps — the first line of attack), `measure_step` (real sweeps), `nsys_profile` (bracketed Nsight capture); `bench/internal/` holds gitignored maintainer-local kernel microbenches |
 | [verify/](verify/README.md) | correctness gates: `verify_family`, `engine_gate`, `pressure_correctness`, `deep_compare`, `sweep_ladder3`, `rdma_preflight` |
 | [export/](export/README.md) | run analysis & webapp export: `export_program`, `trace_real_run`, `trace_program` |

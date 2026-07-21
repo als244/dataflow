@@ -422,3 +422,54 @@ def test_parquet_source_roundtrip(tmp_path):
     it2 = src.sequences(got[4][1])
     re6, _ = next(it2)
     assert np.array_equal(re6.tokens, got[5][0].tokens)
+
+
+# ------------------------- threaded feed -------------------------------------
+
+def test_threaded_feed_equals_sync():
+    """The worker is an implementation detail: threaded and synchronous
+    feeds hand out identical streams (order, bytes, cursors)."""
+    def build(prefetch):
+        src = SyntheticSource(vocab_size=VOCAB, mean_len=120, seed=5,
+                              max_seqlen=512)
+        return DataFeed(src, prefetch_sequences=prefetch)
+
+    with build(64) as threaded, build(0) as sync:
+        for _ in range(200):
+            a = threaded.next_sequence()
+            b = sync.next_sequence()
+            assert np.array_equal(a.tokens, b.tokens)
+        assert threaded.cursor()["source"] == sync.cursor()["source"]
+
+
+def test_threaded_feed_error_surfaces():
+    class BoomSource:
+        def sequences(self, cursor):
+            src = SyntheticSource(vocab_size=VOCAB, mean_len=50, seed=1,
+                                  max_seqlen=128)
+            for i, item in enumerate(src.sequences(cursor)):
+                if i == 5:
+                    raise RuntimeError("boom at 5")
+                yield item
+
+        def describe(self):
+            return {}
+
+    with DataFeed(BoomSource(), prefetch_sequences=8) as feed:
+        for _ in range(5):
+            feed.next_sequence()
+        with pytest.raises(RuntimeError, match="boom at 5"):
+            feed.next_sequence()
+
+
+def test_threaded_packer_cursor_roundtrip():
+    T, GA = 4096, 4
+    packer = Packer(synthetic_feed(), tokens_per_round=T, ga_rounds=GA,
+                    max_seqlen=1024)
+    steps = [packer.next_step() for _ in range(4)]
+    resumed = Packer(synthetic_feed(start_cursor=steps[1].cursor_after),
+                     tokens_per_round=T, ga_rounds=GA, max_seqlen=1024)
+    got = resumed.next_step()
+    for a, b in zip(steps[2].rounds, got.rounds):
+        assert np.array_equal(a.tokens, b.tokens)
+        assert a.seq_lens == b.seq_lens
