@@ -160,7 +160,7 @@ def main() -> int:
     ap.add_argument("--preset", default="smoke")
     ap.add_argument("--steps", type=int, default=3)
     ap.add_argument("--budget", type=float, default=4.0)
-    ap.add_argument("--slab", type=float, default=8.0)
+    ap.add_argument("--backing-gib", type=float, default=8.0)
     ap.add_argument("--out", type=Path, default=Path("examples"))
     ap.add_argument("--name", default=None)
     args = ap.parse_args()
@@ -169,7 +169,7 @@ def main() -> int:
            else P.resolve_preset(args.preset))
     recipe = Recipe(peak_lr=3e-4, min_lr=3e-5, warmup_steps=1,
                     total_steps=args.steps)
-    with daemon_client(backing_gib=args.slab, log=print) as client:
+    with daemon_client(backing_gib=args.backing_gib, log=print) as client:
         cap = capture_run(client, cfg, recipe, legacy_block_pipeline(cfg),
                           args.steps, budget_gib=args.budget)
 

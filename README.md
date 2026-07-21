@@ -81,21 +81,6 @@ to the sim's prediction; the webapp renders both in the same panels and
 diffs them, which is exactly how the sim-vs-real fidelity gap is
 inspected (full guide: [docs/exporting_runs.md](docs/exporting_runs.md)).
 
-### Running training
-
-Execution goes through a persistent engine-service daemon
-(`tools/train/dataflowd.py`, [docs/engine_service.md](docs/engine_service.md))
-that owns the GPU and pinned host memory; training state lives in its
-object store between steps. `tools/train/train_solo.py` drives single-GPU
-pretraining (engine and pure-torch reference legs, a per-sequence data
-pipeline ([docs/data_feeds.md](docs/data_feeds.md)), checkpoints/resume, AdamW or Muon per-field optimizer policy —
-walkthrough: [docs/usage.md](docs/usage.md)), and `tools/train/train_fleet.py`
-drives data-parallel fleets (weighted round distribution, ZeRO-1
-optimizer sharding, fleet checkpoints —
-[docs/distributed_training.md](docs/distributed_training.md)).
-Correctness of every family is pinned against the isolated pure-torch
-twins in [reference_models/](reference_models/README.md).
-
 ---
 
 # High Level Components

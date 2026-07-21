@@ -42,7 +42,7 @@ python tools/export/trace_real_run.py --preset smoke --steps 3 --out examples/
 | `--preset` | model preset (any `resolve_preset` name) |
 | `--steps` | training steps to run; the last one is kept (default 3) |
 | `--budget` | fast-memory plan budget in GiB |
-| `--slab` | daemon slab size in GiB |
+| `--backing-gib` | daemon pinned backing size in GiB |
 | `--out` | output directory |
 | `--name` | output stem (default: `trace-<preset>`) |
 
