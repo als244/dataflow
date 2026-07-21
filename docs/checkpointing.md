@@ -205,11 +205,7 @@ Certification: the three resume drills (single box, same-box world
 each train with checkpoints, resume on FRESH daemons, and assert the
 resumed tail reproduces the uninterrupted run's losses within a
 tight envelope (currently 5e-4 worst-step), on top of the bitwise
-slice-reassembly gates. The envelope is not yet exactly zero — an
-exact continue-vs-resume equality gate is planned once the open
-solo-versus-data-parallel execution-environment investigation
-resolves, since that phenomenon and this envelope plausibly share a
-mechanism.
+slice-reassembly gates.
 
 ## Single GPU is the world-1 special case
 
