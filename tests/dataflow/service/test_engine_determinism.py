@@ -65,7 +65,7 @@ def test_same_daemon_rerun_bitwise(tmp_path):
                            fast_memory_capacity=4 << 30)
     cd = cfg_dict(cfg)
     fam_name = resolver_family(cfg)
-    with daemon_client(slab_gib=4.0, log=print) as client:
+    with daemon_client(backing_gib=4.0, log=print) as client:
         init_model(client, fam_name, cd, seed=11)
         stepper0 = legacy_block_pipeline(cfg)(None)
         packed0 = stepper0.next_step()
