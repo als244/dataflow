@@ -87,12 +87,19 @@ def distribute_artifacts(record: dict, hosts, log) -> None:
 
 def save_checkpoint(ranks, ck: dict, step_next: int, meta: dict,
                      losses_so_far: list, log) -> None:
-    """Conductor-orchestrated checkpoint at a step boundary, and the record
-    v2: each rank snapshots exactly what it is RESPONSIBLE for (its
-    param byte ranges + its own whole objects — rank_save_args over
-    the responsibility map), the conductor saves every rank's planned
-    program beside the artifacts, and checkpoint_record.json (format 2) is
-    written LAST as the completeness marker."""
+    """Conductor-driven checkpoint at a step boundary. CONTRACT:
+
+    Inputs: the conductor's checkpoint config dict ``ck`` (dir/run
+    name, the responsibility save plan, launch argv + resolved
+    settings, data description, hosts), the live ``ranks``
+    (RankState: client + persist_ids + program), the 0-indexed step
+    just completed, the loss history, and run meta (seed, world,
+    rank_rounds, backend, data cursor). Effects: each rank snapshots
+    ITS save-plan slice (param byte ranges it is responsible for +
+    its own optimizer shard) beside per-rank program dumps, and
+    ``checkpoint_record.json`` is written LAST as the completeness
+    marker. The step directory then satisfies load_checkpoint's
+    input contract on any box holding it."""
     import os
 
     from .checkpoint_record import launch_record, save_programs, write_record
@@ -157,23 +164,35 @@ def save_checkpoint(ranks, ck: dict, step_next: int, meta: dict,
 
 
 def load_checkpoint(step_dir, *, rank=None, client=None,
-                    include_opt: bool = True, backing_gib: float = 1.0):
-    """HIGH-LEVEL restore: open a checkpoint step directory and return
-    ``(record, client)``.
+                    include_opt: bool = False, backing_gib: float = 1.0):
+    """HIGH-LEVEL restore. CONTRACT:
 
-    Two views:
-    - ``rank=r`` — RANK VIEW: exactly the state rank r held when the
-      checkpoint was written (full weights + ITS optimizer shard),
-      restored via the same artifact order resume feeds that rank.
-    - ``rank=None`` — AGGREGATE VIEW: weights reassembled from every
-      rank's ranges. Optimizer state is rank-partitioned at world>1,
-      so the aggregate view REFUSES ``include_opt=True`` there —
-      pass a rank for optimizer state, or ``include_opt=False``.
+    Inputs:
+    - ``step_dir``: a checkpoint step directory containing
+      ``checkpoint_record.json`` (raises loudly otherwise) and every
+      artifact the record lists, locally readable.
+    - ``rank``: None for the AGGREGATE view, or an int in
+      [0, record world) for the RANK view.
+    - ``client``: an EngineClient to restore into; None boots a
+      scratch in-process fake engine sized by ``backing_gib``.
+    - ``include_opt``: also load optimizer state (default False —
+      evaluation/inspection). Orthogonal to the view choice.
+    Returns ``(record, client)``.
 
-    With no ``client`` a scratch in-process FAKE engine is booted to
-    hold the bytes — the evaluation/inspection case; pass a real
-    client to load state into a live daemon. ``include_opt=False``
-    releases optimizer-state objects after restore."""
+    RANK VIEW (``rank=r``): exactly the state rank r held when the
+    checkpoint was written, restored in the same artifact order
+    resume feeds that rank. What that state IS follows the scheme
+    that saved it: full replicated weights + r's optimizer shard
+    under today's data-parallel schemes; under future partitioning
+    schemes (tensor/expert), r's weight SHARDS — this function
+    promises "r's objects", never "full weights".
+
+    AGGREGATE VIEW (``rank=None``): complete objects reassembled
+    from every rank's saved ranges. ``include_opt=True`` here is
+    honored when the optimizer state is aggregatable (world 1, or
+    co-replicated saves); with rank-partitioned optimizer shards it
+    raises — per-rank shard objects share ids, so no aggregate
+    exists; use a rank view for optimizer state."""
     from pathlib import Path as _Path
 
     from .checkpoint_record import artifacts_for_restore, read_record
@@ -181,10 +200,14 @@ def load_checkpoint(step_dir, *, rank=None, client=None,
     step_dir = _Path(step_dir)
     record = read_record(step_dir)
     if rank is None and include_opt and record["world"] > 1:
-        raise ValueError(
-            "optimizer state is rank-partitioned at world>1: pass "
-            "rank= for a rank view, or include_opt=False for the "
-            "aggregate weight view")
+        partitioned = any(
+            len(entries) > 1
+            for entries in record.get("save_plan", {}).values())
+        if partitioned:
+            raise ValueError(
+                "no aggregate exists for rank-partitioned optimizer "
+                "shards (per-rank objects share ids): use a rank "
+                "view for optimizer state, or include_opt=False")
     if client is None:
         import tempfile
         import threading

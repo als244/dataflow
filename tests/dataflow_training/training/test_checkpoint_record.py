@@ -115,16 +115,19 @@ def test_manifest_v2_roundtrip_two_ranks(tmp_path):
     from dataflow_training.run.checkpointing import load_checkpoint
 
     for r, want_o in ((0, o0), (1, o1)):
-        rec2, lc = load_checkpoint(step_dir, rank=r)
+        rec2, lc = load_checkpoint(step_dir, rank=r, include_opt=True)
         assert bytes(lc.get_object("W_0")) == w
         assert bytes(lc.get_object("O_0")) == want_o
         lc.shutdown()
-    # aggregate view refuses partitioned opt state; weight view works
-    with pytest.raises(ValueError, match="rank-partitioned"):
-        load_checkpoint(step_dir)
-    rec3, lc = load_checkpoint(step_dir, include_opt=False)
+        rec2b, lcb = load_checkpoint(step_dir, rank=r)  # opt off default
+        assert bytes(lcb.get_object("W_0")) == w
+        lcb.shutdown()
+    # aggregate: weights reassemble; partitioned opt has no aggregate
+    rec3, lc = load_checkpoint(step_dir)
     assert bytes(lc.get_object("W_0")) == w
     lc.shutdown()
+    with pytest.raises(ValueError, match="no aggregate"):
+        load_checkpoint(step_dir, include_opt=True)
 
     for server, c in daemons:
         try:
