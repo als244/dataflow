@@ -154,6 +154,7 @@ def cmd_train(args) -> int:
         profile=profile, backend=args.backend,
         execute_padding=args.execute_padding,
         launch_argv=sys.argv,
+        prof_dir=args.prof_dir,
         checkpoint_every=args.checkpoint_every,
         checkpoint_dir=str(CKPTS), run_name=run_name,
         checkpoint_redundancy=args.checkpoint_redundancy,
@@ -423,6 +424,8 @@ def main() -> int:
                         "nsys command; bracket with the step flags")
     t.add_argument("--profile-start-before-step", type=int, default=None)
     t.add_argument("--profile-stop-after-step", type=int, default=None)
+    t.add_argument("--prof-dir", default="results/pretrain/logs",
+                   help="directory for nsys reports from --profile")
     t.add_argument("--checkpoint-every", type=int, default=None)
     t.add_argument("--checkpoint-redundancy", type=int, default=1)
     t.add_argument("--checkpoint-keep-last", type=int, default=0)
