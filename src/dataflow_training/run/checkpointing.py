@@ -1,4 +1,4 @@
-"""Fleet checkpointing: manifest-v2 write/resume orchestration —
+"""Fleet checkpointing: checkpoint-record (v2) write/resume orchestration —
 responsibility-driven ranged saves, artifact distribution, ordered
 restore. Split from the conductor (fleet.py) at phase close; fleet
 re-exports these names."""
@@ -7,28 +7,28 @@ from pathlib import Path
 from ..distributed.hosts import repo_path, run_on
 
 def resolve_resume(run_dir: Path, resume: str, log) -> dict:
-    """Locate the resume fleet manifest. ``resume`` is a step
+    """Locate the resume checkpoint record. ``resume`` is a step
     directory path or "auto" (newest COMPLETE checkpoint wins —
-    fleet.json is written LAST by the conductor, so its presence is
+    checkpoint_record.json is written LAST by the conductor, so its presence is
     the completeness marker; a crash mid-snapshot leaves no marker
     and auto skips that step)."""
     import json
 
-    from .manifest import read_manifest
+    from .checkpoint_record import read_record
 
     if resume != "auto":
-        manifest = read_manifest(Path(resume))
-        manifest["_step_dir"] = str(resume)
-        return manifest
-    candidates = sorted(run_dir.glob("step_*/fleet.json"))
+        record = read_record(Path(resume))
+        record["_step_dir"] = str(resume)
+        return record
+    candidates = sorted(run_dir.glob("step_*/checkpoint_record.json"))
     if not candidates:
         raise RuntimeError(f"resume=auto found no complete checkpoint "
                            f"under {run_dir}")
     mf = candidates[-1]
     log(f"[fleet] resume=auto -> {mf.parent}")
-    manifest = read_manifest(mf.parent)
-    manifest["_step_dir"] = str(mf.parent)
-    return manifest
+    record = read_record(mf.parent)
+    record["_step_dir"] = str(mf.parent)
+    return record
 
 
 def push_dir(host, src_dir: str, dest_dir: str) -> None:
@@ -46,21 +46,21 @@ def push_dir(host, src_dir: str, dest_dir: str) -> None:
                     f"{host.ssh}:{dest}/"], check=True)
 
 
-def distribute_artifacts(fleet_manifest: dict, hosts, log) -> None:
+def distribute_artifacts(record: dict, hosts, log) -> None:
     """Make EVERY rank artifact locally available on every resuming
     host (each rank replays all artifacts — parameter ranges compose
     across them). Same path layout on every host; hosts that already
     hold an artifact (its writer, or a same-box peer) skip the push."""
     import subprocess
 
-    step_dir = Path(fleet_manifest["_step_dir"])
+    step_dir = Path(record["_step_dir"])
     by_name = {h.name: h for h in hosts}
-    writers = [r["host"] for r in fleet_manifest["launch"]["ranks"]]
-    for i, art in enumerate(fleet_manifest["artifacts"]):
+    writers = [r["host"] for r in record["launch"]["ranks"]]
+    for i, art in enumerate(record["artifacts"]):
         src = step_dir / art
         if not src.is_dir():
             # written on a REMOTE rank's box — pull it to the
-            # conductor first (the manifest records each writer host)
+            # conductor first (the record names each writer host)
             writer = by_name.get(writers[i])
             if writer is None or writer.is_local():
                 raise RuntimeError(
@@ -87,19 +87,19 @@ def distribute_artifacts(fleet_manifest: dict, hosts, log) -> None:
 
 def checkpoint_fleet(ranks, ck: dict, step_next: int, meta: dict,
                      losses_so_far: list, log) -> None:
-    """Conductor-orchestrated checkpoint at a step boundary, manifest
+    """Conductor-orchestrated checkpoint at a step boundary, and the record
     v2: each rank snapshots exactly what it is RESPONSIBLE for (its
     param byte ranges + its own whole objects — rank_save_args over
     the responsibility map), the conductor saves every rank's planned
-    program beside the artifacts, and fleet.json (format 2) is
+    program beside the artifacts, and checkpoint_record.json (format 2) is
     written LAST as the completeness marker."""
     import os
 
-    from .manifest import launch_record, save_programs, write_manifest
+    from .checkpoint_record import launch_record, save_programs, write_record
     from ..distributed.responsibility import rank_save_args
 
     step_dir = ck["dir"] / f"step_{step_next:06d}"
-    os.makedirs(step_dir, exist_ok=True)   # conductor side (fleet.json)
+    os.makedirs(step_dir, exist_ok=True)   # conductor side (checkpoint_record.json)
     plan = ck["responsibility"]
     snaps = []
     for i, rank in enumerate(ranks):
@@ -132,7 +132,7 @@ def checkpoint_fleet(ranks, ck: dict, step_next: int, meta: dict,
                 "device": ck["hosts_by_name"][r.name].device}
                for r in ranks],
         repo=Path.cwd(), programs=progs)
-    write_manifest(step_dir, step=step_next, seed=meta["seed"],
+    write_record(step_dir, step=step_next, seed=meta["seed"],
                    world=len(ranks), data_cursor=meta.get("data_cursor"),
                    losses=losses_so_far, save_plan=plan,
                    artifacts=[f"rank{i}" for i in range(len(ranks))],
@@ -143,7 +143,7 @@ def checkpoint_fleet(ranks, ck: dict, step_next: int, meta: dict,
     if keep > 0:
         import shutil
 
-        complete = sorted(ck["dir"].glob("step_*/fleet.json"))
+        complete = sorted(ck["dir"].glob("step_*/checkpoint_record.json"))
         for mf in complete[:-keep]:
             old_dir = mf.parent
             shutil.rmtree(old_dir, ignore_errors=True)

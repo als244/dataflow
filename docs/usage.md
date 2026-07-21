@@ -107,7 +107,7 @@ python tools/train/train.py reference --preset gpt2_124m \
 python tools/train/train.py train --preset gpt2_124m \
     --fast-budget 14 --resume auto --out results/pretrain/eng.json  # zero-config solo (world-1)
 python tools/train/train.py train --preset l3_1b --steps 1000 --topology topology.toml --rounds 6,2 \
-    --out results/pretrain/fleet.json                        # data-parallel fleet
+    --out results/pretrain/dp_fleet.json                        # data-parallel fleet
 python tools/bench/measure_step.py --preset l3_1b --t-rounds 8192,32768 \
     --budgets 14,6 --steps 12          # measured throughput sweeps
 ```

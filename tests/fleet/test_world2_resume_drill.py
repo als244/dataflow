@@ -64,7 +64,7 @@ def test_world2_zero1rs_checkpoint_resume_drill(tmp_path):
                          topology=local_pair_topology(),
                          launch_argv=["unit", "world2-drill"], **common)
 
-    manifests = sorted((ck_dir / "drill2").glob("step_*/fleet.json"))
+    manifests = sorted((ck_dir / "drill2").glob("step_*/checkpoint_record.json"))
     assert manifests, "no checkpoints written"
     m = json.loads(manifests[-1].read_text())
     assert m["format"] == 2

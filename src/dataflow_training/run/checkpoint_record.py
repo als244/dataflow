@@ -1,6 +1,7 @@
-"""Checkpoint manifest v2: one format at every world size.
+"""The checkpoint record (format 2): one format at every world
+size.
 
-``<run>/step_NNNNNN/fleet.json`` — written LAST by the conductor as
+``<run>/step_NNNNNN/checkpoint_record.json`` — written LAST by the conductor as
 the completeness marker — describes the whole checkpoint:
 
     {
@@ -72,12 +73,12 @@ def launch_record(*, argv, resolved: dict, data: dict, ranks: list,
     }
 
 
-def write_manifest(step_dir: Path, *, step: int, seed: int, world: int,
+def write_record(step_dir: Path, *, step: int, seed: int, world: int,
                    data_cursor, losses, save_plan: dict,
                    artifacts: list, launch: dict) -> Path:
-    """fleet.json, written atomically and LAST (the completeness
+    """checkpoint_record.json, written atomically and LAST (the completeness
     marker — a crash mid-snapshot leaves no marker)."""
-    manifest = {
+    record = {
         "format": FORMAT,
         "step": step, "seed": seed, "world": world,
         "created_t": time.time(),
@@ -87,25 +88,25 @@ def write_manifest(step_dir: Path, *, step: int, seed: int, world: int,
         "artifacts": list(artifacts),
         "launch": launch,
     }
-    tmp = step_dir / "fleet.json.tmp"
-    tmp.write_text(json.dumps(manifest, indent=1))
-    out = step_dir / "fleet.json"
+    tmp = step_dir / "checkpoint_record.json.tmp"
+    tmp.write_text(json.dumps(record, indent=1))
+    out = step_dir / "checkpoint_record.json"
     tmp.rename(out)
     return out
 
 
-def read_manifest(step_dir: Path) -> dict:
-    mf = Path(step_dir) / "fleet.json"
+def read_record(step_dir: Path) -> dict:
+    mf = Path(step_dir) / "checkpoint_record.json"
     if not mf.is_file():
-        raise RuntimeError(f"no fleet.json at {step_dir}")
-    manifest = json.loads(mf.read_text())
-    if manifest.get("format") != FORMAT:
+        raise RuntimeError(f"no checkpoint_record.json at {step_dir}")
+    record = json.loads(mf.read_text())
+    if record.get("format") != FORMAT:
         raise RuntimeError(
             f"checkpoint at {step_dir} has format "
-            f"{manifest.get('format')!r}; this build reads format "
+            f"{record.get('format')!r}; this build reads format "
             f"{FORMAT} only (older checkpoints: use the retired tools "
             f"in tools/train/internal/)")
-    return manifest
+    return record
 
 
 def save_programs(step_dir: Path, prog_dicts: list) -> list:
@@ -121,12 +122,12 @@ def save_programs(step_dir: Path, prog_dicts: list) -> list:
     return rel
 
 
-def artifacts_for_restore(manifest: dict, rank: int) -> list:
+def artifacts_for_restore(record: dict, rank: int) -> list:
     """Which artifacts THIS rank must restore, in order: every
     artifact holding a range of an object the rank needs (all of
     them, for parameter reassembly) — its OWN artifact last so its
     whole-object entries (O shards) win any overlap."""
-    world = manifest["world"]
-    order = [manifest["artifacts"][r] for r in range(world) if r != rank]
-    order.append(manifest["artifacts"][rank])
+    world = record["world"]
+    order = [record["artifacts"][r] for r in range(world) if r != rank]
+    order.append(record["artifacts"][rank])
     return order

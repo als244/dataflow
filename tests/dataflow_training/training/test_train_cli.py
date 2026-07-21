@@ -37,7 +37,7 @@ def test_train_cli_world1_and_peek(tmp_path):
 
     ck = REPO / "results" / "pretrain" / "checkpoints" / "cli_smoke"
     try:
-        manifests = sorted(ck.glob("step_*/fleet.json"))
+        manifests = sorted(ck.glob("step_*/checkpoint_record.json"))
         assert manifests, "no v2 checkpoint written"
         m = json.loads(manifests[-1].read_text())
         assert m["format"] == 2

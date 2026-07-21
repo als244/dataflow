@@ -11,10 +11,11 @@ The machinery lives in single-purpose components; import from here:
     daemons.py          dataflowd lifecycle on a host (launch/kill/...)
     grouped_lowering.py lower_with_group — blind lower -> annotate ->
                         exact sizes (the three composable passes)
-    ../run/checkpointing.py manifest-v2 save / resume orchestration
+    ../run/checkpointing.py checkpoint save / resume orchestration
     sharding.py         layout-geometry shard math (unchanged)
     responsibility.py   who steps, saves (the save-plan derivation)
-    ../run/manifest.py  checkpoint manifest v2 read/write
+    ../run/checkpoint_record.py the per-checkpoint record (v2):
+                        contents + save plan + launch provenance
 """
 from ..run.checkpointing import (  # noqa: F401
     checkpoint_fleet,

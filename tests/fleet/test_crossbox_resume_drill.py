@@ -1,4 +1,4 @@
-"""Cross-box resume drill against manifest v2 — the third and final
+"""Cross-box resume drill against the v2 checkpoint record — the third and final
 S4 drill: two REAL hosts from topology.toml (nccl or auto backend),
 zero1rs default, checkpoints written per responsibility on each box,
 artifacts distributed across boxes at resume, and the resumed tail
@@ -64,7 +64,7 @@ def test_crossbox_zero1rs_checkpoint_resume_drill(tmp_path):
                          launch_argv=["unit", "crossbox-drill"],
                          **common)
 
-    manifests = sorted((ck_dir / "xdrill").glob("step_*/fleet.json"))
+    manifests = sorted((ck_dir / "xdrill").glob("step_*/checkpoint_record.json"))
     assert manifests, "no checkpoints written"
     m = json.loads(manifests[-1].read_text())
     assert m["format"] == 2

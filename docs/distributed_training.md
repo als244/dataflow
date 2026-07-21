@@ -172,7 +172,7 @@ returns the stored `client_meta`.
 
 The engine is **stateless per step**: all trajectory state lives in
 store objects (weights `W_*`, optimizer state `O_*`) plus the
-driver-supplied step index. That is why a resume manifest is small — the step counter, seed,
+driver-supplied step index. That is why a checkpoint record is small — the step counter, seed,
 fleet layout, and artifact locations; config and program re-derive
 from the invocation — and why restore + re-register + continue
 reproduces training exactly.
@@ -190,7 +190,7 @@ python tools/train/train.py train ... --topology topology.toml \
 At every N-step boundary the conductor has each rank snapshot to a
 **host-local** path (`results/pretrain/checkpoints/<run>/step_XXXXXX/`
 on that rank's own disk — the run name is your `--out` stem), waits
-for all writers, then writes `fleet.json` on the conductor **last**.
+for all writers, then writes `checkpoint_record.json` on the conductor **last**.
 That file is the completeness marker: a crash mid-snapshot leaves no
 marker and the checkpoint is invisible to resume. It is MANIFEST v2
 (`"format": 2`, one format at every world size) and records: the
@@ -200,7 +200,7 @@ the literal argv, resolved settings, data identity, git and
 torch/CUDA identity, per-rank host/device, and every rank's PLANNED
 PROGRAM saved beside the artifacts (`programs/rankN.json`): a
 checkpoint captures plan-time decisions, not just weights, and any
-run can be re-invoked exactly from its manifest.
+run can be re-invoked exactly from its record.
 
 ### The parallelism stack: scheme, sharding, layouts, groups
 
@@ -237,7 +237,7 @@ layouts                  The coordinate system geometry compiles
     ▼
 responsibility           Who steps and therefore saves each slice —
   (responsibility.py)    derived from the same axes; becomes the
-                         checkpoint's save plan (manifest v2).
+                         checkpoint's save plan (record v2).
 ```
 
 The conductor (`dataflow_training/run/conductor.py`) takes the scheme as
@@ -297,14 +297,14 @@ python tools/train/train.py train ... --resume auto --out results/pretrain/myrun
 
 `--resume auto` picks the newest *complete* checkpoint for the run
 name (or pass a specific `step_XXXXXX` directory). The conductor
-validates the manifest against the current invocation (world,
+validates the record against the current invocation (world,
 rounds, backend, seed — mismatches refuse loudly), pulls any
 remote-written artifact from its recorded writer host and fans the
 full set out to every rank, boots daemons, runs the
 kernel warm-up, and only **then** restores (`overwrite=True`) — the
 warm-up mutates state, and restoring afterwards makes it harmless.
 Training continues from the checkpoint step; the loss curve is
-stitched from the manifest so the saved run output stays continuous.
+stitched from the record so the saved run output stays continuous.
 
 Resume is *in-place*: same world, same plan. Restoring into a
 different world/plan requires a gathered full-state artifact (a

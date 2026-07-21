@@ -1,9 +1,9 @@
-"""Manifest-v2 gates (CPU, fake engines): the end-to-end checkpoint
+"""Checkpoint-record (v2) gates (CPU, fake engines): the end-to-end checkpoint
 shape without the conductor — two daemons save per a zero1rs-shaped
-responsibility plan (ranged params + whole own shards), the manifest
+responsibility plan (ranged params + whole own shards), the record
 writes LAST, and restore-by-artifact-order reassembles every object
 BITWISE on a fresh daemon pair. Plus: format guard (loud on v1/absent),
-completeness marker (no fleet.json = no checkpoint), launch record
+completeness marker (no checkpoint_record.json = no checkpoint), launch record
 round-trip, programs saved beside artifacts."""
 import threading
 import time
@@ -12,12 +12,12 @@ import numpy as np
 import pytest
 
 from dataflow.service import EngineClient, EngineConfig, Server
-from dataflow_training.run.manifest import (
+from dataflow_training.run.checkpoint_record import (
     artifacts_for_restore,
     launch_record,
-    read_manifest,
+    read_record,
     save_programs,
-    write_manifest,
+    write_record,
 )
 from dataflow_training.distributed.responsibility import rank_save_args
 
@@ -86,14 +86,14 @@ def test_manifest_v2_roundtrip_two_ranks(tmp_path):
                            ranks=[{"host": "local", "device": 0},
                                   {"host": "local", "device": 0}],
                            repo=tmp_path, programs=progs)
-    # completeness marker: BEFORE fleet.json, read must refuse
+    # completeness marker: BEFORE checkpoint_record.json, read must refuse
     with pytest.raises(RuntimeError):
-        read_manifest(step_dir)
-    write_manifest(step_dir, step=4, seed=11, world=2,
+        read_record(step_dir)
+    write_record(step_dir, step=4, seed=11, world=2,
                    data_cursor={"doc": 9}, losses=[5.0, 4.0],
                    save_plan=plan, artifacts=["rank0", "rank1"],
                    launch=launch)
-    m = read_manifest(step_dir)
+    m = read_record(step_dir)
     assert m["format"] == 2
     assert m["data_cursor"] == {"doc": 9}
     assert m["launch"]["argv"] == ["train.py", "train"]
@@ -123,6 +123,6 @@ def test_format_guard_is_loud(tmp_path):
 
     step_dir = tmp_path / "step_000002"
     step_dir.mkdir()
-    (step_dir / "fleet.json").write_text(json.dumps({"step": 2}))
+    (step_dir / "checkpoint_record.json").write_text(json.dumps({"step": 2}))
     with pytest.raises(RuntimeError, match="format"):
-        read_manifest(step_dir)
+        read_record(step_dir)

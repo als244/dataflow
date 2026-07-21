@@ -12,7 +12,7 @@ from .topology import HostSpec
 
 def repo_path(host: HostSpec, path: str) -> str:
     """Resolve a repo-relative artifact path on a host. Daemons run
-    with cwd = the repo root, so relative paths in manifests mean
+    with cwd = the repo root, so relative paths in checkpoint records mean
     "under the repo" — but ssh sessions land in $HOME, so every
     remote shell/scp operation must absolute-ify first. (Learned the
     hard way: scp to a relative dest silently ships checkpoints to

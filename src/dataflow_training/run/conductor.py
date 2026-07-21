@@ -228,14 +228,14 @@ def run(global_cfg, recipe: Recipe, pipeline, steps: int, *,
               "redundancy": int(checkpoint_redundancy),
               "keep_last": int(checkpoint_keep_last),
               "hosts_by_name": {h.name: h for h in hosts}}
-    fleet_manifest = None
+    ck_record = None
     if resume is not None:
-        fleet_manifest = resolve_resume(
+        ck_record = resolve_resume(
             Path(checkpoint_dir) / run_name, resume, log)
-        distribute_artifacts(fleet_manifest, hosts, log)
-        resolved = fleet_manifest["launch"]["resolved"]
-        expect = {"world": (fleet_manifest["world"], world),
-                  "seed": (fleet_manifest["seed"], seed),
+        distribute_artifacts(ck_record, hosts, log)
+        resolved = ck_record["launch"]["resolved"]
+        expect = {"world": (ck_record["world"], world),
+                  "seed": (ck_record["seed"], seed),
                   "rank_rounds": (resolved.get("rank_rounds"),
                                   [len(m) for m in round_map]),
                   "backend": (resolved.get("backend"), gspec.backend),
@@ -244,7 +244,7 @@ def run(global_cfg, recipe: Recipe, pipeline, steps: int, *,
         for key, (got, want) in expect.items():
             if got != want:
                 raise RuntimeError(
-                    f"resume manifest mismatch: {key} was {got!r} at "
+                    f"resume record mismatch: {key} was {got!r} at "
                     f"checkpoint time but the run asks {want!r}")
 
     run_lock = None
@@ -336,7 +336,7 @@ def run(global_cfg, recipe: Recipe, pipeline, steps: int, *,
                           r_global=r_global, profile=profile,
                           parallels=parallels,
                           tp_mode=tp_mlp, checkpoint=ck,
-                          fleet_manifest=fleet_manifest,
+                          ck_record=ck_record,
                           zero1rs_world=(world if opt_shard == "zero1rs"
                                          else None),
                           execute_padding=execute_padding,

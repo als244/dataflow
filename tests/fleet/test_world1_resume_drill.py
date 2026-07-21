@@ -61,7 +61,7 @@ def test_world1_checkpoint_resume_drill(tmp_path):
                          checkpoint_every=2, **common)
 
     # manifest v2 surface at the newest checkpoint
-    manifests = sorted((ck_dir / "drill").glob("step_*/fleet.json"))
+    manifests = sorted((ck_dir / "drill").glob("step_*/checkpoint_record.json"))
     assert manifests, "no checkpoints written"
     m = json.loads(manifests[-1].read_text())
     assert m["format"] == 2

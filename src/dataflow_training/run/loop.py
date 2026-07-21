@@ -22,14 +22,14 @@ def fleet_loop(ranks, gspec, recipe, pipeline, steps, *, budgets, seed,
                profile: dict | None = None,
                parallels=None,
                tp_mode: bool = False, checkpoint: dict | None = None,
-               fleet_manifest: dict | None = None,
+               ck_record: dict | None = None,
                zero1rs_world: int | None = None,
                execute_padding: bool = False,
                tp_mlp: bool = False) -> RunResult:
     world = len(ranks)
-    start_step = int(fleet_manifest["step"]) if fleet_manifest else 0
+    start_step = int(ck_record["step"]) if ck_record else 0
 
-    cursor = fleet_manifest.get("data_cursor") if fleet_manifest else None
+    cursor = ck_record.get("data_cursor") if ck_record else None
     if cursor is not None:
         stepper = pipeline(cursor)
     else:
@@ -58,7 +58,7 @@ def fleet_loop(ranks, gspec, recipe, pipeline, steps, *, budgets, seed,
                                               parallel=par,
                                               zero1rs_world=zero1rs_world))
         prog_dict = program_to_dict(planned.program)
-        rank.prog_dict = prog_dict          # manifest v2: saved beside
+        rank.prog_dict = prog_dict          # record v2: saved beside
                                             # the checkpoint artifacts
         from dataflow_training.run.presets import resolver_family
 
@@ -117,17 +117,17 @@ def fleet_loop(ranks, gspec, recipe, pipeline, steps, *, budgets, seed,
                                args={"step": 0, "valid_rows": tokens_step})
         if warm.get("state") != "done":
             raise RuntimeError(f"{rank.name} warm-up: {warm}")
-        if fleet_manifest is not None:
+        if ck_record is not None:
             # RESUME: restore over the warm-up's mutated state (this
             # ordering makes the kernel warm-up harmless), then feed
             # the START step's rounds. Restores the shared artifact
             # (rank-0-deduped state, distributed to this host by the
             # conductor) plus this rank's own artifact, if any.
-            from .manifest import artifacts_for_restore
+            from .checkpoint_record import artifacts_for_restore
 
             restored_step = None
-            step_dir = Path(fleet_manifest["_step_dir"])
-            for art in artifacts_for_restore(fleet_manifest, i):
+            step_dir = Path(ck_record["_step_dir"])
+            for art in artifacts_for_restore(ck_record, i):
                 res = rank.client.restore_snapshot(
                     str(step_dir / art), overwrite=True)
                 restored_step = res["client_meta"]["step"]
@@ -169,10 +169,10 @@ def fleet_loop(ranks, gspec, recipe, pipeline, steps, *, budgets, seed,
                           "budgets_gib": list(budgets),
                           "tokens_per_step": tokens_step})
 
-    if fleet_manifest is not None:
+    if ck_record is not None:
         # continuous curve across the resume: pre-checkpoint losses
-        # ride the manifest
-        res.losses.extend(fleet_manifest.get("losses", []))
+        # ride the checkpoint record
+        res.losses.extend(ck_record.get("losses", []))
         res.meta["resumed_from_step"] = start_step
 
     # ---- lockstep step loop -------------------------------------------
