@@ -345,7 +345,7 @@ class Gpt2HeadLoss(HeadLoss):
         return gpt2_embed_layout(d) if d.tied else gpt2_head_layout(d)
 
     def launch(self, ctx: TaskContext) -> None:
-        from ...blocks.base_blocks import head_chunk_rows
+        from ...blocks.base_blocks import max_head_chunk_rows
 
         d = self.dims
         es, kctx = self._stream_ctx(ctx)
@@ -379,7 +379,7 @@ class Gpt2HeadLoss(HeadLoss):
                 # tied create: this task owns dW_embed's first write; the
                 # position-table region is embed_bwd's to accumulate into
                 dwh["wpe"].zero_()
-            chunk = head_chunk_rows(d.vocab_size)
+            chunk = max_head_chunk_rows(d.vocab_size)
             hw = self.head_linear()
             loss_acc = torch.zeros(1, dtype=torch.float32, device=y.device)
             part = torch.empty(1, dtype=torch.float32, device=y.device)
