@@ -84,6 +84,30 @@ def resolve_data(spec: str, *, max_seqlen: int, vocab_size: int):
             mean_len=int(kv.pop("mean_len", "512")),
             seed=int(kv.pop("seed", "0")),
             max_seqlen=max_seqlen, long_policy=long_policy)
+    elif scheme == "jsonl":
+        from dataflow_training.data.sources.jsonl import JsonlSource
+
+        source = JsonlSource(
+            main, field=kv.pop("field", "text"),
+            tokenizer=kv.pop("tokenizer"),
+            max_seqlen=max_seqlen, long_policy=long_policy,
+            vocab_size=vocab_size)
+    elif scheme == "txt":
+        from dataflow_training.data.sources.jsonl import TextSource
+
+        source = TextSource(
+            main, delimiter=kv.pop("delimiter", "\n\n"),
+            tokenizer=kv.pop("tokenizer"),
+            max_seqlen=max_seqlen, long_policy=long_policy,
+            vocab_size=vocab_size)
+    elif scheme == "parquet":
+        from dataflow_training.data.sources.parquet import ParquetSource
+
+        source = ParquetSource(
+            main, column=kv.pop("column", "text"),
+            tokenizer=kv.pop("tokenizer"),
+            max_seqlen=max_seqlen, long_policy=long_policy,
+            vocab_size=vocab_size)
     elif scheme == "capture":
         from dataflow_training.data.sources.capture import CaptureSource
 
@@ -91,7 +115,7 @@ def resolve_data(spec: str, *, max_seqlen: int, vocab_size: int):
     else:
         raise ValueError(
             f"unknown --data scheme {scheme!r} (known: shards, synthetic, "
-            f"capture)")
+            f"jsonl, txt, parquet, capture)")
     if kv:
         raise ValueError(f"unused --data keys {sorted(kv)} for {scheme!r}")
     return source

@@ -17,6 +17,8 @@ sim = ["dataflow_sim"]
 # Real device backend (only dataflow.runtime.device.cuda imports it).
 cuda = ["cuda-python"]
 dev = ["pytest>=8", "httpx"]
+# Data ingestion: tokenizers + local/hub dataset sources (docs/data_feeds.md).
+data = ["tokenizers", "tiktoken", "datasets", "pyarrow"]
 
 # `uv sync` resolves the sibling simulator checkout in editable mode;
 # a standalone install can drop the sources table and use a published

@@ -295,3 +295,130 @@ def test_engine_resume_drill_with_cursor(tmp_path):
         # fresh process: same-daemon bitwise does not apply — hold the
         # tail to the cross-process ambient envelope
         assert abs(a - b) < 5e-4, (tail.losses, full.losses)
+
+
+# --------------------------- text sources ------------------------------------
+
+class CharTokenizer:
+    """Hermetic test tokenizer: one id per character (offset by 1 so
+    id 0 stays a benign filler)."""
+
+    def encode(self, text: str) -> list[int]:
+        return [1 + (ord(c) % 200) for c in text]
+
+    def describe(self) -> dict:
+        return {"backend": "char", "name": "char", "vocab_size": 201,
+                "eot_id": 200}
+
+
+def write_jsonl(tmp_path, docs, name="corpus_0.jsonl"):
+    import json as json_mod
+
+    p = tmp_path / name
+    p.write_text("\n".join(json_mod.dumps({"text": d}) for d in docs) + "\n")
+    return p
+
+
+def test_jsonl_source_targets_and_masking(tmp_path):
+    from dataflow_training.data.sources.jsonl import JsonlSource
+
+    write_jsonl(tmp_path, ["hello world", "ab"])
+    src = JsonlSource(str(tmp_path / "*.jsonl"), tokenizer=CharTokenizer(),
+                      max_seqlen=64, long_policy="exclude", vocab_size=201)
+    seqs = []
+    it = src.sequences(None)
+    for _ in range(2):
+        seq, cur = next(it)
+        seqs.append(seq)
+    tok = CharTokenizer()
+    want = tok.encode("hello world")
+    assert list(seqs[0].tokens) == want
+    assert list(seqs[0].targets[:-1]) == want[1:]
+    assert int(seqs[0].targets[-1]) == 200          # doc-final -> eot
+    assert len(seqs[1]) == 2
+
+
+def test_jsonl_cursor_resume_and_epoch_wrap(tmp_path):
+    from dataflow_training.data.sources.jsonl import JsonlSource
+
+    write_jsonl(tmp_path, ["one fine doc", "two", "three docs here"])
+    src = JsonlSource(str(tmp_path / "*.jsonl"), tokenizer=CharTokenizer(),
+                      max_seqlen=64, long_policy="exclude", vocab_size=201)
+    it = src.sequences(None)
+    got = [next(it) for _ in range(7)]              # wraps the 3-doc epoch
+    seq4, cur4 = got[3]
+    it2 = src.sequences(got[2][1])                  # resume after 3rd yield
+    re4, _ = next(it2)
+    assert np.array_equal(re4.tokens, seq4.tokens)
+
+
+def test_txt_source_delimiter_split(tmp_path):
+    from dataflow_training.data.sources.jsonl import TextSource
+
+    (tmp_path / "a.txt").write_text("first doc\n\nsecond doc\n\n")
+    src = TextSource(str(tmp_path / "*.txt"), tokenizer=CharTokenizer(),
+                     max_seqlen=64, long_policy="exclude", vocab_size=201)
+    it = src.sequences(None)
+    a, _ = next(it)
+    b, _ = next(it)
+    assert len(a) == len("first doc")
+    assert len(b) == len("second doc")
+
+
+def test_jsonl_end_to_end_pack_determinism(tmp_path):
+    from dataflow_training.data.sources.jsonl import JsonlSource
+
+    docs = [f"document number {i} with some words" * (1 + i % 3)
+            for i in range(24)]
+    write_jsonl(tmp_path, docs)
+
+    def build():
+        src = JsonlSource(str(tmp_path / "*.jsonl"),
+                          tokenizer=CharTokenizer(), max_seqlen=128,
+                          long_policy="chunk", vocab_size=201)
+        return Packer(DataFeed(src), tokens_per_round=256, ga_rounds=2,
+                      max_seqlen=128)
+
+    a, b = build(), build()
+    for _ in range(4):
+        sa, sb = a.next_step(), b.next_step()
+        for ra, rb in zip(sa.rounds, sb.rounds):
+            assert np.array_equal(ra.tokens, rb.tokens)
+            assert ra.seq_lens == rb.seq_lens
+            assert np.all(ra.targets[ra.content:] == -1)
+
+
+def test_tiktoken_backend_if_available():
+    tk = pytest.importorskip("tiktoken")
+    from dataflow_training.data.tokenizers import resolve_tokenizer
+
+    try:
+        tok = resolve_tokenizer("gpt2")
+    except Exception as exc:            # no network + cold cache
+        pytest.skip(f"tiktoken gpt2 unavailable: {exc}")
+    ids = tok.encode("hello world")
+    assert ids and max(ids) < tok.describe()["vocab_size"]
+    assert tok.describe()["eot_id"] == 50256
+
+
+def test_parquet_source_roundtrip(tmp_path):
+    pa = pytest.importorskip("pyarrow")
+    import pyarrow.parquet as pq
+
+    from dataflow_training.data.sources.parquet import ParquetSource
+
+    docs = [f"parquet document {i} body text" for i in range(9)]
+    table = pa.table({"text": docs})
+    pq.write_table(table, tmp_path / "part_0.parquet", row_group_size=4)
+    src = ParquetSource(str(tmp_path / "*.parquet"),
+                        tokenizer=CharTokenizer(), max_seqlen=64,
+                        long_policy="exclude", vocab_size=201)
+    it = src.sequences(None)
+    got = [next(it) for _ in range(12)]              # wraps the epoch
+    tok = CharTokenizer()
+    assert list(got[0][0].tokens) == tok.encode(docs[0])
+    assert list(got[9][0].tokens) == tok.encode(docs[0])   # wrap
+    # resume across a row-group boundary
+    it2 = src.sequences(got[4][1])
+    re6, _ = next(it2)
+    assert np.array_equal(re6.tokens, got[5][0].tokens)
