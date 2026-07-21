@@ -45,7 +45,7 @@ src/dataflow_training/       WORKLOAD — builds programs, registers resolvers
 │                            feed, packer (docs/data_feeds.md)
 ├── run/                     drivers (reference + engine service), presets,
 │                            recipes, profiling
-├── distributed/             topology, fleet conductor, sharding
+├── distributed/             topology, hosts/daemons, parallelism, sharding
 └── testing/                 gradcheck harnesses
 
 reference_models/            TRUTH — isolated pure-torch twins (repo root,
@@ -154,8 +154,7 @@ ShapedConfig (family + shapes)
   → trace / report                  real + wall tok/s vs sim; webapp exports
 ```
 
-Drivers: `tools/train/train.py` (ONE tool, every world size — solo is
-the world-1 fleet; reference/parity/scaling legs included),
+Drivers: `tools/train/train.py` (ONE tool, every world size — its flags compile to a `ParallelismScheme`, THE parallelism contract) over `dataflow_training/run/conductor.py` (THE orchestrator: `run(scheme=...)`, world-1 included),
 `tools/bench/predict_step.py` / `tools/bench/measure_step.py` (simulated and measured throughput sweeps).
 
 ## Simulator semantics the runtime reproduces

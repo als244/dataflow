@@ -18,13 +18,8 @@ torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
     pytest.skip("no CUDA device", allow_module_level=True)
 
-from dataflow_training.distributed.hostops import (  # noqa: E402
-    daemon_paths,
-    kill_daemon,
-    launch_daemon,
-    run_py,
-    uds_forward,
-)
+from dataflow_training.distributed.hosts import run_py, uds_forward
+from dataflow_training.distributed import daemons
 from dataflow_training.distributed.topology import load_topology_or_none  # noqa: E402
 from dataflow.service import EngineClient  # noqa: E402
 
@@ -91,9 +86,9 @@ def run_both(client, remote_sock, args) -> tuple:
 def rig(request, tmp_path_factory):
     backend = request.param
     for host in (LOCAL, REMOTE):
-        kill_daemon(host, lane=LANE)
-        launch_daemon(host, lane=LANE, slab_gib=4.0, peer_port=PORT)
-    remote_sock = daemon_paths(REMOTE, LANE)["sock"]
+        daemons.kill(host, lane=LANE)
+        daemons.launch(host, lane=LANE, slab_gib=4.0, peer_port=PORT)
+    remote_sock = daemons.paths(REMOTE, LANE)["sock"]
     tmp = tmp_path_factory.mktemp(LANE)
     fwd_sock = str(tmp / "r.sock")
     fwd = uds_forward(REMOTE, remote_sock, fwd_sock)
@@ -101,11 +96,11 @@ def rig(request, tmp_path_factory):
     client = None
     while time.time() < deadline:
         try:
-            for sock in (daemon_paths(LOCAL, LANE)["sock"], fwd_sock):
+            for sock in (daemons.paths(LOCAL, LANE)["sock"], fwd_sock):
                 probe = EngineClient(sock, client_name="probe")
                 probe.health()
                 probe.close()
-            client = EngineClient(daemon_paths(LOCAL, LANE)["sock"],
+            client = EngineClient(daemons.paths(LOCAL, LANE)["sock"],
                                   client_name="dtx")
             break
         except Exception:
@@ -125,7 +120,7 @@ def rig(request, tmp_path_factory):
     if fwd is not None:
         fwd.terminate()
     for host in (LOCAL, REMOTE):
-        kill_daemon(host, lane=LANE)
+        daemons.kill(host, lane=LANE)
 
 
 @pytest.mark.parametrize("dtype", ["bf16", "fp32"])

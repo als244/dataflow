@@ -111,17 +111,4 @@ class HostRig:
         self.prof_out: str | None = None
 
 
-# Split at phase close: grouped lowering + checkpointing live in
-# their own modules; these re-exports keep every existing import
-# stable (tests, tools, drills).
-from .checkpointing import (  # noqa: F401
-    checkpoint_fleet,
-    distribute_artifacts,
-    resolve_resume,
-)
-from .grouped_lowering import (  # noqa: F401
-    GroupedBuildVariant,
-    lower_with_group,
-)
-
 

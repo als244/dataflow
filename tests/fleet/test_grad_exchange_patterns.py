@@ -20,12 +20,8 @@ torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
     pytest.skip("no CUDA device", allow_module_level=True)
 
-from dataflow_training.distributed.hostops import (  # noqa: E402
-    daemon_paths,
-    kill_daemon,
-    launch_daemon,
-    run_py,
-)
+from dataflow_training.distributed.hosts import run_py
+from dataflow_training.distributed import daemons
 from dataflow_training.distributed.topology import load_topology_or_none  # noqa: E402
 from dataflow.service import EngineClient, EngineConfig, Server  # noqa: E402
 
@@ -107,13 +103,13 @@ def run_pattern(rig, sizes, reps=REPS) -> dict:
 
 
 def build_rig(tmp_path_factory, lane, port, rdma: bool):
-    kill_daemon(REMOTE, lane=lane)
+    daemons.kill(REMOTE, lane=lane)
     extra = ""
     if rdma:
         extra = f"--peer-rdma-device {REMOTE.ib_dev}"
-    launch_daemon(REMOTE, lane=lane, slab_gib=4.0, peer_port=port,
+    daemons.launch(REMOTE, lane=lane, slab_gib=4.0, peer_port=port,
                   extra_flags=extra)
-    remote_sock = daemon_paths(REMOTE, lane)["sock"]
+    remote_sock = daemons.paths(REMOTE, lane)["sock"]
     prelude = (
         "import sys; sys.path.insert(0, 'src'); "
         "from dataflow.service import EngineClient; "
@@ -169,7 +165,7 @@ def sock_rig(tmp_path_factory):
         rig["client"].shutdown()
     except Exception:
         pass
-    kill_daemon(REMOTE, lane="gxs")
+    daemons.kill(REMOTE, lane="gxs")
 
 
 @pytest.fixture(scope="module")
@@ -180,7 +176,7 @@ def rdma_rig(tmp_path_factory):
         rig["client"].shutdown()
     except Exception:
         pass
-    kill_daemon(REMOTE, lane="gxr")
+    daemons.kill(REMOTE, lane="gxr")
 
 
 def report(tag, res):

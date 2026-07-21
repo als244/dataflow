@@ -13,12 +13,8 @@ if not torch.cuda.is_available():
     pytest.skip("no CUDA device", allow_module_level=True)
 pytest.importorskip("pyverbs")
 
-from dataflow_training.distributed.hostops import (  # noqa: E402
-    daemon_paths,
-    kill_daemon,
-    launch_daemon,
-    run_py,
-)
+from dataflow_training.distributed.hosts import run_py
+from dataflow_training.distributed import daemons
 from dataflow_training.distributed.topology import load_topology_or_none  # noqa: E402
 from dataflow.service import EngineClient, EngineConfig, Server  # noqa: E402
 
@@ -36,7 +32,7 @@ LOCAL = TOPO.local()
 REMOTE = TOPO.remotes()[0]
 LANE = "p2rdma"
 PORT = 29610
-REMOTE_SOCK = daemon_paths(REMOTE, LANE)["sock"]
+REMOTE_SOCK = daemons.paths(REMOTE, LANE)["sock"]
 
 REMOTE_PRELUDE = (
     "import sys; sys.path.insert(0, 'src'); "
@@ -51,8 +47,8 @@ def remote_py(code: str, *, timeout: float = 120.0) -> str:
 
 @pytest.fixture(scope="module")
 def rig(tmp_path_factory):
-    kill_daemon(REMOTE, lane=LANE)
-    launch_daemon(REMOTE, lane=LANE, slab_gib=0.5, peer_port=PORT,
+    daemons.kill(REMOTE, lane=LANE)
+    daemons.launch(REMOTE, lane=LANE, slab_gib=0.5, peer_port=PORT,
                   extra_flags=f"--peer-rdma-device {REMOTE.ib_dev}")
     deadline = time.time() + 90
     while time.time() < deadline:
@@ -65,7 +61,7 @@ def rig(tmp_path_factory):
     else:
         raise RuntimeError(
             f"{REMOTE.name} daemon did not come up; see "
-            f"{daemon_paths(REMOTE, LANE)['log']} on that host")
+            f"{daemons.paths(REMOTE, LANE)['log']} on that host")
 
     tmp = tmp_path_factory.mktemp(LANE)
     sock = str(tmp / "local.sock")
@@ -94,7 +90,7 @@ def rig(tmp_path_factory):
         client.shutdown()
     except Exception:
         pass
-    kill_daemon(REMOTE, lane=LANE)
+    daemons.kill(REMOTE, lane=LANE)
 
 
 def test_rdma_crossbox_byte_identity(rig):

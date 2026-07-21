@@ -228,12 +228,8 @@ def test_tp_mlp_loopback_hostmem(tmp_path):
 
 
 def test_tp_mlp_crossbox_auto():
-    from dataflow_training.distributed.hostops import (
-        daemon_paths,
-        kill_daemon,
-        launch_daemon,
-        uds_forward,
-    )
+    from dataflow_training.distributed.hosts import uds_forward
+from dataflow_training.distributed import daemons
     from dataflow_training.distributed.topology import load_topology_or_none
 
     topo = load_topology_or_none()
@@ -245,24 +241,24 @@ def test_tp_mlp_crossbox_auto():
     clients = []
     try:
         for host in (local, remote):
-            kill_daemon(host, lane=lane)
-            launch_daemon(
+            daemons.kill(host, lane=lane)
+            daemons.launch(
                 host, lane=lane, slab_gib=2.0, peer_port=port,
                 extra_flags="--plugin dataflow_training.model_families.tp_mlp")
         import tempfile
 
         fwd_sock = tempfile.mktemp(suffix=".sock", prefix="tpfwd-")
-        fwd = uds_forward(remote, daemon_paths(remote, lane)["sock"],
+        fwd = uds_forward(remote, daemons.paths(remote, lane)["sock"],
                           fwd_sock)
         deadline = time.time() + 120
         ca = cb = None
         while time.time() < deadline:
             try:
-                for sock in (daemon_paths(local, lane)["sock"], fwd_sock):
+                for sock in (daemons.paths(local, lane)["sock"], fwd_sock):
                     probe = EngineClient(sock, client_name="probe")
                     probe.health()
                     probe.close()
-                ca = EngineClient(daemon_paths(local, lane)["sock"],
+                ca = EngineClient(daemons.paths(local, lane)["sock"],
                                   client_name=local.name)
                 cb = EngineClient(fwd_sock, client_name=remote.name)
                 break
@@ -287,6 +283,6 @@ def test_tp_mlp_crossbox_auto():
             fwd.terminate()
         for host in (local, remote):
             try:
-                kill_daemon(host, lane=lane)
+                daemons.kill(host, lane=lane)
             except Exception:
                 pass

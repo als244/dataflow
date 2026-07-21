@@ -25,7 +25,10 @@ if TOPO is None or not TOPO.remotes():
                 allow_module_level=True)
 
 from dataflow_training.data.pipeline import legacy_block_pipeline  # noqa: E402
-from dataflow_training.distributed.fleet import run_fleet_dp  # noqa: E402
+from dataflow_training.distributed.fleet import (  # noqa: E402
+    ParallelismScheme,
+    run,
+)
 from dataflow_training.run.recipe import Recipe  # noqa: E402
 
 pytestmark = pytest.mark.fleet
@@ -51,12 +54,13 @@ def test_crossbox_zero1rs_checkpoint_resume_drill(tmp_path):
     recipe = Recipe(peak_lr=3e-4, min_lr=3e-5, warmup_steps=2,
                     total_steps=STEPS)
     ck_dir = tmp_path / "ck"
-    common = dict(rank_rounds=(1, 1), budgets=(4.0, 4.0),
+    common = dict(scheme=ParallelismScheme.data_parallel((1, 1)),
+                  budgets=(4.0, 4.0),
                   slabs=(6.0, 6.0), group="dp", seed=SEED, log=quiet,
                   topology=TOPO, checkpoint_dir=str(ck_dir),
                   run_name="xdrill", checkpoint_every=2)
 
-    truth = run_fleet_dp(cfg, recipe, legacy_block_pipeline(cfg), STEPS,
+    truth = run(cfg, recipe, legacy_block_pipeline(cfg), STEPS,
                          launch_argv=["unit", "crossbox-drill"],
                          **common)
 
@@ -68,7 +72,7 @@ def test_crossbox_zero1rs_checkpoint_resume_drill(tmp_path):
     assert m["launch"]["resolved"]["opt_shard"] == "zero1rs"
     ck_step = m["step"]
 
-    resumed = run_fleet_dp(cfg, recipe, legacy_block_pipeline(cfg),
+    resumed = run(cfg, recipe, legacy_block_pipeline(cfg),
                            STEPS, launch_argv=["unit", "crossbox-drill"],
                            resume="auto", **common)
 

@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 
 from dataflow.service import EngineClient, EngineConfig, Server
-from dataflow_training.distributed.manifest import (
+from dataflow_training.run.manifest import (
     artifacts_for_restore,
     launch_record,
     read_manifest,

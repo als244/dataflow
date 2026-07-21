@@ -4,7 +4,7 @@ restore. Split from the conductor (fleet.py) at phase close; fleet
 re-exports these names."""
 from pathlib import Path
 
-from .hostops import repo_path, run_on
+from ..distributed.hosts import repo_path, run_on
 
 def resolve_resume(run_dir: Path, resume: str, log) -> dict:
     """Locate the resume fleet manifest. ``resume`` is a step
@@ -96,7 +96,7 @@ def checkpoint_fleet(ranks, ck: dict, step_next: int, meta: dict,
     import os
 
     from .manifest import launch_record, save_programs, write_manifest
-    from .responsibility import rank_save_args
+    from ..distributed.responsibility import rank_save_args
 
     step_dir = ck["dir"] / f"step_{step_next:06d}"
     os.makedirs(step_dir, exist_ok=True)   # conductor side (fleet.json)

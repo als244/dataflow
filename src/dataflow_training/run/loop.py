@@ -10,12 +10,12 @@ from pathlib import Path
 from dataflow.core.jsonio import program_to_dict
 from dataflow_training.lowering.planning import plan_program
 
-from ..run.driver import RunResult, init_model
-from ..run.presets import cfg_dict, tokens_per_step
+from .driver import RunResult, init_model
+from .presets import cfg_dict, tokens_per_step
 from .checkpointing import checkpoint_fleet
-from .grouped_lowering import GroupedBuildVariant, lower_with_group
-from .ranks import StepRun, put_rank_rounds
-from .sharding import ALL_RANKS, tp_view
+from ..distributed.grouped_lowering import GroupedBuildVariant, lower_with_group
+from ..distributed.ranks import StepRun, put_rank_rounds
+from ..distributed.sharding import ALL_RANKS, tp_view
 
 def fleet_loop(ranks, gspec, recipe, pipeline, steps, *, budgets, seed,
                log, log_every, tokens_step, r_global,

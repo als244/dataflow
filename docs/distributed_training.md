@@ -10,7 +10,7 @@ facts live in code.
 ## 1. The pieces
 
 **Daemons and the conductor.** Every GPU runs one `dataflowd` daemon.
-A *conductor* (the driver process, `train.py train`) launches
+A *conductor* (`dataflow_training/run/conductor.py`, driven by `train.py train`) launches
 daemons over the hosts in `topology.toml`, registers a per-rank
 program with each, feeds token rounds, and drives lockstep steps.
 Daemons never talk to the conductor's Python state — everything
@@ -201,6 +201,61 @@ torch/CUDA identity, per-rank host/device, and every rank's PLANNED
 PROGRAM saved beside the artifacts (`programs/rankN.json`): a
 checkpoint captures plan-time decisions, not just weights, and any
 run can be re-invoked exactly from its manifest.
+
+### The parallelism stack: scheme, sharding, layouts, groups
+
+Parallelism is configured by ONE value object — the
+**ParallelismScheme** (`distributed/parallelism.py`) — and executed
+by a stack of layers, each consuming only the DATA of the layer
+above:
+
+```
+ParallelismScheme        WHAT the parallel structure is: an ordered
+  (the contract)         tuple of named AXES (name, size, role).
+                         Axis names are comm PURPOSE keys ("dp",
+                         "tp"; future "ep"/"pp"). world = product of
+                         axis sizes; composition = more axes.
+    │
+    ▼
+group annotation         The lowered (parallelism-blind) program
+  (annotation pass)      gains {purpose: group} comm handles and
+                         shard/tp task params, keyed by the axis
+                         purposes — family code never involved.
+    │
+    ▼
+sharding API             The GEOMETRY under an axis: ShardPlan (which
+  (sharding.py)          fields split, where), per-rank views, flat
+                         slice boundaries. Computed once; the scheme
+                         CARRIES its plan as data.
+    │
+    ▼
+layouts                  The coordinate system geometry compiles
+  (layout registry +     onto: named per-(family, kind) field
+   narrow_layouts)       tables; narrowing applies slice geometry;
+                         every byte size follows.
+    │
+    ▼
+responsibility           Who steps and therefore saves each slice —
+  (responsibility.py)    derived from the same axes; becomes the
+                         checkpoint's save plan (manifest v2).
+```
+
+The conductor (`dataflow_training/run/conductor.py`) takes the scheme as
+input — `run(cfg, recipe, pipeline, steps, scheme=...)` — validates
+it up front (inconsistent schemes refuse before any daemon
+launches), and never hardcodes a parallelism name. `train.py`'s
+flags compile to a scheme (`--rounds`/`--opt-shard` → a data axis;
+`--tp-mlp` → a tensor axis carrying its ShardPlan; no flags →
+`solo()`).
+
+Composition (e.g. dp × tp meshes) is contract-ready — a multi-axis
+scheme is well-formed data, and comm sub-groups derive per axis per
+orthogonal coordinate — but the mesh group machinery is deliberately
+unbuilt until a composed configuration first matters; `validate`
+refuses multi-axis schemes loudly rather than half-running them.
+A NEW parallelism adds an axis role plus its program-layer machinery
+(an annotation-pass extension and a comm purpose), never a new
+conductor entry point.
 
 ### Responsibility: who steps, saves
 
@@ -393,7 +448,7 @@ refuse or warn rather than corrupt):
 
 - world > 2 requires `backend = "nccl"` — hostmem collectives are
   pairwise.
-- NCCL env defaults in `hostops.py` were tuned for a socket fabric
+- NCCL env defaults in `daemons.py` were tuned for a socket fabric
   (`NCCL_IB_DISABLE=1` etc.). Harmless intra-node (NVLink/P2P
   ignores them), but a MULTI-node IB/RoCE cluster needs them moved
   to per-fabric topology settings first.

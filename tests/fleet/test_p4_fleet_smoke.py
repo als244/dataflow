@@ -2,7 +2,7 @@
 daemons launched from topology.toml (skipped when absent or without a
 remote host), warm-up dance, weighted 6:2 round split, 12 lockstep DP
 steps; asserts the loss drops and the curve stays finite. The 1B
-flagship runs the same code path via tools/train/train_fleet.py."""
+flagship runs the same code path via tools/train/train.py."""
 import math
 
 import pytest
@@ -27,7 +27,7 @@ def quiet(*a, **k):
 
 def test_fleet_dp_125m_smoke():
     from dataflow_training.data.pipeline import legacy_block_pipeline
-    from dataflow_training.distributed.fleet import run_fleet_dp
+    from dataflow_training.distributed.fleet import ParallelismScheme, run
     from dataflow_training.run.presets import preset
     from dataflow_training.run.recipe import Recipe
 
@@ -35,9 +35,10 @@ def test_fleet_dp_125m_smoke():
     steps = 12
     recipe = Recipe(peak_lr=3e-4, min_lr=3e-5, warmup_steps=2,
                     total_steps=steps)
-    res = run_fleet_dp(cfg, recipe, legacy_block_pipeline(cfg), steps,
-                       rank_rounds=(6, 2), budgets=(4.0, 4.0),
-                       slabs=(12.0, 10.0), topology=TOPO, log=quiet)
+    res = run(cfg, recipe, legacy_block_pipeline(cfg), steps,
+              scheme=ParallelismScheme.data_parallel((6, 2)),
+              budgets=(4.0, 4.0),
+              slabs=(12.0, 10.0), topology=TOPO, log=quiet)
     assert len(res.losses) == steps
     assert all(math.isfinite(x) for x in res.losses)
     assert res.losses[0] > 10.5           # ~ln(50304) at init

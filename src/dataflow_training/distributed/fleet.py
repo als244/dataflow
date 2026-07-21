@@ -2,31 +2,35 @@
 
 The machinery lives in single-purpose components; import from here:
 
-    conductor.py        run_fleet_dp — launch, guard, register, run
-    loop.py             fleet_loop — the step loop
+    ../run/conductor.py run(scheme=...) — THE orchestrator, any world
+    parallelism.py      ParallelismScheme — THE parallelism contract
+    ../run/loop.py      fleet_loop — the step loop
     ranks.py            RankState / HostRig / put_rank_rounds / versions
     topology.py         Topology + the zero-config local builders
+    hosts.py            run commands / move files on any host
+    daemons.py          dataflowd lifecycle on a host (launch/kill/...)
     grouped_lowering.py lower_with_group — blind lower -> annotate ->
                         exact sizes (the three composable passes)
-    checkpointing.py    manifest-v2 save / resume orchestration
+    ../run/checkpointing.py manifest-v2 save / resume orchestration
     sharding.py         layout-geometry shard math (unchanged)
     responsibility.py   who steps, saves (the save-plan derivation)
-    manifest.py         checkpoint manifest v2 read/write
+    ../run/manifest.py  checkpoint manifest v2 read/write
 """
-from .checkpointing import (  # noqa: F401
+from ..run.checkpointing import (  # noqa: F401
     checkpoint_fleet,
     distribute_artifacts,
     resolve_resume,
 )
-from .conductor import (  # noqa: F401
+from ..run.conductor import (  # noqa: F401
     check_fleet_versions,
-    run_fleet_dp,
+    run,
 )
+from .parallelism import ParallelismScheme  # noqa: F401
 from .grouped_lowering import (  # noqa: F401
     GroupedBuildVariant,
     lower_with_group,
 )
-from .loop import fleet_loop  # noqa: F401
+from ..run.loop import fleet_loop  # noqa: F401
 from .ranks import (  # noqa: F401
     HostRig,
     RankState,

@@ -18,7 +18,7 @@ if not torch.cuda.is_available():
 from dataflow_training.data.pipeline import legacy_block_pipeline  # noqa: E402
 from dataflow_training.distributed.fleet import (  # noqa: E402
     local_topology,
-    run_fleet_dp,
+    run,
 )
 from dataflow_training.run.recipe import Recipe  # noqa: E402
 
@@ -50,12 +50,11 @@ def test_world1_checkpoint_resume_drill(tmp_path):
     recipe = Recipe(peak_lr=3e-4, min_lr=3e-5, warmup_steps=2,
                     total_steps=STEPS)
     ck_dir = tmp_path / "ck"
-    common = dict(rank_rounds=(cfg.grad_accum_rounds,),
-                  budgets=(4.0,), slabs=(4.0,), group="local",
+    common = dict(budgets=(4.0,), slabs=(4.0,), group="local",
                   seed=SEED, log=quiet,
                   checkpoint_dir=str(ck_dir), run_name="drill")
 
-    truth = run_fleet_dp(cfg, recipe, legacy_block_pipeline(cfg), STEPS,
+    truth = run(cfg, recipe, legacy_block_pipeline(cfg), STEPS,
                          topology=local_topology(budget_gib=4.0,
                                                  slab_gib=4.0),
                          launch_argv=["unit", "world1-drill"],
@@ -76,7 +75,7 @@ def test_world1_checkpoint_resume_drill(tmp_path):
     assert ck_step < STEPS
 
     # fresh conductor + daemon resumes the tail
-    resumed = run_fleet_dp(cfg, recipe, legacy_block_pipeline(cfg),
+    resumed = run(cfg, recipe, legacy_block_pipeline(cfg),
                            STEPS,
                            topology=local_topology(budget_gib=4.0,
                                                    slab_gib=4.0),

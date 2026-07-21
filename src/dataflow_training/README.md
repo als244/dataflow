@@ -55,8 +55,13 @@ What each subpackage exposes and what tools/tests actually import:
   `recipe.py` (`Recipe`), `profiling.py` (`profile_program`,
   `load_or_profile`, `apply_measured_costs`, `cached_pcie`),
   `parity.py`, `schedule.py`, `scaling.py`, `crosscheck.py`.
-- **`distributed`** — `topology.py`, `fleet.py`, `sharding.py`,
-  `hostops.py` (the multi-box conductor `tools/train_fleet.py` drives).
+- **`distributed`** — the distribution vocabulary and machinery:
+  `topology.py` (host/rank maps), `hosts.py` (run commands / move
+  files on any host), `daemons.py` (dataflowd lifecycle on a host),
+  `parallelism.py` (`ParallelismScheme` — THE contract), `ranks.py`,
+  `sharding.py`, `responsibility.py`, `group_annotation.py`,
+  `grouped_lowering.py`, `fleet.py` (re-export facade). Driven by
+  the conductor in `run/` via `tools/train/train.py`.
 - **`testing`** — `gradcheck.py` (`check_block_backward`,
   `check_model_step`), `block_forms.py`.
 

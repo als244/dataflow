@@ -97,10 +97,9 @@ def cfg_with_overrides(args):
 
 # --------------------------------------------------------------- train
 def cmd_train(args) -> int:
-    from dataflow_training.distributed.fleet import (
-        local_topology,
-        run_fleet_dp,
-    )
+    from dataflow_training.run.conductor import run
+    from dataflow_training.distributed.fleet import local_topology
+    from dataflow_training.distributed.parallelism import ParallelismScheme
     from dataflow_training.distributed.topology import load_topology
 
     cfg = cfg_with_overrides(args)
@@ -108,19 +107,32 @@ def cmd_train(args) -> int:
         topo = load_topology(args.topology)
         group = args.group or "dp"
         world = len(topo.group(group).members)
-        rank_rounds = (tuple(int(r) for r in args.rounds.split(","))
-                       if args.rounds else None)
-        if rank_rounds is None:
-            raise SystemExit("fleet mode needs --rounds (per-rank "
-                             "round split summing to ga_rounds)")
     else:
         topo, group, world = None, "local", 1
-        rank_rounds = (cfg.grad_accum_rounds,)
     fast = per_rank_floats(args.fast_budget, world, "--fast-budget")
     backing = per_rank_floats(args.backing_budget, world,
                               "--backing-budget")
     if topo is None:
         topo = local_topology(budget_gib=fast[0], slab_gib=backing[0])
+
+    # the flags compile to THE parallelism contract
+    if args.tp_mlp:
+        from dataflow_training.distributed.sharding import (
+            layer_fields_by_root,
+            tp_mlp_shards,
+        )
+
+        scheme = ParallelismScheme.tensor_parallel(
+            tp_mlp_shards(layer_fields_by_root(cfg), group, world))
+    elif world == 1:
+        scheme = ParallelismScheme.solo()
+    else:
+        if not args.rounds:
+            raise SystemExit("fleet mode needs --rounds (per-rank "
+                             "round split summing to ga_rounds)")
+        scheme = ParallelismScheme.data_parallel(
+            tuple(int(r) for r in args.rounds.split(",")),
+            responsibility=args.opt_shard or "zero1rs")
 
     recipe = recipe_for(args.steps, peak_lr=args.peak_lr,
                         muon_lr=args.muon_lr)
@@ -135,12 +147,11 @@ def cmd_train(args) -> int:
              f"steps={args.steps} fast={fast} backing={backing} "
              f"data={args.data or 'default'} "
              f"ckpt={args.checkpoint_every or 'off'}")
-    res = run_fleet_dp(
+    res = run(
         cfg, recipe, feed, args.steps,
-        rank_rounds=rank_rounds, budgets=fast, slabs=backing,
+        scheme=scheme, budgets=fast, slabs=backing,
         topology=topo, group=group, seed=args.seed, log=log_line,
         profile=profile, backend=args.backend,
-        opt_shard=args.opt_shard, tp_mlp=args.tp_mlp,
         execute_padding=args.execute_padding,
         launch_argv=sys.argv,
         checkpoint_every=args.checkpoint_every,

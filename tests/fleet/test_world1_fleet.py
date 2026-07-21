@@ -21,7 +21,7 @@ from pathlib import Path  # noqa: E402
 from dataflow_training.data.pipeline import legacy_block_pipeline  # noqa: E402
 from dataflow_training.distributed.fleet import (  # noqa: E402
     local_topology,
-    run_fleet_dp,
+    run,
 )
 from dataflow_training.run.recipe import Recipe  # noqa: E402
 
@@ -61,9 +61,8 @@ def test_world1_fleet_matches_solo_engine():
                           legacy_block_pipeline(cfg), STEPS,
                           budget_gib=4.0, seed=SEED, log=quiet)
 
-    res = run_fleet_dp(cfg, recipe, legacy_block_pipeline(cfg), STEPS,
-                       rank_rounds=(cfg.grad_accum_rounds,),
-                       budgets=(4.0,), slabs=(4.0,),
+    res = run(cfg, recipe, legacy_block_pipeline(cfg), STEPS,
+              budgets=(4.0,), slabs=(4.0,),
                        topology=local_topology(budget_gib=4.0,
                                                slab_gib=4.0),
                        group="local", seed=SEED, log=quiet)

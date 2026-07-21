@@ -3,7 +3,7 @@
 at creation), verified allreduce, the rs+ag==allreduce identity at
 the GroupHandle surface, and a fused-layer timing report. Hosts from
 topology.toml; both sides launched daemons (NCCL env rides
-launch_daemon from the topology's iface/ib_dev)."""
+daemons.launch from the topology's iface/ib_dev)."""
 import json
 import threading
 import time
@@ -14,13 +14,8 @@ torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
     pytest.skip("no CUDA device", allow_module_level=True)
 
-from dataflow_training.distributed.hostops import (  # noqa: E402
-    daemon_paths,
-    kill_daemon,
-    launch_daemon,
-    run_py,
-    uds_forward,
-)
+from dataflow_training.distributed.hosts import run_py, uds_forward
+from dataflow_training.distributed import daemons
 from dataflow_training.distributed.topology import load_topology_or_none  # noqa: E402
 from dataflow.service import EngineClient  # noqa: E402
 from dataflow.service.peer import nccl  # noqa: E402
@@ -91,10 +86,10 @@ def run_both(client, remote_sock, args) -> tuple:
 @pytest.fixture(scope="module")
 def rig(tmp_path_factory):
     for host in (LOCAL, REMOTE):
-        kill_daemon(host, lane=LANE)
-        launch_daemon(host, lane=LANE, slab_gib=4.0, peer_port=PORT)
-    remote_sock = daemon_paths(REMOTE, LANE)["sock"]
-    local_sock = daemon_paths(LOCAL, LANE)["sock"]
+        daemons.kill(host, lane=LANE)
+        daemons.launch(host, lane=LANE, slab_gib=4.0, peer_port=PORT)
+    remote_sock = daemons.paths(REMOTE, LANE)["sock"]
+    local_sock = daemons.paths(LOCAL, LANE)["sock"]
     tmp = tmp_path_factory.mktemp(LANE)
     fwd_sock = str(tmp / "tub.sock")
     fwd = uds_forward(REMOTE, remote_sock, fwd_sock)
@@ -124,7 +119,7 @@ def rig(tmp_path_factory):
     if fwd is not None:
         fwd.terminate()
     for host in (LOCAL, REMOTE):
-        kill_daemon(host, lane=LANE)
+        daemons.kill(host, lane=LANE)
 
 
 def test_nccl_bootstrap_and_verified_collectives(rig):

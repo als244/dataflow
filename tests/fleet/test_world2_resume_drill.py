@@ -20,8 +20,9 @@ if not torch.cuda.is_available():
 
 from dataflow_training.data.pipeline import legacy_block_pipeline  # noqa: E402
 from dataflow_training.distributed.fleet import (  # noqa: E402
+    ParallelismScheme,
     local_pair_topology,
-    run_fleet_dp,
+    run,
 )
 from dataflow_training.run.recipe import Recipe  # noqa: E402
 
@@ -53,12 +54,13 @@ def test_world2_zero1rs_checkpoint_resume_drill(tmp_path):
     recipe = Recipe(peak_lr=3e-4, min_lr=3e-5, warmup_steps=2,
                     total_steps=STEPS)
     ck_dir = tmp_path / "ck"
-    common = dict(rank_rounds=(1, 1), budgets=(4.0, 4.0),
+    common = dict(scheme=ParallelismScheme.data_parallel((1, 1)),
+                  budgets=(4.0, 4.0),
                   slabs=(4.0, 4.0), group="pair", seed=SEED, log=quiet,
                   checkpoint_dir=str(ck_dir), run_name="drill2",
                   checkpoint_every=2)
 
-    truth = run_fleet_dp(cfg, recipe, legacy_block_pipeline(cfg), STEPS,
+    truth = run(cfg, recipe, legacy_block_pipeline(cfg), STEPS,
                          topology=local_pair_topology(),
                          launch_argv=["unit", "world2-drill"], **common)
 
@@ -76,7 +78,7 @@ def test_world2_zero1rs_checkpoint_resume_drill(tmp_path):
                                        "programs/rank1.json"]
     ck_step = m["step"]
 
-    resumed = run_fleet_dp(cfg, recipe, legacy_block_pipeline(cfg),
+    resumed = run(cfg, recipe, legacy_block_pipeline(cfg),
                            STEPS, topology=local_pair_topology(),
                            launch_argv=["unit", "world2-drill"],
                            resume="auto", **common)

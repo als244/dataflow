@@ -1,7 +1,15 @@
-"""The conductor: launch (or attach to) every member daemon, guard
-versions and run identity, register per-rank programs, and hand off to
-the loop. Zero-config world-1 is one local child daemon through the
-same machinery. Split from fleet.py at phase close."""
+"""THE conductor: the main orchestrator for training at every world
+size — launch (or attach to) every member daemon, guard versions and
+run identity, register per-rank programs, and hand off to the step
+loop. Zero-config world-1 is one local child daemon through the same
+machinery; there is nothing distributed-specific about orchestration,
+which is why this lives in run/ beside the library legs.
+
+The entry is ``run(...)`` and it takes a
+``parallelism.ParallelismScheme`` — the conductor never hardcodes a
+parallelism name; the scheme (data split, responsibility mode,
+optional tensor plan) is validated up front and mapped onto the
+machinery."""
 from __future__ import annotations
 
 import os
@@ -12,31 +20,23 @@ from pathlib import Path
 from dataflow.core.jsonio import program_to_dict
 from dataflow_training.lowering.planning import plan_program
 
-from ..run.driver import RunResult, init_model
-from ..run.presets import cfg_dict, tokens_per_step
-from ..run.recipe import Recipe
+from .driver import RunResult, init_model
+from .presets import cfg_dict, tokens_per_step
+from .recipe import Recipe
 from .checkpointing import checkpoint_fleet, distribute_artifacts, resolve_resume
-from .grouped_lowering import GroupedBuildVariant, lower_with_group
-from .hostops import (
-    daemon_paths,
-    kill_daemon,
-    launch_daemon,
-    nsys_command,
-    repo_path,
-    run_on,
-    uds_forward,
-    wait_daemon_exit,
-)
-from .ranks import HostRig, RankState, wait_client
-from .hostops import fetch_file
-from .sharding import (
+from ..distributed.grouped_lowering import GroupedBuildVariant, lower_with_group
+from ..distributed.hosts import repo_path, run_on, uds_forward
+from ..distributed import daemons
+from ..distributed.ranks import HostRig, RankState, wait_client
+from ..distributed.hosts import fetch_file
+from ..distributed.sharding import (
     ParallelConfig,
     layer_fields_by_root,
     tp_mlp_shards,
     zero1_halves,
     zero1rs_block_params,
 )
-from .topology import load_topology
+from ..distributed.topology import load_topology
 from .loop import fleet_loop
 
 def check_fleet_versions(hosts, log) -> None:
@@ -49,8 +49,8 @@ def check_fleet_versions(hosts, log) -> None:
     step 0)."""
     import subprocess
 
-    from .hostops import run_on
-    from .topology import repo_root
+    from ..distributed.hosts import run_on
+    from ..distributed.topology import repo_root
 
     local_rev = subprocess.run(
         ["git", "-C", str(repo_root()), "rev-parse", "HEAD"],
@@ -102,62 +102,62 @@ def check_fleet_versions(hosts, log) -> None:
 
 
 
-def run_fleet_dp(global_cfg, recipe: Recipe, pipeline, steps: int, *,
-                 rank_rounds=(6, 2), budgets=None, slabs=None,
-                 topology=None, group: str = "dp", attach=None,
-                 seed: int = 11, log=print, log_every: int = 10,
-                 profile: dict | None = None,
-                 backend: str | None = None, opt_shard: str | None = None,
-                 tp_mlp: bool = False,
-                 execute_padding: bool = False,
-                 launch_argv=None,
-                 checkpoint_every: int | None = None,
-                 checkpoint_dir: str = "results/pretrain/checkpoints",
-                 checkpoint_redundancy: int = 1,
-                 checkpoint_keep_last: int = 0,
-                 run_name: str = "run",
-                 resume: str | None = None,
-                 prof_dir: str = "results/pretrain/logs") -> RunResult:
+def run(global_cfg, recipe: Recipe, pipeline, steps: int, *,
+        scheme=None, budgets=None, slabs=None,
+        topology=None, group: str = "dp", attach=None,
+        seed: int = 11, log=print, log_every: int = 10,
+        profile: dict | None = None,
+        backend: str | None = None,
+        execute_padding: bool = False,
+        launch_argv=None,
+        checkpoint_every: int | None = None,
+        checkpoint_dir: str = "results/pretrain/checkpoints",
+        checkpoint_redundancy: int = 1,
+        checkpoint_keep_last: int = 0,
+        run_name: str = "run",
+        resume: str | None = None,
+        prof_dir: str = "results/pretrain/logs") -> RunResult:
     """Train ``global_cfg``'s step batch across the group's hosts;
     returns the conductor's RunResult (losses = GLOBAL step means).
 
-    ``attach`` maps host names to pre-launched daemon sockets (their
-    lifecycle stays with the caller); every other member is launched
-    here — profiled runs wrap each launched daemon in the canonical
-    nsys command and fetch remote reports into ``prof_dir``."""
+    ``scheme`` is a distributed.parallelism.ParallelismScheme — THE
+    parallelism contract (data split, responsibility mode, optional
+    tensor plan). None means the world's default: solo at world 1,
+    data-parallel zero1rs otherwise (which then requires an explicit
+    scheme carrying the round split). ``attach`` maps host names to
+    pre-launched daemon sockets (their lifecycle stays with the
+    caller); every other member is launched here — profiled runs wrap
+    each launched daemon in the canonical nsys command and fetch
+    remote reports into ``prof_dir``."""
+    from ..distributed.parallelism import ParallelismScheme
+
     topo = topology if topology is not None else load_topology()
     gspec = topo.group(group)
     if backend is not None:
-        from .topology import GroupSpec
+        from ..distributed.topology import GroupSpec
 
         gspec = GroupSpec(name=gspec.name, members=gspec.members,
                           backend=backend)
     hosts = topo.group_hosts(group)
     world = len(hosts)
-    # DP DEFAULT (responsibility model): zero1rs at world > 1 — each
-    # rank steps params/n. opt_shard="co" is the co-responsible
-    # DIAGNOSTIC lane (replicated stepping; certified bitwise
-    # equality across ranks as a comm-corruption tripwire).
-    if opt_shard is None and world > 1 and not tp_mlp:
-        opt_shard = "zero1rs"
-    if opt_shard == "co":
-        opt_shard = None
     if world < 1:
         raise ValueError(f"group {group!r} has no members")
-    if world == 1 and opt_shard is not None:
-        raise ValueError("opt_shard is meaningless at world 1")
-    if world == 1 and tp_mlp:
-        raise ValueError("tp_mlp needs at least two ranks")
+    if scheme is None:
+        scheme = ParallelismScheme.solo()
+    r_global = global_cfg.grad_accum_rounds
+    scheme.validate(world=world, ga_rounds=r_global)
     if world > 2 and gspec.backend == "hostmem":
         raise ValueError(
             "the hostmem lane is pairwise (world-2 CI); groups with "
             f"{world} members need backend 'nccl' or 'auto'")
-    if len(rank_rounds) != world:
-        raise ValueError(f"rank_rounds {rank_rounds} vs {world} members")
-    r_global = global_cfg.grad_accum_rounds
-    if tp_mlp and opt_shard is not None:
-        raise ValueError("tp_mlp and opt_shard are separate "
-                         "parallelism configurations — pick one")
+    # map the scheme onto the machinery
+    tp_mlp = scheme.tensor_plan is not None
+    # responsibility is a DATA-axis notion (None on solo / pure
+    # tensor schemes — tp ranks own what they hold by construction)
+    opt_shard = (None if world == 1
+                 or scheme.responsibility in (None, "co")
+                 else scheme.responsibility)
+    rank_rounds = scheme.rank_rounds or (r_global,)
     if tp_mlp:
         # tensor parallelism splits COMPUTE, not data: every rank runs
         # the full step batch (rank_rounds does not apply)
@@ -180,8 +180,7 @@ def run_fleet_dp(global_cfg, recipe: Recipe, pipeline, steps: int, *,
 
     parallels = [None] * world
     if tp_mlp:
-        plan = tp_mlp_shards(layer_fields_by_root(global_cfg),
-                             gspec.name, world)
+        plan = scheme.tensor_plan
         plan.validate(getattr(global_cfg, "opt_policy", None))
         plan.consumable("tp")
         parallels = [ParallelConfig(group=gspec.name, rank=i, world=world,
@@ -204,7 +203,7 @@ def run_fleet_dp(global_cfg, recipe: Recipe, pipeline, steps: int, *,
     if checkpoint_every:
         from dataflow_training.model_families.families import resolve_family
 
-        from .responsibility import responsibility_map
+        from ..distributed.responsibility import responsibility_map
 
         if world == 1:
             resp = responsibility_map(global_cfg, 1)
@@ -291,11 +290,11 @@ def run_fleet_dp(global_cfg, recipe: Recipe, pipeline, steps: int, *,
                                            / f"dp_prof_{host.name}")
                     else:
                         rig.prof_out = f"/tmp/dp_prof_{host.name}"
-                    wrap = nsys_command(host, rig.prof_out)
-                kill_daemon(host)
+                    wrap = daemons.nsys_command(host, rig.prof_out)
+                daemons.kill(host)
                 rdma_flag = (f"--peer-rdma-device {host.ib_dev}"
                              if host.ib_dev else "")
-                paths = launch_daemon(host, slab_gib=rig.slab_gib,
+                paths = daemons.launch(host, slab_gib=rig.slab_gib,
                                       wrap=wrap, extra_flags=rdma_flag)
                 rig.launched = True
                 if host.is_local():
@@ -306,7 +305,7 @@ def run_fleet_dp(global_cfg, recipe: Recipe, pipeline, steps: int, *,
                     rig.forward = uds_forward(host, paths["sock"],
                                               local_sock)
                     rig.sock = local_sock
-            log_path = daemon_paths(host)["log"]
+            log_path = daemons.paths(host)["log"]
             rig.client = wait_client(
                 rig.sock, name=f"fleet-{host.name}", timeout_s=180,
                 fail_hint=(f"{host.name} daemon unreachable; see "
@@ -359,7 +358,7 @@ def run_fleet_dp(global_cfg, recipe: Recipe, pipeline, steps: int, *,
             if not rig.launched:
                 continue
             try:
-                wait_daemon_exit(rig.host, timeout_s=180.0)
+                daemons.wait_exit(rig.host, timeout_s=180.0)
                 if rig.prof_out is not None and not rig.host.is_local():
                     dest = str(Path(prof_dir)
                                / f"dp_prof_{rig.host.name}.nsys-rep")
@@ -369,7 +368,7 @@ def run_fleet_dp(global_cfg, recipe: Recipe, pipeline, steps: int, *,
                     else:
                         log(f"[fleet] WARNING: no report fetched from "
                             f"{rig.host.name} ({rig.prof_out}.nsys-rep)")
-                kill_daemon(rig.host)
+                daemons.kill(rig.host)
             except Exception as e:
                 log(f"[fleet] teardown {rig.host.name}: {e}")
             if rig.forward is not None:
