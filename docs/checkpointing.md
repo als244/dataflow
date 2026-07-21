@@ -179,6 +179,38 @@ directory is engine artifacts and program dumps. Annotated:
 checkpoint auditable and re-invocable without guessing; `losses` +
 `data_cursor` make the resumed curve continuous.
 
+## Resuming
+
+One flag, at any world size:
+
+```bash
+python tools/train/train.py train --preset l3_125m \
+  --checkpoint-every 50 --run-name mine --resume auto
+```
+
+`--resume auto` picks the newest step directory containing a
+`checkpoint_record.json`; an explicit step-directory path pins one.
+Every dynamic quantity a continued run needs is reconstructed from
+the record, not guessed: the loop restarts at the recorded step, so
+the per-step `step` run argument — which drives the learning-rate
+schedule and the optimizer's bias-correction term as pure functions
+of the step index — continues exactly as an uninterrupted run would;
+the data pipeline resumes from `data_cursor`; prior `losses` ride
+the record so the saved curve stays continuous; and the invocation
+is validated against `launch.resolved` (world, seed, preset), with
+mismatches refused rather than silently retrained.
+
+Certification: the three resume drills (single box, same-box world
+2 with partitioned saves, cross-box with artifact redistribution)
+each train with checkpoints, resume on FRESH daemons, and assert the
+resumed tail reproduces the uninterrupted run's losses within a
+tight envelope (currently 5e-4 worst-step), on top of the bitwise
+slice-reassembly gates. The envelope is not yet exactly zero — an
+exact continue-vs-resume equality gate is planned once the open
+solo-versus-data-parallel execution-environment investigation
+resolves, since that phenomenon and this envelope plausibly share a
+mechanism.
+
 ## Single GPU is the world-1 special case
 
 There is deliberately one checkpoint format at every world size.
