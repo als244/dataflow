@@ -1,106 +1,148 @@
 # Checkpointing
 
-How training state is saved and restored: the engine's snapshot /
-restore verbs, the lease protection that makes overlapped saving
-safe, the sliced (ranged) saves that responsibility partitioning
-produces, and the training-run layer that assembles per-rank
-artifacts into one resumable checkpoint.
+Persistence is an engine capability first: the daemon exposes a
+small snapshot / restore API, asynchronous but lease-protected, and
+everything else — including distributed training checkpoints — is
+composed on top of it. This page describes the engine API and its
+concurrency contract, then shows usage, ending with how the
+distributed training layer drives it.
 
-## What a checkpoint is on disk
+## The engine API
 
-One directory per saved step:
-
-```
-checkpoints/<run_name>/step_000420/
-  rank0/                  engine snapshot artifact (one per rank)
-    manifest.json         artifact index: objects, ranges, offsets
-    payload.bin           raw object bytes
-  rank1/ ...
-  programs/rank0.json     the exact lowered program each rank ran
-  checkpoint_record.json  the record (format 2) — written LAST
-```
-
-`checkpoint_record.json` is the completeness marker: it is written
-only after every rank's snapshot reports done, so its presence means
-the checkpoint is whole. Readers must open it first (`read_record`
-refuses unknown formats loudly). It carries the step, seed, world,
-data cursor, loss history, the responsibility **save plan** (which
-rank saved which byte range of which object), the artifact list, and
-a full launch record (argv, resolved settings, git identity,
-torch/cuda versions, per-rank host/device, program paths) — enough
-to re-invoke or audit the run without guessing.
-
-## Engine layer: snapshot / restore
-
-`snapshot(scope, dest, ids=..., ranges=..., client_meta=...)` is
-**asynchronous**: the daemon validates the request, acquires leases
-(see below), enqueues a copy job, and returns a `snap_id`
-immediately. A dedicated writer thread then copies the object bytes
-from host backing into `payload.bin` and writes `manifest.json` via
-a temp-file rename, so a crashed save never leaves a
-plausible-looking artifact. Poll with `snapshot_status(snap_id)` or
-block with `wait_snapshot`.
+Four verbs on `EngineClient`:
 
 ```python
-out = client.snapshot("all", "/ckpt/step_000420/rank0",
-                      ids=["W_0", "O_0"],
-                      ranges={"W_0": (0, 1 << 20)},   # byte range
-                      client_meta={"step": 420, "rank": 0})
-client.wait_snapshot(out["snap_id"], timeout=600.0)
+out = client.snapshot(scope, dest, ids=None, ranges=None,
+                      client_meta=None)     # -> {"snap_id": ...}
+client.snapshot_status(snap_id)             # -> {"state", "bytes_done", ...}
+client.wait_snapshot(snap_id, timeout=...)  # poll until done/error
+client.restore_snapshot(path, overwrite=False)
 ```
 
-`restore_snapshot(path, overwrite=True)` reads an artifact and puts
-its objects back: a full entry overwrites (or creates) the object; a
-**ranged** entry fills just that byte range in place, creating a
-full-size object first if none exists. `client_meta` round-trips, so
-a restorer can verify the step it loaded.
+- `scope` selects objects ("all" plus an explicit `ids=` list is the
+  common form). `ranges={oid: (lo, hi)}` saves only that byte range
+  of an object — the primitive that partitioned-responsibility
+  saves use. `client_meta` is an arbitrary JSON dict that
+  round-trips through the artifact (steps, ranks, tags).
+- `dest` becomes one **artifact directory**: `manifest.json` (the
+  object index — ids, sizes, ranges, payload offsets, your
+  `client_meta`) plus `payload.bin` (raw bytes).
 
-## Lease protection: why overlapped saving is safe
+### Under the hood: asynchronous, lease-protected
 
-The payload copy reads object bytes directly from host backing, so
-those bytes must not move or change mid-copy. The snapshot admission
-therefore takes a **read lease** on every object it will copy —
-acquired last and exception-safe, so a rejected request can never
-leak a lease — and the writer thread releases all of them when the
-job finishes, success or failure.
+`snapshot` does no copying on the calling path. Admission validates
+the request, acquires a **read lease** on every object it will save
+— taken last and exception-safe, so a rejected request can never
+leak one — enqueues a copy job, and returns the `snap_id`
+immediately. A dedicated writer thread then streams the leased
+objects' bytes from host backing into `payload.bin`, writes
+`manifest.json` to a temp file and renames it into place (a crashed
+save never leaves a plausible-looking artifact), and finally
+releases every lease, on success or failure alike.
 
-While an object is leased, any verb that would disturb it — a
-`put_object`, a `release_object`, or an entire **run** whose program
-binds it (runs are checked object-by-object before any state
-mutates) — is not failed but **parked**: the dispatcher holds the
-call and automatically retries it when the leases release. The
-client sees only latency, never an error. Timeline for a step
-boundary:
+The lease is the whole concurrency contract: while held, the saved
+bytes are guaranteed stable — object extents cannot move and no
+writer can touch them.
+
+### How waiting works
+
+**Engine side (implicit — callers cannot get this wrong).** Any verb
+that would disturb a leased object — `put_object`, a release, or an
+entire **run** whose program binds one (runs are checked
+object-by-object before any state mutates) — is not rejected but
+**parked**: the dispatcher holds the call and retries it
+automatically when the leases release. The client of that verb
+observes latency, never an error. At a training step boundary this
+means the next step may be submitted immediately; it simply does not
+execute until the save's payload copy is off the state it needs:
 
 ```
 step N compute ──────────┐
-                         ├─ snapshot admitted, leases W_/O_
+                         ├─ snapshot admitted, W_/O_ leased
 payload copy (writer) ───┼────────────────┐
 step N+1 run submitted ──┤ PARKED (leased) │
                          │                 ├─ leases released
                          │                 └─ step N+1 unparks, runs
 ```
 
-So correctness never depends on the caller's timing: the next step
-cannot read or write half-saved state, by construction. The current
-cost is that a *conflicting* next step stalls for the payload-copy
-window; work that touches no leased object proceeds concurrently.
-The engine also exposes `duplicate_object_group` (an on-device copy
-of a whole object group under a tag), which supports a future
-stall-free pattern — copy the persistent state to a background group
-quickly, release the live objects, and snapshot the copy while
-training proceeds. The training layer does not use it yet.
+Work that touches no leased object proceeds concurrently with the
+copy.
 
-## Sliced saves and reassembling restores
+**Client side (explicit — for artifact consumers).** The `snap_id`
+is the handle: poll `snapshot_status` or block in `wait_snapshot`.
+Waiting is only required before *reading the artifact* (or declaring
+a checkpoint complete) — never for correctness of subsequent
+training, which the leases already guarantee.
 
-Under partitioned optimizer responsibility, each rank saves only the
-parameter byte ranges it is responsible for, plus its own optimizer
-shard — that is what the `ranges=` argument and the record's
-`save_plan` express. Restore reverses it: each rank replays, in
-order, every artifact the record lists for the checkpoint —
-**its own artifact last**, so its own optimizer shard and ranges win
-any overlap — and complete objects reassemble bitwise from the
-slices:
+### Restore
+
+`restore_snapshot(path, overwrite=True)` reads one artifact and puts
+its objects back: full entries overwrite (or create) the object;
+**ranged** entries fill just their byte range in place, creating a
+full-size object first if none exists. `client_meta` comes back in
+the result, so a restorer can verify what it loaded.
+
+## Example usage
+
+Single engine, save and restore:
+
+```python
+out = client.snapshot("all", "/ckpt/step_000420/rank0",
+                      ids=["W_0", "O_0"],
+                      client_meta={"step": 420, "rank": 0})
+client.wait_snapshot(out["snap_id"], timeout=600.0)   # artifact ready
+...
+res = client.restore_snapshot("/ckpt/step_000420/rank0",
+                              overwrite=True)
+assert res["client_meta"]["step"] == 420
+```
+
+A ranged save (only the first MiB of `W_0`, plus all of `O_0`):
+
+```python
+client.snapshot("all", dest, ids=["O_0", "W_0"],
+                ranges={"W_0": (0, 1 << 20)},
+                client_meta={"rank": 0})
+```
+
+## The distributed training composition
+
+Training checkpoints are exactly this API, driven per rank. One
+directory per saved step:
+
+```
+checkpoints/<run_name>/step_000420/
+  rank0/  rank1/          one engine artifact per rank
+  programs/rankN.json     the exact lowered program each rank ran
+  checkpoint_record.json  the record (format 2) — written LAST
+```
+
+**Saving.** Under partitioned optimizer responsibility each rank
+saves the parameter byte ranges it is responsible for plus its own
+optimizer shard; the record's `save_plan` is that map. Minimal form
+of what the training layer does at a step boundary:
+
+```python
+ids, ranges = rank_save_args(save_plan, rank, own_objects=["O_0"])
+out = client.snapshot("all", f"{step_dir}/rank{rank}",
+                      ids=ids, ranges=ranges,
+                      client_meta={"step": step, "rank": rank})
+# ... all ranks' copies overlap each other; then:
+client.wait_snapshot(out["snap_id"], timeout=600.0)
+write_record(step_dir, step=step, save_plan=save_plan,
+             artifacts=["rank0", "rank1"], ...)   # completeness marker
+```
+
+`checkpoint_record.json` is written only after every rank reports
+done, so its presence means the checkpoint is whole; it also carries
+the seed, world, data cursor, loss history, and a full launch record
+(argv, git and torch/cuda identity, per-rank host/device, program
+paths). Readers open it first — `read_record` refuses unknown
+formats loudly.
+
+**Restoring.** Each rank replays every artifact the record lists,
+**its own last**, so its own optimizer shard and ranges win any
+overlap; complete objects reassemble bitwise from the slices:
 
 ```python
 record = read_record(step_dir)
@@ -108,40 +150,47 @@ for artifact in artifacts_for_restore(record, rank):
     client.restore_snapshot(str(step_dir / artifact), overwrite=True)
 ```
 
-Cross-box runs add one move: artifacts live on the box that wrote
+Cross-box runs add one move: artifacts stay on the box that wrote
 them until resume, when the conductor pulls each writer's artifacts
-and fans the full step directory out to every member.
+and fans the completed step directory out to every member.
 
-## Training-run usage
+**From the training tool** all of this is two flags:
 
 ```bash
-# save every 50 steps; resume from the newest complete checkpoint
 python tools/train/train.py train --preset l3_125m \
-  --checkpoint-every 50 --run-name mine
+  --checkpoint-every 50 --run-name mine          # save
 python tools/train/train.py train --preset l3_125m \
-  --checkpoint-every 50 --run-name mine --resume auto
+  --checkpoint-every 50 --run-name mine --resume auto   # resume
 ```
 
-`--resume` accepts `auto` (newest directory containing a
-`checkpoint_record.json`) or an explicit step directory. Resume
+`--resume` takes `auto` (newest directory containing a
+`checkpoint_record.json`) or an explicit step directory; resume
 validates the record against the invocation (world, seed, preset)
-and refuses mismatches; losses before the checkpoint ride the record
-so the saved curve stays continuous; the data pipeline restarts from
+and refuses mismatches, pre-checkpoint losses ride the record so the
+saved curve stays continuous, and the data pipeline restarts from
 the recorded cursor.
+
+## Current limits and direction
+
+A *conflicting* next step stalls for the payload-copy window —
+leases guarantee safety, not stall-freedom. The engine's
+`duplicate_object_group` verb (fast on-device copy of an object
+group under a tag) supports the stall-free pattern — duplicate the
+persistent state, release the live objects, snapshot the background
+copy while training proceeds — but the training layer does not wire
+it in yet. Older pre-record checkpoint layouts are not readable by
+this tooling; there is deliberately no converter.
 
 ## What certifies this
 
-- lease behavior: parked writers wake on release, snapshots see a
+- lease behavior — parked writers wake on release, snapshots see a
   stable image (`tests/dataflow/service/test_service_snapshot.py`)
 - ranged saves and slice round-trips
   (`tests/dataflow/service/test_slice_snapshots.py`)
 - record format, own-artifact-last reassembly, completeness marker
   (`tests/dataflow_training/training/test_checkpoint_record.py`)
 - end-to-end resume drills — single box, same-box world 2 with
-  partitioned saves, and cross-box with artifact redistribution —
-  each asserting the resumed tail reproduces the uninterrupted run
+  partitioned saves, cross-box with artifact redistribution — each
+  asserting the resumed tail reproduces the uninterrupted run
   (`tests/fleet/test_world1_resume_drill.py`,
   `test_world2_resume_drill.py`, `test_crossbox_resume_drill.py`)
-
-Older pre-record checkpoint layouts are not readable by this
-tooling; there is deliberately no converter.
