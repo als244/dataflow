@@ -54,9 +54,3 @@ EVERY launched daemon in the canonical nsys command (cudaProfilerApi
 capture range; brackets ride the daemon's `profiler_control`) — one
 flag, any world size; per-rank reports are fetched back for fleets.
 See [tools/train/README.md](../train/README.md).
-
-## internal/
-
-Maintainer-local kernel microbenches (gitignored — not part of the
-repo surface): per-op MoE head-to-heads, fla delta-rule + conv A/B at
-qwen3.5 shapes, VMM slab primitive latencies.
