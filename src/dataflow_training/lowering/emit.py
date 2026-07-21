@@ -60,10 +60,50 @@ class FamilyLayouts:
     head: PackedLayout           # W_head (unused branches when tied)
     embed_ns: str = "embed"      # policy namespace: "head" when tied
     init_specials: Mapping[str, Callable] | None = None  # field -> (n, gen) -> tensor
+    # PRODUCTION COUPLING (data, not behavior): weight field -> the
+    # saved-activation field it produces. Narrowing a weight narrows
+    # its product in lockstep (narrow_layouts below). A family fact,
+    # named without parallelism vocabulary: any sharding scheme that
+    # narrows fields rides it (d_ff sharding couples w1->x1; expert
+    # sharding couples stacked expert weights to their slot fields).
+    activation_of_weight: Mapping[str, str] | None = None
 
     @property
     def n_layers(self) -> int:
         return len(self.layers)
+
+
+def narrow_layouts(fl: FamilyLayouts, slices_by_root) -> FamilyLayouts:
+    """The layouts with per-field slices applied — the GENERIC narrowing
+    every sharding scheme composes with (tensor-parallel d_ff ranges,
+    expert-dim ranges, anything future): ``{root: {field: (dim, lo,
+    hi)}}`` is pure geometry, no parallelism vocabulary. Weight slices
+    pull their produced activations along via ``activation_of_weight``.
+    Layouts are DATA; this is the one transform over them."""
+    from dataclasses import replace as dc_replace
+
+    from dataflow_training.blocks.layouts import sliced_layout
+
+    coupling = fl.activation_of_weight or {}
+    layers = []
+    for i, ll in enumerate(fl.layers):
+        slices = slices_by_root.get(f"W_{i}")
+        if not slices:
+            layers.append(ll)
+            continue
+        wl = sliced_layout(ll.weights, slices)
+        act_slices = {coupling[wf]: sl for wf, sl in slices.items()
+                      if wf in coupling}
+        cl = (sliced_layout(ll.activations, act_slices)
+              if act_slices else ll.activations)
+        layers.append(dc_replace(ll, weights=wl, activations=cl))
+    embed = fl.embed
+    if slices_by_root.get("W_embed"):
+        embed = sliced_layout(embed, slices_by_root["W_embed"])
+    head = fl.head
+    if slices_by_root.get("W_head"):
+        head = sliced_layout(head, slices_by_root["W_head"])
+    return dc_replace(fl, layers=layers, embed=embed, head=head)
 
 
 def object_size_factory(dims, fl: FamilyLayouts, opt_update_regions=None,

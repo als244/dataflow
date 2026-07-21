@@ -354,17 +354,36 @@ def lower_with_group(cfg, dp_group: str, recompute_levels=None,
         else:
             shard_params = shard_block_params(plan, parallel.rank)
             opt_regions = update_regions(plan, parallel.rank)
-    shaped = build_shaped_program(
-        cfg, hw=hw, family="llama3-shaped",
-        kinds={"block": roofline_block_kind_spec(cfg, hw)},
-        dp_group=dp_group, recompute_levels=recompute_levels,
-        shard_params=shard_params,
-        tp_params=tp_params)
-    from dataflow_training.lowering.emit import apply_exact_sizes, object_size_factory
+    # Three composable passes (family lowering stays parallelism-blind):
+    # fam.lower -> annotate_groups -> exact sizes with the rank view.
+    # The equivalence gates (test_group_annotation, digest-pinned) prove
+    # this path identical to the retired in-builder grouped lowering.
+    from dataflow_training.model_families.families import resolve_family
 
-    dims, fl = family_layouts(cfg, tp_view=rank_view)
+    from .group_annotation import annotate_groups
+
+    fam = resolve_family(cfg)
+    program = fam.lower(cfg, recompute_levels=recompute_levels)
+    program = annotate_groups(program, group=dp_group,
+                              shard_params=shard_params,
+                              tp_params=tp_params)
+    if opt_regions is None and opt_slices is None and rank_view is None:
+        return program          # plain DP: solo sizes are the rank sizes
+    # sharded/narrowed ranks re-size with the rank view. The layout
+    # pieces are llama3's until the family object-sizer hook lands
+    # with the responsibility map (plan S4); zero1rs/tp reach fleet
+    # only via llama3 today (equivalence-certified).
+    from dataflow_training.lowering.emit import (
+        apply_exact_sizes,
+        narrow_layouts,
+        object_size_factory,
+    )
+
+    dims, fl = fam.family_layouts(cfg)
+    if rank_view:
+        fl = narrow_layouts(fl, rank_view)
     return apply_exact_sizes(
-        shaped, "llama3-exact",
+        program, f"{fam.name}-exact",
         object_size=object_size_factory(dims, fl, opt_update_regions=opt_regions,
                                 opt_slice_by_root=opt_slices))
 
@@ -733,7 +752,10 @@ def fleet_loop(ranks, gspec, recipe, pipeline, steps, *, budgets, seed,
                                               parallel=par,
                                               zero1rs_world=zero1rs_world))
         prog_dict = program_to_dict(planned.program)
-        resolver = {"kind": "model_family", "family": "llama3",
+        from dataflow_training.run.presets import resolver_family
+
+        fam_name = resolver_family(rank.cfg)
+        resolver = {"kind": "model_family", "family": fam_name,
                     "cfg": cfg_dict(rank.cfg),
                     "hyper": recipe.hyper_spec()}
         init_kwargs = {"seed": seed}
@@ -765,7 +787,7 @@ def fleet_loop(ranks, gspec, recipe, pipeline, steps, *, budgets, seed,
             log(f"[fleet] {rank.name}: sharded optimizer state "
                 f"{o_bytes / 1024 ** 3:.2f} GiB"
                 + (" (tp: sharded weights too)" if narrowed else ""))
-        init_model(rank.client, "llama3", cfg_dict(rank.cfg), **init_kwargs)
+        init_model(rank.client, fam_name, cfg_dict(rank.cfg), **init_kwargs)
         step_lens_by_rank[i] = put_rank_rounds(rank, step_packed,
                                                tokens_per_round,
                                                execute_padding=execute_padding,
@@ -819,7 +841,7 @@ def fleet_loop(ranks, gspec, recipe, pipeline, steps, *, budgets, seed,
             log(f"[fleet] {rank.name}: restored checkpoint @ step "
                 f"{start_step}")
         else:
-            init_model(rank.client, "llama3", cfg_dict(rank.cfg),
+            init_model(rank.client, fam_name, cfg_dict(rank.cfg),
                        **init_kwargs)
             step_lens_by_rank[i] = put_rank_rounds(rank, step_packed,
                                                    tokens_per_round,

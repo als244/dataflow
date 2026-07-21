@@ -36,6 +36,7 @@ STUB = textwrap.dedent('''
             derive_dims=base.derive_dims, lower=lower_llama3,
             initial_values=base.initial_values,
             build_resolver=base.build_resolver,
+            family_layouts=base.family_layouts,
         )
 
 
@@ -127,6 +128,7 @@ def test_validate_family_reports_broken_surface():
             derive_dims=base.derive_dims, lower=base.lower,
             initial_values=base.initial_values,
             build_resolver=base.build_resolver,
+            family_layouts=base.family_layouts,
         )
 
     F.register_family("brokenfam", _broken)

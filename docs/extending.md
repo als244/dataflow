@@ -539,7 +539,13 @@ What adding a family actually touches, in order:
    into it byte-identically.
 4. `model_families/<family>/model.py` — ONE declaration module: the
    Shaped*Config, the `LayerKindSpec`(s) into `build_shaped_program`,
-   the config->dims mapping, and the `FamilyLayouts` into the generic
+   the config->dims mapping, and `family_layouts(cfg)` -> (dims,
+   `FamilyLayouts`) — PURE: no views, no parallelism arguments (the
+   registry's `family_layouts` contract field; per-rank narrowing is
+   `lowering.emit.narrow_layouts` over slice geometry). Declare
+   weight->activation production couplings as
+   `FamilyLayouts.activation_of_weight` DATA (narrowing a weight
+   narrows what it produces). The layouts feed the generic
    lowering (§4). The recompute `build_variant` is just the builder
    re-invoked with levels. The config carries the standard knobs and
    `derive_dims` FORWARDS them into the Dims: `dtypes` (§3) and

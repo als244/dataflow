@@ -182,39 +182,26 @@ def derive_dims(cfg: ShapedLlamaConfig) -> LlamaDims:
 # which saved activations narrow alongside a tensor-parallel weight
 # slice: x1/x3 are the w1/w3 up-projections, so they share the d_ff
 # column range (the same (dim, lo, hi) tuple — both slice dim 1)
-TP_ACTIVATION_OF_WEIGHT = {"w1": "x1", "w3": "x3"}
+# production coupling (family fact): these weights' products are the
+# saved activations that narrow with them under ANY field sharding
+ACTIVATION_OF_WEIGHT = {"w1": "x1", "w3": "x3"}
 
 
-def family_layouts(cfg: ShapedLlamaConfig, tp_view: dict | None = None
-                   ) -> tuple[LlamaDims, FamilyLayouts]:
-    """``tp_view`` ({root: {field: (dim, lo, hi)}}, from
-    sharding.tp_view) makes this a PER-RANK view: listed weight
-    fields — and the saved activations tied to them — materialize at
-    shard shape. Grad/opt layouts, exact sizes, and init offsets all
-    derive from these layouts, so the transform lands everywhere by
-    construction."""
+def family_layouts(cfg: ShapedLlamaConfig) -> tuple[LlamaDims, FamilyLayouts]:
+    """The family's PURE layouts — no views, no parallelism. Per-rank
+    narrowing is the layouts-library operation (``emit.narrow_layouts``
+    over slice geometry); the coupling it needs is data on the result."""
     dims = derive_dims(cfg)
     cl = activation_layout(dims)
-    view = tp_view or {}
-    layers = []
-    for i in range(cfg.n_layers):
-        wl = weight_layout(dims, layer=i)
-        cli = cl
-        slices = view.get(f"W_{i}")
-        if slices:
-            wl = sliced_layout(wl, slices)
-            act_slices = {}
-            for wf, af in TP_ACTIVATION_OF_WEIGHT.items():
-                if wf in slices:
-                    act_slices[af] = slices[wf]
-            if act_slices:
-                cli = sliced_layout(cl, act_slices)
-        layers.append(LayerLayout(kind="block", weights=wl,
-                                  activations=cli))
+    layers = [LayerLayout(kind="block",
+                          weights=weight_layout(dims, layer=i),
+                          activations=cl)
+              for i in range(cfg.n_layers)]
     return dims, FamilyLayouts(
         layers=layers,
         embed=embed_weight_layout(dims),
         head=head_weight_layout(dims),
+        activation_of_weight=ACTIVATION_OF_WEIGHT,
     )
 
 
@@ -255,7 +242,11 @@ def initial_values(program: Program, cfg: ShapedLlamaConfig, backend, *,
                    seed: int = 0, into=None, tp_view: dict | None = None):
     from dataflow_training.model_families.init_policy import build_init_policy
 
-    dims, fl = family_layouts(cfg, tp_view=tp_view)
+    from dataflow_training.lowering.emit import narrow_layouts
+
+    dims, fl = family_layouts(cfg)
+    if tp_view:
+        fl = narrow_layouts(fl, tp_view)
     slices_by_root = tp_fill_slices(cfg, tp_view) if tp_view else None
     return initial_values_from_layouts(program, dims, fl, backend,
                                        seed=seed, into=into,

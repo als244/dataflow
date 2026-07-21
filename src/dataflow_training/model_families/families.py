@@ -39,6 +39,21 @@ class InitialValuesFn(Protocol):
     def __call__(self, program, cfg, backend, seed: int = 0) -> dict: ...
 
 
+class LayoutsFn(Protocol):
+    """cfg -> (dims, FamilyLayouts): the family's PURE derived dims plus
+    the per-root packed layouts every byte size in its programs comes
+    from — no views, no parallelism vocabulary. Per-rank narrowing is
+    the layouts-library operation (``lowering.emit.narrow_layouts``
+    over ``{root: {field: (dim, lo, hi)}}`` slice geometry — tensor-
+    parallel d_ff ranges, expert-dim ranges, anything future), pulled
+    couplings riding the FamilyLayouts.activation_of_weight DATA.
+    The distributed layer composes narrowed layouts with its own
+    region/slice data (``object_size_factory``) to re-size per-rank
+    programs: family facts stay here, parallelism facts stay out."""
+
+    def __call__(self, cfg) -> tuple: ...
+
+
 class BuildResolverFn(Protocol):
     """dims -> resolver. The resolver is a CALLABLE ``task -> executable``
     where the executable exposes ``launch(ctx)`` (see docs/task-contract.md
@@ -64,6 +79,7 @@ class ModelFamily:
     lower: LowerFn
     initial_values: InitialValuesFn
     build_resolver: BuildResolverFn
+    family_layouts: LayoutsFn
     # gradcheck bundle (ladder level 2) — None for heterogeneous families,
     # whose per-kind block ladders live in their own test module instead of
     # the generic check_block_backward harness
@@ -130,6 +146,7 @@ def _llama3() -> ModelFamily:
     from dataflow_training.blocks.layouts import activation_layout, weight_layout
     from dataflow_training.model_families.llama3.blocks import BlockBwd, BlockFwd, BlockRecompute, build_resolver
     from .llama3 import derive_dims, initial_values, lower_llama3
+    from .llama3.model import family_layouts as _layouts_llama3
     from .llama3 import ShapedLlamaConfig
 
     return ModelFamily(
@@ -139,6 +156,7 @@ def _llama3() -> ModelFamily:
         lower=lower_llama3,
         initial_values=initial_values,
         build_resolver=build_resolver,
+        family_layouts=_layouts_llama3,
         block_fwd=BlockFwd,
         block_bwd=BlockBwd,
         block_recompute=BlockRecompute,
@@ -158,6 +176,7 @@ def _qwen3() -> ModelFamily:
         build_qwen3_resolver,
     )
     from .qwen3 import derive_dims, initial_values_qwen3, lower_qwen3
+    from .qwen3.model import family_layouts as _fl_qwen3
     from .qwen3 import ShapedQwen3Config
 
     return ModelFamily(
@@ -167,6 +186,7 @@ def _qwen3() -> ModelFamily:
         lower=lower_qwen3,
         initial_values=initial_values_qwen3,
         build_resolver=build_qwen3_resolver,
+        family_layouts=_fl_qwen3,
         block_fwd=Qwen3BlockFwd,
         block_bwd=Qwen3BlockBwd,
         block_recompute=Qwen3BlockRecompute,
@@ -180,6 +200,7 @@ def _qwen3() -> ModelFamily:
 def _qwen35() -> ModelFamily:
     from dataflow_training.model_families.qwen35.blocks import build_qwen35_resolver
     from .qwen35 import initial_values_qwen35, lower_qwen35
+    from .qwen35.model import family_layouts as _fl_qwen35
     from .qwen35 import ShapedQwen35Config, derive_dims
 
     # heterogeneous (lin/full kinds) — the per-kind block ladders live in
@@ -191,6 +212,7 @@ def _qwen35() -> ModelFamily:
         lower=lower_qwen35,
         initial_values=initial_values_qwen35,
         build_resolver=build_qwen35_resolver,
+        family_layouts=_fl_qwen35,
         twin_module="reference_models.qwen35",
         bridge_module="dataflow_training.model_families.qwen35.bridge",
     )
@@ -198,6 +220,7 @@ def _qwen35() -> ModelFamily:
 
 def _olmoe() -> ModelFamily:
     from dataflow_training.model_families.olmoe.blocks import build_olmoe_resolver
+    from .olmoe.model import family_layouts as _fl_olmoe
     from .olmoe import ShapedOlmoeConfig, derive_dims, initial_values_olmoe, lower_olmoe
 
     # MoE family — the block ladder needs the aux-loss term in the
@@ -210,6 +233,7 @@ def _olmoe() -> ModelFamily:
         lower=lower_olmoe,
         initial_values=initial_values_olmoe,
         build_resolver=build_olmoe_resolver,
+        family_layouts=_fl_olmoe,
         twin_module="reference_models.olmoe",
         bridge_module="dataflow_training.model_families.olmoe.bridge",
     )
@@ -217,6 +241,7 @@ def _olmoe() -> ModelFamily:
 
 def _qwen35moe() -> ModelFamily:
     from dataflow_training.model_families.qwen35moe.blocks import build_qwen35moe_resolver
+    from .qwen35moe.model import family_layouts as _fl_qwen35moe
     from .qwen35moe import (
         ShapedQwen35MoeConfig,
         derive_dims,
@@ -233,6 +258,7 @@ def _qwen35moe() -> ModelFamily:
         lower=lower_qwen35moe,
         initial_values=initial_values_qwen35moe,
         build_resolver=build_qwen35moe_resolver,
+        family_layouts=_fl_qwen35moe,
         twin_module="reference_models.qwen35moe",
         bridge_module="dataflow_training.model_families.qwen35moe.bridge",
     )
@@ -240,6 +266,7 @@ def _qwen35moe() -> ModelFamily:
 
 def _qwen3moe() -> ModelFamily:
     from dataflow_training.model_families.qwen3moe.blocks import build_qwen3moe_resolver
+    from .qwen3moe.model import family_layouts as _fl_qwen3moe
     from .qwen3moe import (
         ShapedQwen3MoeConfig,
         derive_dims,
@@ -256,6 +283,7 @@ def _qwen3moe() -> ModelFamily:
         lower=lower_qwen3moe,
         initial_values=initial_values_qwen3moe,
         build_resolver=build_qwen3moe_resolver,
+        family_layouts=_fl_qwen3moe,
         twin_module="reference_models.qwen3moe",
         bridge_module="dataflow_training.model_families.qwen3moe.bridge",
     )
@@ -263,6 +291,7 @@ def _qwen3moe() -> ModelFamily:
 
 def _dsv3() -> ModelFamily:
     from dataflow_training.model_families.dsv3.blocks import build_dsv3_resolver
+    from .dsv3.model import family_layouts as _fl_dsv3
     from .dsv3 import (
         ShapedDsv3Config,
         derive_dims,
@@ -279,6 +308,7 @@ def _dsv3() -> ModelFamily:
         lower=lower_dsv3,
         initial_values=initial_values_dsv3,
         build_resolver=build_dsv3_resolver,
+        family_layouts=_fl_dsv3,
         twin_module="reference_models.dsv3",
         bridge_module="dataflow_training.model_families.dsv3.bridge",
     )
@@ -286,6 +316,7 @@ def _dsv3() -> ModelFamily:
 
 def _dsv32() -> ModelFamily:
     from dataflow_training.model_families.dsv32.blocks import build_dsv32_resolver
+    from .dsv32.model import family_layouts as _fl_dsv32
     from .dsv32 import (
         ShapedDsv32Config,
         derive_dims,
@@ -302,6 +333,7 @@ def _dsv32() -> ModelFamily:
         lower=lower_dsv32,
         initial_values=initial_values_dsv32,
         build_resolver=build_dsv32_resolver,
+        family_layouts=_fl_dsv32,
         twin_module="reference_models.dsv32",
         bridge_module="dataflow_training.model_families.dsv32.bridge",
     )
@@ -315,6 +347,7 @@ def _gpt2() -> ModelFamily:
         Gpt2BlockRecompute,
         build_gpt2_resolver,
     )
+    from .gpt2.model import family_layouts as _fl_gpt2
     from .gpt2 import ShapedGpt2Config, derive_dims, initial_values, lower_gpt2
 
     return ModelFamily(
@@ -324,6 +357,7 @@ def _gpt2() -> ModelFamily:
         lower=lower_gpt2,
         initial_values=initial_values,
         build_resolver=build_gpt2_resolver,
+        family_layouts=_fl_gpt2,
         block_fwd=Gpt2BlockFwd,
         block_bwd=Gpt2BlockBwd,
         block_recompute=Gpt2BlockRecompute,
@@ -335,6 +369,7 @@ def _gpt2() -> ModelFamily:
 
 
 def _glm52() -> ModelFamily:
+    from .glm52.model import family_layouts as _fl_glm52
     from .glm52 import (
         ShapedGlm52Config,
         derive_dims,
@@ -353,6 +388,7 @@ def _glm52() -> ModelFamily:
         lower=lower_glm52,
         initial_values=initial_values_glm52,
         build_resolver=build_glm52_resolver,
+        family_layouts=_fl_glm52,
         twin_module="reference_models.glm52",
         bridge_module="dataflow_training.model_families.glm52.bridge",
     )

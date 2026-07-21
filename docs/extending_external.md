@@ -156,7 +156,7 @@ move into your package:
 
 | builtin location | yours | imports you use |
 |---|---|---|
-| `model_families/<family>/model.py` | `mypkg/mymodel_model.py` | `build_shaped_program`, `LayerKindSpec`, `AuxShare`, `FamilyLayouts`, `apply_exact_sizes`, `object_size_factory`, `initial_values_from_layouts` — the whole lowering toolkit is importable |
+| `model_families/<family>/model.py` | `mypkg/mymodel_model.py` | `build_shaped_program`, `LayerKindSpec`, `AuxShare`, `FamilyLayouts`, `apply_exact_sizes`, `object_size_factory`, `initial_values_from_layouts` — the whole lowering toolkit is importable. REQUIRED registry fields include `family_layouts` (PURE: `cfg -> (dims, FamilyLayouts)`, no views/parallelism args — per-rank narrowing is `lowering.emit.narrow_layouts`; declare weight->activation couplings as `FamilyLayouts.activation_of_weight` data) |
 | `model_families/<family>/blocks.py` | `mypkg/mymodel_blocks.py` | your `launch(ctx)` executables + resolver; reuse `blocks.base_blocks` templates (`EmbedFwd`/`HeadLoss`/`EmbedBwd`/`OptimizerStep`, and `RoundPrologue` — REQUIRED: every family's resolver must map `prologue_round`, the universal first task of each round that publishes the round's content token count and materializes its Segments), `blocks.layouts`, `kernels.resolve_kernels` |
 | `model_families/<family>/bridge.py` + `reference_models/<family>.py` | `mypkg/mymodel_reference.py` (+ bridge) | your own isolated pure-torch twin + a bytes->state_dict bridge, if you want the parity treatment (docs/correctness_compare.md) |
 | `model_families/<family>/presets.py` | `mypkg/mymodel_presets.py` | preset classmethods on your config; `register_bench_config` for named bench shapes |

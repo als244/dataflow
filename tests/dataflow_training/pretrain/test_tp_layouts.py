@@ -15,6 +15,7 @@ from dataflow_training.distributed.sharding import (
     tp_mlp_shards,
     tp_view,
 )
+from dataflow_training.lowering.emit import narrow_layouts
 from dataflow_training.lowering.emit import fill_weight_fields
 from dataflow_training.model_families.llama3 import (
     ShapedLlamaConfig,
@@ -36,7 +37,8 @@ def build_plan():
 def test_per_rank_layout_shapes_and_sizes():
     plan = build_plan()
     dims, full = family_layouts(CFG)
-    _, fl0 = family_layouts(CFG, tp_view=tp_view(plan, 0))
+    _, fl0 = family_layouts(CFG)
+    fl0 = narrow_layouts(fl0, tp_view(plan, 0))
     ffs = CFG.d_ff // 2
     w = {f.name: f.shape for f in fl0.layers[0].weights.fields}
     assert w["w1"] == (CFG.d_model, ffs)
@@ -82,7 +84,8 @@ def test_init_parity_shards_are_single_gpu_slices():
     rank_bufs = []
     for rank in (0, 1):
         view = tp_view(plan, rank)
-        _, fl_r = family_layouts(CFG, tp_view=view)
+        _, fl_r = family_layouts(CFG)
+        fl_r = narrow_layouts(fl_r, view)
         slices = tp_fill_slices(CFG, view)
         gen_r = torch.Generator().manual_seed(SEED)
         bufs = []

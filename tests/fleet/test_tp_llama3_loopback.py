@@ -30,6 +30,7 @@ from dataclasses import replace  # noqa: E402
 
 from dataflow.core.jsonio import program_to_dict  # noqa: E402
 from dataflow_training.distributed.fleet import lower_with_group  # noqa: E402
+from dataflow_training.lowering.emit import narrow_layouts
 from dataflow_training.distributed.sharding import (  # noqa: E402
     ParallelConfig,
     layer_fields_by_root,
@@ -204,7 +205,7 @@ def test_tp_llama3_two_daemons_vs_plain(tmp_path):
 
         # 2) replicated W fields bitwise across ranks; shards differ
         views = [tp_view(plan, r) for r in (0, 1)]
-        fls = [family_layouts(cfg, tp_view=views[r])[1] for r in (0, 1)]
+        fls = [narrow_layouts(family_layouts(cfg)[1], views[r]) for r in (0, 1)]
         wa = bytearray(ca.get_object("W_0"))
         wb = bytearray(cb.get_object("W_0"))
         la_ = fls[0].layers[0].weights

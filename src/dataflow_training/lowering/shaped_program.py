@@ -325,7 +325,7 @@ def build_shaped_program(
                                    # sharded weights/activations at shard
                                    # shape and run the partial+allreduce
                                    # MLP variants; per-rank object sizes
-                                   # come from family_layouts(tp_view=...)
+                                   # come from narrow_layouts over the rank's slices
     bias_update_in_bwd: bool = False,
     retained_lbl: bool = False,
     freeze=None,  # FreezePlan | None (training/freeze_plan.py)

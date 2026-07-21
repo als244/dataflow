@@ -133,6 +133,13 @@ def toy_activation_layout(dims: ToyDims) -> PackedLayout:
     ])
 
 
+def toy_family_layouts(cfg: ToyConfig) -> tuple[ToyDims, FamilyLayouts]:
+    """The contract's PURE layouts surface (LayoutsFn): cfg ->
+    (dims, FamilyLayouts) — no views, no parallelism arguments."""
+    dims = toy_dims(cfg)
+    return dims, toy_layouts(dims)
+
+
 def toy_layouts(dims: ToyDims) -> FamilyLayouts:
     layers = [LayerLayout(kind="block",
                           weights=toy_weight_layout(dims),
@@ -348,6 +355,7 @@ def toy_family() -> ModelFamily:
         lower=lower_toy,
         initial_values=toy_initial_values,
         build_resolver=build_toy_resolver,
+        family_layouts=toy_family_layouts,
     )
 
 
