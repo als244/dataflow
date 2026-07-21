@@ -20,6 +20,7 @@ derived from the forward stage lists, never hand-written
 | gpt2 | `optimizer_block` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
 | gpt2 | `optimizer_embed` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
 | gpt2 | `optimizer_head` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
+| gpt2 | `prologue_round` | forward | `RoundPrologue` | The round-boundary task, EVERY family's first task of a round: |
 | llama3 | `block_bwd` | backward | `BlockBwd` | Transformer-block backward: MLP-tail then attention backward, per |
 | llama3 | `block_fwd` | forward | `BlockFwd` | Transformer-block forward: runs the STAGES list, writing saved |
 | llama3 | `block_recompute` | recompute (planner/derived) | `BlockRecompute` | Derived recompute: replays the forward stages through the last |
@@ -29,6 +30,7 @@ derived from the forward stage lists, never hand-written
 | llama3 | `optimizer_block` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
 | llama3 | `optimizer_embed` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
 | llama3 | `optimizer_head` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
+| llama3 | `prologue_round` | forward | `RoundPrologue` | The round-boundary task, EVERY family's first task of a round: |
 | qwen3 | `block_bwd` | backward | `Qwen3BlockBwd` | Transformer-block backward: MLP-tail then attention backward, per |
 | qwen3 | `block_fwd` | forward | `Qwen3BlockFwd` | Transformer-block forward: runs the STAGES list, writing saved |
 | qwen3 | `block_recompute` | recompute (planner/derived) | `Qwen3BlockRecompute` | Derived recompute: replays the forward stages through the last |
@@ -38,6 +40,7 @@ derived from the forward stage lists, never hand-written
 | qwen3 | `optimizer_block` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
 | qwen3 | `optimizer_embed` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
 | qwen3 | `optimizer_head` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
+| qwen3 | `prologue_round` | forward | `RoundPrologue` | The round-boundary task, EVERY family's first task of a round: |
 | qwen35 | `embed_bwd` | backward | `EmbedBwd` | Embedding backward: deterministic per-row scatter of dy into |
 | qwen35 | `embed_fwd` | forward | `EmbedFwd` | Token-embedding lookup: tokens + W_embed -> the first hidden |
 | qwen35 | `gattn_bwd` | backward | `Qwen35AttnBlockBwd` | Transformer-block backward: MLP-tail then attention backward, per |
@@ -50,6 +53,7 @@ derived from the forward stage lists, never hand-written
 | qwen35 | `optimizer_block` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
 | qwen35 | `optimizer_embed` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
 | qwen35 | `optimizer_head` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
+| qwen35 | `prologue_round` | forward | `RoundPrologue` | The round-boundary task, EVERY family's first task of a round: |
 | olmoe | `embed_bwd` | backward | `EmbedBwd` | Embedding backward: deterministic per-row scatter of dy into |
 | olmoe | `embed_fwd` | forward | `EmbedFwd` | Token-embedding lookup: tokens + W_embed -> the first hidden |
 | olmoe | `head_loss` | backward | `HeadLoss` | Fused final-norm + LM head + CE loss + head backward, micro-chunked |
@@ -59,7 +63,7 @@ derived from the forward stage lists, never hand-written
 | olmoe | `optimizer_block` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
 | olmoe | `optimizer_embed` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
 | olmoe | `optimizer_head` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
-| olmoe | `prologue_round` | forward | `RoundPrologue` | The round-boundary task: publishes the CURRENT ROUND both as an |
+| olmoe | `prologue_round` | forward | `RoundPrologue` | The round-boundary task, EVERY family's first task of a round: |
 | qwen35moe | `embed_bwd` | backward | `EmbedBwd` | Embedding backward: deterministic per-row scatter of dy into |
 | qwen35moe | `embed_fwd` | forward | `EmbedFwd` | Token-embedding lookup: tokens + W_embed -> the first hidden |
 | qwen35moe | `gattnmoe_bwd` | backward | `Qwen35MoeAttnBlockBwd` | Metadata-object plumbing for pure-MoE families: the layer's M |
@@ -72,14 +76,14 @@ derived from the forward stage lists, never hand-written
 | qwen35moe | `optimizer_block` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
 | qwen35moe | `optimizer_embed` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
 | qwen35moe | `optimizer_head` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
-| qwen35moe | `prologue_round` | forward | `RoundPrologue` | The round-boundary task: publishes the CURRENT ROUND both as an |
+| qwen35moe | `prologue_round` | forward | `RoundPrologue` | The round-boundary task, EVERY family's first task of a round: |
 | qwen3moe | `embed_bwd` | backward | `EmbedBwd` | Embedding backward: deterministic per-row scatter of dy into |
 | qwen3moe | `embed_fwd` | forward | `EmbedFwd` | Token-embedding lookup: tokens + W_embed -> the first hidden |
 | qwen3moe | `head_loss` | backward | `HeadLoss` | Fused final-norm + LM head + CE loss + head backward, micro-chunked |
 | qwen3moe | `optimizer_block` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
 | qwen3moe | `optimizer_embed` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
 | qwen3moe | `optimizer_head` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
-| qwen3moe | `prologue_round` | forward | `RoundPrologue` | The round-boundary task: publishes the CURRENT ROUND both as an |
+| qwen3moe | `prologue_round` | forward | `RoundPrologue` | The round-boundary task, EVERY family's first task of a round: |
 | qwen3moe | `q3moeattn_bwd` | backward | `Qwen3MoeBlockBwd` | Metadata-object plumbing for pure-MoE families: the layer's M |
 | qwen3moe | `q3moeattn_fwd` | forward | `Qwen3MoeBlockFwd` | Metadata-object plumbing for pure-MoE families: the layer's M |
 | qwen3moe | `q3moeattn_recompute` | recompute (planner/derived) | `Qwen3MoeBlockRecompute` | Metadata-object plumbing for pure-MoE families: the layer's M |
@@ -95,7 +99,7 @@ derived from the forward stage lists, never hand-written
 | dsv3 | `optimizer_block` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
 | dsv3 | `optimizer_embed` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
 | dsv3 | `optimizer_head` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
-| dsv3 | `prologue_round` | forward | `RoundPrologue` | The round-boundary task: publishes the CURRENT ROUND both as an |
+| dsv3 | `prologue_round` | forward | `RoundPrologue` | The round-boundary task, EVERY family's first task of a round: |
 | dsv32 | `dsadense_bwd` | backward | `Dsv32DenseBlockBwd` | Metadata-object plumbing (one implementation for fwd/rc/bwd): the |
 | dsv32 | `dsadense_fwd` | forward | `Dsv32DenseBlockFwd` | Metadata-object plumbing (one implementation for fwd/rc/bwd): the |
 | dsv32 | `dsadense_recompute` | recompute (planner/derived) | `Dsv32DenseBlockRecompute` | Metadata-object plumbing (one implementation for fwd/rc/bwd): the |
@@ -108,7 +112,7 @@ derived from the forward stage lists, never hand-written
 | dsv32 | `optimizer_block` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
 | dsv32 | `optimizer_embed` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
 | dsv32 | `optimizer_head` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
-| dsv32 | `prologue_round` | forward | `RoundPrologue` | The round-boundary task: publishes the CURRENT ROUND both as an |
+| dsv32 | `prologue_round` | forward | `RoundPrologue` | The round-boundary task, EVERY family's first task of a round: |
 | glm52 | `embed_bwd` | backward | `EmbedBwd` | Embedding backward: deterministic per-row scatter of dy into |
 | glm52 | `embed_fwd` | forward | `EmbedFwd` | Token-embedding lookup: tokens + W_embed -> the first hidden |
 | glm52 | `gdl_bwd` | backward | `Glm52DlBlockBwd` | Leader backward KL: dI = sigma - (p_own + dM)/N when followers |
@@ -124,4 +128,4 @@ derived from the forward stage lists, never hand-written
 | glm52 | `optimizer_block` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
 | glm52 | `optimizer_embed` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
 | glm52 | `optimizer_head` | optimizer | `AdamWStep` | Per-FIELD optimizer step over one packed weight object — |
-| glm52 | `prologue_round` | forward | `RoundPrologue` | The round-boundary task: publishes the CURRENT ROUND both as an |
+| glm52 | `prologue_round` | forward | `RoundPrologue` | The round-boundary task, EVERY family's first task of a round: |

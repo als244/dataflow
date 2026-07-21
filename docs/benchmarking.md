@@ -34,7 +34,7 @@ throughput.md), not a tolerance to widen.
 
     python tools/bench/measure_step.py --preset gpt2_124m \
         --t-round 8192,65536 --tokens-step 524288 \
-        --budget 14,4 --steps 12 --data doc
+        --budget 14,4 --steps 12 --data shards:datasets/fineweb10B
 
 ## 3. Profile — `train.py --profile` (GPU, captures at any world size)
 
@@ -46,7 +46,7 @@ report holds exactly those steps — warmed, no boot noise. Reports land
 under `results/pretrain/logs/`.
 
     python tools/train/train.py train --preset gpt2_124m --ga-rounds 8 --profile \
-        --batch 64 --data doc --steps 10 --start 5 --stop 8 \
+        --batch 64 --data shards:datasets/fineweb10B --steps 10 --profile-start-before-step 5 --profile-stop-after-step 8 \
         --out gpt2_124m_ga8
 
 Fleet-scale profiling (multi-daemon, per-rank reports) is

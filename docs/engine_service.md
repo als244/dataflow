@@ -15,8 +15,8 @@ Start it:
 
 ```bash
 python tools/train/dataflowd.py start --socket /tmp/dfd.sock --backing-gib 145
-python tools/train/dataflowd.py status
-python tools/train/dataflowd.py stop
+python tools/train/dataflowd.py status --socket /tmp/dfd.sock
+python tools/train/dataflowd.py stop --socket /tmp/dfd.sock
 ```
 
 `--backing-gib` is the ONE pinned budget (default `auto`): residents AND

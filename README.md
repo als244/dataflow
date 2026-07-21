@@ -37,17 +37,17 @@ save/restore mechanics: [docs/checkpointing.md](docs/checkpointing.md)):
 # (here 8 x 8 x 1024 = 64K tokens per step from the fineweb shards)
 python tools/train/train.py train --preset gpt2_124m --steps 1000 \
     --data datasets/fineweb10B --batch 8 --ga-rounds 8 \
-    --checkpoint-every 100 --run-name demo
+    --checkpoint-every 100 --out results/pretrain/demo
 
 # resume from the newest complete checkpoint
 python tools/train/train.py train --preset gpt2_124m --steps 1000 \
     --data datasets/fineweb10B --batch 8 --ga-rounds 8 \
-    --checkpoint-every 100 --run-name demo --resume auto
+    --checkpoint-every 100 --out results/pretrain/demo --resume auto
 
 # Nsight capture of exact warmed steps, report written under --prof-dir
 python tools/train/train.py train --preset gpt2_124m --steps 10 \
     --profile --profile-start-before-step 5 --profile-stop-after-step 8 \
-    --prof-dir results/pretrain/logs
+    --prof-dir results/pretrain/logs --out results/pretrain/profdemo
 ```
 
 ### Quickstart: benchmark training throughput under tight GPU memory budgets
@@ -126,7 +126,7 @@ python tools/train/train.py train --preset gpt2_124m --steps 1000 \
     --data datasets/fineweb10B --ga-rounds 8 \
     --topology topology.toml --group dp --rounds 6,2 \
     --fast-budget 14,12 --backing-budget 60,30 \
-    --checkpoint-every 100 --run-name fleet-demo
+    --checkpoint-every 100 --out results/pretrain/fleet-demo
 ```
 
 # High Level Components

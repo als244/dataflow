@@ -29,7 +29,7 @@ summary.
 
 | flag | meaning |
 |---|---|
-| `--preset --steps --budget --slab` | the run |
+| `--preset --steps --budget --backing-gib` | the run |
 | `--out` | output directory |
 | `--name` | output stem (default `trace-<preset>`) |
 

@@ -267,7 +267,7 @@ def run(global_cfg, recipe: Recipe, pipeline, steps: int, *,
                 f"run {run_name!r} is already active (lock at "
                 f"{lock_path}) — a second same-name launch would "
                 f"share GPUs and collide on checkpoints; stop the "
-                f"other run or pick a different --run-name")
+                f"other run or pick a different --out")
         import os as _os
 
         run_lock.write(str(_os.getpid()))

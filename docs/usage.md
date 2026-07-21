@@ -13,7 +13,7 @@ from dataflow_training.model_families.llama3.blocks import build_resolver
 from dataflow_training.lowering.planning import plan_program
 from dataflow_training.run.profiling import apply_measured_costs, cached_pcie, load_or_profile
 
-cfg = ShapedLlamaConfig.llama3_8b(seq_len=1024, batch=8, grad_accum_rounds=8)
+cfg = ShapedLlamaConfig.gpt2_124m(seq_len=1024, batch=8, grad_accum_rounds=8)
 backend = CudaBackend()
 
 # 1. the machine, measured ONCE and disk-cached (re-measuring per run
@@ -59,7 +59,7 @@ from dataflow_training.run.recipe import Recipe
 recipe = Recipe(peak_lr=3e-4, min_lr=3e-5, warmup_steps=10, total_steps=100)
 pipeline = pipeline_from_args(cfg, None)   # the default shard corpus;
                                            # any --data spec works here
-with daemon_client(backing_gib=60.0) as client:        # boots an in-process dataflowd
+with daemon_client(backing_gib=16.0) as client:        # boots an in-process dataflowd
     res = run_engine(client, cfg, recipe, pipeline, steps=100,
                      budget_gib=16.0)               # plans + registers + runs
 print(res.losses)
@@ -142,7 +142,7 @@ read task ranges on the stream timelines. GPU metrics sampling
 (`--gpu-metrics-devices`) needs perf-counter permission.
 
     python tools/train/train.py train --preset gpt2_124m --steps 10 --profile \
-        --start 5 --stop 8 --out gpt2_capture
+        --profile-start-before-step 5 --profile-stop-after-step 8 --out gpt2_capture
 
 For the rest of the benchmarking workflow (predict → measure →
 profile, profile-cache discipline): see

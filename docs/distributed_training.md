@@ -347,7 +347,7 @@ overrides the group backend, `--opt-shard` selects the optimizer
 sharding mode (DEFAULT at world>1: `zero1rs` — each rank steps
 params/n; `co` is the co-responsible DIAGNOSTIC lane), and
 `--tp-mlp` switches to tensor-parallel MLPs through the sharding
-API. `--attach HOST=SOCK` (repeatable) attaches to pre-launched
+API. the conductor's `attach=` argument (repeatable) attaches to pre-launched
 daemons instead of launching them — the profiling rigs use this to
 nsys-wrap each daemon themselves. `train.py compare` overlays the
 loss curves of finished runs. Omitting the topology flags entirely
@@ -457,5 +457,5 @@ refuse or warn rather than corrupt):
   to per-fabric topology settings first.
 - Tensor parallelism (`--tp-mlp`) is valid on this substrate
   (matched GPUs) but is a correctness track, not a throughput one.
-- The `--rounds` default is a 2-rank split; always pass it
+- Fleet mode requires `--rounds` explicitly (launches refuse without it); always pass it
   explicitly for other world sizes.

@@ -185,7 +185,7 @@ One flag, at any world size:
 
 ```bash
 python tools/train/train.py train --preset l3_125m \
-  --checkpoint-every 50 --run-name mine --resume auto
+  --checkpoint-every 50 --out results/pretrain/mine --resume auto
 ```
 
 `--resume auto` picks the newest step directory containing a
@@ -271,9 +271,9 @@ and fans the completed step directory out to every member.
 
 ```bash
 python tools/train/train.py train --preset l3_125m \
-  --checkpoint-every 50 --run-name mine          # save
+  --checkpoint-every 50 --out results/pretrain/mine          # save
 python tools/train/train.py train --preset l3_125m \
-  --checkpoint-every 50 --run-name mine --resume auto   # resume
+  --checkpoint-every 50 --out results/pretrain/mine --resume auto   # resume
 ```
 
 `--resume` takes `auto` (newest directory containing a

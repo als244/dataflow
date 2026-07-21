@@ -25,7 +25,7 @@ import torch
 
 from dataflow.runtime.interop import torch_view
 from dataflow_training.blocks.layouts import PackedLayout, grad_layout, head_weight_layout
-from dataflow_training.blocks.base_blocks import _Base, head_chunk_rows
+from dataflow_training.blocks.base_blocks import _Base, max_head_chunk_tokens
 
 PPO_CLIP_EPS = 0.2
 
@@ -56,7 +56,7 @@ def rl_head_loss_math(y, actions, old_lp, adv, w, norm_w, *, mode, K, kctx,
     t, d_model = y.shape
     vocab = w.shape[0]
     total = total_rows or t
-    chunk = chunk or head_chunk_rows(vocab)
+    chunk = chunk or max_head_chunk_tokens(vocab)
     dy = torch.empty_like(y)
     dw = torch.zeros(vocab, d_model, dtype=torch.float32, device=y.device)
     dnorm = torch.zeros(d_model, dtype=torch.float32, device=y.device)
