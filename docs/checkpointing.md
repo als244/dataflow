@@ -86,6 +86,15 @@ Work that touches no leased object proceeds concurrently with the
 copy.
 
 **Ordering against runs (both directions, no caller effort).**
+A run is complete only when the engine's end-of-run drain has
+consumed a completion token for EVERY piece of in-flight device
+work — compute tasks and host/device transfer jobs alike, each
+tracked by its own event — so a tail of device-to-host offloads on
+the transfer stream is waited for exactly like compute. The drain
+then refuses to return if any transfer is still queued (a loud
+deadlock error, never a silent drop) and verifies every persistent
+object landed at its planned final location before the service
+declares the run done.
 Runs occupy the dispatcher end-to-end, so a snapshot submitted while
 a program is running is admitted only after that run — including its
 final-state offload to backing — completes: `run` then `snapshot` in
