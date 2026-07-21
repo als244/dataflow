@@ -74,11 +74,13 @@ class SnapshotWriter(threading.Thread):
                             continue
                         rec = store.objects[e["id"]]
                         mv = store.view(rec)
+                        rng = e.get("range")
+                        if rng:
+                            mv = mv[rng[0]:rng[1]]
                         f.seek(seg["offset"])
                         f.write(mv)
                         with st.lock:
-                            st.snapshots[snap_id]["bytes_done"] += \
-                                rec.size_bytes
+                            st.snapshots[snap_id]["bytes_done"] += len(mv)
                 manifest = {
                     "schema": MANIFEST_SCHEMA,
                     "service_schema": SCHEMA_VERSION,
@@ -127,6 +129,11 @@ def install(server) -> None:
         scope, dest = a["scope"], a["dest"]
         client_meta = a.get("client_meta") or {}
         label = a.get("label")
+        # ranges: {oid: [lo, hi)} — save only the byte range a saver is
+        # RESPONSIBLE for (slice-granular save plans). Ranged entries
+        # record the FULL object size plus the range; they never dedup.
+        ranges = {k: (int(v[0]), int(v[1]))
+                  for k, v in (a.get("ranges") or {}).items()}
         if a.get("ids"):
             # explicit id list (SavePlan dedup: a saver writes only
             # the objects its plan assigns it)
@@ -144,10 +151,18 @@ def install(server) -> None:
         with store.catalog_lock:
             for oid in ids:
                 rec = store.objects[oid]
+                rng = ranges.get(oid)
+                if rng is not None:
+                    lo, hi = rng
+                    if not (0 <= lo < hi <= rec.size_bytes):
+                        raise ServiceError(
+                            "BAD_REQUEST",
+                            f"range {rng} outside {oid} "
+                            f"({rec.size_bytes} B)")
                 lin = rec.lineage
                 parent = lin.parent
                 seg = None
-                if (not lin.dirty and parent in payload_ids
+                if (rng is None and not lin.dirty and parent in payload_ids
                         and lin.parent_version is not None
                         and store.objects[parent].version
                         == lin.parent_version
@@ -155,17 +170,21 @@ def install(server) -> None:
                         == rec.size_bytes):
                     seg = {"ref": parent}
                 else:
-                    seg = {"offset": offset, "size": rec.size_bytes}
-                    offset = _align(offset + rec.size_bytes)
+                    n = (rng[1] - rng[0]) if rng else rec.size_bytes
+                    seg = {"offset": offset, "size": n}
+                    offset = _align(offset + n)
                     payload_ids.add(oid)
-                entries.append({
+                entry = {
                     "id": oid, "size_bytes": rec.size_bytes,
                     "meta": rec.meta, "protected": rec.protected,
                     "version": rec.version,
                     "lineage": {"parent": lin.parent, "dirty": lin.dirty,
                                 "parent_version": lin.parent_version},
                     "payload": seg,
-                })
+                }
+                if rng is not None:
+                    entry["range"] = [rng[0], rng[1]]
+                entries.append(entry)
             idset = set(ids)
             ogroups = [
                 {"ogid": g.ogid, "members": list(g.members),
@@ -260,13 +279,18 @@ def install(server) -> None:
                             f"snapshot {e['size_bytes']} B")
                 seg = e["payload"]
                 src = by_id[seg["ref"]]["payload"] if "ref" in seg else seg
-                rec = store.put(oid, None, size_bytes=e["size_bytes"],
-                                meta=e["meta"], writer="restore")
+                rng = e.get("range")
+                if rng and exists is not None:
+                    rec = exists          # fill the range in place
+                else:
+                    rec = store.put(oid, None, size_bytes=e["size_bytes"],
+                                    meta=e["meta"], writer="restore")
                 mv = store.view(rec)
+                lo, hi = (rng[0], rng[1]) if rng else (0, e["size_bytes"])
                 f.seek(src["offset"])
-                off = 0
-                while off < e["size_bytes"]:
-                    n = f.readinto(mv[off:off + _CHUNK])
+                off = lo
+                while off < hi:
+                    n = f.readinto(mv[off:min(off + _CHUNK, hi)])
                     if not n:
                         raise ServiceError(
                             "IO_ERROR", f"short payload read for {oid}")

@@ -283,10 +283,16 @@ class EngineClient:
 
     # ---- programs + runs ----
     def snapshot(self, scope: str, dest: str, *, ids=None,
-                 client_meta=None, label=None, wait=True):
+                 ranges=None, client_meta=None, label=None, wait=True):
+        """``ranges``: {object_id: (lo, hi)} — save only the byte range
+        this saver is RESPONSIBLE for (slice-granular save plans);
+        restore fills ranges back into full-size objects."""
         return self._call("snapshot",
                           {"scope": scope, "dest": str(dest),
                            "ids": list(ids) if ids else None,
+                           "ranges": ({k: [int(v[0]), int(v[1])]
+                                       for k, v in ranges.items()}
+                                      if ranges else None),
                            "client_meta": client_meta or {},
                            "label": label}, wait=wait)
 

@@ -99,6 +99,16 @@ with EngineClient("/tmp/dfd.sock", client_name="driver") as c:
                    client_meta={"step": 100, "cursor": [3, 128]})
     c.wait_snapshot(s["snap_id"])
 
+    # 4b. SLICE snapshots: save only the byte range this saver is
+    #     RESPONSIBLE for (slice-granular save plans). A ranged entry
+    #     records the FULL object size plus its [lo, hi); restore
+    #     fills the range into the resident object (overwrite=True) or
+    #     creates the object full-size and fills the range — restoring
+    #     each responsible rank's artifact in turn REASSEMBLES the
+    #     complete object. Ranged entries never dedup.
+    c.snapshot("all", "/ckpts/step100-r0", ids=["W_3"],
+               ranges={"W_3": (0, 1 << 20)})
+
     # 5. resume later (client_meta comes back in the same call)
     meta = c.restore_snapshot("/ckpts/step100")["client_meta"]
 ```
