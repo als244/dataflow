@@ -387,7 +387,7 @@ class EmbedFwd(_Base):
 HEAD_CHUNK_SCRATCH_BYTES = 128 << 20  # per (chunk, vocab) bf16 buffer
 
 
-def max_head_chunk_rows(vocab_size: int) -> int:
+def max_head_chunk_tokens(vocab_size: int) -> int:
     """UPPER BOUND on token rows per fused-head chunk: caps each
     internal (chunk, vocab) bf16 buffer (logits, dlogits) at
     ~HEAD_CHUNK_SCRATCH_BYTES. A round SHORTER than the cap runs as
@@ -466,7 +466,7 @@ class HeadLoss(_Base):
                         norm_rows = int(vr[_r])
                 else:
                     norm_rows = int(vr)
-            chunk = max_head_chunk_rows(d.vocab_size)
+            chunk = max_head_chunk_tokens(d.vocab_size)
             hw = self.head_linear()
             loss_acc = torch.zeros(1, dtype=torch.float32, device=y.device)
             part = torch.empty(1, dtype=torch.float32, device=y.device)
