@@ -29,39 +29,16 @@ CKPTS = _ROOT / "results" / "pretrain" / "checkpoints"
 
 
 class CheckpointPayload:
-    """get_bytes over a checkpoint STEP DIRECTORY: restore every
-    artifact the record lists, in record order, into a scratch fake
-    engine — ranged saves reassemble exactly as resume does — and
-    read objects from it."""
+    """get_bytes over a checkpoint step directory, via the high-level
+    load_checkpoint helper (scratch engine, optimizer state skipped —
+    evaluation only needs weights)."""
 
     def __init__(self, ckpt_dir: Path):
-        import tempfile
-        import threading
-        import time
+        from dataflow_training.run.checkpointing import load_checkpoint
 
-        from dataflow.service import EngineClient, EngineConfig, Server
-        from dataflow_training.run.checkpoint_record import (
-            artifacts_for_restore,
-            read_record,
-        )
-
-        rec = read_record(ckpt_dir)
-        self.step = int(rec["step"])
-        sock = str(Path(tempfile.mkdtemp()) / "eval.sock")
-        server = Server(EngineConfig(socket_path=sock, fake=True,
-                                     slab_backing_gib=1.0))
-        threading.Thread(target=server.serve_forever, daemon=True).start()
-        for _ in range(600):
-            try:
-                EngineClient(sock, client_name="probe").close()
-                break
-            except OSError:
-                time.sleep(0.01)
-        self.client = EngineClient(sock, client_name="eval")
-        for rank in range(rec["world"]):
-            for art in artifacts_for_restore(rec, rank):
-                self.client.restore_snapshot(str(ckpt_dir / art),
-                                             overwrite=True)
+        record, self.client = load_checkpoint(ckpt_dir,
+                                              include_opt=False)
+        self.step = int(record["step"])
 
     def __call__(self, oid: str) -> "torch.Tensor":
         raw = bytearray(bytes(self.client.get_object(oid)))

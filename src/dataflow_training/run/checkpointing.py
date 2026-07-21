@@ -154,3 +154,52 @@ def checkpoint_fleet(ranks, ck: dict, step_next: int, meta: dict,
             log(f"[fleet] pruned checkpoint {old_dir.name}")
 
 
+
+
+def load_checkpoint(step_dir, *, client=None, include_opt: bool = True,
+                    backing_gib: float = 1.0):
+    """HIGH-LEVEL restore: open a checkpoint step directory and return
+    ``(record, client)`` with every object reassembled.
+
+    Restores the record's artifacts in record order (each rank's own
+    artifact last), so ranged/partitioned saves reassemble exactly as
+    resume does. With no ``client`` a scratch in-process FAKE engine
+    is booted to hold the bytes — the evaluation/inspection case;
+    pass a real client to load state into a live daemon.
+    ``include_opt=False`` releases the optimizer-state objects after
+    restore (evaluation does not need them)."""
+    from pathlib import Path as _Path
+
+    from .checkpoint_record import artifacts_for_restore, read_record
+
+    step_dir = _Path(step_dir)
+    record = read_record(step_dir)
+    if client is None:
+        import tempfile
+        import threading
+        import time
+
+        from dataflow.service import EngineClient, EngineConfig, Server
+
+        sock = str(_Path(tempfile.mkdtemp()) / "ckload.sock")
+        server = Server(EngineConfig(socket_path=sock, fake=True,
+                                     slab_backing_gib=backing_gib))
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        for _ in range(600):
+            try:
+                EngineClient(sock, client_name="probe").close()
+                break
+            except OSError:
+                time.sleep(0.01)
+        client = EngineClient(sock, client_name="ckload")
+    for rank in range(record["world"]):
+        for art in artifacts_for_restore(record, rank):
+            client.restore_snapshot(str(step_dir / art), overwrite=True)
+    if not include_opt:
+        for oid in record.get("save_plan", {}):
+            if oid.startswith("O_"):
+                try:
+                    client.release_object(oid, force=True)
+                except Exception:
+                    pass
+    return record, client

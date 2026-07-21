@@ -263,6 +263,13 @@ for artifact in artifacts_for_restore(record, rank):
     client.restore_snapshot(str(step_dir / artifact), overwrite=True)
 ```
 
+For programmatic consumers there is a one-call form —
+`load_checkpoint(step_dir, include_opt=False)` returns the record and
+a client holding every reassembled object (a scratch engine when none
+is passed; `include_opt=False` drops optimizer state, the evaluation
+case). The checkpoint evaluation tool is exactly this helper plus a
+forward pass.
+
 Cross-box runs add one move: artifacts stay on the box that wrote
 them until resume, when the conductor pulls each writer's artifacts
 and fans the completed step directory out to every member.

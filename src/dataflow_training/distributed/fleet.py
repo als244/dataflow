@@ -19,6 +19,7 @@ The machinery lives in single-purpose components; import from here:
 """
 from ..run.checkpointing import (  # noqa: F401
     checkpoint_fleet,
+    load_checkpoint,
     distribute_artifacts,
     resolve_resume,
 )
