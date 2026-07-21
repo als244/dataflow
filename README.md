@@ -117,8 +117,10 @@ backend = "auto"                 # nccl on real fabrics
 ```
 
 ```bash
-# weighted data parallelism: 6 of 8 grad-accum rounds on boxA's
-# faster GPU, 2 on boxB; per-rank fast/backing memory, comma per rank.
+# weighted data parallelism: the step's data is divided 3:1 —
+# boxA's faster GPU takes six rounds' worth of tokens, boxB two, and
+# each rank's LOCAL grad-accum count simply equals its data share.
+# Per-rank fast/backing memory, comma per rank.
 # Checkpoints and --resume auto work exactly as in the solo quickstart.
 python tools/train/train.py train --preset gpt2_124m --steps 1000 \
     --data datasets/fineweb10B --ga-rounds 8 \

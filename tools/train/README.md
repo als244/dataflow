@@ -24,7 +24,7 @@ daemon in the canonical nsys command — one flag, any world size.
 | `--batch` / `--ga-rounds` | round geometry overrides |
 | `--fast-budget` | device fast memory GiB, comma-separated per rank |
 | `--backing-budget` | host memory GiB per rank — the daemon's pinned backing store |
-| `--topology` / `--group` / `--rounds` | fleet mode: topology.toml path, group, per-rank round split (omit all three for zero-config solo) |
+| `--topology` / `--group` / `--rounds` | fleet mode: topology.toml path, group, per-rank DATA shares in round units — each rank's local grad-accum count is its share (omit all three for zero-config solo) |
 | `--backend` | group backend override: hostmem \| nccl \| auto |
 | `--opt-shard {zero1,zero1rs,co}` | DEFAULT at world>1 is zero1rs (each rank steps params/n); `co` = the co-responsible DIAGNOSTIC lane (replicated stepping, bitwise cross-rank equality as a corruption tripwire) |
 | `--tp-mlp` | tensor-parallel MLPs (correctness track; needs `--execute-padding` when rounds can be under-full) |

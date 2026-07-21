@@ -338,8 +338,9 @@ which sit far above this floor.
 
 `train.py train` composes the run from `topology.toml` plus
 per-rank overrides: `--group` picks the topology group, `--rounds`
-assigns per-rank round counts (rank order = member order, weighted
-data distribution), `--fast-budget`/`--backing-budget` (comma per
+assigns each rank its share of the step's DATA, in round units (rank
+order = member order; unequal shares = weighted data parallelism —
+a rank's local grad-accum count is simply its share), `--fast-budget`/`--backing-budget` (comma per
 rank) override the topology's per-rank device budgets and host
 memory, `--backend {hostmem,nccl,auto}`
 overrides the group backend, `--opt-shard` selects the optimizer
@@ -426,7 +427,7 @@ python tools/train/train.py train --preset l3_125m --steps 60 --topology topolog
     --out results/pretrain/node_smoke.json
 ```
 
-`--rounds` must list one entry per member (the per-rank split of the
+`--rounds` must list one entry per member (each rank's share of the
 step's grad-accum rounds; equal on a homogeneous node). The version
 handshake, link probes, and warm-up dance run automatically.
 
