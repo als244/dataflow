@@ -395,7 +395,10 @@ def max_head_chunk_tokens(vocab_size: int) -> int:
     cap bounds scratch, it never pads compute. Deterministic in the
     dims, so profiled costs are stable."""
     rows = HEAD_CHUNK_SCRATCH_BYTES // (2 * vocab_size)
-    return max(256, (rows // 256) * 256)
+    # floor of 512 even when the budget says less (slightly over-budget
+    # scratch beats sub-512 chunks); shorter rounds still slice down —
+    # the cap never pads compute
+    return max(512, (rows // 256) * 256)
 
 
 @dataclass(frozen=True)
