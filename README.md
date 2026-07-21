@@ -36,12 +36,12 @@ save/restore mechanics: [docs/checkpointing.md](docs/checkpointing.md)):
 # max sequence length; --batch x --ga-rounds x seq_len = tokens/step
 # (here 8 x 8 x 1024 = 64K tokens per step from the fineweb shards)
 python tools/train/train.py train --preset gpt2_124m --steps 1000 \
-    --data datasets/fineweb10B --batch 8 --ga-rounds 8 \
+    --data shards:datasets/fineweb10B --batch 8 --ga-rounds 8 \
     --checkpoint-every 100 --out results/pretrain/demo
 
 # resume from the newest complete checkpoint
 python tools/train/train.py train --preset gpt2_124m --steps 1000 \
-    --data datasets/fineweb10B --batch 8 --ga-rounds 8 \
+    --data shards:datasets/fineweb10B --batch 8 --ga-rounds 8 \
     --checkpoint-every 100 --out results/pretrain/demo --resume auto
 
 # Nsight capture of exact warmed steps, report written under --prof-dir
@@ -123,7 +123,7 @@ backend = "auto"                 # nccl on real fabrics
 # Per-rank fast/backing memory, comma per rank.
 # Checkpoints and --resume auto work exactly as in the solo quickstart.
 python tools/train/train.py train --preset gpt2_124m --steps 1000 \
-    --data datasets/fineweb10B --ga-rounds 8 \
+    --data shards:datasets/fineweb10B --ga-rounds 8 \
     --topology topology.toml --group dp --rounds 6,2 \
     --fast-budget 14,12 --backing-budget 60,30 \
     --checkpoint-every 100 --out results/pretrain/fleet-demo

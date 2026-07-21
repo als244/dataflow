@@ -29,18 +29,42 @@ CKPTS = _ROOT / "results" / "pretrain" / "checkpoints"
 
 
 class CheckpointPayload:
-    """get_bytes over a snapshot: manifest offsets into payload.bin."""
+    """get_bytes over a checkpoint STEP DIRECTORY: restore every
+    artifact the record lists, in record order, into a scratch fake
+    engine — ranged saves reassemble exactly as resume does — and
+    read objects from it."""
 
     def __init__(self, ckpt_dir: Path):
-        manifest = json.loads((ckpt_dir / "manifest.json").read_text())
-        self.step = int(manifest["client_meta"].get("step", -1))
-        self.index = {o["id"]: o["payload"] for o in manifest["objects"]}
-        self.payload = open(ckpt_dir / "payload.bin", "rb")
+        import tempfile
+        import threading
+        import time
+
+        from dataflow.service import EngineClient, EngineConfig, Server
+        from dataflow_training.run.checkpoint_record import (
+            artifacts_for_restore,
+            read_record,
+        )
+
+        rec = read_record(ckpt_dir)
+        self.step = int(rec["step"])
+        sock = str(Path(tempfile.mkdtemp()) / "eval.sock")
+        server = Server(EngineConfig(socket_path=sock, fake=True,
+                                     slab_backing_gib=1.0))
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        for _ in range(600):
+            try:
+                EngineClient(sock, client_name="probe").close()
+                break
+            except OSError:
+                time.sleep(0.01)
+        self.client = EngineClient(sock, client_name="eval")
+        for rank in range(rec["world"]):
+            for art in artifacts_for_restore(rec, rank):
+                self.client.restore_snapshot(str(ckpt_dir / art),
+                                             overwrite=True)
 
     def __call__(self, oid: str) -> "torch.Tensor":
-        seg = self.index[oid]
-        self.payload.seek(int(seg["offset"]))
-        raw = bytearray(self.payload.read(int(seg["size"])))
+        raw = bytearray(bytes(self.client.get_object(oid)))
         return torch.frombuffer(raw, dtype=torch.uint8)
 
 
@@ -57,15 +81,16 @@ def main() -> int:
     run_dir = CKPTS / args.run
     if args.step is not None:
         ck = run_dir / f"step_{args.step:06d}"
-        if not (ck / "manifest.json").is_file():
+        if not ((ck / "checkpoint_record.json").is_file()
+                or (ck / "manifest.json").is_file()):
             print(f"no complete checkpoint at {ck}", file=sys.stderr)
             return 1
     else:
-        manifests = sorted(run_dir.glob("step_*/manifest.json"))
-        if not manifests:
+        marks = sorted(run_dir.glob("step_*/checkpoint_record.json"))             or sorted(run_dir.glob("step_*/manifest.json"))
+        if not marks:
             print(f"no complete checkpoints under {run_dir}", file=sys.stderr)
             return 1
-        ck = manifests[-1].parent
+        ck = marks[-1].parent
 
     cfg = P.resolve_preset(args.preset)
     payload = CheckpointPayload(ck)

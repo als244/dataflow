@@ -333,23 +333,15 @@ def cmd_scaling(args) -> int:
 # ---------------------------------------------------------------- peek
 def cmd_peek(args) -> int:
     run_dir = CKPTS / args.run
-    manifests = sorted(run_dir.glob("step_*/fleet.json"))
+    manifests = sorted(run_dir.glob("step_*/checkpoint_record.json"))
     if manifests:
         manifest = json.loads(manifests[-1].read_text())
         losses = [float(x) for x in manifest.get("losses", [])]
         step = manifest["step"]
         source = str(manifests[-1])
     else:
-        # engine-local layout (reference legs, library runs)
-        legacy = sorted(run_dir.glob("step_*/manifest.json"))
-        if not legacy:
-            print(f"no complete checkpoints under {run_dir}",
-                  file=sys.stderr)
-            return 1
-        meta = json.loads(legacy[-1].read_text()).get("client_meta", {})
-        losses = [float(x) for x in meta.get("losses", [])]
-        step = meta.get("step")
-        source = str(legacy[-1])
+        print(f"no complete checkpoints under {run_dir}", file=sys.stderr)
+        return 1
     if not losses:
         print(f"{source} carries no loss curve", file=sys.stderr)
         return 1
