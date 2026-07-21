@@ -364,6 +364,12 @@ def lower_with_group(cfg, dp_group: str, recompute_levels=None,
 
     fam = resolve_family(cfg)
     program = fam.lower(cfg, recompute_levels=recompute_levels)
+    if dp_group is None:
+        # world-1: the solo program IS the rank program — no group
+        # handles, no shard/tp (validated upstream)
+        if shard_params or tp_params:
+            raise ValueError("shard/tp params need a group")
+        return program
     program = annotate_groups(program, group=dp_group,
                               shard_params=shard_params,
                               tp_params=tp_params)
@@ -507,6 +513,26 @@ class HostRig:
         self.prof_out: str | None = None
 
 
+def local_topology(*, budget_gib: float = 8.0, slab_gib: float = 8.0,
+                   device: int = 0, peer_port: int = 29711) -> "Topology":
+    """Zero-config world-1: one localhost member, one group ("local").
+    The conductor launches the daemon as a LOCAL CHILD process (the
+    HostSpec.ssh=None lane) — the child-daemon pattern at world 1."""
+    import os
+
+    from .topology import GroupSpec, HostSpec, Topology
+
+    host = HostSpec(name="local", peer_listen=f"127.0.0.1:{peer_port}",
+                    ssh=None, repo=os.getcwd(),
+                    slab_gib=slab_gib, budget_gib=budget_gib,
+                    device=device)
+    return Topology(conductor="local", hosts={"local": host},
+                    groups={"local": GroupSpec(name="local",
+                                               members=("local",),
+                                               backend="hostmem")},
+                    source="<local world-1>")
+
+
 def run_fleet_dp(global_cfg, recipe: Recipe, pipeline, steps: int, *,
                  rank_rounds=(6, 2), budgets=None, slabs=None,
                  topology=None, group: str = "dp", attach=None,
@@ -538,8 +564,12 @@ def run_fleet_dp(global_cfg, recipe: Recipe, pipeline, steps: int, *,
                           backend=backend)
     hosts = topo.group_hosts(group)
     world = len(hosts)
-    if world < 2:
-        raise ValueError(f"group {group!r} has {world} member(s)")
+    if world < 1:
+        raise ValueError(f"group {group!r} has no members")
+    if world == 1 and opt_shard is not None:
+        raise ValueError("opt_shard is meaningless at world 1")
+    if world == 1 and tp_mlp:
+        raise ValueError("tp_mlp needs at least two ranks")
     if world > 2 and gspec.backend == "hostmem":
         raise ValueError(
             "the hostmem lane is pairwise (world-2 CI); groups with "
@@ -681,7 +711,9 @@ def run_fleet_dp(global_cfg, recipe: Recipe, pipeline, steps: int, *,
                           tp_mode=tp_mlp, checkpoint=ck,
                           fleet_manifest=fleet_manifest,
                           zero1rs_world=(world if opt_shard == "zero1rs"
-                                         else None))
+                                         else None),
+                          execute_padding=execute_padding,
+                          tp_mlp=tp_mlp)
     finally:
         for rig in rigs:
             if rig.client is None:
@@ -720,7 +752,9 @@ def fleet_loop(ranks, gspec, recipe, pipeline, steps, *, budgets, seed,
                parallels=None,
                tp_mode: bool = False, checkpoint: dict | None = None,
                fleet_manifest: dict | None = None,
-               zero1rs_world: int | None = None) -> RunResult:
+               zero1rs_world: int | None = None,
+               execute_padding: bool = False,
+               tp_mlp: bool = False) -> RunResult:
     world = len(ranks)
     start_step = int(fleet_manifest["step"]) if fleet_manifest else 0
 
@@ -743,12 +777,13 @@ def fleet_loop(ranks, gspec, recipe, pipeline, steps, *, budgets, seed,
     # ---- per-rank register + warm-up ----------------------------------
     for i, rank in enumerate(ranks):
         par = parallels[i] if parallels else None
+        rank_group = gspec.name if world > 1 else None
         planned = plan_program(
-            lower_with_group(rank.cfg, gspec.name,
+            lower_with_group(rank.cfg, rank_group,
                              parallel=par, zero1rs_world=zero1rs_world),
             fast_memory_capacity=int(budgets[i] * 1024 ** 3),
             recompute=True,
-            build_variant=GroupedBuildVariant(rank.cfg, gspec.name,
+            build_variant=GroupedBuildVariant(rank.cfg, rank_group,
                                               parallel=par,
                                               zero1rs_world=zero1rs_world))
         prog_dict = program_to_dict(planned.program)
@@ -849,12 +884,15 @@ def fleet_loop(ranks, gspec, recipe, pipeline, steps, *, budgets, seed,
                                                    require_full=tp_mlp)
             log(f"[fleet] {rank.name}: warm-up done, re-seeded")
 
-    ranks[0].client._call("create_peer_group",
-                          {"name": gspec.name,
-                           "members": list(gspec.members),
-                           "backend": gspec.backend})
-    log(f"[fleet] {gspec.name} group up ({gspec.backend}, "
-        f"world {world})")
+    if world > 1:
+        ranks[0].client._call("create_peer_group",
+                              {"name": gspec.name,
+                               "members": list(gspec.members),
+                               "backend": gspec.backend})
+        log(f"[fleet] {gspec.name} group up ({gspec.backend}, "
+            f"world {world})")
+    else:
+        log("[fleet] world 1 — no peer group; solo program")
 
     res = RunResult(backend="fleet-tp" if tp_mode else "fleet-dp",
                     budget_gib=budgets[0],
