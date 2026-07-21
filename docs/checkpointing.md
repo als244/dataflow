@@ -85,6 +85,17 @@ step N+1 run submitted ──┤ PARKED (leased) │
 Work that touches no leased object proceeds concurrently with the
 copy.
 
+**Ordering against runs (both directions, no caller effort).**
+Runs occupy the dispatcher end-to-end, so a snapshot submitted while
+a program is running is admitted only after that run — including its
+final-state offload to backing — completes: `run` then `snapshot` in
+submission order always saves the post-run state, with no explicit
+synchronization by the caller. The reverse direction is the lease
+park described above: a run submitted during an in-flight save
+executes only after the copy releases its objects. Ordering is
+dispatcher submission order; leases close the one remaining window
+(the asynchronous payload copy).
+
 **Client side (explicit — for artifact consumers).** The `snap_id`
 is the handle: poll `snapshot_status` or block in `wait_snapshot`.
 Waiting is only required before *reading the artifact* (or declaring
