@@ -169,7 +169,7 @@ def main() -> int:
            else P.resolve_preset(args.preset))
     recipe = Recipe(peak_lr=3e-4, min_lr=3e-5, warmup_steps=1,
                     total_steps=args.steps)
-    with daemon_client(slab_gib=args.slab, log=print) as client:
+    with daemon_client(backing_gib=args.slab, log=print) as client:
         cap = capture_run(client, cfg, recipe, legacy_block_pipeline(cfg),
                           args.steps, budget_gib=args.budget)
 

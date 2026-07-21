@@ -6,8 +6,10 @@ Same shape as the P4a gate, but everything family-parameterized
 through the registry — lowering, resolver, init, layouts. Asserts per
 family: (1) the two replicas' weights land BITWISE IDENTICAL, (2) the
 result matches a single-engine combined-batch run within bf16
-accumulation noise. llama3 runs as the control; gpt2 is the first
-non-llama3 passenger through the fleet machinery."""
+accumulation noise. llama3 runs as the control; gpt2 was the first
+non-llama3 passenger; qwen35 (hybrid linear attention) and qwen3moe
+(routed experts + per-step load-balancing aux) put the two
+structurally different architectures through the same machinery."""
 import threading
 import time
 
@@ -39,7 +41,8 @@ pytestmark = pytest.mark.fleet
 SEED = 11
 # per-family port pairs: back-to-back params must not fight over
 # lingering peer listeners (Address-already-in-use, suite-order flake)
-PORTS = {"llama3": (29531, 29532), "gpt2": (29541, 29542)}
+PORTS = {"llama3": (29531, 29532), "gpt2": (29541, 29542),
+         "qwen35": (29551, 29552), "qwen3moe": (29561, 29562)}
 
 
 def tiny_pair_cfg(family_tiny):
@@ -128,7 +131,8 @@ class RankRun:
 
 
 @pytest.mark.gpu
-@pytest.mark.parametrize("family_name", ["llama3", "gpt2"])
+@pytest.mark.parametrize("family_name", ["llama3", "gpt2",
+                                         "qwen35", "qwen3moe"])
 def test_family_generic_two_daemon_dp_step(tmp_path, family_name):
     register_all()
     from dataflow_training.model_families.families import _FAMILIES

@@ -22,7 +22,7 @@ def test_reference_vs_service_parity_smoke():
     quiet = lambda *_a, **_k: None
 
     ref = run_reference(cfg, recipe, feed, steps, seed=11, log=quiet)
-    with daemon_client(slab_gib=4.0, log=quiet) as client:
+    with daemon_client(backing_gib=4.0, log=quiet) as client:
         eng = run_engine(client, cfg, recipe, feed, steps, budget_gib=4.0,
                          seed=11, log=quiet)
 

@@ -1,7 +1,7 @@
 """Engine service daemon CLI: start / status / stop.
 
     python tools/train/dataflowd.py start --socket ~/.dataflow/dataflowd.sock \
-        --slab-gib auto --device 0
+        --backing-gib auto --device 0
     python tools/train/dataflowd.py status
     python tools/train/dataflowd.py stop
 
@@ -26,7 +26,7 @@ def main() -> None:
 
     st = sub.add_parser("start")
     st.add_argument("--socket", default=DEFAULT_SOCKET)
-    st.add_argument("--slab-gib", default="auto")
+    st.add_argument("--backing-gib", default="auto")
     st.add_argument("--device", type=int, default=0)
     st.add_argument("--kernels", default=None)
     st.add_argument("--fake", action="store_true",
@@ -62,14 +62,15 @@ def main() -> None:
             from dataflow_training.model_families.families import load_plugins
 
             load_plugins(explicit=args.plugin)
-        slab = args.slab_gib if args.slab_gib == "auto" else float(args.slab_gib)
-        cfg = EngineConfig(socket_path=args.socket, slab_backing_gib=slab,
+        backing = (args.backing_gib if args.backing_gib == "auto"
+                   else float(args.backing_gib))
+        cfg = EngineConfig(socket_path=args.socket, slab_backing_gib=backing,
                            device=args.device, kernel_set=args.kernels,
                            fake=args.fake, peer_name=args.peer_name,
                            peer_listen=args.peer_listen,
                            peer_rdma_device=args.peer_rdma_device)
         print(f"dataflowd: listening on {args.socket} "
-              f"(fake={args.fake}, slab={slab})")
+              f"(fake={args.fake}, backing={backing})")
         Server(cfg).serve_forever()
     elif args.cmd == "status":
         with EngineClient(args.socket, client_name="dataflowd-cli") as c:

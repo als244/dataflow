@@ -107,7 +107,7 @@ def build_rig(tmp_path_factory, lane, port, rdma: bool):
     extra = ""
     if rdma:
         extra = f"--peer-rdma-device {REMOTE.ib_dev}"
-    daemons.launch(REMOTE, lane=lane, slab_gib=4.0, peer_port=port,
+    daemons.launch(REMOTE, lane=lane, backing_gib=4.0, peer_port=port,
                   extra_flags=extra)
     remote_sock = daemons.paths(REMOTE, lane)["sock"]
     prelude = (

@@ -442,7 +442,7 @@ def init_model(client, family_name: str, cfg_dict: dict, *,
 
 
 @contextmanager
-def daemon_client(slab_gib: float = 100.0, *, socket: str | None = None,
+def daemon_client(backing_gib: float = 100.0, *, socket: str | None = None,
                   device: int = 0, attach: bool = False, log=print,
                   peer_name: str | None = None,
                   peer_listen: str | None = None):
@@ -466,9 +466,9 @@ def daemon_client(slab_gib: float = 100.0, *, socket: str | None = None,
 
     register_all()          # in-process server shares this registry
     sock = socket or f"/tmp/pretrain-dataflowd-{os.getpid()}.sock"
-    log(f"[daemon] booting in-process dataflowd slab={slab_gib} GiB dev={device}")
+    log(f"[daemon] booting in-process dataflowd slab={backing_gib} GiB dev={device}")
     t0 = time.perf_counter()
-    server = Server(EngineConfig(socket_path=sock, slab_backing_gib=slab_gib,
+    server = Server(EngineConfig(socket_path=sock, slab_backing_gib=backing_gib,
                                  device=device, fake=False,
                                  peer_name=peer_name,
                                  peer_listen=peer_listen))

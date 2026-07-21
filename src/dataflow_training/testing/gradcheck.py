@@ -511,7 +511,7 @@ def isolated_block_compare(cfg, isolate, *, seed: int = 0,
 
 def engine_grad_state_dict(cfg, fam, dims, program, resolver, values,
                            result) -> dict:
-    """Engine dW slabs -> twin-named gradient dict, with ZERO per-family
+    """Engine dW backing -> twin-named gradient dict, with ZERO per-family
     code: each optimizer task's executable resolves its own
     (weight_layout, grad_layout, ns) — per-kind dispatch included — and
     the family bridge's to_reference_state_dict supplies the name map by
@@ -700,7 +700,7 @@ def check_model_step(
     fam = resolve_family(cfg)
     dims = fam.derive_dims(cfg)
     program = fam.lower(cfg, recompute_levels=recompute_levels)
-    # retain the gradient slabs: dW ids in final_locations survive pool
+    # retain the gradient backing: dW ids in final_locations survive pool
     # recycling after the optimizer consumes them, enabling the direct
     # dW-vs-autograd comparison (the sharp parity instrument — final
     # params are init-dominated ~200x, update space is bf16-quantum

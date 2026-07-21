@@ -97,7 +97,7 @@ def main() -> int:
     ap.add_argument("--data", default=None,
                     help="data source spec; default: exactly-full "
                          "uniform windows (the geometry the plans price)")
-    ap.add_argument("--slab", type=float, default=16.0)
+    ap.add_argument("--backing-gib", type=float, default=16.0)
     ap.add_argument("--peak-lr", type=float, default=3e-4)
     ap.add_argument("--measured-plan", action="store_true",
                     help="prediction column from PROFILED task costs")
@@ -131,7 +131,7 @@ def main() -> int:
            f"{'budget':>6} {'pred_s':>7} {'meas_s':>7} {'ratio':>6} "
            f"{'tok/s':>8} {'effTF/s':>8} {'hwTF/s':>7} {'recomp':>6}")
     print(hdr)
-    with daemon_client(slab_gib=args.slab, log=quiet_log) as client:
+    with daemon_client(backing_gib=args.backing_gib, log=quiet_log) as client:
         for seq in seqs:
             for tr in t_rounds:
                 if tr % seq or tokens_step % tr:

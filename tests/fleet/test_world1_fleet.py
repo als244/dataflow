@@ -56,15 +56,15 @@ def test_world1_fleet_matches_solo_engine():
                     total_steps=STEPS)
 
     solo = None
-    with daemon_client(slab_gib=4.0, log=quiet) as client:
+    with daemon_client(backing_gib=4.0, log=quiet) as client:
         solo = run_engine(client, cfg, recipe,
                           legacy_block_pipeline(cfg), STEPS,
                           budget_gib=4.0, seed=SEED, log=quiet)
 
     res = run(cfg, recipe, legacy_block_pipeline(cfg), STEPS,
-              budgets=(4.0,), slabs=(4.0,),
+              budgets=(4.0,), backing=(4.0,),
                        topology=local_topology(budget_gib=4.0,
-                                               slab_gib=4.0),
+                                               backing_gib=4.0),
                        group="local", seed=SEED, log=quiet)
 
     assert len(res.losses) == STEPS

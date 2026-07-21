@@ -23,7 +23,7 @@ daemon in the canonical nsys command — one flag, any world size.
 | `--opt {adamw,muon}` | override the preset's optimizer policy |
 | `--batch` / `--ga-rounds` | round geometry overrides |
 | `--fast-budget` | device fast memory GiB, comma-separated per rank |
-| `--backing-budget` | host memory GiB per rank — the daemon's pinned slab |
+| `--backing-budget` | host memory GiB per rank — the daemon's pinned backing store |
 | `--topology` / `--group` / `--rounds` | fleet mode: topology.toml path, group, per-rank round split (omit all three for zero-config solo) |
 | `--backend` | group backend override: hostmem \| nccl \| auto |
 | `--opt-shard {zero1,zero1rs,co}` | DEFAULT at world>1 is zero1rs (each rank steps params/n); `co` = the co-responsible DIAGNOSTIC lane (replicated stepping, bitwise cross-rank equality as a corruption tripwire) |
@@ -70,7 +70,7 @@ write); prints last/EMA/min, writes
 ## dataflowd.py — engine service daemon CLI
 
 `start | status | stop` ([engine_service.md](../../docs/engine_service.md)).
-`start` flags: `--socket --slab-gib --device --kernels --fake`,
+`start` flags: `--socket --backing-gib --device --kernels --fake`,
 `--plugin`, `--no-default-workloads`, and the peer plane's
 `--peer-name --peer-listen --peer-rdma-device`. A second daemon on a
 LIVE socket refuses loudly (stale socket files are reclaimed).

@@ -29,7 +29,7 @@ class HostSpec:
     nsys: str = "nsys"
     ib_dev: str | None = None
     iface: str | None = None       # fast-link netdev (NCCL_SOCKET_IFNAME)
-    slab_gib: float = 8.0
+    backing_gib: float = 8.0
     budget_gib: float = 8.0
     device: int = 0                # CUDA device index (multi-GPU hosts
                                    # use one topology entry per GPU)
@@ -112,7 +112,7 @@ def build_host(name: str, entry: dict) -> HostSpec:
         nsys=entry.get("nsys", "nsys"),
         ib_dev=entry.get("ib_dev"),
         iface=entry.get("iface"),
-        slab_gib=float(entry.get("slab_gib", 8.0)),
+        backing_gib=float(entry.get("backing_gib", 8.0)),
         budget_gib=float(entry.get("budget_gib", 8.0)),
         device=int(entry.get("device", 0)))
 
@@ -164,7 +164,7 @@ def load_topology_or_none(path: str | None = None) -> Topology | None:
         return None
 
 
-def local_topology(*, budget_gib: float = 8.0, slab_gib: float = 8.0,
+def local_topology(*, budget_gib: float = 8.0, backing_gib: float = 8.0,
                    device: int = 0, peer_port: int = 29711) -> "Topology":
     """Zero-config world-1: one localhost member, one group ("local").
     The conductor launches the daemon as a LOCAL CHILD process (the
@@ -173,7 +173,7 @@ def local_topology(*, budget_gib: float = 8.0, slab_gib: float = 8.0,
 
     host = HostSpec(name="local", peer_listen=f"127.0.0.1:{peer_port}",
                     ssh=None, repo=os.getcwd(),
-                    slab_gib=slab_gib, budget_gib=budget_gib,
+                    backing_gib=backing_gib, budget_gib=budget_gib,
                     device=device)
     return Topology(conductor="local", hosts={"local": host},
                     groups={"local": GroupSpec(name="local",
@@ -183,7 +183,7 @@ def local_topology(*, budget_gib: float = 8.0, slab_gib: float = 8.0,
 
 
 def local_pair_topology(*, budget_gib: float = 4.0,
-                        slab_gib: float = 4.0, device: int = 0,
+                        backing_gib: float = 4.0, device: int = 0,
                         ports=(29721, 29722)) -> "Topology":
     """Two localhost members sharing one GPU over the hostmem backend
     — the same-box world-2 pattern the drills and CI ride."""
@@ -195,7 +195,7 @@ def local_pair_topology(*, budget_gib: float = 4.0,
         hosts[name] = HostSpec(name=name,
                                peer_listen=f"127.0.0.1:{port}",
                                ssh=None, repo=os.getcwd(),
-                               slab_gib=slab_gib, budget_gib=budget_gib,
+                               backing_gib=backing_gib, budget_gib=budget_gib,
                                device=device)
     return Topology(conductor="local0", hosts=hosts,
                     groups={"pair": GroupSpec(name="pair",

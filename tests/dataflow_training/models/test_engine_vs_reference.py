@@ -101,7 +101,7 @@ def test_engine_matches_reference_uniform(name):
     recipe = smoke_recipe()
     ref = run_reference(cfg, recipe, legacy_block_pipeline(cfg),
                         STEPS, log=quiet_log)
-    with daemon_client(slab_gib=4.0, log=quiet_log) as client:
+    with daemon_client(backing_gib=4.0, log=quiet_log) as client:
         eng = run_engine(client, cfg, recipe,
                          legacy_block_pipeline(cfg), STEPS,
                          budget_gib=4.0, log=quiet_log)
@@ -175,7 +175,7 @@ def test_engine_matches_reference_ragged(name):
     boundaries = [0]
     for ln in RAGGED_LENGTHS:
         boundaries.append(boundaries[-1] + ln)
-    with daemon_client(slab_gib=4.0, log=quiet_log) as client:
+    with daemon_client(backing_gib=4.0, log=quiet_log) as client:
         planned = plan_program(fam.lower(cfg),
                                fast_memory_capacity=4 << 30)
         cd = cfg_dict(cfg)

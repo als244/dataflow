@@ -272,7 +272,7 @@ def test_engine_resume_drill_with_cursor(tmp_path):
         pass
 
     ck = tmp_path / "drill"
-    with daemon_client(slab_gib=4.0, log=quiet) as client:
+    with daemon_client(backing_gib=4.0, log=quiet) as client:
         full = run_engine(client, cfg, recipe, pipe, 6, budget_gib=4.0,
                           seed=11, log=quiet, checkpoint_every=2,
                           checkpoint_dir=ck)
@@ -285,7 +285,7 @@ def test_engine_resume_drill_with_cursor(tmp_path):
     import shutil
 
     shutil.rmtree(ck / "step_000006")
-    with daemon_client(slab_gib=4.0, log=quiet) as client:
+    with daemon_client(backing_gib=4.0, log=quiet) as client:
         tail = run_engine(client, cfg, recipe, pipe, 6, budget_gib=4.0,
                           seed=11, log=quiet, checkpoint_every=2,
                           checkpoint_dir=ck, resume=True)

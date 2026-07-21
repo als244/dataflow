@@ -21,7 +21,7 @@ class PlannedProgram:
     makespan_us: float               # simulator-verified makespan of the plan
     peak_fast_bytes: int
     recompute_levels: dict[str, int]
-    peak_backing_bytes: int = 0      # host-side (slab) demand of the plan
+    peak_backing_bytes: int = 0      # host-side (backing) demand of the plan
     # per-direction PCIe summary of the simulated schedule:
     # {"from_slow"|"to_slow": {"bytes", "busy_us", "n"}} — utilization =
     # busy_us / makespan_us (the webapp's link panels, as numbers)

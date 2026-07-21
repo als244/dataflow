@@ -50,7 +50,7 @@ def remote_py(code: str, *, timeout: float = 120.0) -> str:
 @pytest.fixture(scope="module")
 def rig(tmp_path_factory):
     daemons.kill(REMOTE, lane=LANE)
-    daemons.launch(REMOTE, lane=LANE, slab_gib=0.5, peer_port=PORT)
+    daemons.launch(REMOTE, lane=LANE, backing_gib=0.5, peer_port=PORT)
     deadline = time.time() + 90
     while time.time() < deadline:
         try:

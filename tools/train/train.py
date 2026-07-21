@@ -18,7 +18,7 @@ Subcommands:
 Budget flags are memory-tier named and comma-separated per rank:
   --fast-budget    device fast memory GiB (one value per rank)
   --backing-budget host memory GiB per rank — drives the daemon's
-                   pinned slab AND refuses plans whose backing peak
+                   pinned backing store AND refuses plans whose backing peak
                    would not fit it
 
 Checkpoints are manifest v2 at every world size (fleet.json:
@@ -113,7 +113,7 @@ def cmd_train(args) -> int:
     backing = per_rank_floats(args.backing_budget, world,
                               "--backing-budget")
     if topo is None:
-        topo = local_topology(budget_gib=fast[0], slab_gib=backing[0])
+        topo = local_topology(budget_gib=fast[0], backing_gib=backing[0])
 
     # the flags compile to THE parallelism contract
     if args.tp_mlp:
@@ -149,7 +149,7 @@ def cmd_train(args) -> int:
              f"ckpt={args.checkpoint_every or 'off'}")
     res = run(
         cfg, recipe, feed, args.steps,
-        scheme=scheme, budgets=fast, slabs=backing,
+        scheme=scheme, budgets=fast, backing=backing,
         topology=topo, group=group, seed=args.seed, log=log_line,
         profile=profile, backend=args.backend,
         execute_padding=args.execute_padding,
@@ -226,7 +226,7 @@ def cmd_smoke(args) -> int:
              f"vocab{cfg.vocab_size} steps{args.steps} ln(V)={lnV:.3f}")
     ref = run_reference(cfg, recipe, feed, args.steps, seed=11,
                         log=log_line)
-    with daemon_client(slab_gib=float(args.backing_budget),
+    with daemon_client(backing_gib=float(args.backing_budget),
                        log=log_line) as client:
         init_model(client, "llama3", P.cfg_dict(cfg), seed=11)
         identical = init_bytes_identical(cfg, client, seed=11)
@@ -272,7 +272,7 @@ def cmd_parity(args) -> int:
     gc.collect()
     torch.cuda.empty_cache()
     engs = {}
-    with daemon_client(slab_gib=float(args.backing_budget),
+    with daemon_client(backing_gib=float(args.backing_budget),
                        log=log_line) as client:
         for b in budgets:
             eng = run_engine(client, cfg, recipe, feed, args.steps,
@@ -314,7 +314,7 @@ def cmd_scaling(args) -> int:
             r.meta["params"] = P.param_counts(cfg)
             r.save(RESULTS / f"scaling_{name}_reference.json")
     else:
-        with daemon_client(slab_gib=float(args.backing_budget),
+        with daemon_client(backing_gib=float(args.backing_budget),
                            log=log_line) as client:
             for name in names:
                 cfg = P.preset(name)
@@ -405,7 +405,7 @@ def main() -> int:
     t.add_argument("--fast-budget", default="8",
                    help="device fast GiB, comma per rank")
     t.add_argument("--backing-budget", default="8",
-                   help="host GiB per rank (pinned slab + plan cap)")
+                   help="host GiB per rank (pinned backing + plan cap)")
     t.add_argument("--topology", default=None)
     t.add_argument("--group", default=None)
     t.add_argument("--rounds", default=None,

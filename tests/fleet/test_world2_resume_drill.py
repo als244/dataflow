@@ -40,28 +40,40 @@ def quiet(*a, **k):
     pass
 
 
-def tiny_cfg():
-    from dataflow_training.model_families.llama3 import ShapedLlamaConfig
+PAIR_PORTS = {"llama3": (29721, 29722), "qwen35": (29723, 29724),
+              "qwen3moe": (29725, 29726)}
 
-    return replace(ShapedLlamaConfig.tiny(), vocab_size=50304,
+
+def tiny_cfg(family_name):
+    from dataflow_training.model_families.llama3 import ShapedLlamaConfig
+    from dataflow_training.model_families.qwen35.model import ShapedQwen35Config
+    from dataflow_training.model_families.qwen3moe.model import ShapedQwen3MoeConfig
+
+    tiny = {"llama3": ShapedLlamaConfig, "qwen35": ShapedQwen35Config,
+            "qwen3moe": ShapedQwen3MoeConfig}[family_name].tiny()
+    return replace(tiny, vocab_size=50304,
                    grad_accum_rounds=2, num_steps=STEPS)
 
 
 @pytest.mark.gpu
 @needs_corpus
-def test_world2_zero1rs_checkpoint_resume_drill(tmp_path):
-    cfg = tiny_cfg()
+@pytest.mark.parametrize("family_name", ["llama3", "qwen35", "qwen3moe"])
+def test_world2_zero1rs_checkpoint_resume_drill(tmp_path, family_name):
+    cfg = tiny_cfg(family_name)
     recipe = Recipe(peak_lr=3e-4, min_lr=3e-5, warmup_steps=2,
                     total_steps=STEPS)
     ck_dir = tmp_path / "ck"
+
+    def pair_topo():
+        return local_pair_topology(ports=PAIR_PORTS[family_name])
     common = dict(scheme=ParallelismScheme.data_parallel((1, 1)),
                   budgets=(4.0, 4.0),
-                  slabs=(4.0, 4.0), group="pair", seed=SEED, log=quiet,
+                  backing=(4.0, 4.0), group="pair", seed=SEED, log=quiet,
                   checkpoint_dir=str(ck_dir), run_name="drill2",
                   checkpoint_every=2)
 
     truth = run(cfg, recipe, legacy_block_pipeline(cfg), STEPS,
-                         topology=local_pair_topology(),
+                         topology=pair_topo(),
                          launch_argv=["unit", "world2-drill"], **common)
 
     manifests = sorted((ck_dir / "drill2").glob("step_*/checkpoint_record.json"))
@@ -79,7 +91,7 @@ def test_world2_zero1rs_checkpoint_resume_drill(tmp_path):
     ck_step = m["step"]
 
     resumed = run(cfg, recipe, legacy_block_pipeline(cfg),
-                           STEPS, topology=local_pair_topology(),
+                           STEPS, topology=pair_topo(),
                            launch_argv=["unit", "world2-drill"],
                            resume="auto", **common)
 

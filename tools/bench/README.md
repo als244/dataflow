@@ -21,7 +21,7 @@ link %, recompute + idle %, ETA. Full guide:
 | `--ga-rounds` | alternative to `--tokens-step` |
 | `--seq-len` / `--seq-lens` | sequence length (third sweep axis) |
 | `--budget` / `--budgets` | device budget GiB (single / sweep) |
-| `--backing` | host-slab capacity ceiling GiB (plans escalate recompute to fit; infeasible combos report as INFEASIBLE rows) |
+| `--backing` | host-backing capacity ceiling GiB (plans escalate recompute to fit; infeasible combos report as INFEASIBLE rows) |
 | `--opt {adamw,muon}` | optimizer (sizes O and the NS work; roofline under-prices muon NS time — `--measured` is muon-exact) |
 | `--hw {3090,5090}` + `--tflops --bw --pcie` | hardware profile / overrides |
 | `--measured` | profiled task costs instead of roofline (disk-cached; needs the GPU once per geometry) |
@@ -41,7 +41,7 @@ prediction — `pred_s meas_s ratio tok/s effTF/s hwTF/s recomp`.
 | grid flags | as predict_step: `--preset --plugin --opt --t-round(s) --tokens-step --seq-len(s) --budget(s)` |
 | `--steps` | steps per cell (first 3 = warmup, excluded from the mean) |
 | `--data SPEC` | data source spec ([data_feeds.md](../../docs/data_feeds.md)); default: the standard feed — pass the uniform-window config for plan-comparable runs |
-| `--slab` | daemon pinned slab GiB |
+| `--backing-gib` | daemon pinned backing GiB |
 | `--peak-lr` | recipe peak for the cells |
 | `--measured-plan` | prediction column from PROFILED task costs |
 | `--hw` | display only — the run measures the real box |

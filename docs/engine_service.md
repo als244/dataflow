@@ -14,12 +14,12 @@ device/host memory peaks).
 Start it:
 
 ```bash
-python tools/train/dataflowd.py start --socket /tmp/dfd.sock --slab-gib 145
+python tools/train/dataflowd.py start --socket /tmp/dfd.sock --backing-gib 145
 python tools/train/dataflowd.py status
 python tools/train/dataflowd.py stop
 ```
 
-`--slab-gib` is the ONE pinned budget (default `auto`): residents AND
+`--backing-gib` is the ONE pinned budget (default `auto`): residents AND
 run transients (gradients, saved activations) draw from the same slab.
 Size it to `residents + worst-plan transients` (the plan's demand
 bound); the daemon refuses to pin into the system's last 24 GiB.

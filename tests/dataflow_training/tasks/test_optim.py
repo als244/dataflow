@@ -4,7 +4,7 @@ Levels: per-optimizer step math vs independent inline formulas; muon
 orthogonalization properties; policy dispatch + state-layout slots;
 and the end-to-end gate — a MIXED per-field policy through the REAL
 engine vs a hand replica applying reference steps to the engine's own
-retained dW gradient slabs (exactly the bytes the optimizer kernels
+retained dW gradient backing (exactly the bytes the optimizer kernels
 consumed). Default policy byte-stability is covered by the lowering
 tripwires + every existing family ladder (all-adamw unchanged).
 """
@@ -144,14 +144,14 @@ def test_opt_state_layout_slots_follow_policy():
 
 # --------------------------------------------------------------- E2E
 #
-# The E2E gates feed each hand replica the ENGINE'S OWN dW slabs — the
+# The E2E gates feed each hand replica the ENGINE'S OWN dW backing — the
 # exact gradient bytes the optimizer kernels consumed — so they isolate
 # optimizer-step math from forward/backward parity (covered elsewhere).
 
 
 def retain_grad_slabs(program):
     """Pin every dW object's terminal placement to fast so the gradient
-    slabs survive pool recycling for post-run readout (final_locations
+    backing survive pool recycling for post-run readout (final_locations
     is the designed retention API)."""
     dw_ids = {o.id for t in program.tasks for o in t.outputs
               if o.id.startswith("dW")}
@@ -194,7 +194,7 @@ def test_mixed_policy_model_step_vs_hand_replica():
     """llama3 tiny, one step, per-field policy {wq: muon, w1: sgdm,
     wo: sgd, rest adamw} through the REAL engine — final weights must
     match independent inline reference steps fed the engine's retained
-    dW gradient slabs."""
+    dW gradient backing."""
     from dataflow.runtime import Engine
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.runtime.device.fake import FakeBackend

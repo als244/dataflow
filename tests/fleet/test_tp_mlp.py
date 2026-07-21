@@ -228,8 +228,8 @@ def test_tp_mlp_loopback_hostmem(tmp_path):
 
 
 def test_tp_mlp_crossbox_auto():
+    from dataflow_training.distributed import daemons
     from dataflow_training.distributed.hosts import uds_forward
-from dataflow_training.distributed import daemons
     from dataflow_training.distributed.topology import load_topology_or_none
 
     topo = load_topology_or_none()
@@ -243,7 +243,7 @@ from dataflow_training.distributed import daemons
         for host in (local, remote):
             daemons.kill(host, lane=lane)
             daemons.launch(
-                host, lane=lane, slab_gib=2.0, peer_port=port,
+                host, lane=lane, backing_gib=2.0, peer_port=port,
                 extra_flags="--plugin dataflow_training.model_families.tp_mlp")
         import tempfile
 

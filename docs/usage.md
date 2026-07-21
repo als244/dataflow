@@ -59,7 +59,7 @@ from dataflow_training.run.recipe import Recipe
 recipe = Recipe(peak_lr=3e-4, min_lr=3e-5, warmup_steps=10, total_steps=100)
 pipeline = pipeline_from_args(cfg, None)   # the default shard corpus;
                                            # any --data spec works here
-with daemon_client(slab_gib=60.0) as client:        # boots an in-process dataflowd
+with daemon_client(backing_gib=60.0) as client:        # boots an in-process dataflowd
     res = run_engine(client, cfg, recipe, pipeline, steps=100,
                      budget_gib=16.0)               # plans + registers + runs
 print(res.losses)

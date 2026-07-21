@@ -103,7 +103,7 @@ def check_fleet_versions(hosts, log) -> None:
 
 
 def run(global_cfg, recipe: Recipe, pipeline, steps: int, *,
-        scheme=None, budgets=None, slabs=None,
+        scheme=None, budgets=None, backing=None,
         topology=None, group: str = "dp", attach=None,
         seed: int = 11, log=print, log_every: int = 10,
         profile: dict | None = None,
@@ -176,7 +176,7 @@ def run(global_cfg, recipe: Recipe, pipeline, steps: int, *,
             start += k
     budgets = tuple(budgets) if budgets else tuple(h.budget_gib
                                                    for h in hosts)
-    slabs = tuple(slabs) if slabs else tuple(h.slab_gib for h in hosts)
+    backing = tuple(backing) if backing else tuple(h.backing_gib for h in hosts)
 
     parallels = [None] * world
     if tp_mlp:
@@ -274,7 +274,7 @@ def run(global_cfg, recipe: Recipe, pipeline, steps: int, *,
         run_lock.flush()
 
     attach = dict(attach or {})
-    rigs = [HostRig(h, slabs[i], budgets[i])
+    rigs = [HostRig(h, backing[i], budgets[i])
             for i, h in enumerate(hosts)]
     check_fleet_versions(hosts, log)
     try:
@@ -294,7 +294,7 @@ def run(global_cfg, recipe: Recipe, pipeline, steps: int, *,
                 daemons.kill(host)
                 rdma_flag = (f"--peer-rdma-device {host.ib_dev}"
                              if host.ib_dev else "")
-                paths = daemons.launch(host, slab_gib=rig.slab_gib,
+                paths = daemons.launch(host, backing_gib=rig.backing_gib,
                                       wrap=wrap, extra_flags=rdma_flag)
                 rig.launched = True
                 if host.is_local():
@@ -310,7 +310,7 @@ def run(global_cfg, recipe: Recipe, pipeline, steps: int, *,
                 rig.sock, name=f"fleet-{host.name}", timeout_s=180,
                 fail_hint=(f"{host.name} daemon unreachable; see "
                            f"{log_path} on that host"))
-            log(f"[fleet] {host.name} up (slab {rig.slab_gib} GiB)")
+            log(f"[fleet] {host.name} up (backing {rig.backing_gib} GiB)")
 
         ranks = [RankState(rig.host.name, rig.client, cfgs[i],
                            round_map[i]) for i, rig in enumerate(rigs)]

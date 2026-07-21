@@ -37,7 +37,7 @@ def underfull_pipeline(cfg, *, steps_probe: int = 3):
     return pipeline_from_args(cfg, "shards:")
 
 
-def run_family_parity(cfg, *, steps: int = 15, slab_gib: float = 6.0,
+def run_family_parity(cfg, *, steps: int = 15, backing_gib: float = 6.0,
                       budget_gib: float = 4.0, data: str = "block") -> None:
     from dataflow_training.run import parity
     from dataflow_training.run.driver import daemon_client, run_engine, run_reference
@@ -53,7 +53,7 @@ def run_family_parity(cfg, *, steps: int = 15, slab_gib: float = 6.0,
             else legacy_block_pipeline(cfg))
 
     ref = run_reference(cfg, recipe, feed, steps, seed=11, log=quiet_log)
-    with daemon_client(slab_gib=slab_gib, log=quiet_log) as client:
+    with daemon_client(backing_gib=backing_gib, log=quiet_log) as client:
         eng = run_engine(client, cfg, recipe, feed, steps,
                          budget_gib=budget_gib, seed=11, log=quiet_log)
 
@@ -228,10 +228,10 @@ def test_underfull_execute_padding_equivalence():
     recipe = Recipe(peak_lr=3e-4, min_lr=3e-5, warmup_steps=3,
                     total_steps=steps)
     feed = underfull_pipeline(cfg)
-    with daemon_client(slab_gib=6.0, log=quiet_log) as client:
+    with daemon_client(backing_gib=6.0, log=quiet_log) as client:
         content = run_engine(client, cfg, recipe, feed, steps,
                              budget_gib=4.0, seed=11, log=quiet_log)
-    with daemon_client(slab_gib=6.0, log=quiet_log) as client:
+    with daemon_client(backing_gib=6.0, log=quiet_log) as client:
         padded = run_engine(client, cfg, recipe, feed, steps,
                             budget_gib=4.0, seed=11, log=quiet_log,
                             execute_padding=True)
@@ -279,11 +279,11 @@ def test_underfull_poisoned_tail_is_dead_bytes():
     assert any(rnd.content < rnd.tokens.shape[0]
                for s in packed_steps for rnd in s.rounds),         "poison gate is vacuous: no under-full round in the window"
 
-    with daemon_client(slab_gib=6.0, log=quiet_log) as client:
+    with daemon_client(backing_gib=6.0, log=quiet_log) as client:
         clean = run_engine(client, cfg, recipe,
                            PrepackedPipeline(packed_steps), steps,
                            budget_gib=4.0, seed=11, log=quiet_log)
-    with daemon_client(slab_gib=6.0, log=quiet_log) as client:
+    with daemon_client(backing_gib=6.0, log=quiet_log) as client:
         dirty = run_engine(client, cfg, recipe,
                            PrepackedPipeline([poisoned(s)
                                               for s in packed_steps]),

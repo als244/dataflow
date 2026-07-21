@@ -1,4 +1,5 @@
-"""World-1 resume drill against manifest v2: train with checkpoints,
+"""World-1 resume drill against the v2 checkpoint record: train with
+checkpoints,
 resume from a FRESH conductor + daemon (process-death equivalent), and
 the resumed tail must reproduce the uninterrupted run within the
 cross-process ambient envelope. Also asserts the manifest v2 surface:
@@ -36,27 +37,35 @@ def quiet(*a, **k):
     pass
 
 
-def tiny_cfg():
+def tiny_cfg(family_name):
     from dataflow_training.model_families.gpt2.model import ShapedGpt2Config
+    from dataflow_training.model_families.llama3 import ShapedLlamaConfig
+    from dataflow_training.model_families.qwen35.model import ShapedQwen35Config
+    from dataflow_training.model_families.qwen3moe.model import ShapedQwen3MoeConfig
 
-    return replace(ShapedGpt2Config.tiny(), vocab_size=50304,
+    tiny = {"gpt2": ShapedGpt2Config, "llama3": ShapedLlamaConfig,
+            "qwen35": ShapedQwen35Config,
+            "qwen3moe": ShapedQwen3MoeConfig}[family_name].tiny()
+    return replace(tiny, vocab_size=50304,
                    grad_accum_rounds=2, num_steps=STEPS)
 
 
 @pytest.mark.gpu
 @needs_corpus
-def test_world1_checkpoint_resume_drill(tmp_path):
-    cfg = tiny_cfg()
+@pytest.mark.parametrize("family_name", ["gpt2", "llama3",
+                                         "qwen35", "qwen3moe"])
+def test_world1_checkpoint_resume_drill(tmp_path, family_name):
+    cfg = tiny_cfg(family_name)
     recipe = Recipe(peak_lr=3e-4, min_lr=3e-5, warmup_steps=2,
                     total_steps=STEPS)
     ck_dir = tmp_path / "ck"
-    common = dict(budgets=(4.0,), slabs=(4.0,), group="local",
+    common = dict(budgets=(4.0,), backing=(4.0,), group="local",
                   seed=SEED, log=quiet,
                   checkpoint_dir=str(ck_dir), run_name="drill")
 
     truth = run(cfg, recipe, legacy_block_pipeline(cfg), STEPS,
                          topology=local_topology(budget_gib=4.0,
-                                                 slab_gib=4.0),
+                                                 backing_gib=4.0),
                          launch_argv=["unit", "world1-drill"],
                          checkpoint_every=2, **common)
 
@@ -78,7 +87,7 @@ def test_world1_checkpoint_resume_drill(tmp_path):
     resumed = run(cfg, recipe, legacy_block_pipeline(cfg),
                            STEPS,
                            topology=local_topology(budget_gib=4.0,
-                                                   slab_gib=4.0),
+                                                   backing_gib=4.0),
                            launch_argv=["unit", "world1-drill"],
                            checkpoint_every=2, resume="auto", **common)
 

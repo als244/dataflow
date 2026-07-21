@@ -30,7 +30,7 @@ is the third axis; `--opt {adamw,muon}` sizes optimizer state (and its
 NS work) correctly — though roofline mode under-charges muon's
 Newton-Schulz TIME (~0.3-0.5 s/step at 1B; `--measured` is
 muon-exact, and the tool prints the same note on muon runs);
-`--backing N` sets the host-slab ceiling — the
+`--backing N` sets the host-backing ceiling — the
 planner escalates recompute to fit BOTH ceilings, and combos it cannot
 fit report as INFEASIBLE rows, not crashes.
 

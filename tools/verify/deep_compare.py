@@ -8,7 +8,7 @@ the methodology and the gotcha catalog):
      twin block outputs (composition recorders), with per-token hot-row
      decomposition — separates smooth precision drift from discrete
      relocations (routing flips) and localizes jumps to a block.
-  2. gradient comparison in dW space (engine slabs vs twin autograd),
+  2. gradient comparison in dW space (engine backing vs twin autograd),
      grouped per block — a bug shows as a jump at one block/op; noise
      compounds smoothly with depth.
   3. MoE counts parity where the twin exposes step counters (engine

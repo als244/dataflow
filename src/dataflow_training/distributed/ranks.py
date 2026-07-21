@@ -100,9 +100,9 @@ def wait_client(sock: str, *, name: str, timeout_s: float,
 class HostRig:
     """One group member's runtime state under the conductor."""
 
-    def __init__(self, host, slab_gib: float, budget_gib: float):
+    def __init__(self, host, backing_gib: float, budget_gib: float):
         self.host = host
-        self.slab_gib = slab_gib
+        self.backing_gib = backing_gib
         self.budget_gib = budget_gib
         self.launched = False
         self.forward = None

@@ -41,22 +41,27 @@ def quiet(*a, **k):
     pass
 
 
-def tiny_cfg():
+def tiny_cfg(family_name):
     from dataflow_training.model_families.llama3 import ShapedLlamaConfig
+    from dataflow_training.model_families.qwen35.model import ShapedQwen35Config
+    from dataflow_training.model_families.qwen3moe.model import ShapedQwen3MoeConfig
 
-    return replace(ShapedLlamaConfig.tiny(), vocab_size=50304,
+    tiny = {"llama3": ShapedLlamaConfig, "qwen35": ShapedQwen35Config,
+            "qwen3moe": ShapedQwen3MoeConfig}[family_name].tiny()
+    return replace(tiny, vocab_size=50304,
                    grad_accum_rounds=2, num_steps=STEPS)
 
 
 @pytest.mark.gpu
-def test_crossbox_zero1rs_checkpoint_resume_drill(tmp_path):
-    cfg = tiny_cfg()
+@pytest.mark.parametrize("family_name", ["llama3", "qwen35", "qwen3moe"])
+def test_crossbox_zero1rs_checkpoint_resume_drill(tmp_path, family_name):
+    cfg = tiny_cfg(family_name)
     recipe = Recipe(peak_lr=3e-4, min_lr=3e-5, warmup_steps=2,
                     total_steps=STEPS)
     ck_dir = tmp_path / "ck"
     common = dict(scheme=ParallelismScheme.data_parallel((1, 1)),
                   budgets=(4.0, 4.0),
-                  slabs=(6.0, 6.0), group="dp", seed=SEED, log=quiet,
+                  backing=(6.0, 6.0), group="dp", seed=SEED, log=quiet,
                   topology=TOPO, checkpoint_dir=str(ck_dir),
                   run_name="xdrill", checkpoint_every=2)
 

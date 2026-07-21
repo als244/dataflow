@@ -21,7 +21,7 @@ conductor = "alpha"
 [hosts.alpha]
 peer_listen = "10.0.0.1:29700"
 ib_dev = "mlx5_0"
-slab_gib = 2.0
+backing_gib = 2.0
 budget_gib = 1.0
 
 [hosts.beta]
@@ -33,7 +33,7 @@ peer_listen = "10.0.0.2:29700"
 [hosts.alpha_g1]
 peer_listen = "10.0.0.1:29710"
 device = 1
-slab_gib = 2.0
+backing_gib = 2.0
 budget_gib = 1.0
 
 [groups.dp]

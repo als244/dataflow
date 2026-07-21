@@ -87,7 +87,7 @@ def rig(request, tmp_path_factory):
     backend = request.param
     for host in (LOCAL, REMOTE):
         daemons.kill(host, lane=LANE)
-        daemons.launch(host, lane=LANE, slab_gib=4.0, peer_port=PORT)
+        daemons.launch(host, lane=LANE, backing_gib=4.0, peer_port=PORT)
     remote_sock = daemons.paths(REMOTE, LANE)["sock"]
     tmp = tmp_path_factory.mktemp(LANE)
     fwd_sock = str(tmp / "r.sock")

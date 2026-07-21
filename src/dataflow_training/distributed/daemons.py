@@ -55,7 +55,7 @@ def env(host: HostSpec, extra: dict | None = None) -> str:
 
 
 def launch(host: HostSpec, *, lane: str = "fleet",
-           slab_gib: float, peer_port: int | None = None,
+           backing_gib: float, peer_port: int | None = None,
            extra_flags: str = "", wrap: str = "",
            extra_env: dict | None = None) -> dict:
     """Start the host's dataflowd detached (tools/train/daemonize.py). The
@@ -69,7 +69,7 @@ def launch(host: HostSpec, *, lane: str = "fleet",
     # argv directly, so assignments would be taken as the program
     inner = (f"{env_prefix}{wrap} {host.python} -u "
              f"{host.repo}/tools/train/dataflowd.py "
-             f"start --socket {p['sock']} --slab-gib {slab_gib} "
+             f"start --socket {p['sock']} --backing-gib {backing_gib} "
              f"--device {host.device} "
              f"--peer-name {host.name} "
              f"--peer-listen {host.peer_addr(peer_port)} "
