@@ -93,3 +93,36 @@ def test_slice_snapshot_roundtrip_and_compose(tmp_path):
             c2.shutdown()
     finally:
         c.shutdown()
+
+
+def test_second_daemon_on_live_socket_refuses(tmp_path):
+    """The double-launch door is closed: a second Server on a LIVE
+    socket refuses loudly instead of silently unlinking it (the
+    two-runs-on-one-GPU class); a stale socket file is reclaimed."""
+    server, c = boot(tmp_path, "solo")
+    try:
+        sock = str(tmp_path / "solo.sock")
+        second = Server(EngineConfig(socket_path=sock, fake=True,
+                                     slab_backing_gib=0.05))
+        with pytest.raises(RuntimeError, match="already serving"):
+            second.serve_forever()
+    finally:
+        c.shutdown()
+    # stale socket (daemon gone): wait until nothing accepts, then a
+    # fresh server reclaims the leftover file cleanly
+    import socket as _socket
+    import time as _t
+
+    sock_path = str(tmp_path / "solo.sock")
+    for _ in range(200):
+        probe = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+        probe.settimeout(0.2)
+        try:
+            probe.connect(sock_path)
+            probe.close()
+            _t.sleep(0.05)
+        except OSError:
+            probe.close()
+            break
+    server3, c3 = boot(tmp_path, "solo")
+    c3.shutdown()

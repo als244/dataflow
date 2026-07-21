@@ -171,14 +171,30 @@ def distribute_artifacts(fleet_manifest: dict, hosts, log) -> None:
     host (each rank replays all artifacts — parameter ranges compose
     across them). Same path layout on every host; hosts that already
     hold an artifact (its writer, or a same-box peer) skip the push."""
+    import subprocess
+
     step_dir = Path(fleet_manifest["_step_dir"])
-    for art in fleet_manifest["artifacts"]:
+    by_name = {h.name: h for h in hosts}
+    writers = [r["host"] for r in fleet_manifest["launch"]["ranks"]]
+    for i, art in enumerate(fleet_manifest["artifacts"]):
         src = step_dir / art
         if not src.is_dir():
-            raise RuntimeError(
-                f"checkpoint artifact missing at {src} — its writer "
-                f"host may be unreachable (redundant copies land in a "
-                f"later hardening pass)")
+            # written on a REMOTE rank's box — pull it to the
+            # conductor first (the manifest records each writer host)
+            writer = by_name.get(writers[i])
+            if writer is None or writer.is_local():
+                raise RuntimeError(
+                    f"checkpoint artifact missing at {src} and its "
+                    f"writer {writers[i]!r} is not reachable")
+            subprocess.run(
+                ["scp", "-q", "-r",
+                 f"{writer.ssh}:{repo_path(writer, str(src))}",
+                 str(step_dir)], check=True)
+            log(f"[fleet] artifact {art} pulled from {writer.name}")
+            if not src.is_dir():
+                raise RuntimeError(
+                    f"artifact {art} unavailable after pull from "
+                    f"{writer.name}")
         for host in hosts:
             if host.is_local():
                 continue
@@ -652,6 +668,32 @@ def run_fleet_dp(global_cfg, recipe: Recipe, pipeline, steps: int, *,
                     f"resume manifest mismatch: {key} was {got!r} at "
                     f"checkpoint time but the run asks {want!r}")
 
+    run_lock = None
+    if ck is not None:
+        # per-run-name exclusive lock: a second launch of the same run
+        # REFUSES instead of silently sharing GPUs and colliding on
+        # the checkpoint directory (the double-run incident's other
+        # half). Held for the run's duration; the OS drops it on any
+        # exit, crash included.
+        import fcntl
+
+        ck["dir"].mkdir(parents=True, exist_ok=True)
+        lock_path = ck["dir"] / ".run_lock"
+        run_lock = open(lock_path, "w")
+        try:
+            fcntl.flock(run_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            run_lock.close()
+            raise RuntimeError(
+                f"run {run_name!r} is already active (lock at "
+                f"{lock_path}) — a second same-name launch would "
+                f"share GPUs and collide on checkpoints; stop the "
+                f"other run or pick a different --run-name")
+        import os as _os
+
+        run_lock.write(str(_os.getpid()))
+        run_lock.flush()
+
     attach = dict(attach or {})
     rigs = [HostRig(h, slabs[i], budgets[i])
             for i, h in enumerate(hosts)]
@@ -721,6 +763,8 @@ def run_fleet_dp(global_cfg, recipe: Recipe, pipeline, steps: int, *,
                           execute_padding=execute_padding,
                           tp_mlp=tp_mlp)
     finally:
+        if run_lock is not None:
+            run_lock.close()
         for rig in rigs:
             if rig.client is None:
                 continue

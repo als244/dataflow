@@ -458,6 +458,22 @@ class Server:
         path = self.config.socket_path
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         if os.path.exists(path):
+            # a LIVE daemon on this socket means a second instance is
+            # being launched by mistake (the two-runs-on-one-GPU
+            # class) — refuse loudly; only a STALE socket (crash
+            # leftover, nothing accepting) is cleaned and reclaimed
+            probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            probe.settimeout(0.5)
+            try:
+                probe.connect(path)
+                probe.close()
+                raise RuntimeError(
+                    f"a daemon is already serving {path} — refusing "
+                    f"to double-launch (stop it first: daemonize.py "
+                    f"--kill <pidfile>, or dataflowd stop)")
+            except (ConnectionRefusedError, FileNotFoundError,
+                    socket.timeout, TimeoutError):
+                probe.close()
             os.unlink(path)
         self._sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self._sock.bind(path)

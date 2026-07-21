@@ -95,3 +95,28 @@ def test_rank_save_args_projection():
     for oid, (lo, hi) in ranges0.items():
         assert lo == 0
         assert ranges1[oid][0] == hi
+
+
+def test_run_lock_refuses_second_same_name(tmp_path):
+    """The per-run flock: while one conductor holds a run name, a
+    second same-name launch refuses loudly (CPU: exercised at the
+    lock layer the conductor uses)."""
+    import fcntl
+
+    lock_path = tmp_path / "run" / ".run_lock"
+    lock_path.parent.mkdir(parents=True)
+    holder = open(lock_path, "w")
+    fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    second = open(lock_path, "w")
+    try:
+        import pytest as _pytest
+
+        with _pytest.raises(BlockingIOError):
+            fcntl.flock(second, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    finally:
+        second.close()
+        holder.close()
+    # released holder -> a new claimant succeeds
+    third = open(lock_path, "w")
+    fcntl.flock(third, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    third.close()
