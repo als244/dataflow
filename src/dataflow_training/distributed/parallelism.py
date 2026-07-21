@@ -31,10 +31,12 @@ MESH SEMANTICS (what a multi-axis scheme MEANS)
   own flat boundaries). Replicas not responsible for a slice are its
   recorded BACKUPS (multiplicity in the save plan, fault tolerance
   later).
-- ROUNDS: at most one axis (the data axis) carries a
-  gradient-accumulation round split; every other axis runs its data
-  coordinate's full round set. Unequal entries = weighted data
-  parallelism for heterogeneous GPUs.
+- ROUNDS: at most one axis (the data axis) divides the step's
+  DATA, expressed in round units (a round = one forward/backward's
+  worth of tokens); every other axis runs its data coordinate's
+  full share. Gradient accumulation is rank-LOCAL — a rank's
+  grad-accum count is simply its data share. Unequal shares =
+  weighted data parallelism for heterogeneous GPUs.
 
 HOW THE LAYERS STACK (the scheme is the top; each layer references
 the artifacts of the one below, never its internals):
@@ -110,11 +112,13 @@ class Axis:
       key ``TaskSpec.comm_groups`` uses and the annotation pass
       binds to a concrete group handle.
     - ``size`` — ranks along the axis (>= 1).
-    - ``rounds`` — per-rank gradient-accumulation round counts, only
-      on a DATA axis (``plan is None``): length == size, sums to the
-      config's ``grad_accum_rounds``. Unequal entries = weighted
-      data parallelism. Mutually exclusive with ``plan`` (a tensor
-      axis runs the full batch).
+    - ``rounds`` — each rank's share of the step's DATA in round
+      units, only on a DATA axis (``plan is None``): length == size,
+      shares sum to the step's total (the config's
+      ``grad_accum_rounds``); a rank's LOCAL grad-accum count is
+      its share. Unequal shares = weighted data parallelism.
+      Mutually exclusive with ``plan`` (a tensor axis runs the full
+      batch).
     - ``responsibility`` — who steps + saves parameter slices along
       a REPLICATING axis (see distributed/responsibility.py):
       "zero1rs" (default: one responsible rank per slice, split at
@@ -257,10 +261,12 @@ class ParallelismScheme:
         """One replicating "dp" axis: world == len(rank_rounds).
 
         Args:
-            rank_rounds: per-rank gradient-accumulation round counts;
-                must sum to the config's ``grad_accum_rounds``.
-                Unequal entries = weighted DP for heterogeneous GPUs
-                (e.g. (6, 2) for a 5090/3090 pair).
+            rank_rounds: each rank's share of the step's data, in
+                round units; shares sum to the step's total (the
+                config's ``grad_accum_rounds``), and a rank's LOCAL
+                grad-accum count equals its share. Unequal shares =
+                weighted DP for heterogeneous GPUs (e.g. (6, 2) for
+                a 5090/3090 pair).
             responsibility: slice-stepping mode along the axis —
                 "zero1rs" (default; partitioned optimizer + byte-equal
                 reduce-scatter/all-gather), "zero1" (field-snapped),
