@@ -56,13 +56,35 @@ def test_registry_addresses_every_weight_root(family_name):
     assert set(roots) == expect
 
 
-def test_registry_covers_external_family():
-    """The toy external family conforms to the same contract."""
-    import tests.fixtures.external_family.toy_family  # noqa: F401 (registers)
-    from dataflow_training.model_families import families as F
+def test_registry_covers_external_family(monkeypatch):
+    """The toy external family conforms to the same contract — loaded
+    through the PLUGIN path (single module identity; the same
+    fresh-registration lifecycle the external suite owns)."""
+    import sys
+    from pathlib import Path as P
 
-    fam = F.family("toyfam")
-    cfg = fam.config_type.tiny()
-    assert validate_layouts(cfg) == []
-    reg = registered_layouts(cfg)
-    assert any(k.startswith("toyfam/") for k in reg)
+    import dataflow_training.model_families.families as F
+    from dataflow.service import registry as service_registry
+
+    F._FAMILIES.pop("toyfam", None)
+    F._cache.pop("toyfam", None)
+    for key in [k for k in service_registry._CACHE if "toyfam" in k[1]]:
+        del service_registry._CACHE[key]
+    sys.modules.pop("toy_family", None)
+    monkeypatch.syspath_prepend(
+        str(P(__file__).resolve().parents[3] / "tests" / "fixtures"
+            / "external_family"))
+    F.load_plugins(explicit=["toy_family"])
+    try:
+        fam = F.family("toyfam")
+        cfg = fam.config_type.tiny()
+        assert validate_layouts(cfg) == []
+        reg = registered_layouts(cfg)
+        assert any(k.startswith("toyfam/") for k in reg)
+    finally:
+        F._FAMILIES.pop("toyfam", None)
+        F._cache.pop("toyfam", None)
+        for key in [k for k in service_registry._CACHE
+                    if "toyfam" in k[1]]:
+            del service_registry._CACHE[key]
+        sys.modules.pop("toy_family", None)
