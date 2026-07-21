@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import threading
 import time
+from dataclasses import replace
 from pathlib import Path
 
 from dataflow.core.jsonio import program_to_dict
@@ -49,14 +50,29 @@ def fleet_loop(ranks, gspec, recipe, pipeline, steps, *, budgets, seed,
     for i, rank in enumerate(ranks):
         par = parallels[i] if parallels else None
         rank_group = gspec.name if world > 1 else None
+        # the loop runs ONE optimizer step per client.run with fresh
+        # data — the program must carry exactly one step slot. Lowering
+        # with the run-length num_steps builds N slots of which only
+        # slot 0 is ever fed: the others execute on init-residue
+        # buffers, silently training junk every iteration (THE
+        # solo-vs-DP divergence root cause).
+        step_cfg = replace(rank.cfg, num_steps=1)
         planned = plan_program(
-            lower_with_group(rank.cfg, rank_group,
+            lower_with_group(step_cfg, rank_group,
                              parallel=par, zero1rs_world=zero1rs_world),
             fast_memory_capacity=int(budgets[i] * 1024 ** 3),
             recompute=True,
-            build_variant=GroupedBuildVariant(rank.cfg, rank_group,
+            build_variant=GroupedBuildVariant(step_cfg, rank_group,
                                               parallel=par,
                                               zero1rs_world=zero1rs_world))
+        extra_slots = [s.id for s in planned.program.initial_objects
+                       if s.id.startswith("tokens_") and
+                       not s.id.startswith("tokens_0_")]
+        if extra_slots:
+            raise RuntimeError(
+                f"{rank.name}: program carries step slots beyond 0 "
+                f"({extra_slots[:3]}...) — the loop feeds one step per "
+                f"run; multi-slot programs silently train junk")
         prog_dict = program_to_dict(planned.program)
         rank.prog_dict = prog_dict          # record v2: saved beside
                                             # the checkpoint artifacts
@@ -64,7 +80,7 @@ def fleet_loop(ranks, gspec, recipe, pipeline, steps, *, budgets, seed,
 
         fam_name = resolver_family(rank.cfg)
         resolver = {"kind": "model_family", "family": fam_name,
-                    "cfg": cfg_dict(rank.cfg),
+                    "cfg": cfg_dict(step_cfg),
                     "hyper": recipe.hyper_spec()}
         init_kwargs = {"seed": seed}
         if zero1rs_world is not None:

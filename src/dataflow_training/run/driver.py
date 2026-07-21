@@ -19,7 +19,7 @@ import sys
 import threading
 import time
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
 import torch
@@ -604,7 +604,12 @@ def run_engine(client, cfg, recipe: Recipe, pipeline, steps: int, *,
 
     from dataflow.core.jsonio import program_to_dict
 
-    planned = plan_at_budget(cfg, budget_gib, recompute=recompute,
+    # one optimizer step per client.run with fresh data: the program
+    # must carry exactly ONE step slot (multi-slot lowering with
+    # slot-0-only feeding silently trains junk — the solo-vs-DP
+    # divergence root cause; same fix as the fleet loop)
+    step_cfg = replace(cfg, num_steps=1)
+    planned = plan_at_budget(step_cfg, budget_gib, recompute=recompute,
                              measured=measured)
     n_rc = sum(1 for v in (planned.recompute_levels or {}).values() if v)
     ts = planned.transfer_stats or {}
@@ -620,7 +625,12 @@ def run_engine(client, cfg, recipe: Recipe, pipeline, steps: int, *,
         f"d2h {d2h.get('bytes', 0) / 1e9:.1f} GB "
         f"({d2h.get('busy_us', 0.0) / planned.makespan_us * 100:.0f}%)")
     prog_dict = program_to_dict(planned.program)
-    cd = cfg_dict(cfg)
+    extra = [s.id for s in planned.program.initial_objects
+             if s.id.startswith("tokens_") and
+             not s.id.startswith("tokens_0_")]
+    if extra:
+        raise RuntimeError(f"multi-slot program in run_engine: {extra[:3]}")
+    cd = cfg_dict(step_cfg)
     fam = resolver_family(cfg)
     resolver = {"kind": "model_family", "family": fam, "cfg": cd,
                 "hyper": recipe.hyper_spec()}
