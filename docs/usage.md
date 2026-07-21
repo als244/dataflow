@@ -105,7 +105,7 @@ python tools/train/train.py scaling --presets l3_125m,l3_1b ...  # the ladder, l
 python tools/train/train.py reference --preset gpt2_124m \
     --checkpoint-every 250 --out results/pretrain/ref.json   # pure-torch leg
 python tools/train/train.py train --preset gpt2_124m \
-    --fast-budget 14 --resume auto --out results/pretrain/eng.json  # zero-config solo (world-1)
+    --fast-budget 14 --resume auto --out results/pretrain/eng.json  # solo; resume needs a prior checkpointed run
 python tools/train/train.py train --preset l3_1b --steps 1000 --topology topology.toml --rounds 6,2 \
     --out results/pretrain/dp_fleet.json                        # data-parallel fleet
 python tools/bench/measure_step.py --preset l3_1b --t-rounds 8192,32768 \

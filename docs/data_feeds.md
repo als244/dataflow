@@ -171,10 +171,9 @@ configurations.
 
 ## 8. CLI reference
 
-`--data SPEC` on every data-taking tool (`train.py`
-train/reference, `measure_step`, `train.py`,
-`eval_checkpoint` via its val-split pipeline), plus the packing
-flags where geometry lives:
+`--data SPEC` on the data-taking tools (`train.py`
+train/reference and `measure_step`), plus the packing flags where
+geometry lives:
 
 | flag | meaning |
 |---|---|

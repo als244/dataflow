@@ -45,8 +45,9 @@ What each subpackage exposes and what tools/tests actually import:
   `simulate_program` — the dataflow_sim boundary), `freeze_plan.py` /
   `freeze_program.py`, `replay.py` (`replay_gap_pct`).
 - **`data`** — `segments.py` (`Segments`, `resolve_segments`,
-  `uniform_segments` — the varlen value object), `fineweb.py`
-  (deterministic token stream), `packing.py`.
+  `uniform_segments` — the varlen value object), `sources/`
+  (deterministic token streams), `feed.py` + `packer.py` (the
+  pipeline + packing), `pipeline.py`.
 - **`run`** — drivers and study plumbing: `driver.py`
   (`daemon_client`, `init_model`, `run_engine`, `run_reference`,
   `plan_at_budget`), `presets.py` (locked training config +
