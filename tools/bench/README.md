@@ -40,7 +40,7 @@ prediction — `pred_s meas_s ratio tok/s effTF/s hwTF/s recomp`.
 |---|---|
 | grid flags | as predict_step: `--preset --plugin --opt --t-round(s) --tokens-step --seq-len(s) --budget(s)` |
 | `--steps` | steps per cell (first 3 = warmup, excluded from the mean) |
-| `--data {block,doc}` | packing mode |
+| `--data SPEC` | data source spec ([data_feeds.md](../../docs/data_feeds.md)); default: train_solo's default feed — pass the uniform-window config for plan-comparable captures |
 | `--slab` | daemon pinned slab GiB |
 | `--peak-lr` | recipe peak for the cells |
 | `--measured-plan` | prediction column from PROFILED task costs |

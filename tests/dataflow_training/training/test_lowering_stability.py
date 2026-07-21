@@ -18,30 +18,30 @@ from dataflow_training.model_families.dsv3 import ShapedDsv3Config, lower_dsv3
 from dataflow_training.model_families.dsv32 import ShapedDsv32Config, lower_dsv32
 from dataflow_training.model_families.glm52 import ShapedGlm52Config, lower_glm52
 
-# Constants last updated DELIBERATELY for the per-step aux counts wiring:
-# persistent Aux_{i} objects + round prologues + fwd accumulate edges +
-# last-round bwd reads (noaux trio: bias rule moved into that bwd; the
-# policy-frozen bias also shrinks their dW). The five DENSE-family
-# constants are UNTOUCHED — verified byte-identical in the same commit.
+# Constants last updated DELIBERATELY for the UNIVERSAL round prologue:
+# every family now opens each round with prologue_round_{s}_{r} (publishes
+# the round's content token count + materializes Segments), and embed_fwd
+# carries the current_round edge that chains the round behind it. Every
+# family's digest moves in this commit, dense ones included.
 EXPECTED = {
-    "llama3-tiny-ga2-s2": "28cb016ba2779a5c",
-    "llama3-tiny-tail": "e06f9a28c9665f46",
-    "qwen3-tiny-ga3": "fd8e2305dd04e271",
-    "qwen35-tiny-ga2": "3a76b7ddade100eb",
-    "qwen35-tiny-tied": "f6dd20935fc2ad10",
-    "olmoe-tiny": "f1a58520d14ab14a",
-    "olmoe-tiny-ga2": "63099eceb206fdd8",
-    "qwen35moe-tiny-ga2": "cc86d9e311392976",
-    "qwen3moe-tiny": "122d79ea2c615b2d",
-    "qwen3moe-tiny-ga2": "63b00be44ffb2a04",
-    "dsv3-tiny": "1d01289effdbbd57",
-    "dsv3-tiny-ga2": "595d1d0fd22d7404",
-    "dsv32-tiny": "525c2e3b11f74752",
-    "dsv32-tiny-ga2": "146b7fd412d4bd2e",
-    "dsv32-tiny-dense": "92441deefbbca9cf",
-    "glm52-tiny": "e5d7b4fce92368d1",
-    "glm52-tiny-ga2": "a796a383240748e9",
-    "glm52-tiny-warmup": "cf8f22f2f258c090",
+    "llama3-tiny-ga2-s2": "d0d6c5ca89511c61",
+    "llama3-tiny-tail": "474cc3736f2f335c",
+    "qwen3-tiny-ga3": "a333a01170ed8ad2",
+    "qwen35-tiny-ga2": "8ff6b4c8e43f4d7f",
+    "qwen35-tiny-tied": "c4e3cb643c97bee2",
+    "olmoe-tiny": "095800b546ccd6ec",
+    "olmoe-tiny-ga2": "799788e364a6c2cf",
+    "qwen35moe-tiny-ga2": "171be03fd8d0a69b",
+    "qwen3moe-tiny": "36a72e02a174eb2e",
+    "qwen3moe-tiny-ga2": "136cd9b787083263",
+    "dsv3-tiny": "64eea2e0e216b174",
+    "dsv3-tiny-ga2": "597fa49dd95425e2",
+    "dsv32-tiny": "e3afd8c8563f6c0b",
+    "dsv32-tiny-ga2": "a47186f9873cdf3a",
+    "dsv32-tiny-dense": "80c1e7f07a08f93d",
+    "glm52-tiny": "11a3ae6e7cf5cb52",
+    "glm52-tiny-ga2": "5fea29c45acc7231",
+    "glm52-tiny-warmup": "e9983dd1eb231d7f",
 }
 
 

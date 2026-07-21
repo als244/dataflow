@@ -232,8 +232,7 @@ def build_shaped_qwen3moe(
     return build_shaped_program(
         cfg, hw=hw, family="qwen3moe-shaped",
         kinds={"moe": _kind_spec(cfg, hw)},
-        round_prologue=True,
-        retained_lbl=dims_fp.moe.lbl_retained_inputs,
+                retained_lbl=dims_fp.moe.lbl_retained_inputs,
         fast_memory_capacity=fast_memory_capacity,
         recompute_levels=recompute_levels, name=name,
         freeze=freeze_plan,

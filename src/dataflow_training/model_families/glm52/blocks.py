@@ -92,7 +92,7 @@ class Glm52AuxTempState:
 
     def _aux_temp_state(self, ctx):
         d = self.dims
-        n = self.rows(ctx)
+        n = self.num_tokens(ctx)
         layer = ctx.task.block_params["layer"]
         layout = self._aux_temp_layout()
         key = ctx.task.compute_block_key

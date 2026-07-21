@@ -169,6 +169,45 @@ The rest of the block contract:
 - Sizes come from layouts (`blocks/layouts.py`); never hand-compute bytes
   anywhere else. Lowering will ask the layout for `total_bytes`.
 
+**Content < buffer: derive row counts, never assume them.** Round
+buffers are planner-sized, but an under-full round EXECUTES ONLY its
+content rows ([data_feeds.md](data_feeds.md) §5). The rules every
+launch must follow:
+
+- The row count is `n = self.num_tokens(ctx)` — a pure host read of
+  the value the ROUND PROLOGUE task published (the sum of the round's
+  wire seq_lens). The prologue — every family's first task of a round
+  — also materializes the round's device `cu`/`positions` before any
+  consumer dispatches, so launches never trigger device work by
+  reading metadata. Without a program (direct invocation in unit
+  tests) `num_tokens` is the full buffer and every row computes.
+- Slice flow tensors at the launch (`torch_view(...)[:n]`) and pass
+  saved-context view dicts through `self.content_views(views, ctx)`
+  rather than slicing fields by hand. It is token-axis-aware, which
+  matters because NOT every per-token field is token-major: flash's
+  `lse` is `(n_heads, tokens)` — dim 1 is the token axis — and
+  recurrent-state or counter fields have no token axis at all. A new
+  field with an unusual layout must fit one of those rules or get an
+  explicit per-site slice (the flat `(tokens * top_k)` MoE
+  `route_order` is the standing example — sliced by slots at its
+  read sites).
+- Inside stage functions, size scratch off the incoming tensors
+  (`x.shape[0]`), never `dims.tokens` — the views arriving in `st`
+  are already content-sliced, and a `dims.tokens` scratch silently
+  reintroduces the full buffer.
+- A task consuming ANOTHER round's per-token objects (retained-inputs
+  LBL packs) slices by THAT round's count —
+  `self.num_tokens_of_round(ctx, r)` — because fill differs per
+  round.
+- `profile_fill` is the one deliberate exception: it seeds FULL
+  buffers (profiler-only path, dims-uniform segments).
+
+The per-family under-full parity gates
+(`tests/dataflow_training/pretrain/test_engine_parity_families.py`)
+catch a mis-derived row count as a loss-curve divergence; the
+engine-vs-engine `--execute-padding` equivalence gate pins the two
+execution modes to the same numerics.
+
 **Aux objects — never-recompute artifacts and persistent counters.**
 Some stage outputs are cheap to store but expensive or ILLEGAL to
 recompute (top-k routing selections, DSA index selections: recomputing

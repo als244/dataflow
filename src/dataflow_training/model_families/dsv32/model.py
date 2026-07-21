@@ -408,7 +408,7 @@ def build_shaped_dsv32(
     return build_shaped_program(
         cfg, hw=hw, family="dsv32-shaped",
         kinds=_kind_specs(cfg, hw), layer_kinds=dims.kinds,
-        round_prologue=True, bias_update_in_bwd=True,
+        bias_update_in_bwd=True,
         fast_memory_capacity=fast_memory_capacity,
         recompute_levels=recompute_levels, name=name,
         freeze=(_ce_plan(cfg) if cfg.sparse_mode

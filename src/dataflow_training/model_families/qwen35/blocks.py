@@ -49,7 +49,8 @@ from ...blocks.layouts import (
     qwen35_lin_activation_layout,
     qwen35_lin_weight_layout,
 )
-from ...blocks.base_blocks import AdamWHyper, AdamWStep, EmbedBwd, EmbedFwd, HeadLoss
+from ...blocks.base_blocks import (AdamWHyper, AdamWStep, EmbedBwd,
+                                   EmbedFwd, HeadLoss, RoundPrologue)
 from ..llama3.blocks import BlockBwd, BlockFwd, BlockRecompute
 
 
@@ -169,7 +170,8 @@ class Qwen35LinBlockFwd(BlockFwd):
         st.pop("core_out"), st.pop("qkvz")
         st["h_mid"] = xo  # feeds the shared MLP-tail stages
         if a is not None:
-            a["rstd_gate"].copy_(rstd)
+            # flat (tokens*heads,): sliced by computed rows, not axis rules
+            a["rstd_gate"][:rows].copy_(rstd)
 
     @staticmethod
     def _stage_ffn_norm(kctx, K, d, st):
@@ -254,7 +256,7 @@ class Qwen35LinBlockBwd(BlockBwd):
         dwn = torch.empty(d.lin_v_head_dim, dtype=torch.float32, device=o2.device)
         y2 = torch.empty_like(o2)
         K.gated_rmsnorm_bwd(
-            kctx, do_normed, o2, z2, w["lin_norm_w"], a["rstd_gate"],
+            kctx, do_normed, o2, z2, w["lin_norm_w"], a["rstd_gate"][:rows],
             dcore, dz2, dwn, y2,
         )
         del do_normed, z2
@@ -412,8 +414,9 @@ class Qwen35AttnBlockFwd(BlockFwd):
         st["k"] = Qwen35AttnBlockFwd._partial_rope(kctx, K, d, kn, kvh, st["seg"].positions)
         st.pop("qm"), st.pop("km")
         if st["a"] is not None:
-            st["a"]["rstd_q"].copy_(rstd_q)
-            st["a"]["rstd_k"].copy_(rstd_k)
+            # flat (tokens*heads,): sliced by computed rows, not axis rules
+            st["a"]["rstd_q"][:t * h].copy_(rstd_q)
+            st["a"]["rstd_k"][:t * kvh].copy_(rstd_k)
 
     @staticmethod
     def _stage_attn(kctx, K, d, st):
@@ -509,9 +512,9 @@ class Qwen35AttnBlockBwd(BlockBwd):
 
         # --- flash bwd needs post-norm/post-rope q, k (rebuild from saved) ---
         qn = torch.empty_like(a["qm"])
-        K.rmsnorm_apply(kctx, a["qm"].view(t * h, hd), a["rstd_q"], w["q_norm_w"], qn.view(t * h, hd))
+        K.rmsnorm_apply(kctx, a["qm"].view(t * h, hd), a["rstd_q"][:t * h], w["q_norm_w"], qn.view(t * h, hd))
         kn = torch.empty_like(a["km"])
-        K.rmsnorm_apply(kctx, a["km"].view(t * kvh, hd), a["rstd_k"], w["k_norm_w"], kn.view(t * kvh, hd))
+        K.rmsnorm_apply(kctx, a["km"].view(t * kvh, hd), a["rstd_k"][:t * kvh], w["k_norm_w"], kn.view(t * kvh, hd))
         seg = a["_seg"]
         pos = seg.positions          # always varlen; run_args prologue
         q = Qwen35AttnBlockFwd._partial_rope(kctx, K, d, qn, h, pos)
@@ -528,10 +531,10 @@ class Qwen35AttnBlockBwd(BlockBwd):
         dkn = Qwen35AttnBlockFwd._partial_rope(kctx, K, d, dk, kvh, pos, bwd=True)
         del dk
 
-        dqm, dqnorm = norm_bwd(dqn.view(t * h, hd), a["qm"].view(t * h, hd), a["rstd_q"], w["q_norm_w"])
+        dqm, dqnorm = norm_bwd(dqn.view(t * h, hd), a["qm"].view(t * h, hd), a["rstd_q"][:t * h], w["q_norm_w"])
         del dqn
         acc("q_norm_w", dqnorm)
-        dkm, dknorm = norm_bwd(dkn.view(t * kvh, hd), a["km"].view(t * kvh, hd), a["rstd_k"], w["k_norm_w"])
+        dkm, dknorm = norm_bwd(dkn.view(t * kvh, hd), a["km"].view(t * kvh, hd), a["rstd_k"][:t * kvh], w["k_norm_w"])
         del dkn
         acc("k_norm_w", dknorm)
         dqm = dqm.view(t, d.attn_dim)
@@ -592,6 +595,7 @@ def build_qwen35_resolver(
 ):
     kernels = kernels if kernels is not None else resolve_kernels()
     table = {
+        "prologue_round": RoundPrologue(dims, kernels),
         "embed_fwd": EmbedFwd(dims, kernels),
         "linattn_fwd": Qwen35LinBlockFwd(dims, kernels),
         "linattn_recompute": Qwen35LinBlockRecompute(dims, kernels),

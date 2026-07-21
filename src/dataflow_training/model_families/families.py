@@ -448,7 +448,9 @@ def validate_family(name: str, *, preset: str = "tiny") -> list[str]:
     except Exception as exc:
         return problems + [f"lower raised: {exc!r}"]
     ids = list(prog.task_by_id())
-    shape = _re.compile(r"^[a-z0-9_]+_\d+_\d+_\d+$|^(head_loss|embed_fwd|embed_bwd|optimizer)")
+    shape = _re.compile(
+        r"^[a-z0-9_]+_\d+_\d+_\d+$"
+        r"|^(head_loss|embed_fwd|embed_bwd|optimizer|prologue_round)")
     bad = [i for i in ids if not shape.match(i)]
     if bad:
         problems.append(f"task ids off the naming shape (first 3): {bad[:3]}")

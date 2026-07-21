@@ -315,12 +315,17 @@ def build_toy_resolver(dims: ToyDims, hyper=None):
         EmbedFwd,
         HeadLoss,
         OptimizerStep,
-    )
+    RoundPrologue,
+)
     from dataflow_training.kernels import resolve_kernels
 
     kernels = resolve_kernels()
     hyper = hyper if hyper is not None else AdamWHyper()
     table = {
+        # the round prologue is UNIVERSAL: every family (external ones
+        # included) opens each round with it — it publishes the round
+        # index + content token count and materializes Segments
+        "prologue_round": RoundPrologue(dims, kernels),
         "embed_fwd": EmbedFwd(dims, kernels),
         "toy_block_fwd": ToyBlockFwd(dims, kernels),
         "toy_block_recompute": ToyBlockRecompute(dims, kernels),

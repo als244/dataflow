@@ -2,9 +2,10 @@
 opens every round with a ``prologue_round_{s}_{r}`` task whose 4-byte
 int32 output IS the object-backed ``current_round`` value, and whose launch
 publishes it into the engine's mutable ``run_values`` channel (``run_args``
-stays immutable). The flag defaults OFF — every family chain is byte-stable
-(the lowering-stability tripwire pins that); the aux families turn it on
-when their per-step counts wiring lands."""
+stays immutable). The flag defaults ON —
+EVERY family opens each round with the prologue (it also publishes the
+round's content token count and materializes Segments); passing
+``round_prologue=False`` builds the bare chain (planner unit tests)."""
 from dataclasses import dataclass, replace
 
 import pytest
@@ -47,14 +48,23 @@ def test_prologue_round_structure():
 
 
 def test_flag_off_is_byte_stable():
-    """No prologue tasks/objects without the flag (the tripwire pins the
-    hashes; this pins the reason)."""
+    """round_prologue=False builds the bare chain — no prologue tasks —
+    and the DEFAULT build opens every round with one (the universal-
+    prologue contract; the hash tripwire pins the bytes)."""
     hw = ShapedHardware()
     program = build_shaped_program(
         TINY, hw=hw, family="llama3-shaped",
         kinds={"block": roofline_block_kind_spec(TINY, hw)},
+        round_prologue=False,
     )
     assert not [t for t in program.tasks if t.compute_block_key == "prologue_round"]
+    default = build_shaped_program(
+        TINY, hw=hw, family="llama3-shaped",
+        kinds={"block": roofline_block_kind_spec(TINY, hw)},
+    )
+    prologues = [t for t in default.tasks
+                 if t.compute_block_key == "prologue_round"]
+    assert len(prologues) == TINY.grad_accum_rounds
 
 
 # --- GPU e2e: the value flows through both channels ---------------------------

@@ -142,8 +142,10 @@ def stage_moe_experts13(kctx, K, d, st):
     a = st["a"]
     xp = st.pop("xp")
     if a is not None and "h13" in a:
-        # ctx write-through: the aten path pays one copy into the view
-        h13 = a["h13"]
+        # ctx write-through: the aten path pays one copy into the view.
+        # h13 is SLOT-major (tokens*top_k rows) — content_views cannot
+        # see its token axis, so slice to the dispatched slot count here
+        h13 = a["h13"][:xp.shape[0]]
         K.moe_grouped_mm_fwd(kctx, xp, st["w"]["w13_experts"], st["offsets"], h13)
     else:
         # scratch destination: dual-mode return skips the copy + duplicate
@@ -270,7 +272,7 @@ def moe_mlp_tail_bwd(kctx, K, d, dy, a, w, dw, accum, acc, norm_bwd, *, resid_fi
     K.moe_dispatch_fwd(kctx, dy, order, dyp, top_k=topk)
 
     sact = torch.empty((rows, f), dtype=torch.bfloat16, device=dy.device)
-    K.swiglu_packed_fwd(kctx, a["h13"], sact)
+    K.swiglu_packed_fwd(kctx, a["h13"][:rows], sact)
     dsact = K.moe_grouped_mm_dgrad(kctx, dyp, w["w2_experts"], offsets)  # RAW
 
     # dL/d route_w at slot j: <dy[token(j)], yp_j> == <dsact_raw_j, sact_j>
@@ -289,7 +291,7 @@ def moe_mlp_tail_bwd(kctx, K, d, dy, a, w, dw, accum, acc, norm_bwd, *, resid_fi
     del srw
 
     dh13 = torch.empty((rows, 2 * f), dtype=torch.bfloat16, device=dy.device)
-    K.swiglu_packed_bwd(kctx, dsact, a["h13"], dh13)
+    K.swiglu_packed_bwd(kctx, dsact, a["h13"][:rows], dh13)
     del dsact
     if dw is not None and "w13_experts" in dw:
         K.moe_grouped_mm_wgrad(kctx, xp, dh13, offsets, dw["w13_experts"], accumulate=accum)
@@ -453,7 +455,7 @@ class MoEAuxTempState:
                     r = int(oid.split("_")[-2])
                     found.append((r, self.content_views(
                         layout.views(self._in(ctx, j)), ctx,
-                        rows=self.rows_of_round(ctx, r))))
+                        num_tokens=self.num_tokens_of_round(ctx, r))))
             if not found:
                 raise RuntimeError(f"no AuxTemp_ input on {ctx.task.id}")
             own_round = int(ctx.task.id.split("_")[-2])

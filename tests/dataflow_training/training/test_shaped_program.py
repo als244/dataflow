@@ -28,9 +28,9 @@ def test_8b_shape_totals():
     assert a_bytes > 12 * GIB
     assert param_bytes + a_bytes > 24 * GIB
 
-    # task chain structure: embed + 32 fwd + head_loss (fused head+CE+bwd)
-    # + 32 bwd + embed_bwd + 34 optimizer tasks
-    assert len(program.tasks) == 1 + 32 + 1 + 32 + 1 + 34
+    # task chain structure: round prologue + embed + 32 fwd + head_loss
+    # (fused head+CE+bwd) + 32 bwd + embed_bwd + 34 optimizer tasks
+    assert len(program.tasks) == 1 + 1 + 32 + 1 + 32 + 1 + 34
 
 
 def test_grad_accum_mutation_pattern():

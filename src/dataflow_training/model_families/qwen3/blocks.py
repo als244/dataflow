@@ -23,7 +23,8 @@ from dataflow.core import TaskSpec
 from ...blocks import ops
 from ...kernels import KernelSet, resolve_kernels
 from ...blocks.layouts import PackedLayout, Qwen3Dims, qwen3_activation_layout, qwen3_weight_layout
-from ...blocks.base_blocks import AdamWHyper, AdamWStep, EmbedBwd, EmbedFwd, HeadLoss
+from ...blocks.base_blocks import (AdamWHyper, AdamWStep, EmbedBwd,
+                                   EmbedFwd, HeadLoss, RoundPrologue)
 from ..llama3.blocks import BlockBwd, BlockFwd, BlockRecompute
 
 
@@ -48,7 +49,7 @@ class Qwen3BlockFwd(BlockFwd):
     def _stage_qkv_qknorm(kctx, K, d, st):
         h1, w, a = st["h1"], st["w"], st["a"]
         # linear-triple conversion pending (exemplar: llama3)
-        t, h, kvh, hd = d.tokens, d.n_heads, d.n_kv_heads, d.head_dim
+        t, h, kvh, hd = h1.shape[0], d.n_heads, d.n_kv_heads, d.head_dim
         # write-through: projections land directly in the ctx views when a
         # context is attached (bwd reads PRE-norm qm/km from ctx)
         if a is not None:
@@ -69,8 +70,10 @@ class Qwen3BlockFwd(BlockFwd):
         st.pop("h1")
         st.update(qn=qn, kn=kn, v=v)
         if a is not None:
-            a["rstd_q"].copy_(rstd_q)
-            a["rstd_k"].copy_(rstd_k)
+            # flat (tokens*heads,) fields: no token axis for
+            # content_views to see — slice by the computed row count
+            a["rstd_q"][:t * h].copy_(rstd_q)
+            a["rstd_k"][:t * kvh].copy_(rstd_k)
 
     @staticmethod
     def _stage_rope(kctx, K, d, st):
@@ -136,7 +139,7 @@ class Qwen3BlockBwd(BlockBwd):
         # linear-triple conversion pending (exemplar: llama3)
         d = self.dims
         K = self.kernels
-        t, h, kvh, hd = d.tokens, d.n_heads, d.n_kv_heads, d.head_dim
+        t, h, kvh, hd = dh_mid.shape[0], d.n_heads, d.n_kv_heads, d.head_dim
 
         d_attn = dh_mid @ w["wo"].T
         if acc.wanted("wo"):
@@ -145,9 +148,9 @@ class Qwen3BlockBwd(BlockBwd):
         # rebuild flash-bwd's q/k from saved qm/km + rstds: norm re-apply + rope
         qm2, km2 = a["qm"].view(t * h, hd), a["km"].view(t * kvh, hd)
         qn = torch.empty_like(a["qm"])
-        K.rmsnorm_apply(kctx, qm2, a["rstd_q"], w["q_norm_w"], qn.view(t * h, hd))
+        K.rmsnorm_apply(kctx, qm2, a["rstd_q"][:t * h], w["q_norm_w"], qn.view(t * h, hd))
         kn = torch.empty_like(a["km"])
-        K.rmsnorm_apply(kctx, km2, a["rstd_k"], w["k_norm_w"], kn.view(t * kvh, hd))
+        K.rmsnorm_apply(kctx, km2, a["rstd_k"][:t * kvh], w["k_norm_w"], kn.view(t * kvh, hd))
         q = torch.empty_like(qn)
         seg = a["_seg"]
         pos = seg.positions          # always varlen; run_args prologue
@@ -169,10 +172,10 @@ class Qwen3BlockBwd(BlockBwd):
         K.rope_bwd(kctx, dk, dkn, pos, kvh, hd, d.rope_base)
         del dk
 
-        dqm, dq_norm = norm_bwd(dqn.view(t * h, hd), qm2, a["rstd_q"], w["q_norm_w"])
+        dqm, dq_norm = norm_bwd(dqn.view(t * h, hd), qm2, a["rstd_q"][:t * h], w["q_norm_w"])
         del dqn
         acc("q_norm_w", dq_norm)
-        dkm, dk_norm = norm_bwd(dkn.view(t * kvh, hd), km2, a["rstd_k"], w["k_norm_w"])
+        dkm, dk_norm = norm_bwd(dkn.view(t * kvh, hd), km2, a["rstd_k"][:t * kvh], w["k_norm_w"])
         del dkn
         acc("k_norm_w", dk_norm)
         dqm = dqm.view(t, d.q_dim)
@@ -206,6 +209,7 @@ def build_qwen3_resolver(
     the resolver is built per config, so families never collide)."""
     kernels = kernels if kernels is not None else resolve_kernels()
     table = {
+        "prologue_round": RoundPrologue(dims, kernels),
         "embed_fwd": EmbedFwd(dims, kernels),
         "block_fwd": Qwen3BlockFwd(dims, kernels),
         "block_recompute": Qwen3BlockRecompute(dims, kernels),

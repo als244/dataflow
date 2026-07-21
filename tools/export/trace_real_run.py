@@ -78,14 +78,17 @@ def parity_line(measured: dict, sim: dict) -> str:
             f"sim {log_makespan_us(sim):.0f}us")
 
 
-def put_packed_step(client, stepper, tokens_per_round: int):
+def put_packed_step(client, stepper, tokens_per_round: int, *,
+                    execute_padding: bool = False):
     """Put one PackedStep's rounds; returns (valid count, wire
-    seq_lens bounds by round)."""
+    seq_lens bounds by round). Content bounds by default — under
+    ``execute_padding`` an under-full round's tail rides as one
+    masked segment and executes."""
     packed = stepper.next_step()
     lens = {}
     for r, rnd in enumerate(packed.rounds):
         bounds = rnd.bounds()
-        if rnd.content < tokens_per_round:
+        if execute_padding and rnd.content < tokens_per_round:
             bounds = bounds + [tokens_per_round]
         lens[str(r)] = bounds
         client.put_object(f"tokens_0_{r}", rnd.tokens.tobytes())

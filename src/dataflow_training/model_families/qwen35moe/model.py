@@ -268,8 +268,7 @@ def build_shaped_qwen35moe(
         fast_memory_capacity=fast_memory_capacity,
         recompute_levels=recompute_levels, name=label,
         kinds=_kind_specs(cfg, hw), layer_kinds=dims.kinds,
-        round_prologue=True,
-        retained_lbl=dims_fp.moe.lbl_retained_inputs,
+                retained_lbl=dims_fp.moe.lbl_retained_inputs,
         freeze=freeze_plan,
     )
 

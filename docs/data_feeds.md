@@ -122,15 +122,26 @@ bin-packs sequences into the step's rounds:
   packing byte-for-byte (pinned by hash gates).
 
 UNDER-FULL ROUNDS (the no-split default): round buffers keep their
-fixed planner size; `seq_lens` carries the content segments plus one
-final MASKED tail segment (filler tokens, targets -1) whose loss
-contribution is exactly zero. Fill is a first-class metric: the step
-log prints it, and `RunResult.meta["data"]` aggregates content
-tokens + mean/min fill. tok/s counts CONTENT tokens only, and the
-effective-FLOP count scales its token-linear buckets to content
-(executed tail work stays in hardware FLOPs — the recompute
-convention). Packing policies compete on the fill metric and the
-loss curve; a policy change never lands silently.
+fixed planner size, but ONLY CONTENT EXECUTES — `seq_lens` stops at
+the content edge and every task computes over views sliced to the
+round's real rows (content re-view). The buffer tail is dead bytes:
+no kernel reads or writes it. `--execute-padding` restores the
+fallback lane where the tail rides as one final MASKED wire segment
+(filler tokens, targets -1, exactly zero loss contribution) and
+executes for real; the two modes are numerically equivalent (a
+standing engine-vs-engine gate pins it). Fill is a first-class
+metric: the step log prints it, and `RunResult.meta["data"]`
+aggregates content tokens + mean/min fill. tok/s counts CONTENT
+tokens only; effective FLOPs scale token-linear buckets to content,
+and hardware FLOPs count what actually ran (content by default, tail
+included under `--execute-padding`). Packing policies compete on the
+fill metric and the loss curve; a policy change never lands
+silently.
+
+One current limitation: the tensor-parallel lane (`--tp-mlp`) runs
+planner-sized collectives, so under-full rounds there require
+`--execute-padding` (or exact-fill packing) — the fleet refuses the
+combination rather than mis-communicating.
 
 ## 6. Engine inputs — the wire
 
@@ -138,11 +149,13 @@ Exactly what crosses to the daemon, per round `r` of a step:
 `tokens_0_r` / `targets_0_r` byte buffers (fixed
 `tokens_per_round` int32), plus
 `run_args = {"step": k, "valid_rows": REAL-target count,
-"seq_lens": {r: [0, b1, ..., T]}}`. The engine's first consuming
-task materializes `Segments` (device `cu`/`positions`) from the
-bounds — see [program_contract.md](program_contract.md) §9. Extras
-become additional per-round objects only for programs that declare
-them.
+"seq_lens": {r: [0, b1, ..., content_r]}}` — the bounds END at the
+round's content edge (under `--execute-padding` a final masked
+segment extends them to the buffer size). The engine's first
+consuming task materializes `Segments` (device `cu`/`positions`)
+from the bounds — see [program_contract.md](program_contract.md) §9.
+Extras become additional per-round objects only for programs that
+declare them.
 
 ## 7. Determinism, resume, capture
 
@@ -169,6 +182,7 @@ flags where geometry lives:
 | `--packing-policy {ffd,greedy}` | bin-packing policy |
 | `--allow-round-split` | legacy exact-fill packing |
 | `--capture PATH` | record the consumed sequences for replay |
+| `--execute-padding` | execute under-full tails as one masked segment (debug/fallback; default computes content rows only) |
 
 The two legacy configurations, spelled out:
 

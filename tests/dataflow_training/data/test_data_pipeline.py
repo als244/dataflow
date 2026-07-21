@@ -248,7 +248,7 @@ def test_legacy_block_configuration_pinned():
 @needs_corpus
 def test_engine_resume_drill_with_cursor(tmp_path):
     """Cursor resume end-to-end on the engine (new-defaults pipeline —
-    under-full rounds with masked tails included): a checkpointed run's
+    under-full rounds executing content-only): a checkpointed run's
     resumed tail must reproduce the uninterrupted run bitwise (one
     daemon; init re-seeds, restore overwrites)."""
     import torch

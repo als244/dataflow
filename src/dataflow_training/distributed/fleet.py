@@ -428,15 +428,29 @@ class StepRun:
             self.error = e
 
 
-def put_rank_rounds(rank: RankState, packed, tokens_per_round: int) -> dict:
+def put_rank_rounds(rank: RankState, packed, tokens_per_round: int, *,
+                    execute_padding: bool = False,
+                    require_full: bool = False) -> dict:
     """Ship the rank ITS slice of the step's packed rounds. Returns
-    the rank's wire seq_lens bounds (an under-full round's tail rides
-    as one masked segment)."""
+    the rank's wire seq_lens bounds — CONTENT bounds by default (tasks
+    compute only content rows); under ``execute_padding`` an under-full
+    round's tail rides as one masked segment and executes.
+    ``require_full``: raise on an under-full round unless padding
+    executes — the TP lane's collectives run planner-sized buffers, so
+    content-width rounds cannot cross them yet."""
     lens = {}
     for local_r, orig_r in enumerate(rank.rounds):
         rnd = packed.rounds[orig_r]
+        if (require_full and not execute_padding
+                and rnd.content < tokens_per_round):
+            raise RuntimeError(
+                f"round {orig_r} is under-full ({rnd.content}/"
+                f"{tokens_per_round}) and this configuration requires "
+                f"full rounds (tp_mlp collectives are planner-sized) — "
+                f"pass --execute-padding or use exact-fill packing "
+                f"(--allow-round-split)")
         bounds = rnd.bounds()
-        if rnd.content < tokens_per_round:
+        if execute_padding and rnd.content < tokens_per_round:
             bounds = bounds + [tokens_per_round]
         lens[str(local_r)] = bounds
         rank.client.put_object(f"tokens_0_{local_r}",
@@ -481,6 +495,7 @@ def run_fleet_dp(global_cfg, recipe: Recipe, pipeline, steps: int, *,
                  profile: dict | None = None,
                  backend: str | None = None, opt_shard: str | None = None,
                  tp_mlp: bool = False,
+                 execute_padding: bool = False,
                  checkpoint_every: int | None = None,
                  checkpoint_dir: str = "results/pretrain/checkpoints",
                  checkpoint_redundancy: int = 1,
@@ -752,7 +767,9 @@ def fleet_loop(ranks, gspec, recipe, pipeline, steps, *, budgets, seed,
                 + (" (tp: sharded weights too)" if narrowed else ""))
         init_model(rank.client, "llama3", cfg_dict(rank.cfg), **init_kwargs)
         step_lens_by_rank[i] = put_rank_rounds(rank, step_packed,
-                                               tokens_per_round)
+                                               tokens_per_round,
+                                               execute_padding=execute_padding,
+                                               require_full=tp_mlp)
         reg = rank.client.register_program(prog_dict, resolver=resolver)
         missing = reg["bindings"]["missing_inputs"]
         if missing:
@@ -796,14 +813,18 @@ def fleet_loop(ranks, gspec, recipe, pipeline, steps, *, budgets, seed,
                     f"{rank.name}: restored step {restored_step} != "
                     f"resume step {start_step}")
             step_lens_by_rank[i] = put_rank_rounds(rank, step_packed,
-                                                   tokens_per_round)
+                                                   tokens_per_round,
+                                                   execute_padding=execute_padding,
+                                                   require_full=tp_mlp)
             log(f"[fleet] {rank.name}: restored checkpoint @ step "
                 f"{start_step}")
         else:
             init_model(rank.client, "llama3", cfg_dict(rank.cfg),
                        **init_kwargs)
             step_lens_by_rank[i] = put_rank_rounds(rank, step_packed,
-                                                   tokens_per_round)
+                                                   tokens_per_round,
+                                                   execute_padding=execute_padding,
+                                                   require_full=tp_mlp)
             log(f"[fleet] {rank.name}: warm-up done, re-seeded")
 
     ranks[0].client._call("create_peer_group",
@@ -843,7 +864,9 @@ def fleet_loop(ranks, gspec, recipe, pipeline, steps, *, budgets, seed,
             last_cursor = step_packed.cursor_after
             for k, rank in enumerate(ranks):
                 step_lens_by_rank[k] = put_rank_rounds(
-                    rank, step_packed, tokens_per_round)
+                    rank, step_packed, tokens_per_round,
+                    execute_padding=execute_padding,
+                    require_full=tp_mlp)
         # GLOBAL-DENOMINATOR: every rank normalizes by the step's total
         # (tp replicas share ONE batch — the packed step IS that batch)
         valid = step_packed.valid_rows

@@ -80,7 +80,8 @@ class FlopReport:
     by_group: dict = field(default_factory=dict)
 
     def per_step(self, seq_lens_by_round=None, *, tokens: int = 0,
-                 seq_len: int = 0, content_fraction: float = 1.0):
+                 seq_len: int = 0, content_fraction: float = 1.0,
+                 executed_fraction: float = 1.0):
         """(effective, hardware) flops for ONE step; packed rounds
         pass {round: [lens]} for the exact quadratic mass. Attention
         scaling applies to the causal buckets only. Optimizer matmul
@@ -89,12 +90,14 @@ class FlopReport:
 
         ``content_fraction`` (content tokens / buffer tokens over the
         step) scales the TOKEN-LINEAR buckets of the EFFECTIVE count
-        when rounds are under-full: executed tail work (present in
-        hardware while execute-padding runs; absent entirely under
-        content re-view, where the CALLER passes the same fraction
-        for hardware by scaling its lens) is never useful work. The
-        attention buckets need no extra treatment — the passed
-        seq_lens already carry only real segments."""
+        when rounds are under-full — executed tail work is never
+        useful work. ``executed_fraction`` scales the token-linear
+        HARDWARE buckets to what actually ran: under content re-view
+        (the default) tasks compute only content rows, so the caller
+        passes the same fraction; under execute-padding the tail runs
+        for real and the caller leaves it at 1. The attention buckets
+        need no extra treatment — the passed seq_lens already carry
+        only real segments."""
         scale = 1.0
         if seq_lens_by_round:
             ratios = [seq_sq_ratio(lens, tokens, seq_len)
@@ -105,12 +108,14 @@ class FlopReport:
         a_bwd_hw = self.attn_bwd_hw * scale
         a_rc = self.attn_recompute_hw * scale
         cf = float(content_fraction)
+        ef = float(executed_fraction)
         # token-linear buckets scale with content; optimizer work is
         # parameter-space and executes fully regardless of fill
         effective = ((self.mm_effective + self.attn_static) * cf
                      + a_fwd + a_bwd_eff + self.optimizer)
-        hardware = (self.mm_hardware + a_fwd + a_bwd_hw + a_rc
-                    + self.attn_static + self.attn_static_rc_hw
+        hardware = ((self.mm_hardware + self.attn_static
+                     + self.attn_static_rc_hw) * ef
+                    + a_fwd + a_bwd_hw + a_rc
                     + self.optimizer)
         return effective, hardware
 

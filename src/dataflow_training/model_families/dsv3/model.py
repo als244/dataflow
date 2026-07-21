@@ -327,7 +327,7 @@ def build_shaped_dsv3(
     return build_shaped_program(
         cfg, hw=hw, family="dsv3-shaped",
         kinds=_kind_specs(cfg, hw), layer_kinds=dims.kinds,
-        round_prologue=True, bias_update_in_bwd=True,
+        bias_update_in_bwd=True,
         fast_memory_capacity=fast_memory_capacity,
         recompute_levels=recompute_levels, name=name,
         freeze=freeze_plan,

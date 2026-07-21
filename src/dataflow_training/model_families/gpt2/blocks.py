@@ -20,7 +20,8 @@ from dataflow.runtime.executable import TaskContext
 from dataflow.runtime.interop import torch_view
 
 from ...blocks import ops
-from ...blocks.base_blocks import AdamWHyper, AdamWStep, HeadLoss, _Base, _fill_tokens
+from ...blocks.base_blocks import (AdamWHyper, AdamWStep, HeadLoss,
+                                   RoundPrologue, _Base, _fill_tokens)
 from ...blocks.layouts import (
     Gpt2Dims,
     PackedLayout,
@@ -273,8 +274,8 @@ class Gpt2EmbedFwd(_Base):
         from ...data.segments import resolve_segments
 
         d = self.dims
-        n = self.rows(ctx)
         with torch.cuda.stream(external_stream(ctx.stream)):
+            n = self.num_tokens(ctx)
             tokens = torch_view(self._in(ctx, 0), (d.tokens,), torch.int32)[:n]
             w = self.el.views(self._in(ctx, 1))
             y = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)[:n]
@@ -310,12 +311,12 @@ class Gpt2EmbedBwd(_Base):
         from ...data.segments import resolve_segments
 
         d = self.dims
-        n = self.rows(ctx)
         es = external_stream(ctx.stream)
         from ...kernels import KernelCtx
 
         kctx = KernelCtx(stream_handle=es.cuda_stream, torch_stream=es)
         with torch.cuda.stream(es):
+            n = self.num_tokens(ctx)
             dy = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)[:n]
             tokens = torch_view(self._in(ctx, 1), (d.tokens,), torch.int32)[:n]
             accum = bool(ctx.task.mutates)
@@ -347,9 +348,9 @@ class Gpt2HeadLoss(HeadLoss):
         from ...blocks.base_blocks import head_chunk_rows
 
         d = self.dims
-        n = self.rows(ctx)
         es, kctx = self._stream_ctx(ctx)
         with torch.cuda.stream(es):
+            n = self.num_tokens(ctx)
             K = self.kernels
             y = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)[:n]
             targets = torch_view(self._in(ctx, 1), (d.tokens,), torch.int32)[:n]
@@ -446,6 +447,7 @@ def build_gpt2_resolver(
     build_resolver for the contract)."""
     kernels = kernels if kernels is not None else resolve_kernels()
     table = {
+        "prologue_round": RoundPrologue(dims, kernels),
         "embed_fwd": Gpt2EmbedFwd(dims, kernels),
         "block_fwd": Gpt2BlockFwd(dims, kernels),
         "block_recompute": Gpt2BlockRecompute(dims, kernels),

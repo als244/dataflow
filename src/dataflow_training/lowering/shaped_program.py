@@ -305,7 +305,7 @@ def build_shaped_program(
     recompute_levels: Mapping[str, int] | None = None,
     name: str | None = None,
     aux_shared=None,
-    round_prologue: bool = False,
+    round_prologue: bool = True,
     dp_group: str | None = None,   # peer-group NAME optimizer tasks
                                    # name; present handle => allreduce(dW)
                                    # before the update (P4a data parallel)
@@ -508,9 +508,18 @@ def build_shaped_program(
                      1.0, group="forward", params={"round": r}, subops=[],
                      mutates=(aux_ids if first_round else ()))
             # ---- forward ----
+            # the current_round edge chains EVERY round task behind the
+            # prologue (embed -> blocks -> head -> bwds): the planner
+            # must schedule the prologue first, so its published
+            # metadata (num_tokens_by_round, materialized Segments) is
+            # visible to all of them. Without it the prologue floats
+            # freely and dense-family tasks can run before it.
+            embed_ins = [f"tokens_{s}_{r}", "W_embed"]
+            if round_prologue:
+                embed_ins.append(f"current_round_{s}_{r}")
             task(
                 f"embed_fwd_{s}_{r}", "embed_fwd",
-                [f"tokens_{s}_{r}", "W_embed"],
+                embed_ins,
                 [OutputSpec(id=f"y_embed_{s}_{r}", size_bytes=y_bytes, role="activation",
                             tensor=TensorMeta(dtype="bf16", shape=(t, d)))],
                 loose.embed_fwd_us, group="forward",

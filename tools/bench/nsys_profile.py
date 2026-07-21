@@ -42,7 +42,12 @@ def main() -> int:
                     help="capture stops AFTER this step")
     ap.add_argument("--ga-rounds", type=int, default=None)
     ap.add_argument("--batch", type=int, default=None)
-    ap.add_argument("--data", choices=["block", "doc"], default="block")
+    ap.add_argument("--data", default=None,
+                    help="data source spec (docs/data_feeds.md); default: "
+                         "train_solo's default feed. Plan-comparable "
+                         "captures want the uniform-window config: "
+                         "--data 'shards:,window=SEQ' --packing-policy "
+                         "greedy (via the passthrough args)")
     ap.add_argument("--opt", choices=["adamw", "muon"], default=None)
     ap.add_argument("--budget", type=float, default=14.0)
     ap.add_argument("--slab", type=float, default=16.0)
@@ -72,7 +77,6 @@ def main() -> int:
              "engine", "--preset", args.preset,
              "--steps", str(args.steps),
              "--budget", str(args.budget), "--slab", str(args.slab),
-             "--data", args.data,
              "--profile",
              "--profile-start-before-step", str(args.start),
              "--profile-stop-after-step", str(args.stop),
@@ -81,6 +85,8 @@ def main() -> int:
         train += ["--ga-rounds", str(args.ga_rounds)]
     if args.batch:
         train += ["--batch", str(args.batch)]
+    if args.data:
+        train += ["--data", args.data]
     if args.opt:
         train += ["--opt", args.opt]
     train += list(args.extra)

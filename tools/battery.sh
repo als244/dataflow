@@ -57,6 +57,20 @@ rsync -az --delete --delete-excluded \
     --exclude='__pycache__/' --exclude='*.pyc' --exclude='.git' \
     "${sync_set[@]/#/$repo/}" "${host}:${rpath}/"
 
+# Prune mirror .py files outside the git-visible set. The per-directory
+# .gitignore filter anchors at each TRANSFER root (src/, tools/, ...), so
+# root-.gitignore patterns like tools/bench/internal/ never apply to the
+# transfer — gitignored files nested in synced dirs ride along and break
+# the hash gate below. One enumerator for sync and hash closes the class.
+(cd "$repo" && \
+    git ls-files --cached --others --exclude-standard -- "${sync_set[@]}" \
+    | grep '\.py$' | LC_ALL=C sort) \
+| ssh "$host" "cd $rpath_q && cat > /tmp/battery_pyset.txt && \
+    find src tests tools examples reference_models conftest.py \
+         -type f -name '*.py' -not -path '*/__pycache__/*' \
+    | LC_ALL=C sort | comm -23 - /tmp/battery_pyset.txt \
+    | xargs -r -d '\n' rm -v --"
+
 # Tree hash: per-file sha256 of every .py in the synced set, then a sha
 # over the sorted list. LC_ALL=C on both sides so ordering is identical.
 hash_local="$(cd "$repo" && \

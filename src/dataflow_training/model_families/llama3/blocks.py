@@ -56,6 +56,7 @@ from dataflow_training.blocks.base_blocks import (
     EmbedFwd,
     HeadLoss,
     _Base,
+    RoundPrologue,
 )
 
 
@@ -142,9 +143,9 @@ class BlockFwd(_Base):
 
     def launch(self, ctx: TaskContext) -> None:
         d = self.dims
-        n = self.rows(ctx)
         es, kctx = self._stream_ctx(ctx)
         with torch.cuda.stream(es):
+            n = self.num_tokens(ctx)
             x = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)[:n]
             w = self.task_weight_layout(ctx.task).views(self._in(ctx, 1))
             y = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)[:n]
@@ -333,9 +334,9 @@ class BlockRecompute(BlockFwd):
     context-emitting one to repopulate A from the block input."""
     def launch(self, ctx: TaskContext) -> None:
         d = self.dims
-        n = self.rows(ctx)
         es, kctx = self._stream_ctx(ctx)
         with torch.cuda.stream(es):
+            n = self.num_tokens(ctx)
             x = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)[:n]
             w = self.task_weight_layout(ctx.task).views(self._in(ctx, 1))
             a = self.content_views(
@@ -474,9 +475,9 @@ class BlockBwd(_Base):
 
     def launch(self, ctx: TaskContext) -> None:
         d = self.dims
-        n = self.rows(ctx)
         es, kctx = self._stream_ctx(ctx)
         with torch.cuda.stream(es):
+            n = self.num_tokens(ctx)
             dy = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)[:n]
             a = self.content_views(
                 self.task_context_layout(ctx.task).views(self._in(ctx, 1)), ctx)
@@ -630,6 +631,7 @@ def build_resolver(
     record to stamp into profiles and reports."""
     kernels = kernels if kernels is not None else resolve_kernels()
     table = {
+        "prologue_round": RoundPrologue(dims, kernels),
         "embed_fwd": EmbedFwd(dims, kernels),
         "block_fwd": BlockFwd(dims, kernels),
         "block_recompute": BlockRecompute(dims, kernels),

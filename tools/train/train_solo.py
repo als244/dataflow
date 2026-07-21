@@ -281,7 +281,8 @@ def cmd_engine(args) -> int:
                          budget_gib=args.budget, seed=11, log=_log,
                          measured=args.measured, profile=profile,
                          checkpoint_every=args.checkpoint_every,
-                         checkpoint_dir=ck_dir, resume=args.resume)
+                         checkpoint_dir=ck_dir, resume=args.resume,
+                         execute_padding=args.execute_padding)
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     res.save(out)
@@ -378,6 +379,10 @@ def main() -> int:
     e.add_argument("--capture", default=None,
                    help="log every consumed sequence to this file "
                         "(replayable via --data capture:PATH)")
+    e.add_argument("--execute-padding", action="store_true",
+                   help="execute under-full rounds' buffer tails as one "
+                        "masked segment (debug/fallback; default computes "
+                        "content rows only)")
     e.add_argument("--out", required=True)
     e.set_defaults(fn=cmd_engine)
 

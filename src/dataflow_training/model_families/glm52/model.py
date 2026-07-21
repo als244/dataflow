@@ -478,7 +478,7 @@ def build_shaped_glm52(
     return build_shaped_program(
         cfg, hw=hw, family="glm52-shaped",
         kinds=_kind_specs(cfg, hw), layer_kinds=dims.kinds,
-        round_prologue=True, bias_update_in_bwd=True,
+        bias_update_in_bwd=True,
         fast_memory_capacity=fast_memory_capacity,
         recompute_levels=recompute_levels, name=name,
         aux_shared=shares,

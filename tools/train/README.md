@@ -25,6 +25,7 @@ the warmup+cosine recipe, and byte-identical seeded init.
 | `--measured` | plan with PROFILED task costs + measured PCIe (the `[plan]` line becomes the true-profiling sim prediction) |
 | `--data SPEC` | data source spec ([data_feeds.md](../../docs/data_feeds.md)); default: the in-repo shard corpus, per-document |
 | `--packing-policy {ffd,greedy}` / `--allow-round-split` / `--capture PATH` | packing policy, legacy exact-fill split, sequence capture for replay |
+| `--execute-padding` | execute under-full tails as one masked segment (debug/fallback; default computes content rows only) |
 | `--profile` + `--profile-start-before-step N` / `--profile-stop-after-step M` | bracket a step window via the daemon's `profiler_control` (run under `tools/bench/nsys_profile.py` to capture) |
 | `--out` | run-curve JSON (also names the checkpoint dir) |
 
@@ -76,6 +77,7 @@ CE.
 | `--backend {hostmem,nccl,auto}` | group backend override |
 | `--opt-shard {zero1,zero1rs}` | optimizer-state sharding mode |
 | `--tp-mlp` | tensor-parallel MLPs through the sharding API (correctness track) |
+| `--execute-padding` | execute under-full tails (REQUIRED with `--tp-mlp` when rounds can be under-full — planner-sized collectives) |
 | `--attach HOST=SOCK` | attach to pre-launched daemons (repeatable; the profiling rigs use this) |
 | `--checkpoint-every / --checkpoint-redundancy / --checkpoint-keep-last / --resume` | fleet checkpointing (`--resume auto` or a step dir) |
 | `--profile` + start/stop-step flags | wrap every launched daemon in the canonical nsys command, bracket per-rank, fetch reports back |

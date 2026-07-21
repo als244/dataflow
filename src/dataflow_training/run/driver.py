@@ -386,7 +386,7 @@ def run_reference(cfg, recipe: Recipe, pipeline, steps: int, *, seed: int = 11,
         cf = content / tokens_per_step(cfg)
         s_eff, s_hw = flops.per_step(
             step_lens or None, tokens=cfg.tokens, seq_len=cfg.seq_len,
-            content_fraction=cf)
+            content_fraction=cf, executed_fraction=cf)
         if step % log_every == 0 or step == steps - 1:
             fill_note = "" if cf >= 0.9995 else f"  fill {cf * 100:.1f}%"
             log(f"[reference] step {step:4d}/{steps}  loss {step_loss:.4f}"
@@ -578,7 +578,8 @@ def run_engine(client, cfg, recipe: Recipe, pipeline, steps: int, *,
                log=print, log_every: int = 10,
                checkpoint_every: int | None = None,
                checkpoint_dir=None, keep_last: int = 3,
-               resume: bool = False) -> RunResult:
+               resume: bool = False,
+               execute_padding: bool = False) -> RunResult:
     """Train ``cfg`` through the daemon at ``budget_gib`` device budget.
 
     ``pipeline`` is a FACTORY: pipeline(cursor|None) -> a stepper with
@@ -590,7 +591,14 @@ def run_engine(client, cfg, recipe: Recipe, pipeline, steps: int, *,
     cursor every N steps (host-local under ``checkpoint_dir``;
     keep-last pruning). ``resume``: restore the newest complete
     checkpoint, seek the pipeline to its cursor (checkpoints without
-    a cursor fast-forward the stepper CPU-side), and continue."""
+    a cursor fast-forward the stepper CPU-side), and continue.
+
+    ``execute_padding``: under-full rounds normally execute ONLY their
+    content (wire bounds stop at the content edge; tasks compute over
+    sliced views). Setting this appends the tail as one masked wire
+    segment instead — the filler rows execute for real with exactly
+    zero loss contribution. Debug/fallback lane; numerics match either
+    way (the under-full equivalence gate pins it)."""
     import json as json_mod
     import shutil
 
@@ -648,16 +656,17 @@ def run_engine(client, cfg, recipe: Recipe, pipeline, steps: int, *,
 
     def put_step(step: int) -> None:
         """Consume the pipeline's next step and stage its rounds:
-        bytes + wire bounds. Under-full rounds append the masked tail
-        as a final wire segment (targets -1 contribute nothing) until
-        content re-view retires executed tails."""
+        bytes + wire bounds. CONTENT bounds by default — tasks compute
+        over the content rows only and the buffer tail is dead bytes.
+        Under execute_padding the tail rides as one final masked wire
+        segment (targets -1 contribute nothing) and executes."""
         nonlocal last_cursor
         packed = stepper.next_step()
         lens_wire: dict[str, list[int]] = {}
         content = 0
         for r, rnd in enumerate(packed.rounds):
             bounds = rnd.bounds()
-            if rnd.content < T:
+            if execute_padding and rnd.content < T:
                 bounds = bounds + [T]
             lens_wire[str(r)] = bounds
             content += rnd.content
@@ -737,7 +746,8 @@ def run_engine(client, cfg, recipe: Recipe, pipeline, steps: int, *,
             cf = sm["content"] / (T * R)
             s_eff, s_hw = flops.per_step(
                 wire_lens, tokens=cfg.tokens, seq_len=cfg.seq_len,
-                content_fraction=cf)
+                content_fraction=cf,
+                executed_fraction=1.0 if execute_padding else cf)
             fill_note = "" if cf >= 0.9995 else f"  fill {cf * 100:.1f}%"
             log(f"[engine {budget_gib:g}GiB] step {step:4d}/{steps}  "
                 f"loss {step_loss:.4f}  lr {recipe.lr(step):.2e}  "

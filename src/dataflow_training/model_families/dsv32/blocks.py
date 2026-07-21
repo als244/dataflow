@@ -600,7 +600,7 @@ class _WarmupKLMixin:
         with torch.cuda.stream(es):
             a = self.content_views(self.cl.views(self._in(ctx, 0)), ctx)
             x = torch_view(self._in(ctx, 1), (d.tokens, d.d_model),
-                           torch.bfloat16)[:self.rows(ctx)]
+                           torch.bfloat16)[:self.num_tokens(ctx)]
             w = self.task_weight_layout(ctx.task).views(self._in(ctx, 2))
             dw = None
             accum = False

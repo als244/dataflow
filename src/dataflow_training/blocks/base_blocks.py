@@ -36,33 +36,49 @@ from .linear import LinearTriple, resolve_linear, resolve_linears
 
 @dataclass(frozen=True)
 class RoundPrologue:
-    """The round-boundary task: publishes the CURRENT ROUND both as an
-    object-backed value (its 4-byte int32 output — tasks that need the
-    round DEPEND on it, so ordering and recompute-safety ride the
-    dataflow) and into the engine's mutable ``run_values`` channel
-    (``ctx.run_values["current_round"]``, the ergonomic read; ``run_args``
-    stays immutable). Round 0 will additionally zero each aux layer's
-    per-step expert counts once the persistent Aux objects land."""
+    """The round-boundary task, EVERY family's first task of a round:
+
+    - publishes the CURRENT ROUND as an object-backed value (its 4-byte
+      int32 output — tasks that need the round DEPEND on it, so ordering
+      and recompute-safety ride the dataflow) and into the engine's
+      mutable ``run_values`` channel (``ctx.run_values["current_round"]``,
+      the ergonomic read; ``run_args`` stays immutable);
+    - MATERIALIZES THE ROUND'S ``Segments`` (device cu/positions) inside
+      its own stream block. The engine's strict pacing retires this task
+      before any consumer dispatches, so every later task's
+      ``rows(ctx)``/``_attn_meta(ctx)`` is a pure cache read with no
+      stream-ordering obligation of its own. (An overlapped engine would
+      need consumers to carry the object edge.)
+    - Round 0 additionally zeroes each aux layer's per-step expert
+      counts (the all-of-training aggregate is untouched)."""
 
     dims: object = None
     kernels: object = None
 
     def launch(self, ctx) -> None:
-        from dataflow.runtime.interop import torch_view
-        from .modules.moe.spec import moe_aux_layout
+        from dataflow.runtime.interop import external_stream, torch_view
+
+        from ..data.segments import resolve_segments
 
         r = int(ctx.task.block_params["round"])
         if ctx.run_values is not None:
             ctx.run_values["current_round"] = r
-        for buf in ctx.outputs.values():
-            torch_view(buf, (1,), torch.int32).fill_(r)
-        if r == 0 and ctx.task.mutates:
-            # round 0 zeroes every aux layer's per-step counts (the
-            # all-of-training aggregate is untouched)
-            layout = moe_aux_layout(self.dims, self.dims.moe)
-            for m in ctx.task.mutates:
-                if m.startswith("Aux_"):
-                    layout.views(ctx.mutates[m])["expert_counts_current_step"].zero_()
+        with torch.cuda.stream(external_stream(ctx.stream)):
+            seg = resolve_segments(ctx, self.dims, str(r))
+            if ctx.run_values is not None:
+                # the round's content row count = sum of its wire
+                # seq_lens; tasks read it via rows(ctx)
+                ctx.run_values.setdefault(
+                    "num_tokens_by_round", {})[str(r)] = seg.tokens
+            for buf in ctx.outputs.values():
+                torch_view(buf, (1,), torch.int32).fill_(r)
+            if r == 0 and ctx.task.mutates:
+                from .modules.moe.spec import moe_aux_layout
+
+                layout = moe_aux_layout(self.dims, self.dims.moe)
+                for m in ctx.task.mutates:
+                    if m.startswith("Aux_"):
+                        layout.views(ctx.mutates[m])["expert_counts_current_step"].zero_()
 
 
 @dataclass(frozen=True)
@@ -212,18 +228,37 @@ class _Base:
         return acc
 
     def parse_round(self, ctx) -> str:
-        parts = ctx.task.id.rsplit("_", 3)
-        return parts[2] if len(parts) >= 3 else "0"
+        """The task's ROUND, robust to every task-id shape: authoritative
+        block_params["round"] when the task carries it; else the trailing
+        integers of the id — ``kind_{s}_{r}`` and ``kind_{s}_{r}_{i}``
+        both resolve to r (pre-content-re-view only block tasks called
+        this, so the two-number shapes were never exercised)."""
+        bp = getattr(ctx.task, "block_params", None) or {}
+        if "round" in bp:
+            return str(bp["round"])
+        tail = []
+        for part in reversed(ctx.task.id.split("_")):
+            if not part.isdigit():
+                break
+            tail.append(part)
+        if len(tail) >= 3:
+            return tail[1]      # ..._{s}_{r}_{i}: reversed -> [i, r, s]
+        if len(tail) == 2:
+            return tail[0]      # ..._{s}_{r}:     reversed -> [r, s]
+        return "0"
 
-    def content_views(self, views: dict, ctx, rows: int | None = None) -> dict:
+    def content_views(self, views: dict, ctx,
+                      num_tokens: int | None = None) -> dict:
         """Slice a ctx-field view dict to the round's content rows,
         token-axis-aware: dim 0 slices when it spans the round's
         buffer tokens (the T-major convention: activations, rstds,
-        routing packs); dim 1 slices for head-major fields like lse
-        (n_heads, tokens); fields without a token axis (recurrent
-        state, counts) pass through. Identity when the round is
-        exactly full."""
-        n = self.rows(ctx) if rows is None else rows
+        routing packs); the head-major lse class ((n_heads, tokens),
+        recognized BY NAME — size-only matching collides at tiny
+        geometry) slices dim 1; everything else (recurrent state,
+        counts, flat token*head products, slot-major packs) passes
+        through and is sliced explicitly at its sites. Identity when
+        the round is exactly full."""
+        n = self.num_tokens(ctx) if num_tokens is None else num_tokens
         T = self.dims.tokens
         if n == T or views is None:
             return views
@@ -231,28 +266,37 @@ class _Base:
         for name, v in views.items():
             if hasattr(v, "shape") and v.ndim >= 1 and v.shape[0] == T:
                 out[name] = v[:n]
-            elif hasattr(v, "shape") and v.ndim >= 2 and v.shape[1] == T:
+            elif (name.endswith("lse") and hasattr(v, "shape")
+                  and v.ndim >= 2 and v.shape[1] == T):
+                # dim-1 slicing is NAME-KEYED to the closed lse class
+                # ((n_heads, tokens), every instance generated by
+                # layouts._lse_spec). Matching dim SIZES alone collides
+                # at tiny geometry — h13's width 2*d_ff_expert equaled
+                # tokens on a smoke preset and got its WIDTH sliced.
                 out[name] = v[:, :n]
             else:
                 out[name] = v
         return out
 
-    def rows_of_round(self, ctx, r: int) -> int:
-        """Content rows of round ``r`` of this step — for tasks that
-        consume OTHER rounds' per-token objects (retained-inputs LBL),
-        whose fill differs per round."""
-        from ..data.segments import resolve_segments
-        return resolve_segments(ctx, self.dims, r).tokens
+    def num_tokens_of_round(self, ctx, r) -> int:
+        """Content token count of round ``r`` of this step — for tasks
+        that consume OTHER rounds' per-token objects (retained-inputs
+        LBL), whose fill differs per round. Same channel as
+        num_tokens()."""
+        rv = ctx.run_values or {}
+        return rv.get("num_tokens_by_round", {}).get(str(r),
+                                                     self.dims.tokens)
 
-    def rows(self, ctx) -> int:
-        """The round's CONTENT row count — the sum of its wire
-        segments (HOST arithmetic via the cached Segments; reading
-        seg.cu[-1] off-device would be a hidden sync). Per-token views
-        slice to [:rows]; an under-full round's buffer tail is dead
-        bytes no task reads. When the driver runs execute-padding the
-        wire includes the masked tail segment, so this equals the full
-        buffer and tasks transparently compute everything."""
-        return self._attn_meta(ctx).tokens
+    def num_tokens(self, ctx) -> int:
+        """This task's round's CONTENT token count — the sum of its
+        wire seq_lens, published into ``run_values["num_tokens_by_round"]``
+        by the round prologue task (which also materializes the round's
+        device Segments before any consumer dispatches). Falls back to
+        the full buffer when no program ran a prologue (direct
+        invocation computes every row)."""
+        rv = ctx.run_values or {}
+        return rv.get("num_tokens_by_round", {}).get(self.parse_round(ctx),
+                                                     self.dims.tokens)
 
     def _attn_meta(self, ctx):
         """The round's ``Segments`` — the SINGLE varlen descriptor every
@@ -331,8 +375,8 @@ class EmbedFwd(_Base):
         _fill_tokens(self, ctx)
     def launch(self, ctx: TaskContext) -> None:
         d = self.dims
-        n = self.rows(ctx)
         with torch.cuda.stream(external_stream(ctx.stream)):
+            n = self.num_tokens(ctx)
             tokens = torch_view(self._in(ctx, 0), (d.tokens,), torch.int32)[:n]
             w = torch_view(self._in(ctx, 1), (d.vocab_size, d.d_model), torch.bfloat16)
             y = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)[:n]
@@ -384,9 +428,9 @@ class HeadLoss(_Base):
 
     def launch(self, ctx: TaskContext) -> None:
         d = self.dims
-        n = self.rows(ctx)
         es, kctx = self._stream_ctx(ctx)
         with torch.cuda.stream(es):
+            n = self.num_tokens(ctx)
             K = self.kernels
             y = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)[:n]
             targets = torch_view(self._in(ctx, 1), (d.tokens,), torch.int32)[:n]
@@ -482,9 +526,9 @@ class EmbedBwd(_Base):
 
     def launch(self, ctx: TaskContext) -> None:
         d = self.dims
-        n = self.rows(ctx)
         es, kctx = self._stream_ctx(ctx)
         with torch.cuda.stream(es):
+            n = self.num_tokens(ctx)
             dy = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)[:n]
             tokens = torch_view(self._in(ctx, 1), (d.tokens,), torch.int32)[:n]
             accum = bool(ctx.task.mutates)

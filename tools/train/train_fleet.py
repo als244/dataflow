@@ -173,6 +173,10 @@ def main() -> None:
                          "w1/w3/w2 sharded over d_ff (rank_rounds "
                          "does not apply); correctness track, not a "
                          "throughput one on this pair")
+    tr.add_argument("--execute-padding", action="store_true",
+                    help="execute under-full rounds' buffer tails "
+                         "(masked; REQUIRED with --tp-mlp when rounds "
+                         "can be under-full)")
     tr.add_argument("--checkpoint-every", type=int, default=None,
                     help="fleet checkpoint every N steps (per-rank "
                          "host-local snapshots + a conductor fleet "
@@ -268,6 +272,7 @@ def main() -> None:
                            backend=args.backend,
                            opt_shard=args.opt_shard,
                            tp_mlp=args.tp_mlp,
+                           execute_padding=args.execute_padding,
                            checkpoint_every=args.checkpoint_every,
                            checkpoint_redundancy=args.checkpoint_redundancy,
                            checkpoint_keep_last=args.checkpoint_keep_last,
