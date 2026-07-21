@@ -71,7 +71,7 @@ class ShapedQwen35Config:
     rope_base: float = 10_000_000.0
 
     @property
-    def tokens(self) -> int:
+    def max_tokens(self) -> int:
         if self.seq_lens is not None:
             return sum(self.seq_lens)
         return self.seq_len * self.batch
@@ -131,7 +131,7 @@ def derive_dims(cfg: ShapedQwen35Config) -> Qwen35Dims:
         lin_k_heads=cfg.lin_k_heads, lin_v_heads=cfg.lin_v_heads,
         lin_k_head_dim=cfg.lin_k_head_dim, lin_v_head_dim=cfg.lin_v_head_dim,
         lin_conv_kernel=cfg.lin_conv_kernel, d_ff=cfg.d_ff, vocab_size=cfg.vocab_size,
-        tokens=cfg.tokens, seq_len=cfg.seq_len, rope_base=cfg.rope_base,
+        max_tokens=cfg.max_tokens, seq_len=cfg.seq_len, rope_base=cfg.rope_base,
         dtypes=getattr(cfg, "dtypes", None) or DTypePolicy(),
         seq_lens=getattr(cfg, "seq_lens", None),
         kinds=tuple(
@@ -145,7 +145,7 @@ def _kind_specs(cfg: ShapedQwen35Config, hw: ShapedHardware) -> dict[str, LayerK
     import math
 
     dims = derive_dims(cfg)
-    t, d, seq, ff = cfg.tokens, cfg.d_model, cfg.seq_len, cfg.d_ff
+    t, d, seq, ff = cfg.max_tokens, cfg.d_model, cfg.seq_len, cfg.d_ff
 
     def spec(prefix, wl, cl, mm_params, attn_flops, attn_bytes, extra_mem_bytes):
         mm_flops = 2.0 * t * mm_params

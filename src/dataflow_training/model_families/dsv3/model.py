@@ -94,7 +94,7 @@ class ShapedDsv3Config:
     seq_lens: tuple[int, ...] | None = None
 
     @property
-    def tokens(self) -> int:
+    def max_tokens(self) -> int:
         if self.seq_lens is not None:
             return sum(self.seq_lens)
         return self.seq_len * self.batch
@@ -230,7 +230,7 @@ def derive_dims(cfg: ShapedDsv3Config) -> Dsv3Dims:
         v_head_dim=cfg.v_head_dim,
         d_ff=cfg.d_ff_dense, first_k_dense=cfg.first_k_dense,
         vocab_size=cfg.vocab_size,
-        tokens=cfg.tokens, seq_len=cfg.seq_len, rope_base=cfg.rope_base,
+        max_tokens=cfg.max_tokens, seq_len=cfg.seq_len, rope_base=cfg.rope_base,
         dtypes=getattr(cfg, "dtypes", None) or _DSV3_DTYPES,
         seq_lens=getattr(cfg, "seq_lens", None),
         moe=derive_moe_spec(cfg),
@@ -241,7 +241,7 @@ def derive_dims(cfg: ShapedDsv3Config) -> Dsv3Dims:
 
 def _kind_specs(cfg: ShapedDsv3Config, hw: ShapedHardware) -> dict[str, LayerKindSpec]:
     dims = derive_dims(cfg)
-    t, d, seq, h = cfg.tokens, cfg.d_model, cfg.seq_len, cfg.n_heads
+    t, d, seq, h = cfg.max_tokens, cfg.d_model, cfg.seq_len, cfg.n_heads
     qk = cfg.qk_head_dim
     mla_active = (
         d * cfg.q_lora_rank + cfg.q_lora_rank * h * qk

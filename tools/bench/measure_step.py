@@ -60,10 +60,10 @@ def run_cell(client, cfg, budget: float, steps: int, data_mode: str,
                      steps, budget_gib=budget, seed=11, log=quiet_log)
     tail = res.step_wall_s[WARMUP_STEPS:] or res.step_wall_s
     meas_s = sum(tail) / len(tail)
-    tokens_step = cfg.tokens * cfg.grad_accum_rounds
+    tokens_step = cfg.max_tokens * cfg.grad_accum_rounds
     pred_s = planned.makespan_us / 1e6
     return {
-        "seq": cfg.seq_len, "t_round": cfg.tokens,
+        "seq": cfg.seq_len, "t_round": cfg.max_tokens,
         "ga": cfg.grad_accum_rounds, "tokens_step": tokens_step,
         "budget": budget, "pred_s": pred_s, "meas_s": meas_s,
         "ratio": meas_s / pred_s if pred_s else float("nan"),
@@ -117,8 +117,8 @@ def main() -> int:
             else [args.seq_len or base.seq_len])
     t_rounds = ([int(x) for x in args.t_rounds.split(",")]
                 if args.t_rounds
-                else [args.t_round] if args.t_round else [base.tokens])
-    tokens_step = args.tokens_step or (base.tokens
+                else [args.t_round] if args.t_round else [base.max_tokens])
+    tokens_step = args.tokens_step or (base.max_tokens
                                        * base.grad_accum_rounds)
     recipe = Recipe(peak_lr=args.peak_lr, min_lr=args.peak_lr / 10,
                     warmup_steps=max(1, args.steps // 3),

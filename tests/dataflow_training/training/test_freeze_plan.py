@@ -281,13 +281,13 @@ def test_model_step_truncated_ga2():
                                 bridges.get_bytes_from_values(values))
     init_state = {k: v.detach().clone() for k, v in twin.state_dict().items()}
     twin.train()
-    rows = dims.tokens // cfg.seq_len
+    rows = dims.max_tokens // cfg.seq_len
     twin_losses = []
     total = None
     for r in range(cfg.grad_accum_rounds):
-        toks = torch_view(values[f"tokens_0_{r}"], (dims.tokens,),
+        toks = torch_view(values[f"tokens_0_{r}"], (dims.max_tokens,),
                           torch.int32).long().cuda().view(rows, cfg.seq_len)
-        tgts = torch_view(values[f"targets_0_{r}"], (dims.tokens,),
+        tgts = torch_view(values[f"targets_0_{r}"], (dims.max_tokens,),
                           torch.int32).long().cuda().view(rows, cfg.seq_len)
         loss_r = twin.loss(toks, tgts)
         twin_losses.append(float(loss_r.detach()))

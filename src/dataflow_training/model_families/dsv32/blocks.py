@@ -183,9 +183,9 @@ class Dsv32ProfileFill(MoEProfileFill):
             m = layout.views(ctx.inputs[oid])
             if "dsa_idx" in m:
                 idx = m["dsa_idx"]
-                rows = torch.arange(d.tokens, device="cuda").unsqueeze(1)
+                rows = torch.arange(d.max_tokens, device="cuda").unsqueeze(1)
                 offs = torch.arange(d.index_topk, device="cuda").unsqueeze(0)
-                lo_of = torch.empty(d.tokens, dtype=torch.long, device="cuda")
+                lo_of = torch.empty(d.max_tokens, dtype=torch.long, device="cuda")
                 lo = 0
                 # profiler seed data: dims-derived (uniform) per-seq lengths
                 for L in ops.Segments.from_dims(d).lengths:
@@ -199,7 +199,7 @@ class Dsv32ProfileFill(MoEProfileFill):
                 flat = (torch.arange(rows_n, dtype=torch.int64, device="cuda")
                         % moe.n_experts)
                 m["route_ids"].copy_(
-                    flat.view(d.tokens, moe.top_k).to(torch.int32))
+                    flat.view(d.max_tokens, moe.top_k).to(torch.int32))
                 m["route_order"].copy_(
                     torch.argsort(flat, stable=True).to(torch.int32))
                 counts = torch.bincount(flat, minlength=moe.n_experts)
@@ -599,7 +599,7 @@ class _WarmupKLMixin:
         es, kctx = self._stream_ctx(ctx)
         with torch.cuda.stream(es):
             a = self.content_views(self.cl.views(self._in(ctx, 0)), ctx)
-            x = torch_view(self._in(ctx, 1), (d.tokens, d.d_model),
+            x = torch_view(self._in(ctx, 1), (d.max_tokens, d.d_model),
                            torch.bfloat16)[:self.num_tokens(ctx)]
             w = self.task_weight_layout(ctx.task).views(self._in(ctx, 2))
             dw = None

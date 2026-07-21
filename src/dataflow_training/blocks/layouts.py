@@ -155,7 +155,7 @@ class LlamaDims:
     n_kv_heads: int
     d_ff: int
     vocab_size: int
-    tokens: int
+    max_tokens: int
     seq_len: int
     rope_base: float = 500_000.0
     dtypes: DTypePolicy = DTypePolicy()
@@ -191,7 +191,7 @@ class Qwen3Dims:
     head_dim: int
     d_ff: int
     vocab_size: int
-    tokens: int
+    max_tokens: int
     seq_len: int
     rope_base: float = 1_000_000.0
     dtypes: DTypePolicy = DTypePolicy()
@@ -239,7 +239,7 @@ def _lse_spec(dims, n_heads: int) -> tuple[str, tuple[int, ...], str]:
     batched ``(batch*heads, seq_len)`` (identical element count, but the
     per-batch split reappears only for batch>1 and would mismatch the
     single-launch lse)."""
-    return ("lse", (n_heads, dims.tokens), "fp32")
+    return ("lse", (n_heads, dims.max_tokens), "fp32")
 
 
 def grad_layout(weight: PackedLayout, policy: DTypePolicy,
@@ -354,7 +354,7 @@ def activation_layout(dims: LlamaDims) -> PackedLayout:
     flash lse + attention output, the post-attention residual (h_mid), both
     rmsnorm rstds, and the two MLP projections.
     """
-    t, d, kv, ff, h = dims.tokens, dims.d_model, dims.kv_dim, dims.d_ff, dims.n_heads
+    t, d, kv, ff, h = dims.max_tokens, dims.d_model, dims.kv_dim, dims.d_ff, dims.n_heads
     return PackedLayout.build([
         ("rstd_attn", (t,), "fp32"),
         ("q", (t, d), "bf16"),
@@ -419,7 +419,7 @@ def olmoe_activation_layout(dims: OlmoeDims) -> PackedLayout:
     routing decision + pre-activations (tasks/moe/spec.py)."""
     from .modules.moe.spec import moe_context_specs
 
-    t, d, q, kv, h = dims.tokens, dims.d_model, dims.q_dim, dims.kv_dim, dims.n_heads
+    t, d, q, kv, h = dims.max_tokens, dims.d_model, dims.q_dim, dims.kv_dim, dims.n_heads
     return PackedLayout.build([
         ("rstd_attn", (t,), "fp32"),
         ("qm", (t, q), "bf16"),
@@ -443,7 +443,7 @@ def qwen3_activation_layout(dims: Qwen3Dims) -> PackedLayout:
     has exactly the tensors rmsnorm_bwd needs for the qk-norm gradient. v,
     lse, attn_out, h_mid, both block rstds and the MLP projections are saved
     as in llama."""
-    t, d, q, kv, ff = dims.tokens, dims.d_model, dims.q_dim, dims.kv_dim, dims.d_ff
+    t, d, q, kv, ff = dims.max_tokens, dims.d_model, dims.q_dim, dims.kv_dim, dims.d_ff
     h, kvh = dims.n_heads, dims.n_kv_heads
     return PackedLayout.build([
         ("rstd_attn", (t,), "fp32"),
@@ -493,7 +493,7 @@ def qwen3moe_activation_layout(dims: Qwen3MoeDims) -> PackedLayout:
     tail's routing decision + pre-activations (tasks/moe/spec.py)."""
     from .modules.moe.spec import moe_context_specs
 
-    t, d, q, kv = dims.tokens, dims.d_model, dims.q_dim, dims.kv_dim
+    t, d, q, kv = dims.max_tokens, dims.d_model, dims.q_dim, dims.kv_dim
     h, kvh = dims.n_heads, dims.n_kv_heads
     return PackedLayout.build([
         ("rstd_attn", (t,), "fp32"),
@@ -535,7 +535,7 @@ class Dsv3Dims:
     d_ff: int                     # DENSE-kind FFN width (d_ff_dense)
     first_k_dense: int
     vocab_size: int
-    tokens: int
+    max_tokens: int
     seq_len: int
     rope_base: float = 10_000.0
     dtypes: DTypePolicy = DTypePolicy()
@@ -606,7 +606,7 @@ def _dsv3_attn_ctx_specs(dims: Dsv3Dims) -> list[tuple[str, tuple[int, ...], str
     kv_lora + rope) wide instead of h*(qk+v). Pre-norm/pre-rope saves
     (the repo convention); attn_out at the TRUE (t, h*v) — the padded
     form is reconstructed from known-zeros at bwd time."""
-    t = dims.tokens
+    t = dims.max_tokens
     return [
         ("rstd_attn", (t,), "fp32"),
         ("q_a", (t, dims.q_lora_rank), "bf16"),
@@ -630,7 +630,7 @@ def dsv3_dense_weight_layout(dims: Dsv3Dims, layer: int | None = None) -> Packed
 
 
 def dsv3_dense_activation_layout(dims: Dsv3Dims) -> PackedLayout:
-    t, ff = dims.tokens, dims.d_ff
+    t, ff = dims.max_tokens, dims.d_ff
     return PackedLayout.build(_warmup_ctx_filter(
         _dsv3_attn_ctx_specs(dims) + [
             ("x1", (t, ff), "bf16"),
@@ -751,7 +751,7 @@ def dsv32_dense_weight_layout(dims: Dsv32Dims, layer: int | None = None) -> Pack
 
 
 def dsv32_dense_activation_layout(dims: Dsv32Dims) -> PackedLayout:
-    t, ff = dims.tokens, dims.d_ff
+    t, ff = dims.max_tokens, dims.d_ff
     return PackedLayout.build(_warmup_ctx_filter(
         _dsv32_attn_ctx_specs(dims) + [
             ("x1", (t, ff), "bf16"),
@@ -784,7 +784,7 @@ def glm52_aux_temp_layout(dims: "Glm52Dims", kind: str) -> PackedLayout:
 
     specs: list[tuple[str, tuple[int, ...], str]] = []
     if kind in ("gdl", "gml") and getattr(dims, "sparse_mode", True):
-        specs.append(("dsa_idx", (dims.tokens, dims.index_topk), "int32"))
+        specs.append(("dsa_idx", (dims.max_tokens, dims.index_topk), "int32"))
     if kind in ("gml", "gmf"):
         specs += moe_aux_temp_specs(dims, dims.moe)
     return PackedLayout.build(specs)
@@ -798,7 +798,7 @@ def dsv32_aux_temp_layout(dims: Dsv32Dims, kind: str) -> PackedLayout:
 
     specs: list[tuple[str, tuple[int, ...], str]] = []
     if dims.sparse_mode:
-        specs.append(("dsa_idx", (dims.tokens, dims.index_topk), "int32"))
+        specs.append(("dsa_idx", (dims.max_tokens, dims.index_topk), "int32"))
     if kind == "moe":
         specs += moe_aux_temp_specs(dims, dims.moe)
     return PackedLayout.build(specs)
@@ -834,7 +834,7 @@ class Qwen35Dims:
     # shared
     d_ff: int
     vocab_size: int
-    tokens: int
+    max_tokens: int
     seq_len: int
     rope_base: float = 10_000_000.0
     dtypes: DTypePolicy = DTypePolicy()
@@ -902,7 +902,7 @@ def _qwen35_lin_attn_specs(dims) -> list[tuple[str, tuple[int, ...]]]:
 
 
 def _qwen35_lin_attn_ctx(dims) -> list[tuple[str, tuple[int, ...], str]]:
-    t, d = dims.tokens, dims.d_model
+    t, d = dims.max_tokens, dims.d_model
     hv = dims.lin_v_heads
     return [
         ("rstd_attn", (t,), "fp32"),
@@ -933,7 +933,7 @@ def _qwen35_attn_attn_specs(dims) -> list[tuple[str, tuple[int, ...]]]:
 
 
 def _qwen35_attn_attn_ctx(dims) -> list[tuple[str, tuple[int, ...], str]]:
-    t, d = dims.tokens, dims.d_model
+    t, d = dims.max_tokens, dims.d_model
     h, kvh = dims.n_heads, dims.n_kv_heads
     return [
         ("rstd_attn", (t,), "fp32"),
@@ -968,7 +968,7 @@ def qwen35_lin_weight_layout(dims: Qwen35Dims, layer: int | None = None) -> Pack
 def qwen35_lin_activation_layout(dims: Qwen35Dims) -> PackedLayout:
     """DeltaNet saved context (design §3d): projections + fla's saved
     outputs; post-conv and q/k l2norms are recomputed in backward."""
-    t, ff = dims.tokens, dims.d_ff
+    t, ff = dims.max_tokens, dims.d_ff
     return PackedLayout.build(_qwen35_lin_attn_ctx(dims) + [
         ("x1", (t, ff), "bf16"),
         ("x3", (t, ff), "bf16"),
@@ -986,7 +986,7 @@ def qwen35_attn_activation_layout(dims: Qwen35Dims) -> PackedLayout:
     """Gated-attention saved context: pre-norm q (qm) + per-head rstds
     (qwen3 pattern — backward rebuilds post-norm/rope), k likewise, v,
     pre-sigmoid gate, flash outputs, xo, MLP projections."""
-    t, ff = dims.tokens, dims.d_ff
+    t, ff = dims.max_tokens, dims.d_ff
     return PackedLayout.build(_qwen35_attn_attn_ctx(dims) + [
         ("x1", (t, ff), "bf16"),
         ("x3", (t, ff), "bf16"),
@@ -1048,7 +1048,7 @@ class Gpt2Dims:
     n_heads: int
     d_ff: int
     vocab_size: int
-    tokens: int
+    max_tokens: int
     seq_len: int
     n_ctx: int
     # tied embed/head (config option; classic GPT-2 ties, the repo default
@@ -1107,7 +1107,7 @@ def gpt2_activation_layout(dims: Gpt2Dims) -> PackedLayout:
     the rms families), post-projection q/k/v, flash lse + attention output,
     the post-attention residual, and the pre-GELU MLP projection. The
     normed inputs h1/h2 are recomputed in backward from the statistics."""
-    t, d, ff, h = dims.tokens, dims.d_model, dims.d_ff, dims.n_heads
+    t, d, ff, h = dims.max_tokens, dims.d_model, dims.d_ff, dims.n_heads
     return PackedLayout.build([
         ("mean_attn", (t,), "fp32"),
         ("rstd_attn", (t,), "fp32"),

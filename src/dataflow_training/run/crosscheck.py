@@ -173,10 +173,10 @@ def moe_golden_gate(cfg_off, golden_cls, bridge_mod, *, alpha: float,
     backend = CudaBackend()
     values = fam.initial_values(fam.lower(cfg_off), cfg_off, backend, seed=11)
     gb = get_bytes_from_values(values)
-    B, T = dims.tokens // dims.seq_len, dims.seq_len
+    B, T = dims.max_tokens // dims.seq_len, dims.seq_len
     hyper = AdamWHyper(lr=lr, weight_decay=weight_decay)
     try:
-        data = step_data(cfg_off.vocab_size, dims.tokens, steps=steps, seed=seed)
+        data = step_data(cfg_off.vocab_size, dims.max_tokens, steps=steps, seed=seed)
 
         # -- LBL-OFF leg -------------------------------------------------------
         golden = golden_cls.from_packed_bytes(

@@ -259,7 +259,7 @@ class _Base:
         through and is sliced explicitly at its sites. Identity when
         the round is exactly full."""
         n = self.num_tokens(ctx) if num_tokens is None else num_tokens
-        T = self.dims.tokens
+        T = self.dims.max_tokens
         if n == T or views is None:
             return views
         out = {}
@@ -285,7 +285,7 @@ class _Base:
         num_tokens()."""
         rv = ctx.run_values or {}
         return rv.get("num_tokens_by_round", {}).get(str(r),
-                                                     self.dims.tokens)
+                                                     self.dims.max_tokens)
 
     def num_tokens(self, ctx) -> int:
         """This task's round's CONTENT token count — the sum of its
@@ -296,7 +296,7 @@ class _Base:
         invocation computes every row)."""
         rv = ctx.run_values or {}
         return rv.get("num_tokens_by_round", {}).get(self.parse_round(ctx),
-                                                     self.dims.tokens)
+                                                     self.dims.max_tokens)
 
     def _attn_meta(self, ctx):
         """The round's ``Segments`` — the SINGLE varlen descriptor every
@@ -359,9 +359,9 @@ def _fill_tokens(ex, ctx: TaskContext) -> None:
     for oid, b in ctx.inputs.items():
         if "tokens" in oid:
             g = torch.Generator(device="cuda")
-            g.manual_seed(0xE_B_ED ^ d.tokens)
-            v = torch_view(b, (d.tokens,), torch.int32)
-            v.copy_(torch.randint(0, d.vocab_size, (d.tokens,),
+            g.manual_seed(0xE_B_ED ^ d.max_tokens)
+            v = torch_view(b, (d.max_tokens,), torch.int32)
+            v.copy_(torch.randint(0, d.vocab_size, (d.max_tokens,),
                                   generator=g, dtype=torch.int32,
                                   device=v.device))
 
@@ -377,9 +377,9 @@ class EmbedFwd(_Base):
         d = self.dims
         with torch.cuda.stream(external_stream(ctx.stream)):
             n = self.num_tokens(ctx)
-            tokens = torch_view(self._in(ctx, 0), (d.tokens,), torch.int32)[:n]
+            tokens = torch_view(self._in(ctx, 0), (d.max_tokens,), torch.int32)[:n]
             w = torch_view(self._in(ctx, 1), (d.vocab_size, d.d_model), torch.bfloat16)
-            y = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)[:n]
+            y = torch_view(self._out(ctx, 0), (d.max_tokens, d.d_model), torch.bfloat16)[:n]
             ops.embed_fwd(tokens, w, y)
 
 
@@ -432,11 +432,11 @@ class HeadLoss(_Base):
         with torch.cuda.stream(es):
             n = self.num_tokens(ctx)
             K = self.kernels
-            y = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)[:n]
-            targets = torch_view(self._in(ctx, 1), (d.tokens,), torch.int32)[:n]
+            y = torch_view(self._in(ctx, 0), (d.max_tokens, d.d_model), torch.bfloat16)[:n]
+            targets = torch_view(self._in(ctx, 1), (d.max_tokens,), torch.int32)[:n]
             wh = self.hl.views(self._in(ctx, 2))
             accum = bool(ctx.task.mutates)
-            dy = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)[:n]
+            dy = torch_view(self._out(ctx, 0), (d.max_tokens, d.d_model), torch.bfloat16)[:n]
             loss = torch_view(self._out(ctx, 1), (1,), torch.float32)
             # frozen head: the dW_head object does not exist (policy-
             # filtered layout scrubbed it) — CE fwd + dy still run,
@@ -529,8 +529,8 @@ class EmbedBwd(_Base):
         es, kctx = self._stream_ctx(ctx)
         with torch.cuda.stream(es):
             n = self.num_tokens(ctx)
-            dy = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)[:n]
-            tokens = torch_view(self._in(ctx, 1), (d.tokens,), torch.int32)[:n]
+            dy = torch_view(self._in(ctx, 0), (d.max_tokens, d.d_model), torch.bfloat16)[:n]
+            tokens = torch_view(self._in(ctx, 1), (d.max_tokens,), torch.int32)[:n]
             accum = bool(ctx.task.mutates)
             buf = ctx.mutates[ctx.task.mutates[0]] if accum else self._out(ctx, 0)
             dwe = self.egl.view(buf, "w")

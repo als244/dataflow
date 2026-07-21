@@ -351,6 +351,6 @@ def initial_values_from_layouts(program: Program, dims, fl: FamilyLayouts,
         elif spec.id.startswith(("O_", "Aux_")):
             torch_view(buf, (spec.size_bytes,), torch.uint8).zero_()
         elif spec.id.startswith(("tokens_", "targets_")):
-            ids = torch.randint(0, dims.vocab_size, (dims.tokens,), generator=gen, dtype=torch.int32)
-            torch_view(buf, (dims.tokens,), torch.int32).copy_(ids)
+            ids = torch.randint(0, dims.vocab_size, (dims.max_tokens,), generator=gen, dtype=torch.int32)
+            torch_view(buf, (dims.max_tokens,), torch.int32).copy_(ids)
     return buffers

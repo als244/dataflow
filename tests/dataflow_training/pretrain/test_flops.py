@@ -22,7 +22,7 @@ def test_gpt2_hand_formula():
     cfg = fam.config_type.tiny()
     rep = flop_report(cfg, fam.lower(cfg))
     d, ff, L = cfg.d_model, cfg.d_ff, cfg.n_layers
-    t, s, V = cfg.tokens, cfg.seq_len, cfg.vocab_size
+    t, s, V = cfg.max_tokens, cfg.seq_len, cfg.vocab_size
     mm_layer = 2 * t * (cfg.block_params - 2 * d)   # the seed's own form
     attn_f = 2.0 * t * s * d                        # 0.5 * 4 * s^2 * H * hd
     head = 2.0 * t * d * V
@@ -42,7 +42,7 @@ def test_attention_split_factors():
     assert rep.attn_bwd_hw > 0
     assert (abs(rep.attn_bwd_eff / rep.attn_bwd_hw
                 - ATTN_BWD_EFFECTIVE_OVER_HARDWARE) < 1e-9)
-    expect_fwd = 2.0 * cfg.tokens * cfg.seq_len * cfg.d_model * cfg.n_layers
+    expect_fwd = 2.0 * cfg.max_tokens * cfg.seq_len * cfg.d_model * cfg.n_layers
     assert abs(rep.attn_fwd - expect_fwd) / expect_fwd < 1e-6
 
 
@@ -54,7 +54,7 @@ def test_varlen_quadratic_scaling():
     rep = flop_report(cfg, fam.lower(cfg))
     eff_u, hw_u = rep.per_step()
     lens = {"0": [32, 32]}
-    eff_r, hw_r = rep.per_step(lens, tokens=cfg.tokens,
+    eff_r, hw_r = rep.per_step(lens, tokens=cfg.max_tokens,
                                seq_len=cfg.seq_len)
     attn_eff = rep.attn_fwd + rep.attn_bwd_eff
     assert abs((eff_u - eff_r) - 0.5 * attn_eff) / attn_eff < 1e-9
@@ -96,8 +96,8 @@ def test_hybrid_split_causal_vs_static():
     assert (abs(rep.attn_bwd_eff / rep.attn_bwd_hw
                 - ATTN_BWD_EFFECTIVE_OVER_HARDWARE) < 1e-9)
     eff_u, hw_u = rep.per_step()
-    lens = {"0": [cfg.seq_len // 2] * (2 * cfg.tokens // cfg.seq_len)}
-    eff_r, hw_r = rep.per_step(lens, tokens=cfg.tokens,
+    lens = {"0": [cfg.seq_len // 2] * (2 * cfg.max_tokens // cfg.seq_len)}
+    eff_r, hw_r = rep.per_step(lens, tokens=cfg.max_tokens,
                                seq_len=cfg.seq_len)
     causal_eff = rep.attn_fwd + rep.attn_bwd_eff
     # only the causal share halves; the static share is untouched

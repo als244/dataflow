@@ -86,7 +86,7 @@ def build_rl_program(fam, cfg, *, steps: int = 1):
                   for oid in list(t.get("inputs", []))
                   + list(t.get("mutates", []))}
     have_initial = {o["id"] for o in d["initial_objects"]}
-    t_rows = cfg.tokens
+    t_rows = cfg.max_tokens
 
     new_initial = [dict(out_spec[oid], location="backing")
                    for oid in sorted(referenced - produced - have_initial

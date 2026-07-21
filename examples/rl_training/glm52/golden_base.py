@@ -293,7 +293,7 @@ class GoldenDsv3(GoldenOlmoe):
         d = self.dims
         if d.seq_lens is not None:
             return tuple(d.seq_lens)
-        return (d.seq_len,) * (d.tokens // d.seq_len)
+        return (d.seq_len,) * (d.max_tokens // d.seq_len)
 
     def _note_router_counts(self, h2: torch.Tensor, w) -> None:
         """Record this layer's per-expert assignment counts (detached) for

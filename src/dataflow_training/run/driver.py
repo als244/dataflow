@@ -290,7 +290,7 @@ def run_reference(cfg, recipe: Recipe, pipeline, steps: int, *, seed: int = 11,
     model.train()
     opt = reference_optimizer(model, cfg, recipe)
 
-    B, T = dims.tokens // dims.seq_len, dims.seq_len
+    B, T = dims.max_tokens // dims.seq_len, dims.seq_len
     R = cfg.grad_accum_rounds
     # LBL-ON configs (MoE aux_coef > 0): train the composite CE + alpha*LBL
     # per round (the reference's per-round semantics match the engine's
@@ -385,7 +385,7 @@ def run_reference(cfg, recipe: Recipe, pipeline, steps: int, *, seed: int = 11,
         res.tok_per_s.append(content / dt)
         cf = content / tokens_per_step(cfg)
         s_eff, s_hw = flops.per_step(
-            step_lens or None, tokens=cfg.tokens, seq_len=cfg.seq_len,
+            step_lens or None, tokens=cfg.max_tokens, seq_len=cfg.seq_len,
             content_fraction=cf, executed_fraction=cf)
         if step % log_every == 0 or step == steps - 1:
             fill_note = "" if cf >= 0.9995 else f"  fill {cf * 100:.1f}%"
@@ -627,7 +627,7 @@ def run_engine(client, cfg, recipe: Recipe, pipeline, steps: int, *,
 
     init_model(client, fam, cd, seed=seed)
     R = cfg.grad_accum_rounds
-    T = cfg.tokens
+    T = cfg.max_tokens
 
     start_step = 0
     resume_meta = None
@@ -745,7 +745,7 @@ def run_engine(client, cfg, recipe: Recipe, pipeline, steps: int, *,
                          for r, b in sm["lens"].items()}
             cf = sm["content"] / (T * R)
             s_eff, s_hw = flops.per_step(
-                wire_lens, tokens=cfg.tokens, seq_len=cfg.seq_len,
+                wire_lens, tokens=cfg.max_tokens, seq_len=cfg.seq_len,
                 content_fraction=cf,
                 executed_fraction=1.0 if execute_padding else cf)
             fill_note = "" if cf >= 0.9995 else f"  fill {cf * 100:.1f}%"

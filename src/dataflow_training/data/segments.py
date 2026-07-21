@@ -60,7 +60,7 @@ class Segments:
         sl = getattr(d, "seq_lens", None)
         if sl is not None:
             return cls(tuple(int(n) for n in sl))
-        return cls.uniform(d.seq_len, d.tokens // d.seq_len)
+        return cls.uniform(d.seq_len, d.max_tokens // d.seq_len)
 
     @property
     def tokens(self) -> int:

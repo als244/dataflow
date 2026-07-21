@@ -276,9 +276,9 @@ class Gpt2EmbedFwd(_Base):
         d = self.dims
         with torch.cuda.stream(external_stream(ctx.stream)):
             n = self.num_tokens(ctx)
-            tokens = torch_view(self._in(ctx, 0), (d.tokens,), torch.int32)[:n]
+            tokens = torch_view(self._in(ctx, 0), (d.max_tokens,), torch.int32)[:n]
             w = self.el.views(self._in(ctx, 1))
-            y = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)[:n]
+            y = torch_view(self._out(ctx, 0), (d.max_tokens, d.d_model), torch.bfloat16)[:n]
             r = parse_object_round(ctx.task.outputs[0].id)
             seg = resolve_segments(ctx, d, r)
             if seg.lengths and max(seg.lengths) > d.n_ctx:
@@ -317,8 +317,8 @@ class Gpt2EmbedBwd(_Base):
         kctx = KernelCtx(stream_handle=es.cuda_stream, torch_stream=es)
         with torch.cuda.stream(es):
             n = self.num_tokens(ctx)
-            dy = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)[:n]
-            tokens = torch_view(self._in(ctx, 1), (d.tokens,), torch.int32)[:n]
+            dy = torch_view(self._in(ctx, 0), (d.max_tokens, d.d_model), torch.bfloat16)[:n]
+            tokens = torch_view(self._in(ctx, 1), (d.max_tokens,), torch.int32)[:n]
             accum = bool(ctx.task.mutates)
             buf = ctx.mutates[ctx.task.mutates[0]] if accum else self._out(ctx, 0)
             views = self.egl.views(buf)
@@ -352,11 +352,11 @@ class Gpt2HeadLoss(HeadLoss):
         with torch.cuda.stream(es):
             n = self.num_tokens(ctx)
             K = self.kernels
-            y = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)[:n]
-            targets = torch_view(self._in(ctx, 1), (d.tokens,), torch.int32)[:n]
+            y = torch_view(self._in(ctx, 0), (d.max_tokens, d.d_model), torch.bfloat16)[:n]
+            targets = torch_view(self._in(ctx, 1), (d.max_tokens,), torch.int32)[:n]
             wh = self.hl.views(self._in(ctx, 2))
             accum = bool(ctx.task.mutates)
-            dy = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)[:n]
+            dy = torch_view(self._out(ctx, 0), (d.max_tokens, d.d_model), torch.bfloat16)[:n]
             loss = torch_view(self._out(ctx, 1), (1,), torch.float32)
             if accum:
                 dwh = self.hgl.views(ctx.mutates[ctx.task.mutates[0]])

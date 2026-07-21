@@ -355,14 +355,14 @@ def _harness_weights(d_model, moe, gen):
 
 class _Dims:
     def __init__(self, d_model, tokens, moe):
-        self.d_model, self.tokens, self.moe = d_model, tokens, moe
+        self.d_model, self.max_tokens, self.moe = d_model, tokens, moe
 
 
 def _run_tail_fwd(K, dims, w, resid, a):
     """Mirror a family block's ffn_norm + spliced MoE stages."""
     kctx = _kctx()
     h2 = torch.empty_like(resid)
-    rstd = torch.empty(dims.tokens, dtype=torch.float32, device="cuda")
+    rstd = torch.empty(dims.max_tokens, dtype=torch.float32, device="cuda")
     K.rmsnorm_fwd(kctx, resid, w["ffn_norm_w"], h2, rstd)
     if a is not None:
         a["rstd_ffn"].copy_(rstd)
@@ -375,7 +375,7 @@ def _run_tail_fwd(K, dims, w, resid, a):
 
 
 def _ctx_dict(dims, moe):
-    a = {"rstd_ffn": torch.empty(dims.tokens, dtype=torch.float32, device="cuda")}
+    a = {"rstd_ffn": torch.empty(dims.max_tokens, dtype=torch.float32, device="cuda")}
     tmap = {"bf16": torch.bfloat16, "fp32": torch.float32, "int32": torch.int32}
     for name, shape, dt in moe_context_specs(dims, moe):
         a[name] = torch.empty(shape, dtype=tmap[dt], device="cuda")
@@ -506,7 +506,7 @@ def test_partial_ownership_sizes_and_sharded_experts_math():
     full = MoESpec(n_experts=e, top_k=k, d_ff_expert=f)
     part = dataclasses.replace(full, expert_ids=(1, 4, 6))
 
-    D = type("D", (), {"d_model": d_model, "tokens": t})()
+    D = type("D", (), {"d_model": d_model, "max_tokens": t})()
     wspecs = dict(moe_weight_specs(D, part))
     assert wspecs["w13_experts"] == (3, d_model, 2 * f)
     assert wspecs["w2_experts"] == (3, f, d_model)

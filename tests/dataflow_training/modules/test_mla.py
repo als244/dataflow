@@ -29,7 +29,7 @@ class _Dims:
     qk_rope_dim: int = 8
     v_head_dim: int = 16
     rope_base: float = 10_000.0
-    tokens: int = 128
+    max_tokens: int = 128
     seq_len: int = 64
     seq_lens: tuple = None
 
@@ -98,9 +98,9 @@ def test_mla_forms_shapes_and_grads_flow():
     w = _weights(d)
     for name, t_ in w.items():
         t_.requires_grad_()
-    x = torch.randn(d.tokens, d.d_model, device="cuda", requires_grad=True)
+    x = torch.randn(d.max_tokens, d.d_model, device="cuda", requires_grad=True)
     y = mla_block_reference(x, w, d)
-    assert y.shape == (d.tokens, d.d_model)
+    assert y.shape == (d.max_tokens, d.d_model)
     y.backward(torch.randn_like(y))
     for name, t_ in w.items():
         assert t_.grad is not None and torch.isfinite(t_.grad).all(), name
@@ -117,7 +117,7 @@ def test_mla_shared_k_rope_broadcast_gradient():
 
     d = _Dims()
     w = _weights(d, seed=3)
-    x = torch.randn(d.tokens, d.d_model, device="cuda")
+    x = torch.randn(d.max_tokens, d.d_model, device="cuda")
     h1 = ops.rmsnorm_reference(x, w["attn_norm_w"])
 
     w_kv_a = w["w_kv_a"].detach().clone().requires_grad_()
@@ -137,13 +137,13 @@ def test_mla_forms_ragged_packing_matches_per_sequence():
 
     from dataflow_training.blocks.modules.mla_forms import mla_block_reference
 
-    d_packed = _Dims(tokens=96, seq_len=None, seq_lens=(64, 32))
+    d_packed = _Dims(max_tokens=96, seq_len=None, seq_lens=(64, 32))
     w = _weights(d_packed, seed=5)
     x = torch.randn(96, d_packed.d_model, device="cuda")
     y = mla_block_reference(x, w, d_packed)
 
-    d_a = replace(d_packed, tokens=64, seq_len=64, seq_lens=None)
-    d_b = replace(d_packed, tokens=32, seq_len=32, seq_lens=None)
+    d_a = replace(d_packed, max_tokens=64, seq_len=64, seq_lens=None)
+    d_b = replace(d_packed, max_tokens=32, seq_len=32, seq_lens=None)
     ya = mla_block_reference(x[:64], w, d_a)
     yb = mla_block_reference(x[64:], w, d_b)
     assert rel_l2(y, torch.cat([ya, yb])) < 1e-5
@@ -165,7 +165,7 @@ def _dsv3_dims(kind="moe", **over):
     kw = dict(
         d_model=128, n_heads=4, q_lora_rank=64, kv_lora_rank=32,
         qk_nope_dim=16, qk_rope_dim=8, v_head_dim=16,
-        d_ff=256, first_k_dense=1, vocab_size=512, tokens=128, seq_len=64,
+        d_ff=256, first_k_dense=1, vocab_size=512, max_tokens=128, seq_len=64,
         dtypes=DTypePolicy(overrides=(
             ("w_router_bias", ParamDTypes("fp32", "fp32", "fp32")),
         )),
@@ -191,8 +191,8 @@ def _block_state(dims, wl, seed):
             views[f.name] = (
                 torch.randn(n, generator=gen, device="cuda") * 0.06
             ).to(dt).view(f.shape)
-    x = (torch.randn(dims.tokens, dims.d_model, generator=gen, device="cuda") * 0.5).to(torch.bfloat16)
-    dy = (torch.randn(dims.tokens, dims.d_model, generator=gen, device="cuda") * 0.5).to(torch.bfloat16)
+    x = (torch.randn(dims.max_tokens, dims.d_model, generator=gen, device="cuda") * 0.5).to(torch.bfloat16)
+    dy = (torch.randn(dims.max_tokens, dims.d_model, generator=gen, device="cuda") * 0.5).to(torch.bfloat16)
     return views, x, dy
 
 
@@ -212,7 +212,7 @@ def _golden_block(x_ref, leaves, dims, kind, route_ids=None, segments=None):
         aux = torch.zeros((), device=x_ref.device)
         return y, aux
     lens = dims.seq_lens if dims.seq_lens is not None else (
-        dims.seq_len,) * (dims.tokens // dims.seq_len)
+        dims.seq_len,) * (dims.max_tokens // dims.seq_len)
     return moe_mlp_reference(h2, leaves, dims.moe, h_mid,
                              route_ids=route_ids, seq_lens=tuple(lens))
 

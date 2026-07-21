@@ -100,7 +100,7 @@ def make_artifacts(adapter, out_path: Path, *, seed=11, reward_seed=100):
         leaves.append(w_bytes["W_head"].cuda())
     golden = adapter.make_golden(dims, cfg.n_layers, leaves)
 
-    tokens = torch_view(values["tokens_0_0"], (dims.tokens,), torch.int32)
+    tokens = torch_view(values["tokens_0_0"], (dims.max_tokens,), torch.int32)
     tokens = tokens.long().cuda()
     with torch.no_grad():
         captured, y_last = adapter.capture(golden, tokens)
@@ -110,11 +110,11 @@ def make_artifacts(adapter, out_path: Path, *, seed=11, reward_seed=100):
         lse = torch.logsumexp(logits, dim=-1)
 
     g = torch.Generator(device="cuda").manual_seed(reward_seed)
-    actions = torch.randint(0, dims.vocab_size, (dims.tokens,),
+    actions = torch.randint(0, dims.vocab_size, (dims.max_tokens,),
                             generator=g, device="cuda", dtype=torch.int64)
     old_lp = (logits.gather(1, actions.unsqueeze(1)).squeeze(1) - lse
-              + 0.1 * torch.randn(dims.tokens, generator=g, device="cuda"))
-    adv = torch.randn(dims.tokens, generator=g, device="cuda")
+              + 0.1 * torch.randn(dims.max_tokens, generator=g, device="cuda"))
+    adv = torch.randn(dims.max_tokens, generator=g, device="cuda")
 
     m_bytes = {}
     from dataflow_training.blocks.layouts import PackedLayout  # noqa: F401
@@ -200,7 +200,7 @@ def reference_train(adapter, artifacts, *, steps, mode):
         logits = (ops.rmsnorm_reference(
             y_hold, golden.w_head["final_norm_w"]) @ golden.w_head["w"].T)
         rl = rl_loss_reference(logits, actions, old_lp, adv,
-                               dims.tokens, mode)
+                               dims.max_tokens, mode)
         rl.backward()
         dy = y_hold.grad
 

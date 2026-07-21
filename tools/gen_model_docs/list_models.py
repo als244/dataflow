@@ -40,7 +40,7 @@ stages, kernels) at the standard 16×4K run shape; other run shapes:
 # run-shape knobs, policies, and the cross-family commons — never
 # "unique configuration axes"
 RUN_KNOBS = {
-    "batch", "grad_accum_rounds", "num_steps", "seq_len", "tokens",
+    "batch", "grad_accum_rounds", "num_steps", "seq_len", "max_tokens",
     "optimizer_placement", "opt_policy", "dtypes", "vocab_size",
     "n_layers", "d_model",
 }

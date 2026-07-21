@@ -195,13 +195,13 @@ def test_dsv32_ga2_matches_reference():
                  and hasattr(model, "indexer_loss"))
     if drive_idx:
         model.enable_indexer_kl(True)
-    B = dims.tokens // cfg.seq_len
+    B = dims.max_tokens // cfg.seq_len
     total = None
     agg_counts = {}
     for r in range(cfg.grad_accum_rounds):
-        toks = torch_view(values[f"tokens_0_{r}"], (dims.tokens,),
+        toks = torch_view(values[f"tokens_0_{r}"], (dims.max_tokens,),
                           torch.int32).long().cuda().view(B, cfg.seq_len)
-        tgts = torch_view(values[f"targets_0_{r}"], (dims.tokens,),
+        tgts = torch_view(values[f"targets_0_{r}"], (dims.max_tokens,),
                           torch.int32).long().cuda().view(B, cfg.seq_len)
         loss_r = model.loss(toks, tgts, aux_coef=cfg.aux_coef)
         if drive_idx:

@@ -515,7 +515,7 @@ class MoEProfileFill:
 
         moe = _spec(self.dims)
         layout = moe_aux_temp_layout(self.dims, moe)
-        t, topk = self.dims.tokens, moe.top_k
+        t, topk = self.dims.max_tokens, moe.top_k
         for oid in ctx.task.inputs:
             if not oid.startswith("AuxTemp_"):
                 continue

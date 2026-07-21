@@ -70,7 +70,7 @@ class ToyConfig:
     opt_policy: object = "adamw"
 
     @property
-    def tokens(self) -> int:
+    def max_tokens(self) -> int:
         return self.seq_len * self.batch
 
     @property
@@ -93,14 +93,14 @@ class ToyConfig:
 @dataclass(frozen=True)
 class ToyDims:
     """The family's opaque dims object. Field names shared with the
-    builtin dims (``d_model``/``vocab_size``/``tokens``/``dtypes``/
+    builtin dims (``d_model``/``vocab_size``/``max_tokens``/``dtypes``/
     ``opt_policy``) are what the reused base templates and emit helpers
     duck-type on."""
 
     d_model: int
     d_ff: int
     vocab_size: int
-    tokens: int
+    max_tokens: int
     seq_len: int
     dtypes: DTypePolicy = DTypePolicy()
     opt_policy: object = "adamw"
@@ -109,7 +109,7 @@ class ToyDims:
 
 def toy_dims(cfg: ToyConfig) -> ToyDims:
     return ToyDims(d_model=cfg.d_model, d_ff=cfg.d_ff,
-                   vocab_size=cfg.vocab_size, tokens=cfg.tokens,
+                   vocab_size=cfg.vocab_size, max_tokens=cfg.max_tokens,
                    seq_len=cfg.seq_len, opt_policy=cfg.opt_policy)
 
 
@@ -125,7 +125,7 @@ def toy_weight_layout(dims: ToyDims) -> PackedLayout:
 def toy_activation_layout(dims: ToyDims) -> PackedLayout:
     """Saved-for-backward context of one toy block: the norm rstd, the
     normed input, and the pre-activation."""
-    t, d, ff = dims.tokens, dims.d_model, dims.d_ff
+    t, d, ff = dims.max_tokens, dims.d_model, dims.d_ff
     return PackedLayout.build([
         ("rstd", (t,), "fp32"),
         ("xn", (t, d), "bf16"),
@@ -197,10 +197,10 @@ class ToyBlockFwd:
 
         d = self.dims
         x = torch_view(ctx.inputs[ctx.task.inputs[0]],
-                       (d.tokens, d.d_model), torch.bfloat16)
+                       (d.max_tokens, d.d_model), torch.bfloat16)
         w = toy_weight_layout(d).views(ctx.inputs[ctx.task.inputs[1]])
         y = torch_view(ctx.outputs[ctx.task.outputs[0].id],
-                       (d.tokens, d.d_model), torch.bfloat16)
+                       (d.max_tokens, d.d_model), torch.bfloat16)
         xn, rstd = toy_rmsnorm(x, w["ffn_norm_w"])
         u = xn @ w["w1"].T
         y.copy_(x + torch.nn.functional.silu(u) @ w["w2"].T)
@@ -226,7 +226,7 @@ class ToyBlockRecompute:
 
         d = self.dims
         x = torch_view(ctx.inputs[ctx.task.inputs[0]],
-                       (d.tokens, d.d_model), torch.bfloat16)
+                       (d.max_tokens, d.d_model), torch.bfloat16)
         w = toy_weight_layout(d).views(ctx.inputs[ctx.task.inputs[1]])
         a = toy_activation_layout(d).views(
             ctx.outputs[ctx.task.outputs[0].id])
@@ -251,11 +251,11 @@ class ToyBlockBwd:
 
         d = self.dims
         dy = torch_view(ctx.inputs[ctx.task.inputs[0]],
-                        (d.tokens, d.d_model), torch.bfloat16)
+                        (d.max_tokens, d.d_model), torch.bfloat16)
         a = toy_activation_layout(d).views(ctx.inputs[ctx.task.inputs[1]])
         w = toy_weight_layout(d).views(ctx.inputs[ctx.task.inputs[3]])
         dx = torch_view(ctx.outputs[ctx.task.outputs[0].id],
-                        (d.tokens, d.d_model), torch.bfloat16)
+                        (d.max_tokens, d.d_model), torch.bfloat16)
         accum = bool(ctx.task.mutates)
         if accum:
             gbuf = ctx.mutates[ctx.task.mutates[0]]

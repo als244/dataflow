@@ -239,7 +239,7 @@ def moe_aux_temp_specs(dims, moe: MoESpec) -> list[tuple[str, tuple[int, ...], s
     A objects). router_logits stays in the ctx: it is a plain
     recomputable GEMM output the backward consumes for aux/router grads,
     not part of the discrete decision."""
-    t = dims.tokens
+    t = dims.max_tokens
     rows = moe_local_rows(moe, t)
     specs: list[tuple[str, tuple[int, ...], str]] = [
         ("route_w", (t, moe.top_k), "bf16"),
@@ -293,7 +293,7 @@ def moe_context_specs(dims, moe: MoESpec, *, aux_temp: bool = False,
     OUT of the ctx into the layer's M object (moe_aux_temp_specs); only
     router_logits + pre-activations remain here.
     """
-    t = dims.tokens
+    t = dims.max_tokens
     rows = moe_local_rows(moe, t)
     specs: list[tuple[str, tuple[int, ...], str]] = [
         ("router_logits", (t, moe.n_experts), "bf16"),

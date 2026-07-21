@@ -114,7 +114,7 @@ class LooseCosts:
     d_model, vocab_size and the embed/head param counts)."""
 
     def __init__(self, cfg, hw: ShapedHardware) -> None:
-        t, d = cfg.tokens, cfg.d_model
+        t, d = cfg.max_tokens, cfg.d_model
 
         embed_bytes = BF16 * 2.0 * t * d + 4.0 * t
         self.embed_fwd_us = hw.mem_us(embed_bytes)
@@ -236,7 +236,7 @@ def roofline_block_kind_spec(cfg, hw: ShapedHardware, *,
     """Dense-transformer block roofline (attention + SwiGLU MLP): the
     shared cost seed for uniform families (llama3, qwen3). The config
     supplies block_params / kv_dim / d_ff / saved_ctx_width."""
-    t, d, seq = cfg.tokens, cfg.d_model, cfg.seq_len
+    t, d, seq = cfg.max_tokens, cfg.d_model, cfg.seq_len
 
     matmul_params = cfg.block_params - 2 * d  # exclude norm vectors
     mm_flops = 2.0 * t * matmul_params
@@ -357,7 +357,7 @@ def build_shaped_program(
         for m in share.consumers:
             aux_producer_of[m] = share.producer
     loose = LooseCosts(cfg, hw)
-    t, d = cfg.tokens, cfg.d_model
+    t, d = cfg.max_tokens, cfg.d_model
 
     def bf16(n_elems: int) -> int:
         return BF16 * n_elems
@@ -705,7 +705,7 @@ def build_shaped_program(
         metadata={
             "family": family,
             "primary_unit": "tokens",
-            "primary_count": float(cfg.tokens * cfg.grad_accum_rounds * cfg.num_steps),
+            "primary_count": float(cfg.max_tokens * cfg.grad_accum_rounds * cfg.num_steps),
             "config": {
                 "n_layers": cfg.n_layers, "d_model": cfg.d_model, "n_heads": cfg.n_heads,
                 "n_kv_heads": cfg.n_kv_heads, "d_ff": cfg.d_ff, "vocab_size": cfg.vocab_size,

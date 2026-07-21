@@ -66,7 +66,7 @@ class ShapedOlmoeConfig:
     seq_lens: tuple[int, ...] | None = None
 
     @property
-    def tokens(self) -> int:
+    def max_tokens(self) -> int:
         if self.seq_lens is not None:
             return sum(self.seq_lens)
         return self.seq_len * self.batch
@@ -132,7 +132,7 @@ def derive_dims(cfg: ShapedOlmoeConfig) -> OlmoeDims:
         head_dim=cfg.head_dim,
         d_ff=cfg.d_ff_expert,
         vocab_size=cfg.vocab_size,
-        tokens=cfg.tokens,
+        max_tokens=cfg.max_tokens,
         seq_len=cfg.seq_len,
         rope_base=cfg.rope_base,
         dtypes=getattr(cfg, "dtypes", None) or DTypePolicy(),
@@ -146,7 +146,7 @@ def _kind_spec(cfg: ShapedOlmoeConfig, hw: ShapedHardware) -> LayerKindSpec:
     dims = derive_dims(cfg)
     wl = olmoe_weight_layout(dims, layer=0)
     cl = olmoe_activation_layout(dims)
-    t, d, seq = cfg.tokens, cfg.d_model, cfg.seq_len
+    t, d, seq = cfg.max_tokens, cfg.d_model, cfg.seq_len
     q, kv, f, k = cfg.q_dim, cfg.kv_dim, cfg.d_ff_expert, cfg.top_k
 
     total_params = sum(int(math.prod(fl.shape)) for fl in wl.fields)

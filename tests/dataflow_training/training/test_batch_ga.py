@@ -62,12 +62,12 @@ def test_batch_ga_model_step_matches_reference():
     bridges.load_reference_init(model, CFG, dims,
                                 bridges.get_bytes_from_values(values))
     model.train()
-    B = dims.tokens // CFG.seq_len
+    B = dims.max_tokens // CFG.seq_len
     total = None
     for r in range(CFG.grad_accum_rounds):
-        tokens = torch_view(values[f"tokens_0_{r}"], (dims.tokens,),
+        tokens = torch_view(values[f"tokens_0_{r}"], (dims.max_tokens,),
                             torch.int32).long().cuda().view(B, CFG.seq_len)
-        targets = torch_view(values[f"targets_0_{r}"], (dims.tokens,),
+        targets = torch_view(values[f"targets_0_{r}"], (dims.max_tokens,),
                              torch.int32).long().cuda().view(B, CFG.seq_len)
         loss_r = model.loss(tokens, targets)
         total = loss_r if total is None else total + loss_r

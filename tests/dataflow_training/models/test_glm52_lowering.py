@@ -77,7 +77,7 @@ def test_dense_warmup_and_frozen_indexer_modes():
     cfg = ShapedGlm52Config.tiny()
     sizes = prog.object_sizes()
     dms = {k: v for k, v in sizes.items() if k.startswith("dAuxTemp_")}
-    assert dms and all(v == 4 * cfg.tokens * cfg.seq_len for v in dms.values())
+    assert dms and all(v == 4 * cfg.max_tokens * cfg.seq_len for v in dms.values())
     assert not any(oid.startswith("AuxTemp_") and oid.rsplit("_", 1)[1] == "0"
                    for oid in sizes), \
         "gdl (dense leader, layer 0) must have no M in warm-up"

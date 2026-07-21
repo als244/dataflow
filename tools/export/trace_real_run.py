@@ -114,7 +114,7 @@ def capture_run(client, cfg, recipe, feed, steps: int, *,
     init_model(client, resolver_family(cfg), cd, seed=seed)
     R = cfg.grad_accum_rounds
     stepper = feed(None)                    # feed is a pipeline factory
-    valid0, lens0 = put_packed_step(client, stepper, cfg.tokens)
+    valid0, lens0 = put_packed_step(client, stepper, cfg.max_tokens)
     reg = client.register_program(
         program_to_dict(planned.program),
         resolver={"kind": "model_family",
@@ -130,7 +130,7 @@ def capture_run(client, cfg, recipe, feed, steps: int, *,
         if step == 0:
             valid, lens = valid0, lens0
         else:
-            valid, lens = put_packed_step(client, stepper, cfg.tokens)
+            valid, lens = put_packed_step(client, stepper, cfg.max_tokens)
         out = client.run(reg["prog_id"],
                          args={"step": step, "valid_rows": valid,
                                "seq_lens": lens},

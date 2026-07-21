@@ -227,4 +227,4 @@ def param_counts(cfg: ShapedLlamaConfig) -> dict:
 
 
 def tokens_per_step(cfg: ShapedLlamaConfig) -> int:
-    return cfg.tokens * cfg.grad_accum_rounds
+    return cfg.max_tokens * cfg.grad_accum_rounds

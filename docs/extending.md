@@ -192,8 +192,8 @@ launch must follow:
   `route_order` is the standing example — sliced by slots at its
   read sites).
 - Inside stage functions, size scratch off the incoming tensors
-  (`x.shape[0]`), never `dims.tokens` — the views arriving in `st`
-  are already content-sliced, and a `dims.tokens` scratch silently
+  (`x.shape[0]`), never `dims.max_tokens` — the views arriving in `st`
+  are already content-sliced, and a `dims.max_tokens` scratch silently
   reintroduces the full buffer.
 - A task consuming ANOTHER round's per-token objects (retained-inputs
   LBL packs) slices by THAT round's count —

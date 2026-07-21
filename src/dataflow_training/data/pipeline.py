@@ -95,7 +95,7 @@ def pipeline_from_args(cfg, data_spec: str | None, *,
             f"long_policy=whole")
     return DataPipeline(
         data_spec or DEFAULT_SPEC,
-        tokens_per_round=cfg.tokens, ga_rounds=cfg.grad_accum_rounds,
+        tokens_per_round=cfg.max_tokens, ga_rounds=cfg.grad_accum_rounds,
         max_seqlen=cfg.seq_len, vocab_size=cfg.vocab_size,
         policy=policy, allow_round_split=allow_round_split,
         lookahead_mult=lookahead_mult, capture=capture)
@@ -110,7 +110,7 @@ def legacy_block_pipeline(cfg, *, split: str = "train",
     spec = f"shards:{root},window={cfg.seq_len}"
     if split != "train":
         spec += f",split={split}"
-    return DataPipeline(spec, tokens_per_round=cfg.tokens,
+    return DataPipeline(spec, tokens_per_round=cfg.max_tokens,
                         ga_rounds=cfg.grad_accum_rounds,
                         max_seqlen=cfg.seq_len, vocab_size=cfg.vocab_size,
                         policy="greedy")
@@ -125,7 +125,7 @@ def legacy_doc_pipeline(cfg, *, split: str = "train",
     spec = f"shards:{root},long_policy=whole"
     if split != "train":
         spec += f",split={split}"
-    return DataPipeline(spec, tokens_per_round=cfg.tokens,
+    return DataPipeline(spec, tokens_per_round=cfg.max_tokens,
                         ga_rounds=cfg.grad_accum_rounds,
                         max_seqlen=cfg.seq_len, vocab_size=cfg.vocab_size,
                         policy="greedy", allow_round_split=True)

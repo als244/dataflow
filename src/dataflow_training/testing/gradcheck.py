@@ -115,8 +115,8 @@ def _random_block_state(dims, wl, seed: int):
             views[f.name] = (
                 torch.randn(n, generator=gen, device="cuda") * 0.02
             ).to(dt).view(f.shape)
-    x = (torch.randn(dims.tokens, dims.d_model, generator=gen, device="cuda") * 0.5).to(torch.bfloat16)
-    dy = (torch.randn(dims.tokens, dims.d_model, generator=gen, device="cuda") * 0.5).to(torch.bfloat16)
+    x = (torch.randn(dims.max_tokens, dims.d_model, generator=gen, device="cuda") * 0.5).to(torch.bfloat16)
+    dy = (torch.randn(dims.max_tokens, dims.d_model, generator=gen, device="cuda") * 0.5).to(torch.bfloat16)
     return views, x, dy
 
 
@@ -255,14 +255,14 @@ def reference_model_step(cfg, values, *, seq_lens=None,
                                 bridges.get_bytes_from_values(values))
     init_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
     model.train()
-    tokens = torch_view(values["tokens_0_0"], (dims.tokens,),
+    tokens = torch_view(values["tokens_0_0"], (dims.max_tokens,),
                         torch.int32).long().cuda()
-    targets = (torch_view(values["targets_0_0"], (dims.tokens,),
+    targets = (torch_view(values["targets_0_0"], (dims.max_tokens,),
                           torch.int32).long().cuda()
                if "targets_0_0" in values else tokens.clone())
     if seq_lens is None:
-        seq = getattr(dims, "seq_len", None) or dims.tokens
-        lens = tuple([seq] * (dims.tokens // seq))
+        seq = getattr(dims, "seq_len", None) or dims.max_tokens
+        lens = tuple([seq] * (dims.max_tokens // seq))
     else:
         lens = tuple(int(x) for x in seq_lens)
     aux_coef = float(getattr(cfg, "aux_coef", 0.0) or 0.0)
@@ -454,7 +454,7 @@ def isolated_block_compare(cfg, isolate, *, seed: int = 0,
         run_args=run_args)
 
     lens = tuple(getattr(dims, "seq_lens", None)
-                 or (dims.seq_len,) * (dims.tokens // dims.seq_len))
+                 or (dims.seq_len,) * (dims.max_tokens // dims.seq_len))
     offsets = [0]
     for n in lens:
         offsets.append(offsets[-1] + n)
@@ -465,14 +465,14 @@ def isolated_block_compare(cfg, isolate, *, seed: int = 0,
         if b > 0:
             rec = result.objects.get(f"y_0_0_{b - 1}")
             slot = rec.fast or rec.backing
-            swap = torch_view(slot.buffer, (dims.tokens, dims.d_model),
+            swap = torch_view(slot.buffer, (dims.max_tokens, dims.d_model),
                               torch.bfloat16).clone()
         recorders[b] = BlockRecorder(twin.blocks[b], swap_input=swap,
                                      seq_offsets=offsets,
                                      d_model=dims.d_model)
         twin.blocks[b] = recorders[b]
 
-    tokens = torch_view(values["tokens_0_0"], (dims.tokens,),
+    tokens = torch_view(values["tokens_0_0"], (dims.max_tokens,),
                         torch.int32).long().cuda()
     with torch.no_grad():
         lo = 0
@@ -483,13 +483,13 @@ def isolated_block_compare(cfg, isolate, *, seed: int = 0,
     last = isolate[-1]
     rec = result.objects.get(f"y_0_0_{last}")
     slot = rec.fast or rec.backing
-    eng = torch_view(slot.buffer, (dims.tokens, dims.d_model),
+    eng = torch_view(slot.buffer, (dims.max_tokens, dims.d_model),
                      torch.bfloat16).float().cpu()
     twn = torch.cat(recorders[last].outs)
     rowrel = (eng - twn).norm(dim=1) / twn.norm(dim=1).clamp_min(1e-12)
     med = float(rowrel.median())
     hot = (rowrel > max(hot_mult * med, 0.05)).nonzero().flatten().tolist()
-    mask = torch.ones(dims.tokens, dtype=torch.bool)
+    mask = torch.ones(dims.max_tokens, dtype=torch.bool)
     mask[hot] = False
     out = {
         "rel": rel_l2(eng, twn),

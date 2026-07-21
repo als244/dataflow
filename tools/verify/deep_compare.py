@@ -132,13 +132,13 @@ def main() -> int:
         twin.blocks[bi] = rec
         recs.append(rec)
 
-    tokens = torch_view(values["tokens_0_0"], (dims.tokens,),
+    tokens = torch_view(values["tokens_0_0"], (dims.max_tokens,),
                         torch.int32).long().cuda()
-    targets = (torch_view(values["targets_0_0"], (dims.tokens,),
+    targets = (torch_view(values["targets_0_0"], (dims.max_tokens,),
                           torch.int32).long().cuda()
                if "targets_0_0" in values else tokens.clone())
     lens = tuple(getattr(dims, "seq_lens", None)
-                 or (dims.seq_len,) * (dims.tokens // dims.seq_len))
+                 or (dims.seq_len,) * (dims.max_tokens // dims.seq_len))
     aux_coef = float(getattr(cfg, "aux_coef", 0.0) or 0.0)
     aux_form = getattr(twin, "AUX_FORM", None)
     drive_aux_seq = aux_coef > 0.0 and aux_form == "sequence_wise"
@@ -200,7 +200,7 @@ def main() -> int:
                 r = result.objects.get(f"y_0_0_{b - 1}")
                 slot = r.fast or r.backing
                 eng_in = torch_view(slot.buffer,
-                                    (dims.tokens, dims.d_model),
+                                    (dims.max_tokens, dims.d_model),
                                     torch.bfloat16).clone()
             recs[b].outs.clear()
             recs[b].inner = InputSwap(recs[b].inner, eng_in, {"i": 0})
@@ -213,14 +213,14 @@ def main() -> int:
                 lo += ln
         r = result.objects.get(f"y_0_0_{bi}")
         slot = r.fast or r.backing
-        eng = torch_view(slot.buffer, (dims.tokens, dims.d_model),
+        eng = torch_view(slot.buffer, (dims.max_tokens, dims.d_model),
                          torch.bfloat16).float().cpu()
         twn = torch.cat(rec_iso.outs)
         rowrel = (eng - twn).norm(dim=1) / twn.norm(dim=1).clamp_min(1e-12)
         med = float(rowrel.median())
         hot = (rowrel > max(args.hot_mult * med, 0.05)
                ).nonzero().flatten().tolist()
-        mask = torch.ones(dims.tokens, dtype=torch.bool)
+        mask = torch.ones(dims.max_tokens, dtype=torch.bool)
         mask[hot] = False
         print(f"== ISOLATED block(s) {targets_iso} "
               f"[{block_kinds(dims, cfg)[bi]} compared] on engine inputs:")
@@ -241,7 +241,7 @@ def main() -> int:
         oid = f"y_0_0_{bi}"
         r = result.objects.get(oid)
         slot = r.fast or r.backing
-        eng = torch_view(slot.buffer, (dims.tokens, dims.d_model),
+        eng = torch_view(slot.buffer, (dims.max_tokens, dims.d_model),
                          torch.bfloat16).float().cpu()
         twn = torch.cat(rec.outs)
         rowrel = (eng - twn).norm(dim=1) / twn.norm(dim=1).clamp_min(1e-12)

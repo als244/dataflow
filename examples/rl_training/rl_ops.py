@@ -122,17 +122,17 @@ class RLHeadLoss(_Base):
         es, kctx = self._stream_ctx(ctx)
         with torch.cuda.stream(es):
             K = self.kernels
-            y = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
-            actions = torch_view(self._in(ctx, 1), (d.tokens,), torch.int32)
-            old_lp = torch_view(self._in(ctx, 2), (d.tokens,), torch.float32)
-            adv = torch_view(self._in(ctx, 3), (d.tokens,), torch.float32)
+            y = torch_view(self._in(ctx, 0), (d.max_tokens, d.d_model), torch.bfloat16)
+            actions = torch_view(self._in(ctx, 1), (d.max_tokens,), torch.int32)
+            old_lp = torch_view(self._in(ctx, 2), (d.max_tokens,), torch.float32)
+            adv = torch_view(self._in(ctx, 3), (d.max_tokens,), torch.float32)
             wh = self.hl.views(self._in(ctx, 4))
-            dy = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
+            dy = torch_view(self._out(ctx, 0), (d.max_tokens, d.d_model), torch.bfloat16)
             loss = torch_view(self._out(ctx, 1), (1,), torch.float32)
             dwh = self.hgl.views(self._out(ctx, 2))
             l, dy_v, dw, dnorm = rl_head_loss_math(
                 y, actions, old_lp, adv, wh["w"], wh["final_norm_w"],
-                mode=self.mode, K=K, kctx=kctx, total_rows=d.tokens)
+                mode=self.mode, K=K, kctx=kctx, total_rows=d.max_tokens)
             dy.copy_(dy_v)
             dwh["w"].copy_(dw.to(dwh["w"].dtype))
             dwh["final_norm_w"].copy_(dnorm.to(dwh["final_norm_w"].dtype))

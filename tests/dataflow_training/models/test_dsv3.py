@@ -172,12 +172,12 @@ def test_dsv3_ga2_matches_reference():
     bridges.load_reference_init(model, cfg, dims,
                                 bridges.get_bytes_from_values(values))
     model.train()
-    B = dims.tokens // cfg.seq_len
+    B = dims.max_tokens // cfg.seq_len
     total = None
     for r in range(cfg.grad_accum_rounds):
-        toks = torch_view(values[f"tokens_0_{r}"], (dims.tokens,),
+        toks = torch_view(values[f"tokens_0_{r}"], (dims.max_tokens,),
                           torch.int32).long().cuda().view(B, cfg.seq_len)
-        tgts = torch_view(values[f"targets_0_{r}"], (dims.tokens,),
+        tgts = torch_view(values[f"targets_0_{r}"], (dims.max_tokens,),
                           torch.int32).long().cuda().view(B, cfg.seq_len)
         loss_r = model.loss(toks, tgts, aux_coef=cfg.aux_coef)
         total = loss_r if total is None else total + loss_r

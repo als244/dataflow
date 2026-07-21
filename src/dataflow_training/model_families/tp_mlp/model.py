@@ -69,7 +69,7 @@ class TpMlpDims:
     # the generic service run path builds uniform Segments from these
     # (no attention consumes them here)
     seq_len: int
-    tokens: int
+    max_tokens: int
 
 
 def derive_dims(cfg: TpMlpConfig) -> TpMlpDims:
@@ -78,7 +78,7 @@ def derive_dims(cfg: TpMlpConfig) -> TpMlpDims:
                          f"{cfg.world}")
     return TpMlpDims(t=cfg.t, d=cfg.d_model, ff=cfg.d_ff,
                      ffs=cfg.d_ff // cfg.world, world=cfg.world,
-                     rank=cfg.rank, seq_len=cfg.t, tokens=cfg.t)
+                     rank=cfg.rank, seq_len=cfg.t, max_tokens=cfg.t)
 
 
 def tp_weight_layout(dims: TpMlpDims):

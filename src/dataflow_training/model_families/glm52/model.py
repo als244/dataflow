@@ -139,7 +139,7 @@ class ShapedGlm52Config:
     seq_lens: tuple[int, ...] | None = None
 
     @property
-    def tokens(self) -> int:
+    def max_tokens(self) -> int:
         if self.seq_lens is not None:
             return sum(self.seq_lens)
         return self.seq_len * self.batch
@@ -307,7 +307,7 @@ def derive_dims(cfg: ShapedGlm52Config) -> Glm52Dims:
         v_head_dim=cfg.v_head_dim,
         d_ff=cfg.d_ff_dense, first_k_dense=cfg.first_k_dense,
         vocab_size=cfg.vocab_size,
-        tokens=cfg.tokens, seq_len=cfg.seq_len, rope_base=cfg.rope_base,
+        max_tokens=cfg.max_tokens, seq_len=cfg.seq_len, rope_base=cfg.rope_base,
         dtypes=getattr(cfg, "dtypes", None) or _GLM52_DTYPES,
         seq_lens=getattr(cfg, "seq_lens", None),
         kinds=tuple("gdl" if i < cfg.first_k_dense
@@ -349,7 +349,7 @@ def kind_activation_layout(dims: Glm52Dims, kind: str):
 
 def _kind_specs(cfg: ShapedGlm52Config, hw: ShapedHardware) -> dict[str, LayerKindSpec]:
     dims = derive_dims(cfg)
-    t, d, seq, h = cfg.tokens, cfg.d_model, cfg.seq_len, cfg.n_heads
+    t, d, seq, h = cfg.max_tokens, cfg.d_model, cfg.seq_len, cfg.n_heads
     qk = cfg.qk_head_dim
     sbar = seq / 2.0
     k_eff = min(cfg.index_topk, sbar) if cfg.sparse_mode else sbar
@@ -469,7 +469,7 @@ def build_shaped_glm52(
         AuxShare(producer=ld, consumers=dims.group_members(ld)[1:],
                   # frozen indexer => no KL anywhere => no dM chain
                   grad_bytes=(0 if not dims.train_indexer
-                              else 4 * dims.tokens * (
+                              else 4 * dims.max_tokens * (
                                   dims.index_topk if dims.sparse_mode
                                   else cfg.seq_len)))
         for ld in dims.leaders()
@@ -524,7 +524,7 @@ def lower_glm52(
         fast_memory_capacity=fast_memory_capacity,
     )
     base_size = object_size_factory(dims, fl)
-    t_tokens = dims.tokens
+    t_tokens = dims.max_tokens
     dm_cols = dims.index_topk if dims.sparse_mode else cfg.seq_len
 
     def object_size(oid: str):

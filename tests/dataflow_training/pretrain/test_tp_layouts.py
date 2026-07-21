@@ -44,8 +44,8 @@ def test_per_rank_layout_shapes_and_sizes():
     assert w["w2"] == (ffs, CFG.d_model)
     assert w["wq"] == full.layers[0].weights.field("wq").shape
     a = {f.name: f.shape for f in fl0.layers[0].activations.fields}
-    assert a["x1"] == (dims.tokens, ffs)
-    assert a["x3"] == (dims.tokens, ffs)
+    assert a["x1"] == (dims.max_tokens, ffs)
+    assert a["x3"] == (dims.max_tokens, ffs)
     assert a["q"] == full.layers[0].activations.field("q").shape
     # mlp field bytes halve exactly (whole-field sums, no padding)
     mlp = ("w1", "w3", "w2")

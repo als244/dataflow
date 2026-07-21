@@ -70,7 +70,7 @@ class ShapedGpt2Config:
     init_policy: object = None
 
     @property
-    def tokens(self) -> int:
+    def max_tokens(self) -> int:
         if self.seq_lens is not None:
             return sum(self.seq_lens)
         return self.seq_len * self.batch
@@ -173,7 +173,7 @@ def derive_dims(cfg: ShapedGpt2Config) -> Gpt2Dims:
         n_heads=cfg.n_heads,
         d_ff=cfg.d_ff,
         vocab_size=cfg.vocab_size,
-        tokens=cfg.tokens,
+        max_tokens=cfg.max_tokens,
         seq_len=cfg.seq_len,
         n_ctx=n_ctx,
         tied=cfg.tied_embeddings,

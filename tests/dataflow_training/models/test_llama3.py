@@ -18,7 +18,7 @@ from dataflow_training.testing.gradcheck import (  # noqa: E402
 
 pytestmark = pytest.mark.gpu
 
-DIMS = LlamaDims(d_model=256, n_heads=8, n_kv_heads=2, d_ff=512, vocab_size=512, tokens=128, seq_len=128)
+DIMS = LlamaDims(d_model=256, n_heads=8, n_kv_heads=2, d_ff=512, vocab_size=512, max_tokens=128, seq_len=128)
 CFG = ShapedLlamaConfig(
     n_layers=2, d_model=256, n_heads=8, n_kv_heads=2, d_ff=512,
     vocab_size=512, seq_len=128, batch=1,

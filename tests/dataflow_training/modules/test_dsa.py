@@ -37,7 +37,7 @@ class _Dims:
     index_head_dim: int = 32
     index_topk: int = 24
     rope_base: float = 10_000.0
-    tokens: int = 128
+    max_tokens: int = 128
     seq_len: int = 64
     seq_lens: tuple = None
 
@@ -67,16 +67,16 @@ def test_index_scores_vs_hand_loop():
     from dataflow_training.blocks import ops
     from dataflow_training.blocks.modules.dsa_forms import _LN_EPS, dsa_index_scores_reference
 
-    d = _Dims(tokens=32, seq_len=32)
+    d = _Dims(max_tokens=32, seq_len=32)
     w = _idx_weights(d, seed=1)
     g = torch.Generator(device="cuda").manual_seed(2)
-    h1 = (torch.randn(d.tokens, d.d_model, generator=g, device="cuda") * 0.5).to(torch.bfloat16)
-    q_lora_n = (torch.randn(d.tokens, d.q_lora_rank, generator=g, device="cuda") * 0.5).to(torch.bfloat16)
+    h1 = (torch.randn(d.max_tokens, d.d_model, generator=g, device="cuda") * 0.5).to(torch.bfloat16)
+    q_lora_n = (torch.randn(d.max_tokens, d.q_lora_rank, generator=g, device="cuda") * 0.5).to(torch.bfloat16)
 
     scores = dsa_index_scores_reference(h1, q_lora_n, w, d)
 
     # hand loop
-    t, hi, di, rope = d.tokens, d.index_n_heads, d.index_head_dim, d.qk_rope_dim
+    t, hi, di, rope = d.max_tokens, d.index_n_heads, d.index_head_dim, d.qk_rope_dim
     pos = ops.Segments.from_dims(d).on(h1.device).positions
     q = (q_lora_n @ w["w_idx_q"]).view(t, hi, di)
     q_pe = ops.rope_fwd(q[..., :rope].reshape(t, hi * rope).contiguous(),
@@ -116,7 +116,7 @@ def test_topk_padding_is_mask_safe_and_tie_rule_consistent():
     )
     from dataflow_training.kernels import KernelCtx, resolve_kernels
 
-    d = _Dims(tokens=16, seq_len=16, index_topk=8)
+    d = _Dims(max_tokens=16, seq_len=16, index_topk=8)
     # crafted scores: all equal within the causal prefix (total ties)
     scores = torch.zeros(16, 16, device="cuda") + _causal_mask(d, 16, "cuda")
     idx = dsa_topk_reference(scores, 8)
@@ -146,7 +146,7 @@ def test_mask_form_equals_gather_form_fwd_and_bwd():
         dsa_topk_reference,
     )
 
-    d = _Dims(tokens=t, seq_len=t, index_topk=k_sel)
+    d = _Dims(max_tokens=t, seq_len=t, index_topk=k_sel)
     scores = torch.randn(t, t, device="cuda") + _causal_mask(d, t, "cuda")
     idx = dsa_topk_reference(scores, k_sel)
     mask = dsa_mask_from_idx(idx, d, t)
@@ -186,22 +186,22 @@ def test_indexer_kl_grad_is_softmax_minus_p_and_inputs_detached():
         dsa_topk_reference,
     )
 
-    d = _Dims(tokens=48, seq_len=48, index_topk=12)
+    d = _Dims(max_tokens=48, seq_len=48, index_topk=12)
     w = _idx_weights(d, seed=5)
     for name in w:
         w[name].requires_grad_()
     g = torch.Generator(device="cuda").manual_seed(6)
-    h1 = (torch.randn(d.tokens, d.d_model, generator=g, device="cuda") * 0.5
+    h1 = (torch.randn(d.max_tokens, d.d_model, generator=g, device="cuda") * 0.5
           ).to(torch.bfloat16).requires_grad_()
-    q_lora_n = (torch.randn(d.tokens, d.q_lora_rank, generator=g, device="cuda") * 0.5
+    q_lora_n = (torch.randn(d.max_tokens, d.q_lora_rank, generator=g, device="cuda") * 0.5
                 ).to(torch.bfloat16).requires_grad_()
 
     # detached inputs, live indexer weights (the training seam)
     scores = dsa_index_scores_reference(h1.detach(), q_lora_n.detach(), w, d)
     idx = dsa_topk_reference(scores.detach(), d.index_topk)
-    mask = dsa_mask_from_idx(idx, d, d.tokens)
+    mask = dsa_mask_from_idx(idx, d, d.max_tokens)
     # synthetic head-sum target (detached), positive on the live set
-    tgt = torch.rand(d.tokens, d.tokens, generator=g, device="cuda")
+    tgt = torch.rand(d.max_tokens, d.max_tokens, generator=g, device="cuda")
     loss = dsa_indexer_kl_reference(scores, mask, tgt)
     loss.backward()
 
@@ -229,7 +229,7 @@ def test_index_scores_ragged_packing_matches_per_sequence():
 
     from dataflow_training.blocks.modules.dsa_forms import dsa_index_scores_reference
 
-    d = _Dims(tokens=96, seq_len=None, seq_lens=(64, 32))
+    d = _Dims(max_tokens=96, seq_len=None, seq_lens=(64, 32))
     w = _idx_weights(d, seed=7)
     g = torch.Generator(device="cuda").manual_seed(8)
     h1 = (torch.randn(96, d.d_model, generator=g, device="cuda") * 0.5).to(torch.bfloat16)
@@ -237,8 +237,8 @@ def test_index_scores_ragged_packing_matches_per_sequence():
     s_packed = dsa_index_scores_reference(h1, ql, w, d)
     # cross-sequence blocks fully masked
     assert torch.isinf(s_packed[64:, :64]).all() and torch.isinf(s_packed[:64, 64:]).all()
-    d_a = replace(d, tokens=64, seq_len=64, seq_lens=None)
-    d_b = replace(d, tokens=32, seq_len=32, seq_lens=None)
+    d_a = replace(d, max_tokens=64, seq_len=64, seq_lens=None)
+    d_b = replace(d, max_tokens=32, seq_len=32, seq_lens=None)
     sa = dsa_index_scores_reference(h1[:64], ql[:64], w, d_a)
     sb = dsa_index_scores_reference(h1[64:], ql[64:], w, d_b)
     la, lb = ~torch.isinf(sa), ~torch.isinf(sb)
@@ -257,7 +257,7 @@ def test_index_scores_ragged_packing_matches_per_sequence():
 
 def _mla_pad_tensors(d, seed):
     g = torch.Generator(device="cuda").manual_seed(seed)
-    t, h, qk = d.tokens, d.n_heads, d.qk_head_dim
+    t, h, qk = d.max_tokens, d.n_heads, d.qk_head_dim
     qf = (torch.randn(t, h * qk, generator=g, device="cuda") * 0.3).to(torch.bfloat16)
     kf = (torch.randn(t, h * qk, generator=g, device="cuda") * 0.3).to(torch.bfloat16)
     vp3 = torch.zeros(t, h, qk, device="cuda", dtype=torch.bfloat16)
@@ -280,7 +280,7 @@ def test_dsa_kernels_vs_references_and_autograd():
     d = _Dims()
     K = resolve_kernels()
     kctx = KernelCtx()
-    t, h, qk = d.tokens, d.n_heads, d.qk_head_dim
+    t, h, qk = d.max_tokens, d.n_heads, d.qk_head_dim
     g = torch.Generator(device="cuda").manual_seed(11)
     scores = torch.randn(t, t, generator=g, device="cuda") + _causal_mask(d, t, "cuda")
     ref_idx = dsa_topk_reference(scores, d.index_topk)
@@ -335,10 +335,10 @@ def test_dsa_index_bwd_vs_autograd():
     from dataflow_training.blocks import ops
     from dataflow_training.kernels import KernelCtx, resolve_kernels
 
-    d = _Dims(tokens=96, seq_len=48)
+    d = _Dims(max_tokens=96, seq_len=48)
     K = resolve_kernels()
     kctx = KernelCtx()
-    t, hi, di = d.tokens, d.index_n_heads, d.index_head_dim
+    t, hi, di = d.max_tokens, d.index_n_heads, d.index_head_dim
     g = torch.Generator(device="cuda").manual_seed(13)
     q_idx = (torch.randn(t, hi * di, generator=g, device="cuda") * 0.3
              ).to(torch.bfloat16).requires_grad_()
@@ -391,7 +391,7 @@ def _dsv32_dims(**over):
     kw = dict(
         d_model=128, n_heads=4, q_lora_rank=64, kv_lora_rank=32,
         qk_nope_dim=16, qk_rope_dim=8, v_head_dim=16,
-        d_ff=256, first_k_dense=1, vocab_size=512, tokens=128, seq_len=64,
+        d_ff=256, first_k_dense=1, vocab_size=512, max_tokens=128, seq_len=64,
         index_n_heads=8, index_head_dim=32, index_topk=24,
         dtypes=DTypePolicy(overrides=(
             ("w_router_bias", ParamDTypes("fp32", "fp32", "fp32")),
@@ -501,8 +501,8 @@ def test_dsv32_block_ladder2(kind):
         else:
             w[f.name] = (torch.randn(n, generator=gen, device="cuda") * 0.06
                          ).to(dt).view(f.shape)
-    x = (torch.randn(dims.tokens, dims.d_model, generator=gen, device="cuda") * 0.5).to(torch.bfloat16)
-    dy = (torch.randn(dims.tokens, dims.d_model, generator=gen, device="cuda") * 0.5).to(torch.bfloat16)
+    x = (torch.randn(dims.max_tokens, dims.d_model, generator=gen, device="cuda") * 0.5).to(torch.bfloat16)
+    dy = (torch.randn(dims.max_tokens, dims.d_model, generator=gen, device="cuda") * 0.5).to(torch.bfloat16)
 
     from dataflow_training.blocks.layouts import dsv32_aux_temp_layout
     from dataflow_training.data.segments import Segments
@@ -598,7 +598,7 @@ def test_absorbed_op_matches_expanded_reference():
 
     class _D:
         n_heads, qk_head_dim, v_head_dim = h, d_qk, d_v
-        tokens, seq_len, seq_lens = t, t, None
+        max_tokens, seq_len, seq_lens = t, t, None
         index_topk = k_sel
 
     kf = kv.unsqueeze(1).expand(t, h, d_qk).reshape(t, h * d_qk).contiguous()

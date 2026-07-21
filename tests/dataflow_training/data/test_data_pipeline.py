@@ -263,7 +263,7 @@ def test_engine_resume_drill_with_cursor(tmp_path):
     cfg = gpt2_smoke_preset()
     recipe = Recipe(peak_lr=3e-4, min_lr=3e-5, warmup_steps=2,
                     total_steps=6)
-    pipe = DataPipeline("shards:", tokens_per_round=cfg.tokens,
+    pipe = DataPipeline("shards:", tokens_per_round=cfg.max_tokens,
                         ga_rounds=cfg.grad_accum_rounds,
                         max_seqlen=cfg.seq_len,
                         vocab_size=cfg.vocab_size)

@@ -35,7 +35,7 @@ def llama3_block_forward(dims, x: torch.Tensor, w: dict,
 def qwen3_block_forward(dims, x: torch.Tensor, w: dict,
                         seg) -> torch.Tensor:
     d = dims
-    t, h, kvh, hd = d.tokens, d.n_heads, d.n_kv_heads, d.head_dim
+    t, h, kvh, hd = d.max_tokens, d.n_heads, d.n_kv_heads, d.head_dim
     h1 = ops.rmsnorm_reference(x, w["attn_norm_w"])
     qm = (h1 @ w["wq"]).view(t, h, hd)
     km = (h1 @ w["wk"]).view(t, kvh, hd)

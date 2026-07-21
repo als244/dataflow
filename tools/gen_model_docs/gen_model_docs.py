@@ -357,7 +357,7 @@ def gen_page(name: str, preset: str, record: bool,
            f"Layer kinds ({L} layers): `{' '.join(kinds_seq)}`",
            "",
            f"**Run shape**: microbatch {cfg.batch} × seq_len "
-           f"{cfg.seq_len} = **{dims.tokens:,} tokens per round** "
+           f"{cfg.seq_len} = **{dims.max_tokens:,} tokens per round** "
            f"(× {cfg.grad_accum_rounds} grad-accum round(s) per step). "
            f"`A_*`/`AuxTemp_*` objects are sized per round; bytes/token "
            f"figures transfer to any run shape.",
@@ -389,10 +389,10 @@ def gen_page(name: str, preset: str, record: bool,
         detail += field_table(wl, f"`W_{layer}` weights")
         cl = getattr(ex, "cl", None)
         detail += field_table(cl, f"`A_.._{layer}` saved context",
-                              "per (step, round)", per_token=dims.tokens)
+                              "per (step, round)", per_token=dims.max_tokens)
         ml = _aux_temp_layout(name, dims, layer)
         detail += field_table(ml, f"`M_.._{layer}` metadata",
-                              "never recomputed", per_token=dims.tokens)
+                              "never recomputed", per_token=dims.max_tokens)
         if wl is not None:
             summary.append((f"W_i ({kind})", "layer", wl.total_bytes))
             summary.append((f"dW_i ({kind})", "layer/step",
@@ -420,17 +420,17 @@ def gen_page(name: str, preset: str, record: bool,
         if oid in sizes:
             summary.append((oid, "run", sizes[oid]))
     summary.append(("hidden state (y)", "boundary buffer",
-                    dims.tokens * dims.d_model * 2))
+                    dims.max_tokens * dims.d_model * 2))
 
     out += ["## Object summary", "",
-            f"At this run shape ({dims.tokens:,} tokens/round). "
+            f"At this run shape ({dims.max_tokens:,} tokens/round). "
             f"Token-scaled objects show per-token size in parens. "
             f"Details per kind below.", "",
             "| object | scope | size |", "|---|---|---|"]
     for label, per, b in summary:
         cell = fmt_bytes(b)
         if "round" in per or "boundary" in per:
-            cell += f" ({fmt_per_token(b / dims.tokens)})"
+            cell += f" ({fmt_per_token(b / dims.max_tokens)})"
         out.append(f"| `{label}` | {per} | {cell} |")
     out.append("")
 
@@ -467,7 +467,7 @@ def gen_page(name: str, preset: str, record: bool,
         n, tot = agg[g]
         cell = fmt_bytes(tot)
         if g in ("A", "M"):
-            cell += f" ({fmt_per_token(tot / dims.tokens)})"
+            cell += f" ({fmt_per_token(tot / dims.max_tokens)})"
         out.append(f"| {label_of[g]} | {n} | {cell} |")
     out.append("")
 

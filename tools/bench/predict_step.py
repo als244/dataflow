@@ -104,12 +104,12 @@ def combo_row(fam, cfg, hw, budget: float, *, measured: bool,
     rep = flop_report(cfg, planned.program)
     eff, hwf = rep.per_step()
     step_s = planned.makespan_us / 1e6
-    tokens_step = cfg.tokens * cfg.grad_accum_rounds
+    tokens_step = cfg.max_tokens * cfg.grad_accum_rounds
     levels = planned.recompute_levels or {}
     return {
         "seq": cfg.seq_len,
         "ga": cfg.grad_accum_rounds, "batch": cfg.batch,
-        "t_round": cfg.tokens, "tokens_step": tokens_step,
+        "t_round": cfg.max_tokens, "tokens_step": tokens_step,
         "budget": budget, "step_s": step_s,
         "tok_s": tokens_step / step_s,
         "eff_tfs": eff / planned.makespan_us / 1e6,
@@ -265,7 +265,7 @@ def main() -> int:
     def geometry(seq: int) -> list[tuple[int, int]]:
         """(ga, batch) rows for one seq_len — batch is INTERNAL
         arithmetic (T_round / seq_len); the interface speaks T_round."""
-        tokens_step = args.tokens_step or (base.tokens
+        tokens_step = args.tokens_step or (base.max_tokens
                                            * base.grad_accum_rounds)
         if t_rounds is None:
             ga = args.ga_rounds or base.grad_accum_rounds
@@ -302,8 +302,8 @@ def main() -> int:
                 except ValueError as exc:
                     # a combo the planner cannot fit is a RESULT, not a crash
                     rows.append({"seq": seq, "ga": ga,
-                                 "t_round": cfg.tokens,
-                                 "tokens_step": cfg.tokens * ga,
+                                 "t_round": cfg.max_tokens,
+                                 "tokens_step": cfg.max_tokens * ga,
                                  "budget": budget,
                                  "infeasible": str(exc).splitlines()[0][:60]})
     print_table(rows, steps=args.steps)

@@ -48,7 +48,7 @@ class ShapedQwen3Config:
     seq_lens: tuple[int, ...] | None = None
 
     @property
-    def tokens(self) -> int:
+    def max_tokens(self) -> int:
         if self.seq_lens is not None:
             return sum(self.seq_lens)
         return self.seq_len * self.batch
@@ -140,7 +140,7 @@ def derive_dims(cfg: ShapedQwen3Config) -> Qwen3Dims:
         head_dim=cfg.head_dim,
         d_ff=cfg.d_ff,
         vocab_size=cfg.vocab_size,
-        tokens=cfg.tokens,
+        max_tokens=cfg.max_tokens,
         seq_len=cfg.seq_len,
         dtypes=getattr(cfg, "dtypes", None) or DTypePolicy(),
         seq_lens=getattr(cfg, "seq_lens", None),

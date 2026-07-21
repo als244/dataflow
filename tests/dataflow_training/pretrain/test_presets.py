@@ -14,7 +14,7 @@ GIB = 1024**3
 def test_locked_token_budget():
     cfg = P.preset("l3_1b")
     assert cfg.seq_len == 2048 and cfg.batch == 4
-    assert cfg.tokens == 8192                       # tokens / round
+    assert cfg.max_tokens == 8192                       # tokens / round
     assert cfg.grad_accum_rounds == 8
     assert P.tokens_per_step(cfg) == 65536          # ~64K tokens / step
     assert cfg.vocab_size == 50304
@@ -46,7 +46,7 @@ def test_cfg_dict_round_trip_matches_dims():
         d1 = resolve_family(cfg).derive_dims(cfg)
         d2 = resolve_family(rebuilt).derive_dims(rebuilt)
         for attr in ("d_model", "n_heads", "n_kv_heads", "d_ff",
-                     "vocab_size", "tokens", "seq_len"):
+                     "vocab_size", "max_tokens", "seq_len"):
             assert getattr(d1, attr) == getattr(d2, attr)
 
 

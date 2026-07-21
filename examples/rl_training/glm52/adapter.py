@@ -71,7 +71,7 @@ def prep_layer(golden, i):
     golden._layer_ptr = i
     lead = d.leader_index(i)
     golden._group_mask = dsa_mask_from_idx(
-        golden.saved["sel"][lead].cuda(), d, d.tokens)
+        golden.saved["sel"][lead].cuda(), d, d.max_tokens)
     golden._group_scores = None
 
 

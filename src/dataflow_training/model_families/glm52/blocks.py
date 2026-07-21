@@ -105,16 +105,16 @@ class Glm52AuxTempState:
                     buf_of[int(oid.rsplit("_", 1)[1])] = self._in(ctx, j)
                 elif oid.startswith("dAuxTemp_"):
                     st["_dm_view"] = torch_view(
-                        self._in(ctx, j), (d.tokens, _dm_cols(d)), torch.float32)[:n]
+                        self._in(ctx, j), (d.max_tokens, _dm_cols(d)), torch.float32)[:n]
             for oid in ctx.task.mutates:
                 if oid.startswith("dAuxTemp_"):
                     st["_dm_view"] = torch_view(
-                        ctx.mutates[oid], (d.tokens, _dm_cols(d)), torch.float32)[:n]
+                        ctx.mutates[oid], (d.max_tokens, _dm_cols(d)), torch.float32)[:n]
             if key.endswith("_bwd"):
                 for j, o in enumerate(ctx.task.outputs):
                     if o.id.startswith("dAuxTemp_"):
                         st["_dm_view"] = torch_view(
-                            self._out(ctx, j), (d.tokens, _dm_cols(d)),
+                            self._out(ctx, j), (d.max_tokens, _dm_cols(d)),
                             torch.float32)[:n]
                         st["_dm_create"] = True
             if key.endswith("_recompute"):
@@ -134,7 +134,7 @@ class Glm52AuxTempState:
             # the shared selection: dsa_idx is the FIRST field (offset 0)
             # in every producer layout — kind-agnostic by construction
             st["shared_idx"] = torch_view(
-                buf_of[producer], (d.tokens, d.index_topk), torch.int32)[:n]
+                buf_of[producer], (d.max_tokens, d.index_topk), torch.int32)[:n]
         st["_kl_n"] = len(d.group_members(producer))
         return st or None
 
@@ -164,7 +164,7 @@ class Glm52ProfileFill(Dsv32ProfileFill):
         layout = self._aux_temp_layout()
         for oid in ctx.task.inputs:
             if oid.startswith("dAuxTemp_"):
-                torch_view(ctx.inputs[oid], (d.tokens, _dm_cols(d)),
+                torch_view(ctx.inputs[oid], (d.max_tokens, _dm_cols(d)),
                            torch.float32).zero_()
                 continue
             if not oid.startswith("AuxTemp_"):
@@ -178,13 +178,13 @@ class Glm52ProfileFill(Dsv32ProfileFill):
                 continue
             else:
                 m = {"dsa_idx": torch_view(ctx.inputs[oid],
-                                           (d.tokens, d.index_topk),
+                                           (d.max_tokens, d.index_topk),
                                            torch.int32)}
             if "dsa_idx" in m:
                 idx = m["dsa_idx"]
-                rows = torch.arange(d.tokens, device="cuda").unsqueeze(1)
+                rows = torch.arange(d.max_tokens, device="cuda").unsqueeze(1)
                 offs = torch.arange(d.index_topk, device="cuda").unsqueeze(0)
-                lo_of = torch.empty(d.tokens, dtype=torch.long, device="cuda")
+                lo_of = torch.empty(d.max_tokens, dtype=torch.long, device="cuda")
                 lo = 0
                 # profiler seed data: dims-derived (uniform) per-seq lengths
                 for L in ops.Segments.from_dims(d).lengths:
@@ -197,7 +197,7 @@ class Glm52ProfileFill(Dsv32ProfileFill):
                 rows_n = m["route_order"].shape[0]
                 flat = (torch.arange(rows_n, dtype=torch.int64, device="cuda")
                         % moe.n_experts)
-                m["route_ids"].copy_(flat.view(d.tokens, moe.top_k).to(torch.int32))
+                m["route_ids"].copy_(flat.view(d.max_tokens, moe.top_k).to(torch.int32))
                 m["route_order"].copy_(torch.argsort(flat, stable=True).to(torch.int32))
                 counts = torch.bincount(flat, minlength=moe.n_experts)
                 m["route_offsets"][:1].zero_()

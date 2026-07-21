@@ -85,7 +85,7 @@ class ShapedQwen35MoeConfig:
     seq_lens: tuple[int, ...] | None = None
 
     @property
-    def tokens(self) -> int:
+    def max_tokens(self) -> int:
         if self.seq_lens is not None:
             return sum(self.seq_lens)
         return self.seq_len * self.batch
@@ -169,7 +169,7 @@ def derive_dims(cfg: ShapedQwen35MoeConfig) -> Qwen35MoeDims:
         lin_k_head_dim=cfg.lin_k_head_dim, lin_v_head_dim=cfg.lin_v_head_dim,
         lin_conv_kernel=cfg.lin_conv_kernel, d_ff=cfg.d_ff_expert,
         vocab_size=cfg.vocab_size,
-        tokens=cfg.tokens, seq_len=cfg.seq_len, rope_base=cfg.rope_base,
+        max_tokens=cfg.max_tokens, seq_len=cfg.seq_len, rope_base=cfg.rope_base,
         dtypes=getattr(cfg, "dtypes", None) or DTypePolicy(),
         seq_lens=getattr(cfg, "seq_lens", None),
         kinds=tuple(
@@ -183,7 +183,7 @@ def _kind_specs(cfg: ShapedQwen35MoeConfig, hw: ShapedHardware) -> dict[str, Lay
     """Two LayerKindSpecs. MoE roofline convention: FLOPs from ACTIVE
     params (top-k + shared), weight BYTES from the FULL expert stack."""
     dims = derive_dims(cfg)
-    t, d, seq = cfg.tokens, cfg.d_model, cfg.seq_len
+    t, d, seq = cfg.max_tokens, cfg.d_model, cfg.seq_len
     f, fs, k = cfg.d_ff_expert, cfg.d_ff_shared, cfg.top_k
     moe_active = (
         d * cfg.n_experts + k * 3 * f * d

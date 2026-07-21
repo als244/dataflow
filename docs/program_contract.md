@@ -202,7 +202,7 @@ via `dataflow.runtime.interop.torch_view`:
 @dataclass(frozen=True)
 class ToyBlockFwd:
     def launch(self, ctx) -> None:
-        x = torch_view(ctx.inputs[ctx.task.inputs[0]], (d.tokens, d.d_model), torch.bfloat16)
+        x = torch_view(ctx.inputs[ctx.task.inputs[0]], (d.max_tokens, d.d_model), torch.bfloat16)
         w = toy_weight_layout(d).views(ctx.inputs[ctx.task.inputs[1]])
         y = torch_view(ctx.outputs[ctx.task.outputs[0].id], ...)
         ...

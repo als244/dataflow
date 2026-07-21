@@ -716,7 +716,7 @@ def fleet_loop(ranks, gspec, recipe, pipeline, steps, *, budgets, seed,
             log(f"[fleet] checkpoint has no data cursor — fast-"
                 f"forwarding the pipeline {start_step} steps (CPU)")
             fast_forward(stepper, start_step)
-    tokens_per_round = ranks[0].cfg.tokens
+    tokens_per_round = ranks[0].cfg.max_tokens
     step_packed = stepper.next_step()      # the START step's rounds
     step_lens_by_rank: dict[int, dict] = {}
     last_cursor = step_packed.cursor_after
