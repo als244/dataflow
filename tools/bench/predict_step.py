@@ -180,29 +180,24 @@ def main() -> int:
                          "work; CAVEAT: the roofline optimizer_us seed is "
                          "adamw-shaped, so the MAKESPAN under-charges "
                          "muon's NS matmul time (~0.3-0.5 s/step at 1B)")
-    ap.add_argument("--t-round", type=int, default=None,
-                    help="single-point round token budget (must be a "
-                         "multiple of seq_len)")
-    ap.add_argument("--t-rounds", default=None,
-                    help="SWEEP: comma list of round token budgets, e.g. "
-                         "8192,32768,65536 — ga derives from --tokens-step")
+    ap.add_argument("--t-round", default=None,
+                    help="round token budget(s), comma-separated to "
+                         "sweep, e.g. 8192,32768,65536 (each a multiple "
+                         "of seq_len; ga derives from --tokens-step)")
     ap.add_argument("--tokens-step", type=int, default=None,
                     help="tokens per optimizer step (default: the "
                          "preset's); ga = tokens-step / t_round per row")
     ap.add_argument("--ga-rounds", type=int, default=None,
                     help="single-point ga override (alternative to "
                          "--t-round; preset round budget)")
-    ap.add_argument("--budget", type=float, default=14.0,
-                    help="single-point device budget (GiB)")
-    ap.add_argument("--budgets", default=None,
-                    help="SWEEP: comma list of budgets, e.g. 16,8,4,2")
-    ap.add_argument("--seq-len", type=int, default=None,
-                    help="override cfg.seq_len (T_round and tokens/step "
+    ap.add_argument("--budget", default="14",
+                    help="device budget(s) in GiB, comma-separated to "
+                         "sweep, e.g. 16,8,4,2")
+    ap.add_argument("--seq-len", default=None,
+                    help="override cfg.seq_len; comma-separated to sweep "
+                         "as a third grid axis (T_round and tokens/step "
                          "scale; families with learned positions grow "
                          "their table when n_ctx follows seq_len)")
-    ap.add_argument("--seq-lens", default=None,
-                    help="SWEEP: comma list of seq_lens — a third axis "
-                         "over the ga-batch x budgets grid")
     ap.add_argument("--hw", choices=sorted(HW_PROFILES), default="5090")
     ap.add_argument("--tflops", type=float, default=None,
                     help="override peak bf16 TFLOPs")
@@ -254,13 +249,11 @@ def main() -> int:
                   "1B); --measured profiles the real optimizer and is "
                   "muon-exact")
 
-    budgets = ([float(x) for x in args.budgets.split(",")]
-               if args.budgets else [args.budget])
-    seqs = ([int(x) for x in args.seq_lens.split(",")] if args.seq_lens
-            else [args.seq_len or base.seq_len])
-    t_rounds = ([int(x) for x in args.t_rounds.split(",")]
-                if args.t_rounds
-                else [args.t_round] if args.t_round else None)
+    budgets = [float(x) for x in str(args.budget).split(",")]
+    seqs = ([int(x) for x in args.seq_len.split(",")]
+            if args.seq_len else [base.seq_len])
+    t_rounds = ([int(x) for x in str(args.t_round).split(",")]
+                if args.t_round else [base.max_tokens])
 
     def geometry(seq: int) -> list[tuple[int, int]]:
         """(ga, batch) rows for one seq_len — batch is INTERNAL
@@ -283,7 +276,8 @@ def main() -> int:
             out.append((tokens_step // tr, tr // seq))
         return out
 
-    sweep = bool(args.t_rounds or args.budgets or args.seq_lens)
+    sweep = any("," in str(v) for v in
+                (args.t_round, args.budget, args.seq_len) if v)
     print(f"preset {args.preset}  family {fam.name}  hw {args.hw}: "
           f"{hw.peak_bf16_tflops:.0f} TF bf16 x {hw.matmul_eff:.2f}, "
           f"{hw.mem_bw_gbs:.0f} GB/s, pcie {hw.pcie_gbs:.0f} GB/s  "

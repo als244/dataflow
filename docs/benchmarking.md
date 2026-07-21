@@ -12,8 +12,8 @@ seeds for profiled task costs (disk-cached; needs the GPU once per
 geometry). Full guide: [throughput.md](throughput.md).
 
     python tools/bench/predict_step.py --preset gpt2_124m --hw 3090 \
-        --t-rounds 8192,32768,65536 --tokens-step 524288 \
-        --budgets 16,8,4,2 --steps 10000
+        --t-round 8192,32768,65536 --tokens-step 524288 \
+        --budget 16,8,4,2 --steps 10000
 
 Both sweep tools take any `resolve_preset` name (the table:
 [builtin_models.md](builtin_models.md)) and `--plugin` for external
@@ -33,8 +33,8 @@ some geometry is a finding (see the calibration table in
 throughput.md), not a tolerance to widen.
 
     python tools/bench/measure_step.py --preset gpt2_124m \
-        --t-rounds 8192,65536 --tokens-step 524288 \
-        --budgets 14,4 --steps 12 --data doc
+        --t-round 8192,65536 --tokens-step 524288 \
+        --budget 14,4 --steps 12 --data doc
 
 ## 3. Profile — `train.py --profile` (GPU, captures at any world size)
 

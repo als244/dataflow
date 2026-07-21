@@ -62,14 +62,14 @@ families and preset configs: [builtin_models](docs/builtin_models.md).
 #    s/step, tok/s, effective/hardware TFLOPs/s, fast/backing memory
 #    peaks, PCIe traffic + link %, recompute/idle %
 python tools/bench/predict_step.py --preset gpt2_124m --hw 3090 \
-    --t-rounds 8192,32768,65536 --tokens-step 524288 --budgets 16,8,4,2 \
-    --seq-lens 1024,4096 --backing 16
+    --t-round 8192,32768,65536 --tokens-step 524288 --budget 16,8,4,2 \
+    --seq-len 1024,4096 --backing 16
 
 # 2. Measure: the same grid, each cell RUN on the real engine — the
 #    warmed measurement lands beside the prediction for that cell's plan
 python tools/bench/measure_step.py --preset gpt2_124m \
-    --t-rounds 8192,65536 --tokens-step 524288 --budgets 16,4 \
-    --seq-lens 1024,4096 --backing-gib 16 --steps 12
+    --t-round 8192,65536 --tokens-step 524288 --budget 16,4 \
+    --seq-len 1024,4096 --backing-gib 16 --steps 12
 
 # 3. Profile: the same run under Nsight Systems, capture bracketed to
 #    exact warmed steps via the daemon's profiler_control verb

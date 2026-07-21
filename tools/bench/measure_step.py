@@ -85,13 +85,13 @@ def main() -> int:
     ap.add_argument("--plugin", action="append", default=None,
                     help="external-family plugin module(s) to load")
     ap.add_argument("--opt", choices=["adamw", "muon"], default=None)
-    ap.add_argument("--t-round", type=int, default=None)
-    ap.add_argument("--t-rounds", default=None)
+    ap.add_argument("--t-round", default=None,
+                    help="round token budget(s), comma to sweep")
     ap.add_argument("--tokens-step", type=int, default=None)
-    ap.add_argument("--seq-len", type=int, default=None)
-    ap.add_argument("--seq-lens", default=None)
-    ap.add_argument("--budget", type=float, default=14.0)
-    ap.add_argument("--budgets", default=None)
+    ap.add_argument("--seq-len", default=None,
+                    help="sequence length(s), comma to sweep")
+    ap.add_argument("--budget", default="14",
+                    help="fast GiB, comma to sweep")
     ap.add_argument("--steps", type=int, default=12,
                     help="steps per cell (first 3 excluded as warmup)")
     ap.add_argument("--data", default=None,
@@ -111,13 +111,11 @@ def main() -> int:
     base = P.resolve_preset(args.preset)
     if args.opt:
         base = replace(base, opt_policy=args.opt)
-    budgets = ([float(x) for x in args.budgets.split(",")]
-               if args.budgets else [args.budget])
-    seqs = ([int(x) for x in args.seq_lens.split(",")] if args.seq_lens
-            else [args.seq_len or base.seq_len])
-    t_rounds = ([int(x) for x in args.t_rounds.split(",")]
-                if args.t_rounds
-                else [args.t_round] if args.t_round else [base.max_tokens])
+    budgets = [float(x) for x in str(args.budget).split(",")]
+    seqs = ([int(x) for x in args.seq_len.split(",")]
+            if args.seq_len else [base.seq_len])
+    t_rounds = ([int(x) for x in str(args.t_round).split(",")]
+                if args.t_round else [base.max_tokens])
     tokens_step = args.tokens_step or (base.max_tokens
                                        * base.grad_accum_rounds)
     recipe = Recipe(peak_lr=args.peak_lr, min_lr=args.peak_lr / 10,

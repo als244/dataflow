@@ -16,11 +16,11 @@ link %, recompute + idle %, ETA. Full guide:
 | flag | meaning |
 |---|---|
 | `--preset` | any `resolve_preset` name; `--plugin` loads external families |
-| `--t-round` / `--t-rounds a,b,c` | round token budget (single point / sweep axis) |
+| `--t-round` / `--t-round a,b,c` | round token budget (single point / sweep axis) |
 | `--tokens-step` | tokens per optimizer step (ga = tokens-step / t_round) |
 | `--ga-rounds` | alternative to `--tokens-step` |
-| `--seq-len` / `--seq-lens` | sequence length (third sweep axis) |
-| `--budget` / `--budgets` | device budget GiB (single / sweep) |
+| `--seq-len` / `--seq-len` | sequence length (third sweep axis) |
+| `--budget` / `--budget` | device budget GiB (single / sweep) |
 | `--backing` | host-backing capacity ceiling GiB (plans escalate recompute to fit; infeasible combos report as INFEASIBLE rows) |
 | `--opt {adamw,muon}` | optimizer (sizes O and the NS work; roofline under-prices muon NS time — `--measured` is muon-exact) |
 | `--hw {3090,5090}` + `--tflops --bw --pcie` | hardware profile / overrides |

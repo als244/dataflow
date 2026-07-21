@@ -29,14 +29,14 @@ daemon in the canonical nsys command — one flag, any world size.
 | `--opt-shard {zero1,zero1rs,co}` | DEFAULT at world>1 is zero1rs (each rank steps params/n); `co` = the co-responsible DIAGNOSTIC lane (replicated stepping, bitwise cross-rank equality as a corruption tripwire) |
 | `--tp-mlp` | tensor-parallel MLPs (correctness track; needs `--execute-padding` when rounds can be under-full) |
 | `--execute-padding` | execute under-full tails as one masked segment (debug/fallback) |
+| `--prof-dir` | output directory for Nsight reports |
 | `--profile` + `--profile-start-before-step N` / `--profile-stop-after-step M` | wrap every launched daemon in nsys; bracket the step window |
 | `--checkpoint-every / --checkpoint-redundancy / --checkpoint-keep-last / --resume` | checkpoint saves; `--resume auto` or a step dir |
 | `--data SPEC` + `--packing-policy {ffd,greedy}` / `--allow-round-split` / `--capture PATH` | data source + packing ([data_feeds.md](../../docs/data_feeds.md)) |
 | `--out` | run-curve JSON (also names the checkpoint dir and its run lock) |
 
 **`reference`** — the pure-torch twin leg (daemon-less):
-`--preset --steps --peak-lr --opt --ga-rounds --grad-checkpoint
---checkpoint-every --resume` + the data quartet + `--out`.
+`--preset --steps --peak-lr --opt --ga-rounds --checkpoint-every --resume` + the data quartet + `--out`.
 
 **`smoke`** — tiny real-vocab reference-vs-engine gate
 (`--steps --fast-budget --backing-budget`).
