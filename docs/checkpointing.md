@@ -142,6 +142,54 @@ client.snapshot("all", dest, ids=["O_0", "W_0"],
                 client_meta={"rank": 0})
 ```
 
+## The checkpoint record schema
+
+`checkpoint_record.json` (format 2 — `read_record` refuses anything
+else) is the one training-level file; everything else in a step
+directory is engine artifacts and program dumps. Annotated:
+
+```jsonc
+{
+  "format": 2,
+  "step": 420,                  // the step this state follows
+  "seed": 11,
+  "world": 2,
+  "data_cursor": {...},         // pipeline position; resume restarts here
+  "losses": [...],              // per-step losses up to this checkpoint
+  "save_plan": {                // responsibility map: who saved what
+    "W_0": [{"rank": 0, "lo": 0, "hi": 1056512, "role": "responsible"},
+             {"rank": 1, "lo": 1056512, "hi": 2113024,
+              "role": "responsible"}]
+  },
+  "artifacts": ["rank0", "rank1"],   // engine artifact dirs, rank order
+  "launch": {
+    "argv": [...],              // exact invocation
+    "resolved": {"preset": ..., "seed": ..., "opt_shard": ...,
+                  "world": ..., "rank_rounds": ..., "backend": ...},
+    "data": {...},              // pipeline description
+    "git": {"rev": ..., "dirty": ...},
+    "env": {"torch": ..., "cuda": ..., "cudnn": ...},
+    "ranks": [{"host": "chicago", "device": 0}, ...],
+    "programs": ["programs/rank0.json", ...]   // exact lowered programs
+  }
+}
+```
+
+`save_plan` is what restore trusts for reassembly; `launch` makes a
+checkpoint auditable and re-invocable without guessing; `losses` +
+`data_cursor` make the resumed curve continuous.
+
+## Single GPU is the world-1 special case
+
+There is deliberately one checkpoint format at every world size.
+A single-GPU run writes the same step directory with `world: 1`:
+one `rank0/` artifact, a `save_plan` in which rank 0 owns every
+object whole (no ranges), one program dump — and the same
+`read_record` / `artifacts_for_restore` / `restore_snapshot` path
+reads it back. Nothing about resume, validation, or the completeness
+marker is distributed-specific; the distributed composition below is
+the general case this degenerates from.
+
 ## The distributed training composition
 
 Training checkpoints are exactly this API, driven per rank. One
