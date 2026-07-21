@@ -85,7 +85,7 @@ def distribute_artifacts(record: dict, hosts, log) -> None:
                 log(f"[fleet] artifact {art} -> {host.name}")
 
 
-def checkpoint_fleet(ranks, ck: dict, step_next: int, meta: dict,
+def save_checkpoint(ranks, ck: dict, step_next: int, meta: dict,
                      losses_so_far: list, log) -> None:
     """Conductor-orchestrated checkpoint at a step boundary, and the record
     v2: each rank snapshots exactly what it is RESPONSIBLE for (its

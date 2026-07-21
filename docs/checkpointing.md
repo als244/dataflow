@@ -230,7 +230,8 @@ checkpoints/<run_name>/step_000420/
   checkpoint_record.json  the checkpoint record — written LAST
 ```
 
-**Saving.** Under partitioned optimizer responsibility each rank
+**Saving** (`save_checkpoint`, driven by the conductor at each
+checkpoint boundary)**.** Under partitioned optimizer responsibility each rank
 saves the parameter byte ranges it is responsible for plus its own
 optimizer shard; the record's `save_plan` is that map. Minimal form
 of what the training layer does at a step boundary:

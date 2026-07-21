@@ -190,7 +190,7 @@ python tools/train/train.py train ... --topology topology.toml \
 At every N-step boundary the conductor has each rank snapshot to a
 **host-local** path (`results/pretrain/checkpoints/<run>/step_XXXXXX/`
 on that rank's own disk — the run name is your `--out` stem), waits
-for all writers, then writes `checkpoint_record.json` on the conductor **last**
+for all writers (`save_checkpoint`), then writes `checkpoint_record.json` on the conductor **last**
 (the full save/restore mechanics, lease protection, and usage
 examples live in [checkpointing.md](checkpointing.md)).
 That file is the completeness marker: a crash mid-snapshot leaves no

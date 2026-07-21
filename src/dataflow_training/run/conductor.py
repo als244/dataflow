@@ -23,7 +23,7 @@ from dataflow_training.lowering.planning import plan_program
 from .driver import RunResult, init_model
 from .presets import cfg_dict, tokens_per_step
 from .recipe import Recipe
-from .checkpointing import checkpoint_fleet, distribute_artifacts, resolve_resume
+from .checkpointing import save_checkpoint, distribute_artifacts, resolve_resume
 from ..distributed.grouped_lowering import GroupedBuildVariant, lower_with_group
 from ..distributed.hosts import repo_path, run_on, uds_forward
 from ..distributed import daemons

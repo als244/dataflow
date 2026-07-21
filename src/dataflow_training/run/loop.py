@@ -12,7 +12,7 @@ from dataflow_training.lowering.planning import plan_program
 
 from .driver import RunResult, init_model
 from .presets import cfg_dict, tokens_per_step
-from .checkpointing import checkpoint_fleet
+from .checkpointing import save_checkpoint
 from ..distributed.grouped_lowering import GroupedBuildVariant, lower_with_group
 from ..distributed.ranks import StepRun, put_rank_rounds
 from ..distributed.sharding import ALL_RANKS, tp_view
@@ -247,7 +247,7 @@ def fleet_loop(ranks, gspec, recipe, pipeline, steps, *, budgets, seed,
         if (checkpoint is not None
                 and (step + 1) % checkpoint["every"] == 0
                 and step + 1 < steps):
-            checkpoint_fleet(
+            save_checkpoint(
                 ranks, checkpoint, step + 1,
                 {"run": checkpoint["run"], "world": world,
                  "hosts": [r.name for r in ranks],
