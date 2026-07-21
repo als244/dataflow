@@ -44,6 +44,23 @@ The lease is the whole concurrency contract: while held, the saved
 bytes are guaranteed stable — object extents cannot move and no
 writer can touch them.
 
+### Residency contract: snapshots read host backing, always
+
+A store resident's canonical home is its **pinned host-backing
+extent** — that is what "resident" means in the service model; there
+is no fast-only persistent object. Device (fast) copies are
+per-run transients: a run uploads what it needs from backing and
+offloads mutated persistent state back to backing as part of the
+run itself. Snapshot admission then happens on the same single
+dispatcher that runs execute on, so between runs the backing bytes
+ARE the post-step state — the payload writer copies straight from
+the backing extents and never touches the device; no
+device-to-host staging path exists in the snapshot machinery
+because none is needed. Snapshotting a non-resident id fails
+validation loudly. On the restore side, a `placement` argument
+("initial" | "backing_only") chooses whether restored objects also
+take their initial device placement or land backing-only.
+
 ### How waiting works
 
 **Engine side (implicit — callers cannot get this wrong).** Any verb
