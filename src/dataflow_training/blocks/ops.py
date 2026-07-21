@@ -412,20 +412,33 @@ def embed_fwd(tokens: torch.Tensor, w_embed: torch.Tensor, out: torch.Tensor) ->
 
 
 def embed_bwd_accum(tokens: torch.Tensor, dy: torch.Tensor, dw_embed: torch.Tensor, *, zero_first: bool) -> None:
-    """DETERMINISTIC embedding-gradient accumulation.
+    """DETERMINISTIC embedding-gradient accumulation whose rounding
+    MATCHES the grad collective, so a gradient-accumulation split is
+    bitwise-invariant: solo ga=2 and a DP pair summing the same two
+    round grads land the SAME bytes.
 
-    ``index_add_`` on CUDA is float atomicAdd: with duplicate tokens the
-    add ORDER varies run to run — a one-ulp W_embed lottery (measured
-    ~1-in-5 fixed-seed pairs differing by one element; every family's
-    bitwise-determinism gate was silently rolling these dice).
+    Two hazards, both handled:
 
-    Fix, sync-free and fixed-shape (no nonzero()): stable-sort tokens,
-    fp32 cumsum over the sorted rows, per-position segment totals via
-    cumsum-diff against each segment's start (cummax-propagated), then a
-    single index_add_ where every position contributes — but non-
-    segment-end positions contribute EXACT ZEROS, so the atomic order is
-    irrelevant (x + 0.0 is exact regardless of order; each vocab row
-    receives exactly one nonzero add)."""
+    - ``index_add_`` on CUDA is float atomicAdd: with duplicate tokens
+      the add ORDER varies run to run — a one-ulp W_embed lottery
+      (measured ~1-in-5 fixed-seed pairs differing by one element).
+
+    - the bf16 ATOMIC add also rounds differently from the collective's
+      ``add_`` (fp32 opmath, round once). That skew only shows on rows
+      whose token appears in MORE THAN ONE round: solo accumulated
+      across rounds through the atomic, ranks summed the same totals
+      through the collective — a one-ulp seed on exactly the collided
+      rows, which a recurrent architecture amplifies into a visible
+      loss-curve gap (the qwen35 DP-parity incident).
+
+    Scheme, sync-free and fixed-shape (no nonzero()): stable-sort
+    tokens, fp32 cumsum over the sorted rows, then give EVERY position
+    of a token segment that segment's full round total. Each position
+    computes its row's post-accumulation value with the collective's
+    exact arithmetic — fp32(current row) + fp32(bf16-rounded total),
+    rounded once to storage — and ``index_copy_`` scatters the results.
+    Duplicate positions of a row write byte-identical values, so the
+    formally-unordered duplicate write is value-deterministic."""
     if zero_first:
         dw_embed.zero_()
     t = tokens.shape[0]
@@ -440,14 +453,24 @@ def embed_bwd_accum(tokens: torch.Tensor, dy: torch.Tensor, dw_embed: torch.Tens
     is_end = torch.ones(t, dtype=torch.bool, device=tok.device)
     is_end[:-1] = st[1:] != st[:-1]
     seg_start = torch.cummax(torch.where(is_start, idx, idx.new_zeros(())), 0).values
+    # every position's segment END index: reversed cummin over the end
+    # markers (the nearest end at-or-after each position)
+    seg_end = torch.flip(
+        torch.cummin(torch.flip(torch.where(is_end, idx, idx.new_full((), t - 1)),
+                                (0,)), 0).values, (0,))
     before = torch.where(
         (seg_start > 0).unsqueeze(1),
         csum[(seg_start - 1).clamp_min(0)],
         torch.zeros_like(csum[:1]),
     )
-    totals = torch.where(is_end.unsqueeze(1), csum - before,
-                         torch.zeros_like(csum))
-    dw_embed.index_add_(0, st.int(), totals.to(dw_embed.dtype))
+    totals = csum[seg_end] - before                          # (t, d) fp32
+    # the collective's arithmetic, position-wise: round the round-total
+    # to storage (what a rank would put on the wire), add in fp32, round
+    # once. Rows absent from this round are never written.
+    current = dw_embed.index_select(0, st)
+    updated = (current.float()
+               + totals.to(dw_embed.dtype).float()).to(dw_embed.dtype)
+    dw_embed.index_copy_(0, st, updated)
 
 
 # --- qwen3.5 reference forms (DeltaNet + gated attention) ---------------------

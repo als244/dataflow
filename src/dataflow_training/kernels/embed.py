@@ -76,10 +76,19 @@ if triton is not None:
                 src = tl.load(order_ptr + i + jj)
                 acc += tl.load(dy_ptr + src * dy_stride + rd, mask=dmask,
                                other=0.0).to(tl.float32)
+            # round the segment total to the GRAD dtype first — that is
+            # the value a DP rank ships to the collective — then add in
+            # fp32 and round once (the collective's arithmetic). Keeps a
+            # gradient-accumulation split bitwise-invariant: ga=2 solo
+            # and a DP pair reducing the same two round totals land the
+            # same bytes (the qwen35 DP-parity incident: the unrounded
+            # local add differed by one ulp on cross-round duplicate
+            # tokens, and recurrence amplified the seed).
+            accr = acc.to(dw_ptr.dtype.element_ty).to(tl.float32)
             cur = tl.load(dw_ptr + tok * dw_stride + rd, mask=dmask,
                           other=0.0).to(tl.float32)
             tl.store(dw_ptr + tok * dw_stride + rd,
-                     (cur + acc).to(dw_ptr.dtype.element_ty), mask=dmask)
+                     (cur + accr).to(dw_ptr.dtype.element_ty), mask=dmask)
 
     @register("embed_bwd_accum", "triton", deterministic=True,
               workspace=internal(_ws_hint),
