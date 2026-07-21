@@ -13,7 +13,7 @@ import torch
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(),
                                 reason="needs CUDA")
 
-from dataflow_training.data.packing import IGNORE_INDEX
+from dataflow_training.data.lpt_packing import IGNORE_INDEX
 from dataflow_training.blocks import ops
 from dataflow_training.kernels.registry import registered
 

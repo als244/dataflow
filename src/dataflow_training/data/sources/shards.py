@@ -1,41 +1,172 @@
-"""ShardSource: token-shard corpora (the llm.c .bin format).
+"""ShardSource: token-shard corpora, and the mmap machinery under it.
 
-Two emission modes over one corpus:
-- per-document (default): sequences are the corpus's documents in
-  order (delimiter-split; the delimiter token never appears as an
-  input, and a document's final position targets the NEXT document's
-  leading delimiter — the model learns to emit end-of-text). The
-  long policy applies per document.
-- ``window=N``: sequences are consecutive N-token windows with the
-  global shift-by-one targets (fixed-window slicing; delimiters flow
-  through as ordinary tokens).
+Shard format: a 1024-byte header (int32[256]; [0] magic 20240520,
+[1] version, [2] token count) followed by that many uint16 token ids;
+a split is a directory of ``fineweb_{split}_*.bin`` files (the naming
+is the corpus convention on disk, not an API). Documents are
+delimiter-separated (EOT prepended to every doc); ``DocIndex`` maps
+delimiter positions lazily per shard.
 
-Long policies: ``exclude`` (drop docs over max_seqlen), ``trim``
-(truncate), ``chunk`` (split into max_seqlen pieces, positions
-restarting per piece), ``whole`` (emit the full document regardless —
-ONLY for packers that split at round edges and chunk round-locally,
-the legacy-replication path).
-
-Cursors: per-doc = {"doc": ordinal, "piece": i} (piece only under
-``chunk``); window = {"pos": global token position}. Both wrap the
-epoch deterministically.
-
-The mmap corpus machinery (ShardCorpus, DocIndex) is shared with the
-legacy feed module during the migration window.
+Emission modes and policies: see class ShardSource below.
 """
 from __future__ import annotations
 
+import os
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Iterator
 
 import numpy as np
 
-from dataflow_training.data.fineweb import (
-    DEFAULT_ROOT,
-    EOT,
-    DocIndex,
-    ShardCorpus,
-)
 from dataflow_training.data.sequence import Sequence, validate_sequence
+
+HEADER_BYTES = 1024
+HEADER_INTS = 256
+MAGIC = 20240520
+TOKEN_DTYPE = np.uint16
+
+# In-repo corpus (a symlink to the llm.c shards). The /mnt fineweb_edu copy
+# is llama3-128K-tokenized — the WRONG one; always use this.
+DEFAULT_ROOT = str(
+    Path(__file__).resolve().parents[4] / "datasets" / "fineweb10B"
+)
+
+
+def read_header(path: str | os.PathLike) -> tuple[int, int, int]:
+    """(magic, version, ntok) from a shard header; validates the magic."""
+    head = np.fromfile(path, dtype=np.int32, count=HEADER_INTS)
+    if head.shape[0] < 3:
+        raise ValueError(f"{path}: truncated header")
+    magic, version, ntok = int(head[0]), int(head[1]), int(head[2])
+    if magic != MAGIC:
+        raise ValueError(
+            f"{path}: bad magic {magic} (expected {MAGIC}); not an llm.c shard"
+        )
+    expect = HEADER_BYTES + ntok * np.dtype(TOKEN_DTYPE).itemsize
+    actual = os.path.getsize(path)
+    if actual != expect:
+        raise ValueError(
+            f"{path}: size {actual} != header-implied {expect} "
+            f"(ntok={ntok})"
+        )
+    return magic, version, ntok
+
+
+def list_shards(root: str | os.PathLike = DEFAULT_ROOT,
+                split: str = "train") -> list[Path]:
+    """Sorted ``fineweb_{split}_*.bin`` shard paths under ``root``."""
+    root = Path(root)
+    shards = sorted(root.glob(f"fineweb_{split}_*.bin"))
+    if not shards:
+        raise FileNotFoundError(
+            f"no fineweb_{split}_*.bin shards under {root}"
+        )
+    return shards
+
+
+class ShardCorpus:
+    """Read-only view over the concatenation of a split's shards.
+
+    Shards are memory-mapped lazily (a window read touches only a few KB);
+    reads are circular over the total token count, so any global start is
+    valid. Token ids come back as ``uint16`` exactly as stored.
+    """
+
+    def __init__(self, root: str | os.PathLike = DEFAULT_ROOT,
+                 split: str = "train"):
+        self.root = str(root)
+        self.split = split
+        self.paths = list_shards(root, split)
+        self.shard_ntok: list[int] = []
+        for p in self.paths:
+            _, _, ntok = read_header(p)
+            self.shard_ntok.append(ntok)
+        # cumulative starts: cum[i] .. cum[i+1] is shard i's global range
+        self._cum = np.zeros(len(self.paths) + 1, dtype=np.int64)
+        self._cum[1:] = np.cumsum(self.shard_ntok)
+        self._mmaps: list[np.memmap | None] = [None] * len(self.paths)
+
+    @property
+    def total_tokens(self) -> int:
+        return int(self._cum[-1])
+
+    def _mm(self, i: int) -> np.memmap:
+        mm = self._mmaps[i]
+        if mm is None:
+            mm = np.memmap(self.paths[i], dtype=TOKEN_DTYPE, mode="r",
+                           offset=HEADER_BYTES, shape=(self.shard_ntok[i],))
+            self._mmaps[i] = mm
+        return mm
+
+    def _locate(self, pos: int) -> tuple[int, int]:
+        """(shard_index, within_shard_offset) for a global token position."""
+        i = int(np.searchsorted(self._cum, pos, side="right")) - 1
+        return i, pos - int(self._cum[i])
+
+    def read(self, start: int, length: int) -> np.ndarray:
+        """``length`` tokens beginning at global ``start`` (circular)."""
+        total = self.total_tokens
+        if length > total:
+            raise ValueError(f"read {length} > corpus {total} tokens")
+        out = np.empty(length, dtype=TOKEN_DTYPE)
+        pos = start % total
+        filled = 0
+        while filled < length:
+            i, within = self._locate(pos)
+            mm = self._mm(i)
+            take = min(self.shard_ntok[i] - within, length - filled)
+            out[filled:filled + take] = mm[within:within + take]
+            filled += take
+            pos = (pos + take) % total
+        return out
+
+
+EOT = 50256          # gpt2 <|endoftext|> — PREPENDED to every doc in the shards
+
+
+class DocIndex:
+    """Global EOT positions over a ShardCorpus, built lazily per shard
+    (one numpy scan of the mmap, ~100 ms per 100M-token shard, cached
+    in-process). Provides the filtered->raw coordinate map for the
+    doc-aware feed: "filtered" = the corpus with every EOT removed."""
+
+    def __init__(self, corpus: ShardCorpus):
+        self.corpus = corpus
+        self._per_shard: list[np.ndarray | None] = [None] * len(corpus.paths)
+        self._eots: np.ndarray | None = None
+        self._g: np.ndarray | None = None
+
+    def _shard_eots(self, i: int) -> np.ndarray:
+        e = self._per_shard[i]
+        if e is None:
+            mm = self.corpus._mm(i)
+            e = np.flatnonzero(mm == np.uint16(EOT)).astype(np.int64)
+            self._per_shard[i] = e
+        return e
+
+    @property
+    def eots(self) -> np.ndarray:
+        if self._eots is None:
+            parts = [self._shard_eots(i) + int(self.corpus._cum[i])
+                     for i in range(len(self.corpus.paths))]
+            self._eots = (np.concatenate(parts) if parts
+                          else np.zeros(0, np.int64))
+            # g[m] = filtered tokens strictly before the m-th EOT
+            self._g = self._eots - np.arange(len(self._eots), dtype=np.int64)
+        return self._eots
+
+    @property
+    def filtered_total(self) -> int:
+        return self.corpus.total_tokens - len(self.eots)
+
+    def raw_of_filtered(self, f: int) -> int:
+        """Raw position of the f-th non-EOT token (f in filtered space)."""
+        self.eots
+        m = int(np.searchsorted(self._g, f, side="right"))
+        return f + m
+
+
+@dataclass
 
 
 class ShardSource:

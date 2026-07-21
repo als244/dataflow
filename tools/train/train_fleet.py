@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from dataflow_training.run import parity
 from dataflow_training.run.driver import daemon_client, load_result, run_engine
-from dataflow_training.data.fineweb import make_feed
+from dataflow_training.data.pipeline import legacy_block_pipeline
 from dataflow_training.distributed.fleet import run_fleet_dp
 from dataflow_training.run.presets import preset
 from dataflow_training.run.recipe import Recipe
@@ -74,7 +74,7 @@ def run_config(cfg_base, tokens_global: int, steps: int, budgets,
         res_s = load_result(single_path)
     else:
         print(f"[sweep] {tag}: SINGLE ({rounds} rounds x {t_round} tok)")
-        feed = make_feed(cfg.tokens)
+        feed = legacy_block_pipeline(cfg)
         t0 = time.monotonic()
         with daemon_client(slab_gib=backing[0]) as client:
             res_s = run_engine(client, cfg, recipe, feed, steps,
@@ -91,7 +91,7 @@ def run_config(cfg_base, tokens_global: int, steps: int, budgets,
     else:
         split = (rounds * 3 // 4, rounds // 4)
         print(f"[sweep] {tag}: DIST rounds {split[0]}:{split[1]}")
-        feed = make_feed(cfg.tokens)
+        feed = legacy_block_pipeline(cfg)
         t0 = time.monotonic()
         res_d = run_fleet_dp(cfg, recipe, feed, steps,
                              rank_rounds=split, budgets=tuple(budgets),
@@ -253,7 +253,7 @@ def main() -> None:
             if not sep or not sock:
                 p.error(f"--attach wants HOST=SOCK, got {item!r}")
             attach[name] = sock
-        feed = make_feed(cfg.tokens)
+        feed = legacy_block_pipeline(cfg)
         profile = None
         if args.profile:
             profile = {"start": args.profile_start_before_step,

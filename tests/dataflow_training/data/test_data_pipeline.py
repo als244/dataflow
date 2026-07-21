@@ -199,48 +199,99 @@ def test_prepacked_feed_bypass():
     assert pre.cursor() == {"step": 2}
 
 
-# ----------------- the legacy byte-identity gates ----------------------------
+# ----------------- the legacy configuration pins ----------------------------
 
-@needs_corpus
-def test_byte_identity_legacy_doc_packing():
-    """ShardSource(per-doc, whole) + greedy/allow_round_split
-    reproduces make_doc_feed EXACTLY: tokens, targets, and segment
-    lens, round for round."""
-    from dataflow_training.data.fineweb import make_doc_feed
+# sha256 over (tokens || targets || seq_lens) for the first N rounds of
+# the two legacy configurations, PINNED while the retired feed
+# implementations still existed and byte-identity against them was
+# gate-verified. Any packing/source change that shifts these bytes
+# breaks the certified-curve reproductions and must be deliberate.
+LEGACY_DOC_SHA = "c70359b3352ccaffdeebec5dbc0e7ebed88683d8d5f832bf92849d7c2dce9d34"
+LEGACY_BLOCK_SHA = "37be929906be72dec13f36514820fafafbb07d2758c41e67fbe7e78e821e5abf"
+
+
+def rounds_hash(window, allow_split, long_policy, T, MAX, n_rounds) -> str:
+    import hashlib
+
     from dataflow_training.data.sources.shards import ShardSource
 
-    T, MAX, ROUNDS = 32768, 1024, 200
-    legacy = make_doc_feed(T, MAX, root=CORPUS)
-    src = ShardSource(str(CORPUS), max_seqlen=MAX, long_policy="whole",
-                      vocab_size=VOCAB)
+    src = ShardSource(str(CORPUS), max_seqlen=MAX, long_policy=long_policy,
+                      vocab_size=VOCAB, window=window)
     packer = Packer(DataFeed(src), tokens_per_round=T, ga_rounds=1,
-                    max_seqlen=MAX, allow_round_split=True, policy="greedy")
-    for k in range(ROUNDS):
-        want_tok, want_tgt, want_lens = legacy(k)
-        got = packer.next_step().rounds[0]
-        assert np.array_equal(got.tokens, want_tok.numpy()), f"round {k}"
-        assert np.array_equal(got.targets, want_tgt.numpy()), f"round {k}"
-        assert got.seq_lens == tuple(want_lens), f"round {k}"
+                    max_seqlen=MAX, allow_round_split=allow_split,
+                    policy="greedy")
+    h = hashlib.sha256()
+    for _ in range(n_rounds):
+        r = packer.next_step().rounds[0]
+        h.update(r.tokens.tobytes())
+        h.update(r.targets.tobytes())
+        h.update(np.asarray(r.seq_lens, dtype=np.int64).tobytes())
+    return h.hexdigest()
 
 
 @needs_corpus
-def test_byte_identity_legacy_block_packing():
-    """ShardSource(window=seq) + greedy reproduces make_feed exactly
-    (uniform segments)."""
-    from dataflow_training.data.fineweb import make_feed
-    from dataflow_training.data.sources.shards import ShardSource
+def test_legacy_doc_configuration_pinned():
+    """whole-docs + greedy/allow_round_split — the doc-aware legacy
+    packing (the 124M study curves), pinned byte-exactly."""
+    assert rounds_hash(None, True, "whole", 32768, 1024, 200) \
+        == LEGACY_DOC_SHA
 
-    SEQ, BATCH, ROUNDS = 1024, 32, 100
-    T = SEQ * BATCH
-    legacy = make_feed(T, root=CORPUS)
-    src = ShardSource(str(CORPUS), max_seqlen=SEQ, vocab_size=VOCAB,
-                      window=SEQ)
-    packer = Packer(DataFeed(src), tokens_per_round=T, ga_rounds=1,
-                    max_seqlen=SEQ, policy="greedy")
-    for k in range(ROUNDS):
-        want_tok, want_tgt = legacy(k)
-        got = packer.next_step().rounds[0]
-        assert np.array_equal(got.tokens, want_tok.numpy()), f"round {k}"
-        assert np.array_equal(got.targets, want_tgt.numpy()), f"round {k}"
-        assert got.seq_lens == tuple([SEQ] * BATCH)
-        assert got.content == T
+
+@needs_corpus
+def test_legacy_block_configuration_pinned():
+    """window slicing + greedy — the fixed-block legacy packing
+    (the parity/determinism gates' data), pinned byte-exactly."""
+    assert rounds_hash(1024, False, "exclude", 32768, 1024, 100) \
+        == LEGACY_BLOCK_SHA
+
+
+@needs_corpus
+def test_engine_resume_drill_with_cursor(tmp_path):
+    """Cursor resume end-to-end on the engine (new-defaults pipeline —
+    under-full rounds with masked tails included): a checkpointed run's
+    resumed tail must reproduce the uninterrupted run bitwise (one
+    daemon; init re-seeds, restore overwrites)."""
+    import torch
+
+    if not torch.cuda.is_available():
+        pytest.skip("no CUDA")
+    from dataflow_training.data.pipeline import DataPipeline
+    from dataflow_training.run.driver import daemon_client, run_engine
+    from dataflow_training.run.presets import gpt2_smoke_preset
+    from dataflow_training.run.recipe import Recipe
+
+    cfg = gpt2_smoke_preset()
+    recipe = Recipe(peak_lr=3e-4, min_lr=3e-5, warmup_steps=2,
+                    total_steps=6)
+    pipe = DataPipeline("shards:", tokens_per_round=cfg.tokens,
+                        ga_rounds=cfg.grad_accum_rounds,
+                        max_seqlen=cfg.seq_len,
+                        vocab_size=cfg.vocab_size)
+
+    def quiet(*a, **k):
+        pass
+
+    ck = tmp_path / "drill"
+    with daemon_client(slab_gib=4.0, log=quiet) as client:
+        full = run_engine(client, cfg, recipe, pipe, 6, budget_gib=4.0,
+                          seed=11, log=quiet, checkpoint_every=2,
+                          checkpoint_dir=ck)
+        resumed = run_engine(client, cfg, recipe, pipe, 6, budget_gib=4.0,
+                             seed=11, log=quiet, checkpoint_every=2,
+                             checkpoint_dir=ck, resume=True)
+    assert resumed.meta["resumed_from"].endswith("step_000006")
+    # the resumed run restored @6 and had nothing to do — now force a
+    # mid-run resume: drop the newest checkpoint so @4 is the target
+    import shutil
+
+    shutil.rmtree(ck / "step_000006")
+    with daemon_client(slab_gib=4.0, log=quiet) as client:
+        tail = run_engine(client, cfg, recipe, pipe, 6, budget_gib=4.0,
+                          seed=11, log=quiet, checkpoint_every=2,
+                          checkpoint_dir=ck, resume=True)
+    assert len(tail.losses) == 6
+    assert tail.losses[:4] == full.losses[:4]        # manifest carry
+    for a, b in zip(tail.losses[4:], full.losses[4:]):
+        # fresh process: same-daemon bitwise does not apply — hold the
+        # tail to the cross-process ambient envelope
+        assert abs(a - b) < 5e-4, (tail.losses, full.losses)

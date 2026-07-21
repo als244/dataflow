@@ -401,10 +401,12 @@ class RankState:
 
 
 class StepRun:
-    def __init__(self, rank: RankState, step: int, valid: int):
+    def __init__(self, rank: RankState, step: int, valid: int,
+                 seq_lens: dict | None = None):
         self.rank = rank
         self.step = step
         self.valid = valid
+        self.seq_lens = seq_lens
         self.fetched: dict | None = None
         self.out: dict | None = None
         self.error = None
@@ -413,10 +415,11 @@ class StepRun:
         try:
             fetch = [f"loss_0_{r}"
                      for r in range(self.rank.cfg.grad_accum_rounds)]
+            args = {"step": self.step, "valid_rows": self.valid}
+            if self.seq_lens is not None:
+                args["seq_lens"] = self.seq_lens
             out = self.rank.client.run(
-                self.rank.prog_id,
-                args={"step": self.step, "valid_rows": self.valid},
-                fetch=fetch)
+                self.rank.prog_id, args=args, fetch=fetch)
             if out.get("state") != "done":
                 raise RuntimeError(f"{self.rank.name}: {out}")
             self.out = out
@@ -425,19 +428,22 @@ class StepRun:
             self.error = e
 
 
-def put_rank_rounds(rank: RankState, stream, step: int,
-                    r_global_count: int) -> int:
-    """Feed the rank ITS slice of the original stream's rounds for one
-    step. Returns valid tokens contributed."""
-    valid = 0
+def put_rank_rounds(rank: RankState, packed, tokens_per_round: int) -> dict:
+    """Ship the rank ITS slice of the step's packed rounds. Returns
+    the rank's wire seq_lens bounds (an under-full round's tail rides
+    as one masked segment)."""
+    lens = {}
     for local_r, orig_r in enumerate(rank.rounds):
-        tok, tgt = stream(step * r_global_count + orig_r)
-        valid += int((tgt >= 0).sum())
+        rnd = packed.rounds[orig_r]
+        bounds = rnd.bounds()
+        if rnd.content < tokens_per_round:
+            bounds = bounds + [tokens_per_round]
+        lens[str(local_r)] = bounds
         rank.client.put_object(f"tokens_0_{local_r}",
-                               tok.numpy().tobytes())
+                               rnd.tokens.tobytes())
         rank.client.put_object(f"targets_0_{local_r}",
-                               tgt.numpy().tobytes())
-    return valid
+                               rnd.targets.tobytes())
+    return lens
 
 
 def wait_client(sock: str, *, name: str, timeout_s: float,
@@ -468,7 +474,7 @@ class HostRig:
         self.prof_out: str | None = None
 
 
-def run_fleet_dp(global_cfg, recipe: Recipe, stream, steps: int, *,
+def run_fleet_dp(global_cfg, recipe: Recipe, pipeline, steps: int, *,
                  rank_rounds=(6, 2), budgets=None, slabs=None,
                  topology=None, group: str = "dp", attach=None,
                  seed: int = 11, log=print, log_every: int = 10,
@@ -632,7 +638,7 @@ def run_fleet_dp(global_cfg, recipe: Recipe, stream, steps: int, *,
                 time.sleep(0.25)
             log(f"[fleet] link {rigs[0].host.name}<->{other.host.name}"
                 f" peak Gbit/s: {peak or 'unmeasured'}")
-        return fleet_loop(ranks, gspec, recipe, stream, steps,
+        return fleet_loop(ranks, gspec, recipe, pipeline, steps,
                           budgets=budgets, seed=seed, log=log,
                           log_every=log_every,
                           tokens_step=tokens_per_step(global_cfg),
@@ -674,7 +680,7 @@ def run_fleet_dp(global_cfg, recipe: Recipe, stream, steps: int, *,
                 rig.forward.terminate()
 
 
-def fleet_loop(ranks, gspec, recipe, stream, steps, *, budgets, seed,
+def fleet_loop(ranks, gspec, recipe, pipeline, steps, *, budgets, seed,
                log, log_every, tokens_step, r_global,
                profile: dict | None = None,
                parallels=None,
@@ -683,6 +689,22 @@ def fleet_loop(ranks, gspec, recipe, stream, steps, *, budgets, seed,
                zero1rs_world: int | None = None) -> RunResult:
     world = len(ranks)
     start_step = int(fleet_manifest["step"]) if fleet_manifest else 0
+
+    cursor = fleet_manifest.get("data_cursor") if fleet_manifest else None
+    if cursor is not None:
+        stepper = pipeline(cursor)
+    else:
+        stepper = pipeline(None)
+        if start_step:
+            from dataflow_training.data.pipeline import fast_forward
+
+            log(f"[fleet] checkpoint has no data cursor — fast-"
+                f"forwarding the pipeline {start_step} steps (CPU)")
+            fast_forward(stepper, start_step)
+    tokens_per_round = ranks[0].cfg.tokens
+    step_packed = stepper.next_step()      # the START step's rounds
+    step_lens_by_rank: dict[int, dict] = {}
+    last_cursor = step_packed.cursor_after
 
     # ---- per-rank register + warm-up ----------------------------------
     for i, rank in enumerate(ranks):
@@ -729,7 +751,8 @@ def fleet_loop(ranks, gspec, recipe, stream, steps, *, budgets, seed,
                 f"{o_bytes / 1024 ** 3:.2f} GiB"
                 + (" (tp: sharded weights too)" if narrowed else ""))
         init_model(rank.client, "llama3", cfg_dict(rank.cfg), **init_kwargs)
-        put_rank_rounds(rank, stream, 0, r_global)
+        step_lens_by_rank[i] = put_rank_rounds(rank, step_packed,
+                                               tokens_per_round)
         reg = rank.client.register_program(prog_dict, resolver=resolver)
         missing = reg["bindings"]["missing_inputs"]
         if missing:
@@ -772,13 +795,15 @@ def fleet_loop(ranks, gspec, recipe, stream, steps, *, budgets, seed,
                 raise RuntimeError(
                     f"{rank.name}: restored step {restored_step} != "
                     f"resume step {start_step}")
-            put_rank_rounds(rank, stream, start_step, r_global)
+            step_lens_by_rank[i] = put_rank_rounds(rank, step_packed,
+                                                   tokens_per_round)
             log(f"[fleet] {rank.name}: restored checkpoint @ step "
                 f"{start_step}")
         else:
             init_model(rank.client, "llama3", cfg_dict(rank.cfg),
                        **init_kwargs)
-            put_rank_rounds(rank, stream, 0, r_global)
+            step_lens_by_rank[i] = put_rank_rounds(rank, step_packed,
+                                                   tokens_per_round)
             log(f"[fleet] {rank.name}: warm-up done, re-seeded")
 
     ranks[0].client._call("create_peer_group",
@@ -814,14 +839,16 @@ def fleet_loop(ranks, gspec, recipe, stream, steps, *, budgets, seed,
             log(f"[fleet] profiler capture STARTED before step {step}")
         t0 = time.perf_counter()
         if step > start_step:
-            valid = 0
+            step_packed = stepper.next_step()
+            last_cursor = step_packed.cursor_after
             for k, rank in enumerate(ranks):
-                v = put_rank_rounds(rank, stream, step, r_global)
-                if k == 0 or not tp_mode:
-                    valid += v   # tp replicas share ONE batch: count once
-        else:
-            valid = tokens_step        # start-step rounds already resident
-        jobs = [StepRun(rank, step, valid) for rank in ranks]
+                step_lens_by_rank[k] = put_rank_rounds(
+                    rank, step_packed, tokens_per_round)
+        # GLOBAL-DENOMINATOR: every rank normalizes by the step's total
+        # (tp replicas share ONE batch — the packed step IS that batch)
+        valid = step_packed.valid_rows
+        jobs = [StepRun(rank, step, valid, step_lens_by_rank.get(k))
+                for k, rank in enumerate(ranks)]
         threads = [threading.Thread(target=j) for j in jobs]
         for t in threads:
             t.start()
@@ -876,7 +903,8 @@ def fleet_loop(ranks, gspec, recipe, stream, steps, *, budgets, seed,
                 {"run": checkpoint["run"], "world": world,
                  "hosts": [r.name for r in ranks],
                  "rank_rounds": [len(r.rounds) for r in ranks],
-                 "backend": gspec.backend, "seed": seed},
+                 "backend": gspec.backend, "seed": seed,
+                 "data_cursor": last_cursor},
                 res.losses, log)
     # peak DEVICE + HOST accounting, recorded BY DEFAULT per rank
     for rank in ranks:

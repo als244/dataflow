@@ -1,31 +1,7 @@
-"""General sequence packing: finite batches of variable-length
-sequences into fixed t_round token rounds (agenda Phase C0).
-
-THE one packing primitive for pretrain / SFT / RL alike. Pure and
-torch-free (numpy only) so the isolated reference implementation can
-vendor a byte-identical copy.
-
-Contract (decisions 2026-07-09):
-- A round is a FLAT grid of exactly t_round tokens; document/sample
-  boundaries are DATA (`cu` — cu_seqlens-style int32 of FIXED shape
-  (s_max+1,), sentinel-padded with t_round) — variability lives in
-  values, never shapes.
-- Objective: BALANCE — maximize the minimum round fill (proxy for
-  wall-time under a fixed memory envelope; the envelope itself is
-  t_round's job, chosen by the shapes oracle). Deterministic LPT:
-  stable sort by length desc (tie: original index), each sequence to
-  the least-full round that fits it whole.
-- on_overflow: "split" (a sequence that fits nowhere whole is cut at
-  round boundaries; each chunk is its OWN attention segment — llm.c
-  truncation semantics) | "error" (SFT: mid-sample splits break
-  causality; refuse instead).
-- Padding is TAIL-CONTIGUOUS in every round (invariant C0(vi): keeps
-  the future prefix-truncated-compute optimization a pure kernel
-  change) and carries IGNORE_INDEX targets; the pad tail is its own
-  attention segment.
-- Determinism: pure function of the argument list. No RNG; shuffling
-  is the caller's job.
-"""
+"""LPT bin-packing primitives (torch-free): a length-aware packing
+policy candidate for the Packer (longest-processing-time bins).
+The live packing path is data/packer.py; the IGNORE_INDEX constant
+here is the shared masked-target sentinel."""
 from __future__ import annotations
 
 from dataclasses import dataclass

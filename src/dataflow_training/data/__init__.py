@@ -1,12 +1,21 @@
-"""Data plane: fineweb streaming and the general sequence-packing
-primitive (torch-free; the reference side vendors a byte-identical
-copy)."""
+"""The per-sequence data plane: sources -> feed -> packer ->
+fixed-size rounds (docs/data_feeds.md)."""
 
-from .packing import (  # noqa: F401,E402
-    IGNORE_INDEX,
+from .sequence import (  # noqa: F401
     PackedRound,
     PackedStep,
-    pack_batch,
+    Sequence,
+    validate_sequence,
 )
+from .pipeline import (  # noqa: F401
+    DataPipeline,
+    PrepackedPipeline,
+    legacy_block_pipeline,
+    legacy_doc_pipeline,
+    pipeline_from_args,
+)
+from .lpt_packing import IGNORE_INDEX  # noqa: F401
 
-__all__ = ["IGNORE_INDEX", "PackedRound", "PackedStep", "pack_batch"]
+__all__ = ["Sequence", "PackedRound", "PackedStep", "validate_sequence",
+           "DataPipeline", "PrepackedPipeline", "legacy_block_pipeline",
+           "legacy_doc_pipeline", "pipeline_from_args", "IGNORE_INDEX"]

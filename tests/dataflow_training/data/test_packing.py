@@ -4,7 +4,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from dataflow_training.data import IGNORE_INDEX, pack_batch
+from dataflow_training.data.lpt_packing import IGNORE_INDEX, pack_batch
 
 
 def _mk(rng, n, lo=1, hi=900):
