@@ -156,24 +156,35 @@ def checkpoint_fleet(ranks, ck: dict, step_next: int, meta: dict,
 
 
 
-def load_checkpoint(step_dir, *, client=None, include_opt: bool = True,
-                    backing_gib: float = 1.0):
+def load_checkpoint(step_dir, *, rank=None, client=None,
+                    include_opt: bool = True, backing_gib: float = 1.0):
     """HIGH-LEVEL restore: open a checkpoint step directory and return
-    ``(record, client)`` with every object reassembled.
+    ``(record, client)``.
 
-    Restores the record's artifacts in record order (each rank's own
-    artifact last), so ranged/partitioned saves reassemble exactly as
-    resume does. With no ``client`` a scratch in-process FAKE engine
-    is booted to hold the bytes — the evaluation/inspection case;
-    pass a real client to load state into a live daemon.
-    ``include_opt=False`` releases the optimizer-state objects after
-    restore (evaluation does not need them)."""
+    Two views:
+    - ``rank=r`` — RANK VIEW: exactly the state rank r held when the
+      checkpoint was written (full weights + ITS optimizer shard),
+      restored via the same artifact order resume feeds that rank.
+    - ``rank=None`` — AGGREGATE VIEW: weights reassembled from every
+      rank's ranges. Optimizer state is rank-partitioned at world>1,
+      so the aggregate view REFUSES ``include_opt=True`` there —
+      pass a rank for optimizer state, or ``include_opt=False``.
+
+    With no ``client`` a scratch in-process FAKE engine is booted to
+    hold the bytes — the evaluation/inspection case; pass a real
+    client to load state into a live daemon. ``include_opt=False``
+    releases optimizer-state objects after restore."""
     from pathlib import Path as _Path
 
     from .checkpoint_record import artifacts_for_restore, read_record
 
     step_dir = _Path(step_dir)
     record = read_record(step_dir)
+    if rank is None and include_opt and record["world"] > 1:
+        raise ValueError(
+            "optimizer state is rank-partitioned at world>1: pass "
+            "rank= for a rank view, or include_opt=False for the "
+            "aggregate weight view")
     if client is None:
         import tempfile
         import threading
@@ -192,8 +203,9 @@ def load_checkpoint(step_dir, *, client=None, include_opt: bool = True,
             except OSError:
                 time.sleep(0.01)
         client = EngineClient(sock, client_name="ckload")
-    for rank in range(record["world"]):
-        for art in artifacts_for_restore(record, rank):
+    ranks = [rank] if rank is not None else list(range(record["world"]))
+    for r in ranks:
+        for art in artifacts_for_restore(record, r):
             client.restore_snapshot(str(step_dir / art), overwrite=True)
     if not include_opt:
         for oid in record.get("save_plan", {}):

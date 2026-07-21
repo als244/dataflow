@@ -111,6 +111,21 @@ def test_manifest_v2_roundtrip_two_ranks(tmp_path):
         assert bytes(c.get_object("O_0")) == want_o, \
             f"rank {r} O shard clobbered"
 
+    # high-level loader: rank view == that rank's checkpointed state
+    from dataflow_training.run.checkpointing import load_checkpoint
+
+    for r, want_o in ((0, o0), (1, o1)):
+        rec2, lc = load_checkpoint(step_dir, rank=r)
+        assert bytes(lc.get_object("W_0")) == w
+        assert bytes(lc.get_object("O_0")) == want_o
+        lc.shutdown()
+    # aggregate view refuses partitioned opt state; weight view works
+    with pytest.raises(ValueError, match="rank-partitioned"):
+        load_checkpoint(step_dir)
+    rec3, lc = load_checkpoint(step_dir, include_opt=False)
+    assert bytes(lc.get_object("W_0")) == w
+    lc.shutdown()
+
     for server, c in daemons:
         try:
             c.shutdown()

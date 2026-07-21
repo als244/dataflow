@@ -263,12 +263,16 @@ for artifact in artifacts_for_restore(record, rank):
     client.restore_snapshot(str(step_dir / artifact), overwrite=True)
 ```
 
-For programmatic consumers there is a one-call form —
-`load_checkpoint(step_dir, include_opt=False)` returns the record and
-a client holding every reassembled object (a scratch engine when none
-is passed; `include_opt=False` drops optimizer state, the evaluation
-case). The checkpoint evaluation tool is exactly this helper plus a
-forward pass.
+For programmatic consumers there is a one-call form:
+`load_checkpoint(step_dir, ...)` returns the record and a client
+holding the restored objects (a scratch engine when none is passed).
+Two views: `rank=r` restores exactly the state that rank held when
+the checkpoint was written — full weights plus its optimizer shard,
+the same artifact order resume feeds it; the default aggregate view
+reassembles full weights from every rank's ranges, and since
+optimizer state is rank-partitioned at world>1 it requires
+`include_opt=False` there (the evaluation case). The checkpoint
+evaluation tool is exactly this helper plus a forward pass.
 
 Cross-box runs add one move: artifacts stay on the box that wrote
 them until resume, when the conductor pulls each writer's artifacts
