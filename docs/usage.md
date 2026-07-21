@@ -1,7 +1,7 @@
 # End-to-end usage: memory-constrained training
 
 The full path from model config to multi-step training under a fast-memory
-budget, as exercised by `tools/train/train_solo.py` and the drivers in
+budget, as exercised by `tools/train/train.py` and the drivers in
 `dataflow_training/run/driver.py`.
 
 ```python
@@ -99,14 +99,14 @@ renders side by side (see [exporting_runs.md](exporting_runs.md)).
 ## The CLI instead
 
 ```
-python tools/train/train_solo.py smoke                       # tiny real-vocab reference-vs-engine gate
-python tools/train/train_solo.py parity --preset l3_125m ... # one preset, reference + engine at N budgets
-python tools/train/train_solo.py scaling --presets l3_125m,l3_1b ...  # the ladder, loss curves
-python tools/train/train_solo.py reference --preset gpt2_124m --data doc \
+python tools/train/train.py smoke                       # tiny real-vocab reference-vs-engine gate
+python tools/train/train.py parity --preset l3_125m --fast-budget 6,14 ...  # reference + engine at N budgets
+python tools/train/train.py scaling --presets l3_125m,l3_1b ...  # the ladder, loss curves
+python tools/train/train.py reference --preset gpt2_124m \
     --checkpoint-every 250 --out results/pretrain/ref.json   # pure-torch leg
-python tools/train/train_solo.py engine --preset gpt2_124m --data doc \
-    --budget 14 --resume --out results/pretrain/eng.json     # engine leg
-python tools/train/train_fleet.py train --preset l3_1b --steps 1000 --rounds 6,2 \
+python tools/train/train.py train --preset gpt2_124m \
+    --fast-budget 14 --resume auto --out results/pretrain/eng.json  # zero-config solo (world-1)
+python tools/train/train.py train --preset l3_1b --steps 1000 --topology topology.toml --rounds 6,2 \
     --out results/pretrain/fleet.json                        # data-parallel fleet
 python tools/bench/measure_step.py --preset l3_1b --t-rounds 8192,32768 \
     --budgets 14,6 --steps 12          # measured throughput sweeps
@@ -132,8 +132,8 @@ the engine annotates every task launch (ids like
 `from_slow:A_{step}_3_16`). An AMD annotator slots into the same
 protocol with roctx.
 
-`tools/bench/nsys_profile.py` packages the whole recipe: it wraps a
-`train_solo.py engine` run in `nsys profile` with
+`train.py --profile` packages the whole recipe: it wraps every
+daemon the run launches in `nsys profile` with
 `--capture-range=cudaProfilerApi`, and the run brackets steps
 `--start` through `--stop` via `profiler_control` — so the report
 holds exactly those warmed steps, with planning/boot noise excluded.
@@ -141,7 +141,7 @@ Open the report in the nsys GUI and use the NVTX projection rows to
 read task ranges on the stream timelines. GPU metrics sampling
 (`--gpu-metrics-devices`) needs perf-counter permission.
 
-    python tools/bench/nsys_profile.py --preset gpt2_124m --steps 10 \
+    python tools/train/train.py train --preset gpt2_124m --steps 10 --profile \
         --start 5 --stop 8 --out gpt2_capture
 
 For the rest of the benchmarking workflow (predict → measure →

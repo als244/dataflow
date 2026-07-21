@@ -8,8 +8,8 @@ flag, see docs/extending_external.md) calls::
     register_bench_config("mymodel-tiny-s1k-bs8ga2", cfg)
 
 ``run.presets.resolve_preset`` consults this registry, so the name
-works everywhere a builtin preset name does (train_solo, predict_step,
-measure_step, nsys_profile).
+works everywhere a builtin preset name does (train, predict_step,
+measure_step).
 """
 from __future__ import annotations
 

@@ -36,21 +36,21 @@ throughput.md), not a tolerance to widen.
         --t-rounds 8192,65536 --tokens-step 524288 \
         --budgets 14,4 --steps 12 --data doc
 
-## 3. Profile — `tools/bench/nsys_profile.py` (GPU, one capture)
+## 3. Profile — `train.py --profile` (GPU, captures at any world size)
 
-Wraps a `train_solo.py engine` run in Nsight Systems with the
+Wraps every daemon the run launches in Nsight Systems with the
 canonical trace set (`cuda,nvtx,osrt,cublas,cudnn` + GPU metrics) and
 the cudaProfilerApi capture range: the driver brackets the requested
 step window through the daemon's `profiler_control` verb, so the
 report holds exactly those steps — warmed, no boot noise. Reports land
 under `results/pretrain/logs/`.
 
-    python tools/bench/nsys_profile.py --preset gpt2_124m --ga-rounds 8 \
+    python tools/train/train.py train --preset gpt2_124m --ga-rounds 8 --profile \
         --batch 64 --data doc --steps 10 --start 5 --stop 8 \
         --out gpt2_124m_ga8
 
 Fleet-scale profiling (multi-daemon, per-rank reports) is
-`tools/train/train_fleet.py train --profile ...` — see
+the same flag in fleet mode (per-rank reports fetched back) — see
 [distributed_training.md](distributed_training.md).
 
 ## Discipline

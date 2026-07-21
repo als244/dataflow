@@ -572,12 +572,11 @@ def expert_shards(fields_by_root: dict, group: str, world: int, *,
 
 
 def layer_fields_by_root(cfg) -> dict:
-    """Conductor helper: {object_root -> [FieldInfo]} from a family's
-    layouts (llama3-shaped families; extend per family as sharding
-    consumers grow)."""
-    from dataflow_training.model_families.llama3 import family_layouts
+    """Conductor helper: {object_root -> [FieldInfo]} from ANY
+    family's layouts, via the registry contract."""
+    from dataflow_training.model_families.families import resolve_family
 
-    dims, fl = family_layouts(cfg)
+    dims, fl = resolve_family(cfg).family_layouts(cfg)
     out = {}
     for i, layer in enumerate(fl.layers):
         out[f"W_{i}"] = field_infos(layer.weights)

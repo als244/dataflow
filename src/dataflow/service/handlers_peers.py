@@ -130,7 +130,7 @@ def install(server) -> None:
 
         import torch
 
-        from ..tasks.interop import TORCH_DTYPE_BY_NAME
+        from ..runtime.interop import TORCH_DTYPE_BY_NAME
 
         a = call.args
         m = require_nm()

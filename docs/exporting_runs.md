@@ -52,12 +52,12 @@ trace, utilization summary), side by side with the sim's expectation —
 this is the primary instrument for inspecting the sim-vs-real
 fidelity gap. For a capture of what the GPU actually executed
 (kernels, streams, PCIe) rather than the engine's event log, escalate
-to `tools/bench/nsys_profile.py` ([benchmarking.md](benchmarking.md)).
+to `train.py --profile` ([benchmarking.md](benchmarking.md)).
 
 ## The three artifact kinds, disambiguated
 
 | artifact | produced by | upload shows |
 |---|---|---|
 | `<stem>.webapp.json` | `export_program` | the SIMULATOR's expected timeline for a plan (roofline costs) |
-| run curve JSONs | `train_solo --out` | nothing to upload — numeric summaries (loss, tok/s, TF/s) |
+| run curve JSONs | `train.py --out` | nothing to upload — numeric summaries (loss, tok/s, TF/s) |
 | `*.measured.json` | `trace_real_run` | the TRUE measured timeline, diffed against the sim's prediction |

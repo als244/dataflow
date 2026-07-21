@@ -37,7 +37,9 @@ from dataflow_training.testing.gradcheck import rel_l2  # noqa: E402
 pytestmark = pytest.mark.fleet
 
 SEED = 11
-PA, PB = 29531, 29532
+# per-family port pairs: back-to-back params must not fight over
+# lingering peer listeners (Address-already-in-use, suite-order flake)
+PORTS = {"llama3": (29531, 29532), "gpt2": (29541, 29542)}
 
 
 def tiny_pair_cfg(family_tiny):
@@ -141,10 +143,11 @@ def test_family_generic_two_daemon_dp_step(tmp_path, family_name):
                 "cfg": cfg_dict(cfg)}
     tok, tgt = master_tokens(cfg, t_step)
 
-    sa, ca = boot(tmp_path, f"{family_name}-a", PA)
-    sb, cb = boot(tmp_path, f"{family_name}-b", PB)
+    pa, pb = PORTS[family_name]
+    sa, ca = boot(tmp_path, f"{family_name}-a", pa)
+    sb, cb = boot(tmp_path, f"{family_name}-b", pb)
     try:
-        ca.peer_connect(f"{family_name}-b", f"127.0.0.1:{PB}")
+        ca.peer_connect(f"{family_name}-b", f"127.0.0.1:{pb}")
         per = t_step // 2
 
         def seed_rank(rank, client):

@@ -415,7 +415,7 @@ def register_family(name: str, thunk: Callable[[], ModelFamily]) -> None:
     ``thunk`` is a zero-arg callable returning a ``ModelFamily`` (lazy, so
     registration is import-cheap). External families become visible to
     ``family()`` / ``resolve_family()`` and thereby to every tool
-    (predict_step, measure_step, train_solo, verify_family). See
+    (predict_step, measure_step, train, verify_family). See
     docs/extending_external.md.
     """
     if name in _FAMILIES:

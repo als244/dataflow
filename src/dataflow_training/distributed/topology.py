@@ -162,3 +162,44 @@ def load_topology_or_none(path: str | None = None) -> Topology | None:
         return load_topology(path)
     except FileNotFoundError:
         return None
+
+
+def local_topology(*, budget_gib: float = 8.0, slab_gib: float = 8.0,
+                   device: int = 0, peer_port: int = 29711) -> "Topology":
+    """Zero-config world-1: one localhost member, one group ("local").
+    The conductor launches the daemon as a LOCAL CHILD process (the
+    HostSpec.ssh=None lane) — the child-daemon pattern at world 1."""
+    import os
+
+    host = HostSpec(name="local", peer_listen=f"127.0.0.1:{peer_port}",
+                    ssh=None, repo=os.getcwd(),
+                    slab_gib=slab_gib, budget_gib=budget_gib,
+                    device=device)
+    return Topology(conductor="local", hosts={"local": host},
+                    groups={"local": GroupSpec(name="local",
+                                               members=("local",),
+                                               backend="hostmem")},
+                    source="<local world-1>")
+
+
+def local_pair_topology(*, budget_gib: float = 4.0,
+                        slab_gib: float = 4.0, device: int = 0,
+                        ports=(29721, 29722)) -> "Topology":
+    """Two localhost members sharing one GPU over the hostmem backend
+    — the same-box world-2 pattern the drills and CI ride."""
+    import os
+
+    hosts = {}
+    for i, port in enumerate(ports):
+        name = f"local{i}"
+        hosts[name] = HostSpec(name=name,
+                               peer_listen=f"127.0.0.1:{port}",
+                               ssh=None, repo=os.getcwd(),
+                               slab_gib=slab_gib, budget_gib=budget_gib,
+                               device=device)
+    return Topology(conductor="local0", hosts=hosts,
+                    groups={"pair": GroupSpec(name="pair",
+                                              members=("local0",
+                                                       "local1"),
+                                              backend="hostmem")},
+                    source="<local world-2 pair>")

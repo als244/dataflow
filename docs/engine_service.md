@@ -170,7 +170,7 @@ the fast path even mid-run, as do `list_objects` / `list_programs` /
 `profiler_control("start"/"stop")` flips the annotation layer and
 `cudaProfilerStart/Stop` — under `nsys
 --capture-range=cudaProfilerApi` the capture holds exactly the
-bracketed steps; `tools/bench/nsys_profile.py` packages the recipe
+bracketed steps; `train.py --profile` packages the recipe
 ([benchmarking.md](benchmarking.md)).
 
 **Traces.** Every run records a per-task `RunTrace`; the daemon keeps

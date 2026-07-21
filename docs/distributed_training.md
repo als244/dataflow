@@ -4,13 +4,13 @@ This guide explains how multi-daemon training works end to end: the
 communication layer, the sharding API that expresses *who owns what*,
 the parallelism configurations built on it, and how checkpointing and
 resume behave for each. Everything here is driven from
-`tools/train/train_fleet.py` and configured by `topology.toml` — no machine
+`tools/train/train.py` and configured by `topology.toml` — no machine
 facts live in code.
 
 ## 1. The pieces
 
 **Daemons and the conductor.** Every GPU runs one `dataflowd` daemon.
-A *conductor* (the driver process, `train_fleet.py`) launches
+A *conductor* (the driver process, `train.py train`) launches
 daemons over the hosts in `topology.toml`, registers a per-rank
 program with each, feeds token rounds, and drives lockstep steps.
 Daemons never talk to the conductor's Python state — everything
@@ -74,7 +74,7 @@ which is exactly what the fleet warm-up does.
 ### Plain data parallelism (default)
 
 ```
-python tools/train/train_fleet.py train --preset l3_1b --steps 1000 \
+python tools/train/train.py train --preset l3_1b --steps 1000 --topology topology.toml \
     --rounds 6,2 --out results/pretrain/run.json
 ```
 
@@ -180,7 +180,7 @@ reproduces training exactly.
 ### Fleet checkpoints
 
 ```
-python tools/train/train_fleet.py train ... \
+python tools/train/train.py train ... --topology topology.toml \
     --checkpoint-every 100 \
     --checkpoint-redundancy 2 \
     --checkpoint-keep-last 3 \
@@ -192,42 +192,60 @@ At every N-step boundary the conductor has each rank snapshot to a
 on that rank's own disk — the run name is your `--out` stem), waits
 for all writers, then writes `fleet.json` on the conductor **last**.
 That file is the completeness marker: a crash mid-snapshot leaves no
-marker and the checkpoint is invisible to resume. It records the
-fleet layout (hosts, rounds, backend, seed), the save plan,
-artifact locations, and the loss curve so far.
+marker and the checkpoint is invisible to resume. It is MANIFEST v2
+(`"format": 2`, one format at every world size) and records: the
+RESPONSIBILITY save plan, the relative per-rank artifact dirs, the
+global data cursor, the loss curve so far, and the LAUNCH RECORD —
+the literal argv, resolved settings, data identity, git and
+torch/CUDA identity, per-rank host/device, and every rank's PLANNED
+PROGRAM saved beside the artifacts (`programs/rankN.json`): a
+checkpoint captures plan-time decisions, not just weights, and any
+run can be re-invoked exactly from its manifest.
 
-### The SavePlan: who saves what
+### Responsibility: who steps, saves
 
-Saving is deduplicated by the same ownership algebra that defines
-the parallelism — derived automatically from the run's plan:
+Every parameter slice has a RESPONSIBLE rank — it holds the slice's
+optimizer state, performs its step, and saves its checkpoint bytes —
+plus optional BACKUP ranks (multiplicity is recorded from day one;
+fault-tolerant k-responsibility is the same dial later). "Sharding"
+keeps meaning LAYOUT (how tensors split); "responsibility" is the
+who-steps/who-saves vocabulary:
 
-| configuration | shared artifact (written once by rank 0) | per-rank artifacts |
-|---|---|---|
-| plain DP  | `W_*` and `O_*` (fully replicated) | — (other ranks write nothing) |
-| ZeRO-1 (`zero1` or `zero1rs`) | `W_*` (replicated weights) | each rank's owned `O_*` shards |
-| TP        | —                                  | each rank's `W_*` + `O_*` shards |
+- **zero1rs (the DP default)**: parameter bytes partition at the
+  optimizer's own flat-slice boundaries — who saves == who steps,
+  and checkpoint IO balance is automatic. Each rank writes its param
+  byte RANGES (slice snapshots) plus its own whole `O_*` shards.
+- **co (diagnostic)**: every rank holds identical bytes (certified
+  bitwise); one responsible rank per object, byte-balanced, the rest
+  recorded as backups.
+- **TP**: each rank's narrowed `W_*`/`O_*` objects are wholly its
+  responsibility.
+- **world 1**: rank 0, everything.
+
+Restore replays every artifact a rank needs in order (its own last),
+and the engine's native range compose reassembles complete objects.
 
 Data objects (`tokens_*`, `targets_*`, `loss_*`) are never saved:
 resume re-derives them from the deterministic feed position, which
 is a pure function of the step index.
 
-`--checkpoint-redundancy k` additionally copies the shared artifact
-to k distinct hosts at save time; if the primary disk is lost,
-resume recovers from any surviving copy automatically.
+`--checkpoint-redundancy k` copies artifacts to k distinct hosts at
+save time; backups are sourced first (they already hold the bytes).
 `--checkpoint-keep-last K` prunes older complete checkpoints on
 every host after each new one lands.
 
 ### Resume
 
 ```
-python tools/train/train_fleet.py train ... --resume auto --out results/pretrain/myrun.json
+python tools/train/train.py train ... --resume auto --out results/pretrain/myrun.json
 ```
 
 `--resume auto` picks the newest *complete* checkpoint for the run
 name (or pass a specific `step_XXXXXX` directory). The conductor
 validates the manifest against the current invocation (world,
-rounds, backend, seed — mismatches refuse loudly), distributes the
-shared artifact to any host that lacks it, boots daemons, runs the
+rounds, backend, seed — mismatches refuse loudly), pulls any
+remote-written artifact from its recorded writer host and fans the
+full set out to every rank, boots daemons, runs the
 kernel warm-up, and only **then** restores (`overwrite=True`) — the
 warm-up mutates state, and restoring afterwards makes it harmless.
 Training continues from the checkpoint step; the loss curve is
@@ -261,31 +279,36 @@ which sit far above this floor.
 
 ## Fleet flags beyond the basics
 
-`train_fleet.py train` composes the run from `topology.toml` plus
+`train.py train` composes the run from `topology.toml` plus
 per-rank overrides: `--group` picks the topology group, `--rounds`
 assigns per-rank round counts (rank order = member order, weighted
-data distribution), `--budgets`/`--slabs` override the topology's
-per-rank device budgets and host slabs, `--backend {hostmem,nccl,auto}`
+data distribution), `--fast-budget`/`--backing-budget` (comma per
+rank) override the topology's per-rank device budgets and host
+memory, `--backend {hostmem,nccl,auto}`
 overrides the group backend, `--opt-shard` selects the optimizer
-sharding mode, and `--tp-mlp` switches to tensor-parallel MLPs
-through the sharding API. `--attach HOST=SOCK` (repeatable) attaches
-to pre-launched daemons instead of launching them — the profiling
-rigs use this to nsys-wrap each daemon themselves. `train_fleet.py
-compare` overlays the loss curves of finished runs.
+sharding mode (DEFAULT at world>1: `zero1rs` — each rank steps
+params/n; `co` is the co-responsible DIAGNOSTIC lane), and
+`--tp-mlp` switches to tensor-parallel MLPs through the sharding
+API. `--attach HOST=SOCK` (repeatable) attaches to pre-launched
+daemons instead of launching them — the profiling rigs use this to
+nsys-wrap each daemon themselves. `train.py compare` overlays the
+loss curves of finished runs. Omitting the topology flags entirely
+is ZERO-CONFIG SOLO: one local child daemon, the same machinery at
+world 1.
 
 ### Profiling a fleet run
 
 ```
-python tools/train/train_fleet.py train --preset l3_1b --steps 10 \
+python tools/train/train.py train --preset l3_1b --steps 10 --topology topology.toml \
     --rounds 6,2 --profile --profile-start-before-step 5 \
     --profile-stop-after-step 8 --out results/pretrain/prof.json
 ```
 
 `--profile` wraps every launched daemon in Nsight Systems with the
 canonical trace set, brackets the requested step window on each rank
-through its daemon's `profiler_control` verb (the same
-cudaProfilerApi mechanism as `tools/bench/nsys_profile.py`,
-[benchmarking.md](benchmarking.md)), and fetches the per-rank
+through its daemon's `profiler_control` verb (cudaProfilerApi
+capture ranges, [benchmarking.md](benchmarking.md)), and fetches
+the per-rank
 `.nsys-rep` reports back to the conductor's log directory.
 
 ## 6. Bringing up a new machine (single node, N GPUs)
@@ -322,7 +345,7 @@ python -m pytest -q
 **Rung 2 — single-GPU training sanity.**
 
 ```
-python tools/train/train_solo.py smoke --steps 20
+python tools/train/train.py smoke --steps 20
 ```
 
 (one engine, one GPU, real corpus tokens — no fleet machinery).
@@ -341,7 +364,7 @@ python -m pytest -m fleet -q \
 world 2 (`--group` of two members), then the full node:
 
 ```
-python tools/train/train_fleet.py train --preset l3_125m --steps 60 \
+python tools/train/train.py train --preset l3_125m --steps 60 --topology topology.toml \
     --group node --backend nccl --rounds 1,1,1,1,1,1,1,1 \
     --out results/pretrain/node_smoke.json
 ```
@@ -353,7 +376,7 @@ handshake, link probes, and warm-up dance run automatically.
 **Rung 5 — the real run, sharded + checkpointed.**
 
 ```
-python tools/train/train_fleet.py train --preset l3_1b --steps 1000 \
+python tools/train/train.py train --preset l3_1b --steps 1000 --topology topology.toml \
     --group node --backend nccl --rounds 1,1,1,1,1,1,1,1 \
     --opt-shard zero1rs \
     --checkpoint-every 100 --checkpoint-keep-last 3 \

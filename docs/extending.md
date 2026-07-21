@@ -358,7 +358,7 @@ Execution is the ENGINE SERVICE ([engine_service.md](engine_service.md)):
 register the planned program with the family's resolver spec, seed
 W/O via init-as-program, then `run()` per step —
 `dataflow_training/run/driver.py` (`daemon_client`, `init_model`,
-`run_engine`) is the reference driver, and `tools/train/train_solo.py`
+`run_engine`) is the reference driver, and `tools/train/train.py`
 wraps it.
 
 Gates, in order:
@@ -664,7 +664,7 @@ differ (all fail loudly, none silently):
   attention by task-group prefix (`CAUSAL_DENSE_PREFIXES`) — a new
   causal-dense attention prefix must be registered there or its
   backward keeps the as-executed factor in the effective count;
-- the drivers (`dataflow_training/run/driver.py`, `tools/train/train_solo.py`)
+- the drivers (`dataflow_training/run/driver.py`, `tools/train/train.py`)
   read the `loss_{s}_{r}` / `tokens_{s}_{r}` / `targets_{s}_{r}`
   conventions (round data puts, loss fetches).
 

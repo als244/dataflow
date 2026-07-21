@@ -23,3 +23,5 @@ topology.toml
 
 # internal kernel microbenches (maintainer-local, not part of the repo surface)
 tools/bench/internal/
+# retired training tools parked for comparison/revert (train.py replaced them)
+tools/train/internal/

@@ -56,8 +56,8 @@ examples/                    runnable custom-Program demos (rl_training/
                              — the executable companion of
                              extending_programs.md; CI-gated)
 
-tools/                       CLIs over both packages (dataflowd, train_solo,
-tests/                       train_fleet, measure_step, verify_family, …);
+tools/                       CLIs over both packages (dataflowd, train,
+tests/                       measure_step, verify_family, …);
                              tests mirror the split (tests/dataflow/,
                              tests/dataflow_training/) plus tests/fleet/
                              (multi-daemon opt-in lane), tests/examples/,
@@ -154,8 +154,8 @@ ShapedConfig (family + shapes)
   → trace / report                  real + wall tok/s vs sim; webapp exports
 ```
 
-Drivers: `tools/train/train_solo.py` (single box, reference-vs-engine
-parity + scaling), `tools/train/train_fleet.py` (data-parallel fleet),
+Drivers: `tools/train/train.py` (ONE tool, every world size — solo is
+the world-1 fleet; reference/parity/scaling legs included),
 `tools/bench/predict_step.py` / `tools/bench/measure_step.py` (simulated and measured throughput sweeps).
 
 ## Simulator semantics the runtime reproduces

@@ -107,7 +107,7 @@ Notes:
 - Aliases share the exact architecture shape of an earlier preset
   (e.g. Kimi K2.5/2.6/2.7 are shape-identical to K2; GLM 5.1 to 5).
 - every preset name in this table resolves as `--preset` in the tools
-  (predict_step, measure_step, nsys_profile, train_solo, ...); names
+  (predict_step, measure_step, train, ...); names
   shared by several families qualify as `family:preset` (`gpt2:tiny`).
 - Correctness: `python tools/verify/verify_family.py --family <name>`.
 

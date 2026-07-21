@@ -6,8 +6,8 @@ tools' purposes and CLI arguments in full.
 
 | directory | contents |
 |---|---|
-| [train/](train/README.md) | running training: `train_solo` (engine/reference legs, smoke/parity/scaling studies, `peek`), `train_fleet` (DP fleets, `compare`, `sweep`), `dataflowd`, `daemonize`, `eval_checkpoint`, `fetch_dataset`, `pretrain_report` |
-| [bench/](bench/README.md) | throughput, in escalating cost: `predict_step` (simulated sweeps — the first line of attack), `measure_step` (real sweeps), `nsys_profile` (bracketed Nsight capture); `bench/internal/` holds gitignored maintainer-local kernel microbenches |
+| [train/](train/README.md) | running training: `train.py` (ONE tool, every world size — zero-config solo = world-1 fleet; engine/reference legs, smoke/parity/scaling studies, `peek`, `compare`, `--profile` nsys wrap), `dataflowd`, `daemonize` (+`--kill`), `eval_checkpoint`, `fetch_dataset`, `pretrain_report` |
+| [bench/](bench/README.md) | throughput, in escalating cost: `predict_step` (simulated sweeps — the first line of attack), `measure_step` (real sweeps); Nsight captures ride `train.py --profile`; `bench/internal/` holds gitignored maintainer-local kernel microbenches |
 | [verify/](verify/README.md) | correctness gates: `verify_family`, `engine_gate`, `pressure_correctness`, `deep_compare`, `sweep_ladder3`, `rdma_preflight` |
 | [export/](export/README.md) | run analysis & webapp export: `export_program`, `trace_real_run`, `trace_program` |
 | [gen_model_docs/](gen_model_docs/README.md) | generated docs: `gen_model_docs`, `gen_model_page`, `list_models`, `list_kernels`, `list_tasks` |

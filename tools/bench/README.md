@@ -40,31 +40,20 @@ prediction — `pred_s meas_s ratio tok/s effTF/s hwTF/s recomp`.
 |---|---|
 | grid flags | as predict_step: `--preset --plugin --opt --t-round(s) --tokens-step --seq-len(s) --budget(s)` |
 | `--steps` | steps per cell (first 3 = warmup, excluded from the mean) |
-| `--data SPEC` | data source spec ([data_feeds.md](../../docs/data_feeds.md)); default: train_solo's default feed — pass the uniform-window config for plan-comparable captures |
+| `--data SPEC` | data source spec ([data_feeds.md](../../docs/data_feeds.md)); default: the standard feed — pass the uniform-window config for plan-comparable runs |
 | `--slab` | daemon pinned slab GiB |
 | `--peak-lr` | recipe peak for the cells |
 | `--measured-plan` | prediction column from PROFILED task costs |
 | `--hw` | display only — the run measures the real box |
 
-## nsys_profile.py — one Nsight Systems capture
+## Nsight captures
 
-Wraps a `train_solo.py engine` run in `nsys profile` with the
-canonical trace set (`cuda,nvtx,osrt,cublas,cudnn` + GPU metrics) and
-the cudaProfilerApi capture range: the run brackets steps `--start`
-through `--stop` via the daemon's `profiler_control` verb, so the
-report holds exactly those warmed steps. Reports land under
-`results/pretrain/logs/<out>.nsys-rep`.
-
-| flag | meaning |
-|---|---|
-| `--preset --steps --ga-rounds --batch --data --opt --budget --slab` | forwarded to the wrapped engine run |
-| `--start` / `--stop` | capture starts BEFORE / stops AFTER these steps |
-| `--out` | report stem (default: the preset name) |
-| `--nsys` | nsys binary |
-| trailing args | extra `train_solo engine` flags, passed through |
-
-Fleet-scale profiling (per-rank reports) is
-`tools/train/train_fleet.py train --profile ...`.
+Profiling is a `train.py` flag, not a separate tool: `--profile
+--profile-start-before-step N --profile-stop-after-step M` wraps
+EVERY launched daemon in the canonical nsys command (cudaProfilerApi
+capture range; brackets ride the daemon's `profiler_control`) — one
+flag, any world size; per-rank reports are fetched back for fleets.
+See [tools/train/README.md](../train/README.md).
 
 ## internal/
 
