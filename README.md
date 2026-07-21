@@ -22,6 +22,29 @@ not read that table, so under pip install the sibling editable first:
 `pip install -e ../dataflow_sim -e ".[sim,cuda]"`. The `cuda` extra
 pulls the real device backend.)
 
+### Quickstart: train
+
+`tools/train/train.py` is the one training tool at every world size —
+zero-config single GPU, a data-parallel fleet when given a topology —
+with checkpointing and resume built in (flag reference:
+[tools/train/README.md](tools/train/README.md); fleet setup:
+[docs/distributed_training.md](docs/distributed_training.md);
+save/restore mechanics: [docs/checkpointing.md](docs/checkpointing.md)):
+
+```bash
+# single GPU, zero config, with periodic checkpoints
+python tools/train/train.py train --preset gpt2_124m --steps 1000 \
+    --checkpoint-every 100 --run-name demo
+
+# resume from the newest complete checkpoint
+python tools/train/train.py train --preset gpt2_124m --steps 1000 \
+    --checkpoint-every 100 --run-name demo --resume auto
+
+# Nsight capture of exact warmed steps rides the same tool
+python tools/train/train.py train --preset gpt2_124m --steps 10 \
+    --profile --profile-start-before-step 5 --profile-stop-after-step 8
+```
+
 ### Quickstart: benchmark training throughput under tight GPU memory budgets
 
 Three tools cover the throughput workflow in escalating cost — predict
@@ -43,7 +66,8 @@ python tools/bench/measure_step.py --preset gpt2_124m \
 
 # 3. Profile: the same run under Nsight Systems, capture bracketed to
 #    exact warmed steps via the daemon's profiler_control verb
-python tools/bench/nsys_profile.py --preset gpt2_124m --steps 10 --start 5 --stop 8
+python tools/train/train.py train --preset gpt2_124m --steps 10 \
+    --profile --profile-start-before-step 5 --profile-stop-after-step 8
 ```
 
 Everything is inspectable in the

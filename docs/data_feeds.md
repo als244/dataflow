@@ -162,7 +162,7 @@ declare them.
 The PackedStep sequence is a pure function of (source spec,
 tokenizer spec, packing geometry + flags, cursor). Every
 `PackedStep` carries `cursor_after`; the drivers stamp it into
-checkpoint `client_meta` (solo + reference) and the fleet manifest,
+checkpoint `client_meta` (solo + reference) and the checkpoint record,
 so resume SEEKS the source — no dataloader state, no replay from
 zero. Checkpoints without a cursor fast-forward the packer CPU-side.
 The resume drill (checkpoint → kill → resume → curve continues) is a

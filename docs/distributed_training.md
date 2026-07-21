@@ -194,8 +194,8 @@ for all writers, then writes `checkpoint_record.json` on the conductor **last**
 (the full save/restore mechanics, lease protection, and usage
 examples live in [checkpointing.md](checkpointing.md)).
 That file is the completeness marker: a crash mid-snapshot leaves no
-marker and the checkpoint is invisible to resume. It is MANIFEST v2
-(`"format": 2`, one format at every world size) and records: the
+marker and the checkpoint is invisible to resume. It is the checkpoint record
+(one format at every world size) and records: the
 RESPONSIBILITY save plan, the relative per-rank artifact dirs, the
 global data cursor, the loss curve so far, and the LAUNCH RECORD —
 the literal argv, resolved settings, data identity, git and
@@ -239,7 +239,7 @@ layouts                  The coordinate system geometry compiles
     ▼
 responsibility           Who steps and therefore saves each slice —
   (responsibility.py)    derived from the same axes; becomes the
-                         checkpoint's save plan (record v2).
+                         checkpoint's save plan.
 ```
 
 The conductor (`dataflow_training/run/conductor.py`) takes the scheme as

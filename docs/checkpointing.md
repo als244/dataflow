@@ -144,8 +144,8 @@ client.snapshot("all", dest, ids=["O_0", "W_0"],
 
 ## The checkpoint record schema
 
-`checkpoint_record.json` (format 2 — `read_record` refuses anything
-else) is the one training-level file; everything else in a step
+`checkpoint_record.json` (`read_record` refuses unknown formats
+loudly) is the one training-level file; everything else in a step
 directory is engine artifacts and program dumps. Annotated:
 
 ```jsonc
@@ -231,7 +231,7 @@ directory per saved step:
 checkpoints/<run_name>/step_000420/
   rank0/  rank1/          one engine artifact per rank
   programs/rankN.json     the exact lowered program each rank ran
-  checkpoint_record.json  the record (format 2) — written LAST
+  checkpoint_record.json  the checkpoint record — written LAST
 ```
 
 **Saving.** Under partitioned optimizer responsibility each rank

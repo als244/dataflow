@@ -8,7 +8,7 @@ All commands run from the repo root.
 
 Solo is the world-1 special case of a fleet: no topology flags means
 one local CHILD-process daemon (zero-config); naming a topology group
-makes it a DP fleet. Checkpoints carry a v2 record at every world size
+makes it a DP fleet. Checkpoints carry one record at every world size
 (`checkpoint_record.json`: responsibility save plan, launch record with the exact
 argv and per-rank planned programs). `--profile` wraps every launched
 daemon in the canonical nsys command — one flag, any world size.
@@ -30,7 +30,7 @@ daemon in the canonical nsys command — one flag, any world size.
 | `--tp-mlp` | tensor-parallel MLPs (correctness track; needs `--execute-padding` when rounds can be under-full) |
 | `--execute-padding` | execute under-full tails as one masked segment (debug/fallback) |
 | `--profile` + `--profile-start-before-step N` / `--profile-stop-after-step M` | wrap every launched daemon in nsys; bracket the step window |
-| `--checkpoint-every / --checkpoint-redundancy / --checkpoint-keep-last / --resume` | record-v2 checkpoints; `--resume auto` or a step dir |
+| `--checkpoint-every / --checkpoint-redundancy / --checkpoint-keep-last / --resume` | checkpoint saves; `--resume auto` or a step dir |
 | `--data SPEC` + `--packing-policy {ffd,greedy}` / `--allow-round-split` / `--capture PATH` | data source + packing ([data_feeds.md](../../docs/data_feeds.md)) |
 | `--out` | run-curve JSON (also names the checkpoint dir and its run lock) |
 
@@ -50,7 +50,7 @@ daemon in the canonical nsys command — one flag, any world size.
 --backing-budget --grad-checkpoint`).
 
 **`peek RUN`** — an in-flight run's loss curve from its newest
-checkpoint (v2 checkpoint_record.json, or the engine-local layout reference legs
+checkpoint (checkpoint_record.json, or the engine-local layout reference legs
 write); prints last/EMA/min, writes
 `results/pretrain/<RUN>_partial.json` (`--ema`, default 0.98).
 
@@ -100,9 +100,3 @@ No flags: rebuilds every pretraining study report
 (`results/pretrain/reports/*.html`) from the curves under
 `results/pretrain/`.
 
-## internal/ (gitignored)
-
-The retired pre-unification tools (`train_solo.py`, `train_fleet.py`,
-`nsys_profile.py`), parked locally on both boxes for comparison or
-revert. They read the pre-v2 checkpoint layouts; nothing else in the
-repo references them.
