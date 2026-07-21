@@ -170,16 +170,42 @@ and refuses mismatches, pre-checkpoint losses ride the record so the
 saved curve stays continuous, and the data pipeline restarts from
 the recorded cursor.
 
-## Current limits and direction
+## Current limits
 
 A *conflicting* next step stalls for the payload-copy window —
-leases guarantee safety, not stall-freedom. The engine's
-`duplicate_object_group` verb (fast on-device copy of an object
-group under a tag) supports the stall-free pattern — duplicate the
-persistent state, release the live objects, snapshot the background
-copy while training proceeds — but the training layer does not wire
-it in yet. Older pre-record checkpoint layouts are not readable by
-this tooling; there is deliberately no converter.
+leases guarantee safety, not stall-freedom. The stall is
+run-granular by design: runs are admitted atomically (the bind
+pre-pass declares mutation intent for every bound persistent object
+before anything executes), and the engine has no mid-run wait
+primitive, so the only safe enforcement point is before the run
+starts — even though only the optimizer tail actually dirties the
+saved objects. Older pre-record checkpoint layouts are not readable
+by this tooling; there is deliberately no converter.
+
+## Future improvements
+
+Two optimizations for the stall window, in recommended order:
+
+1. **Duplicate-then-snapshot** (preferred first). Use the engine's
+   `duplicate_object_group` verb: fast on-device copy of the
+   persistent group under a tag, release the live objects
+   immediately, snapshot the background copy while training
+   proceeds. Shrinks the stall to the device-copy time regardless of
+   payload IO, needs no engine dispatch changes, and the verb
+   already exists — the training layer just has to wire
+   duplicate -> snapshot-the-copy -> drop-the-copy into its
+   step-boundary save.
+
+2. **Task-granular lease waits.** Leases are READ leases, so the
+   forward/backward — which only reads the weights — could legally
+   overlap the payload copy, with just the mutating optimizer tasks
+   waiting at their dispatch point (task.mutates intersecting the
+   leased set -> wait on release). Because the dispatcher is
+   single-threaded, a snapshot can never be admitted mid-run, so
+   leases only ever pre-exist a run and the wait needs no re-park
+   machinery — a condition wait at engine task dispatch suffices.
+   Hides most of the copy behind step compute; worth doing only if
+   the duplicate-then-snapshot stall ever still matters.
 
 ## What certifies this
 
