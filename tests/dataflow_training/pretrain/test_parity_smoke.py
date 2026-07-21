@@ -12,13 +12,13 @@ def test_reference_vs_service_parity_smoke():
         pytest.skip("no CUDA")
     from dataflow_training.run import parity, presets as P
     from dataflow_training.run.driver import daemon_client, run_engine, run_reference
-    from dataflow_training.data.fineweb import make_feed
+    from dataflow_training.data.pipeline import legacy_block_pipeline
     from dataflow_training.run.recipe import Recipe
 
     cfg = P.smoke_preset()
     steps = 15
     recipe = Recipe(peak_lr=3e-4, min_lr=3e-5, warmup_steps=3, total_steps=steps)
-    feed = make_feed(cfg.tokens)
+    feed = legacy_block_pipeline(cfg)
     quiet = lambda *_a, **_k: None
 
     ref = run_reference(cfg, recipe, feed, steps, seed=11, log=quiet)

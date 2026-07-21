@@ -148,7 +148,8 @@ def test_ffd_invariants_and_determinism():
         assert len(step.rounds) == GA
         for r, r2 in zip(step.rounds, step2.rounds):
             assert sum(r.seq_lens) == r.content <= T
-            assert np.all(r.tokens[r.content:] == 0)          # dead tail
+            assert np.all(r.tokens[r.content:] == 0)          # tail tokens
+            assert np.all(r.targets[r.content:] == -1)        # tail masked
             assert np.array_equal(r.tokens, r2.tokens)        # deterministic
             assert r.seq_lens == r2.seq_lens
         assert 0.9 < min(r.fill_ratio for r in step.rounds) <= 1.0

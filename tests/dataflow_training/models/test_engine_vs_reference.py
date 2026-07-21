@@ -33,7 +33,7 @@ from dataflow_training.run.driver import (  # noqa: E402
     run_engine,
     run_reference,
 )
-from dataflow_training.data.fineweb import make_feed  # noqa: E402
+from dataflow_training.data.pipeline import legacy_block_pipeline  # noqa: E402
 from dataflow_training.run.recipe import Recipe  # noqa: E402
 
 STEPS = 6
@@ -99,11 +99,11 @@ def compare_curves(name: str, mode: str, ref, eng) -> None:
 def test_engine_matches_reference_uniform(name):
     cfg = getattr(P, FAMILY_PRESETS[name])()
     recipe = smoke_recipe()
-    ref = run_reference(cfg, recipe, make_feed(cfg.tokens),
+    ref = run_reference(cfg, recipe, legacy_block_pipeline(cfg),
                         STEPS, log=quiet_log)
     with daemon_client(slab_gib=4.0, log=quiet_log) as client:
         eng = run_engine(client, cfg, recipe,
-                         make_feed(cfg.tokens), STEPS,
+                         legacy_block_pipeline(cfg), STEPS,
                          budget_gib=4.0, log=quiet_log)
     compare_curves(name, "uniform", ref.losses, eng.losses)
 
@@ -128,7 +128,16 @@ def test_engine_matches_reference_ragged(name):
     # a single packed row; the seq_lens arg re-segments it
     cfg = replace(base, seq_len=total, batch=1, grad_accum_rounds=1)
     recipe = smoke_recipe()
-    feed = make_feed(total)
+    from dataflow_training.data.sources.shards import ShardSource
+
+    src = ShardSource(max_seqlen=total, vocab_size=cfg.vocab_size,
+                      window=total)
+    src_iter = src.sequences(None)
+    wins = []
+    for _ in range(STEPS):
+        seq, _cur = next(src_iter)
+        wins.append((torch.from_numpy(seq.tokens),
+                     torch.from_numpy(seq.targets)))
     fam = resolve_family(cfg)
     dims = fam.derive_dims(cfg)
 
@@ -146,7 +155,7 @@ def test_engine_matches_reference_ragged(name):
     opt = reference_optimizer(model, cfg, recipe)
     ref_losses = []
     for step in range(STEPS):
-        tok, tgt = feed(step)
+        tok, tgt = wins[step]
         opt.zero_grad()
         step_valid = int((tgt >= 0).sum())
         lo = 0
@@ -171,7 +180,7 @@ def test_engine_matches_reference_ragged(name):
                                fast_memory_capacity=4 << 30)
         cd = cfg_dict(cfg)
         init_model(client, resolver_family(cfg), cd, seed=11)
-        tok0, tgt0 = feed(0)
+        tok0, tgt0 = wins[0]
         client.put_object("tokens_0_0", tok0.numpy().tobytes())
         client.put_object("targets_0_0", tgt0.numpy().tobytes())
         reg = client.register_program(
@@ -183,7 +192,7 @@ def test_engine_matches_reference_ragged(name):
         eng_losses = []
         for step in range(STEPS):
             if step > 0:
-                tok, tgt = feed(step)
+                tok, tgt = wins[step]
                 client.put_object("tokens_0_0", tok.numpy().tobytes())
                 client.put_object("targets_0_0", tgt.numpy().tobytes())
             else:

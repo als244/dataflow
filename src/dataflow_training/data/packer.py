@@ -48,7 +48,7 @@ def concat_round(placed: list[Sequence], tokens_per_round: int,
     """Materialize one round's fixed-size buffers from placed
     sequences (content = sum of their lengths; zero tail)."""
     tokens = np.zeros(tokens_per_round, dtype=np.int32)
-    targets = np.zeros(tokens_per_round, dtype=np.int32)
+    targets = np.full(tokens_per_round, -1, dtype=np.int32)
     extras: dict[str, list[np.ndarray]] = {}
     at = 0
     for seq in placed:

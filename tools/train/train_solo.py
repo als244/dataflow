@@ -33,7 +33,10 @@ from dataflow_training.run.driver import (
     run_engine,
     run_reference,
 )
-from dataflow_training.data.fineweb import make_doc_feed, make_feed
+from dataflow_training.data.pipeline import (
+    legacy_block_pipeline,
+    pipeline_from_args,
+)
 from dataflow_training.run.recipe import Recipe
 
 RESULTS = _ROOT / "results" / "pretrain"
@@ -46,13 +49,14 @@ def _recipe(steps: int, *, peak_lr: float = 3e-4,
                   muon_lr=muon_lr)
 
 
-def _feed(cfg, data_mode: str):
-    """The run's token feed: "block" = llm.c fixed windows (uniform
-    rows, EOT flows through); "doc" = doc-aware packed varlen (EOT-split
-    segments, per-round seq_lens — both backends' packed modes)."""
-    if data_mode == "doc":
-        return make_doc_feed(cfg.tokens, cfg.seq_len)
-    return make_feed(cfg.tokens)
+def _pipeline(cfg, args):
+    """Build the run's data pipeline from the --data spec + packing
+    flags (data.pipeline_from_args rejects the retired block/doc
+    literals with a migration hint)."""
+    return pipeline_from_args(
+        cfg, args.data, policy=args.packing_policy,
+        allow_round_split=args.allow_round_split,
+        capture=args.capture)
 
 
 def _log(msg: str) -> None:
@@ -90,7 +94,7 @@ def cmd_smoke(args) -> int:
     cfg = P.smoke_preset()
     steps = args.steps
     recipe = _recipe(steps)
-    feed = make_feed(cfg.tokens)
+    feed = legacy_block_pipeline(cfg)
     lnV = math.log(cfg.vocab_size)
     _log(f"SMOKE: {cfg.n_layers}L d{cfg.d_model} vocab{cfg.vocab_size} "
          f"seq{cfg.seq_len}x{cfg.batch} ga{cfg.grad_accum_rounds} "
@@ -126,7 +130,7 @@ def cmd_parity(args) -> int:
     cfg = P.resolve_preset(args.preset)
     steps = args.steps
     recipe = _recipe(steps)
-    feed = make_feed(cfg.tokens)
+    feed = legacy_block_pipeline(cfg)
     budgets = [float(b) for b in args.budgets.split(",")]
     lnV = math.log(cfg.vocab_size)
     RESULTS.mkdir(parents=True, exist_ok=True)
@@ -181,7 +185,7 @@ def cmd_scaling(args) -> int:
     if args.backend == "reference":
         for name in presets:
             cfg = P.preset(name)
-            feed = make_feed(cfg.tokens)
+            feed = legacy_block_pipeline(cfg)
             r = run_reference(cfg, recipe, feed, steps, seed=11,
                               grad_checkpoint=args.grad_checkpoint, log=_log)
             r.meta["preset"] = name
@@ -191,7 +195,7 @@ def cmd_scaling(args) -> int:
         with daemon_client(slab_gib=args.slab, log=_log) as client:
             for name in presets:
                 cfg = P.preset(name)
-                feed = make_feed(cfg.tokens)
+                feed = legacy_block_pipeline(cfg)
                 r = run_engine(client, cfg, recipe, feed, steps,
                                budget_gib=args.budget, seed=11, log=_log)
                 r.meta["preset"] = name
@@ -216,7 +220,7 @@ def cmd_reference(args) -> int:
     if overrides:
         cfg = replace(cfg, **overrides)
     recipe = _recipe(args.steps, peak_lr=args.peak_lr)
-    feed = _feed(cfg, args.data)
+    feed = _pipeline(cfg, args)
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     ck_dir = None
@@ -259,7 +263,7 @@ def cmd_engine(args) -> int:
         cfg = replace(cfg, **overrides)
     recipe = _recipe(args.steps, peak_lr=args.peak_lr,
                      muon_lr=args.muon_lr)
-    feed = _feed(cfg, args.data)
+    feed = _pipeline(cfg, args)
     ck_dir = None
     if args.checkpoint_every:
         ck_dir = RESULTS / "checkpoints" / Path(args.out).stem
@@ -361,9 +365,19 @@ def main() -> int:
                    help="plan with PROFILED task costs (disk-cached) — the "
                         "[plan] line's prediction becomes the true-profiling "
                         "simulator expectation")
-    e.add_argument("--data", choices=["block", "doc"], default="block",
-                   help="block = llm.c fixed windows; doc = EOT-split "
-                        "doc-aware varlen packing")
+    e.add_argument("--data", default=None,
+                   help="data source spec (scheme:args,k=v — see "
+                        "docs/data_feeds.md); default: the in-repo "
+                        "shard corpus, per-document")
+    e.add_argument("--packing-policy", choices=["ffd", "greedy"],
+                   default="ffd")
+    e.add_argument("--allow-round-split", action="store_true",
+                   help="legacy exact-fill packing: sequences split at "
+                        "round edges (with long_policy=whole this "
+                        "reproduces the historical curves)")
+    e.add_argument("--capture", default=None,
+                   help="log every consumed sequence to this file "
+                        "(replayable via --data capture:PATH)")
     e.add_argument("--out", required=True)
     e.set_defaults(fn=cmd_engine)
 
@@ -380,9 +394,13 @@ def main() -> int:
                    help="override cfg.grad_accum_rounds (tokens/step scales)")
     r.add_argument("--checkpoint-every", type=int, default=None)
     r.add_argument("--resume", action="store_true")
-    r.add_argument("--data", choices=["block", "doc"], default="block",
-                   help="block = llm.c fixed windows; doc = EOT-split "
-                        "doc-aware varlen packing")
+    r.add_argument("--data", default=None,
+                   help="data source spec (scheme:args,k=v); default: "
+                        "the in-repo shard corpus, per-document")
+    r.add_argument("--packing-policy", choices=["ffd", "greedy"],
+                   default="ffd")
+    r.add_argument("--allow-round-split", action="store_true")
+    r.add_argument("--capture", default=None)
     r.add_argument("--out", required=True)
     r.set_defaults(fn=cmd_reference)
 

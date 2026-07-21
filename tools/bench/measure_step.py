@@ -36,12 +36,16 @@ def quiet_log(*args, **kwargs) -> None:
     pass
 
 
-def cell_feed(cfg, data_mode: str):
-    from dataflow_training.data.fineweb import make_doc_feed, make_feed
+def cell_pipeline(cfg, data_spec: str | None):
+    from dataflow_training.data.pipeline import (
+        legacy_block_pipeline,
+        pipeline_from_args,
+    )
 
-    if data_mode == "doc":
-        return make_doc_feed(cfg.tokens, cfg.seq_len)
-    return make_feed(cfg.tokens)
+    if data_spec is None:
+        # exactly-full uniform rounds — the geometry the plans price
+        return legacy_block_pipeline(cfg)
+    return pipeline_from_args(cfg, data_spec)
 
 
 def run_cell(client, cfg, budget: float, steps: int, data_mode: str,
@@ -52,7 +56,7 @@ def run_cell(client, cfg, budget: float, steps: int, data_mode: str,
     planned = plan_at_budget(cfg, budget, measured=measured_plan)
     rep = flop_report(cfg, planned.program)
     eff, hwf = rep.per_step()
-    res = run_engine(client, cfg, recipe, cell_feed(cfg, data_mode),
+    res = run_engine(client, cfg, recipe, cell_pipeline(cfg, data_mode),
                      steps, budget_gib=budget, seed=11, log=quiet_log)
     tail = res.step_wall_s[WARMUP_STEPS:] or res.step_wall_s
     meas_s = sum(tail) / len(tail)
@@ -90,7 +94,9 @@ def main() -> int:
     ap.add_argument("--budgets", default=None)
     ap.add_argument("--steps", type=int, default=12,
                     help="steps per cell (first 3 excluded as warmup)")
-    ap.add_argument("--data", choices=["block", "doc"], default="block")
+    ap.add_argument("--data", default=None,
+                    help="data source spec; default: exactly-full "
+                         "uniform windows (the geometry the plans price)")
     ap.add_argument("--slab", type=float, default=16.0)
     ap.add_argument("--peak-lr", type=float, default=3e-4)
     ap.add_argument("--measured-plan", action="store_true",

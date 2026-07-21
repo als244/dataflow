@@ -23,7 +23,7 @@ import torch
 
 from dataflow_training.model_families import bridges
 from dataflow_training.run import presets as P
-from dataflow_training.data.fineweb import make_feed
+from dataflow_training.data.pipeline import DataPipeline
 
 CKPTS = _ROOT / "results" / "pretrain" / "checkpoints"
 
@@ -79,13 +79,19 @@ def main() -> int:
 
     B = args.batch_tokens // cfg.seq_len
     T = cfg.seq_len
-    feed = make_feed(args.batch_tokens, split="val")
+    pipeline = DataPipeline(
+        f"shards:,window={T},split=val",
+        tokens_per_round=args.batch_tokens, ga_rounds=1,
+        max_seqlen=T, vocab_size=cfg.vocab_size, policy="greedy")
+    stepper = pipeline(None)
     rounds = max(1, args.val_tokens // args.batch_tokens)
     total_nll = 0.0
     total_valid = 0
     with torch.no_grad():
         for r in range(rounds):
-            tok, tgt = feed(r)
+            rnd = stepper.next_step().rounds[0]
+            tok = torch.from_numpy(rnd.tokens)
+            tgt = torch.from_numpy(rnd.targets)
             valid = int((tgt >= 0).sum())
             loss = model.loss(tok.cuda().view(B, T), tgt.cuda().view(B, T))
             total_nll += float(loss) * valid

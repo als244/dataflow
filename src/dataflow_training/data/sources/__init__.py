@@ -29,7 +29,7 @@ from typing import Iterator, Protocol
 
 from dataflow_training.data.sequence import Sequence
 
-LONG_POLICIES = ("exclude", "trim", "chunk")
+LONG_POLICIES = ("exclude", "trim", "chunk", "whole")
 
 
 class DataSource(Protocol):

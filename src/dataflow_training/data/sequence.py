@@ -47,10 +47,12 @@ def validate_sequence(seq: Sequence, vocab_size: int) -> None:
 class PackedRound:
     """One round's fixed-size buffers. INVARIANTS: sum(seq_lens) ==
     content n <= len(tokens); tokens/targets[:n] obey the Sequence
-    invariants; [n:] is zero-filled dead tail no compute reads."""
+    invariants. The tail [n:] is tokens 0 / targets -1: under content
+    re-view it is dead bytes nobody reads; under execute-padding it
+    is a masked segment whose loss contribution is exactly zero."""
 
     tokens: np.ndarray                  # (tokens_per_round,) int32
-    targets: np.ndarray                 # (tokens_per_round,) int32
+    targets: np.ndarray                 # (tokens_per_round,) int32; tail -1
     seq_lens: tuple[int, ...]           # CONTENT segments only
     extras: dict[str, np.ndarray] = field(default_factory=dict)
 

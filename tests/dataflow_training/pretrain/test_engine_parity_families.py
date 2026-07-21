@@ -20,12 +20,15 @@ def run_family_parity(cfg, *, steps: int = 15, slab_gib: float = 6.0,
                       budget_gib: float = 4.0, data: str = "block") -> None:
     from dataflow_training.run import parity
     from dataflow_training.run.driver import daemon_client, run_engine, run_reference
-    from dataflow_training.data.fineweb import make_doc_feed, make_feed
+    from dataflow_training.data.pipeline import (
+        legacy_block_pipeline,
+        legacy_doc_pipeline,
+    )
     from dataflow_training.run.recipe import Recipe
 
     recipe = Recipe(peak_lr=3e-4, min_lr=3e-5, warmup_steps=3, total_steps=steps)
-    feed = (make_doc_feed(cfg.tokens, cfg.seq_len) if data == "doc"
-              else make_feed(cfg.tokens))
+    feed = (legacy_doc_pipeline(cfg) if data == "doc"
+            else legacy_block_pipeline(cfg))
 
     ref = run_reference(cfg, recipe, feed, steps, seed=11, log=quiet_log)
     with daemon_client(slab_gib=slab_gib, log=quiet_log) as client:

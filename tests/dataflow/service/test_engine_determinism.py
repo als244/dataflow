@@ -21,7 +21,7 @@ from dataflow_training.run.presets import (  # noqa: E402
     smoke_preset,
 )
 from dataflow_training.run.driver import daemon_client, init_model  # noqa: E402
-from dataflow_training.data.fineweb import make_feed  # noqa: E402
+from dataflow_training.data.pipeline import legacy_block_pipeline  # noqa: E402
 from dataflow_training.run.recipe import Recipe  # noqa: E402
 from dataflow_training.model_families.families import resolve_family  # noqa: E402
 from dataflow_training.lowering.planning import plan_program  # noqa: E402
@@ -29,19 +29,22 @@ from dataflow_training.lowering.planning import plan_program  # noqa: E402
 STEPS = 3
 
 
-def run_steps(client, cfg, prog_id, feed) -> list:
+def run_steps(client, cfg, prog_id, pipeline) -> list:
     losses = []
     overflows = []
     fetch = [f"loss_0_{r}" for r in range(cfg.grad_accum_rounds)]
+    stepper = pipeline(None)
     for step in range(STEPS):
-        valid = 0
-        for r in range(cfg.grad_accum_rounds):
-            tok, tgt = feed(step * cfg.grad_accum_rounds + r)
-            valid += int((tgt >= 0).sum())
-            client.put_object(f"tokens_0_{r}", tok.numpy().tobytes())
-            client.put_object(f"targets_0_{r}", tgt.numpy().tobytes())
+        packed = stepper.next_step()
+        lens = {}
+        for r, rnd in enumerate(packed.rounds):
+            lens[str(r)] = rnd.bounds()
+            client.put_object(f"tokens_0_{r}", rnd.tokens.tobytes())
+            client.put_object(f"targets_0_{r}", rnd.targets.tobytes())
         out = client.run(prog_id,
-                         args={"step": step, "valid_rows": valid},
+                         args={"step": step,
+                               "valid_rows": packed.valid_rows,
+                               "seq_lens": lens},
                          fetch=fetch)
         assert out.get("state") == "done", (step, out)
         losses.append(sum(out["fetched"][k] for k in fetch))
@@ -64,22 +67,22 @@ def test_same_daemon_rerun_bitwise(tmp_path):
     fam_name = resolver_family(cfg)
     with daemon_client(slab_gib=4.0, log=print) as client:
         init_model(client, fam_name, cd, seed=11)
-        feed = make_feed(cfg.tokens)
-        for r in range(cfg.grad_accum_rounds):
-            tok, tgt = feed(r)
-            client.put_object(f"tokens_0_{r}", tok.numpy().tobytes())
-            client.put_object(f"targets_0_{r}", tgt.numpy().tobytes())
+        stepper0 = legacy_block_pipeline(cfg)(None)
+        packed0 = stepper0.next_step()
+        for r, rnd in enumerate(packed0.rounds):
+            client.put_object(f"tokens_0_{r}", rnd.tokens.tobytes())
+            client.put_object(f"targets_0_{r}", rnd.targets.tobytes())
         reg = client.register_program(
             program_to_dict(planned.program),
             resolver={"kind": "model_family", "family": fam_name, "cfg": cd,
                       "hyper": recipe.hyper_spec()})
         assert not reg["bindings"]["missing_inputs"]
         first = run_steps(client, cfg, reg["prog_id"],
-                          make_feed(cfg.tokens))
+                          legacy_block_pipeline(cfg))
         # re-init: same seed, same bytes
         init_model(client, fam_name, cd, seed=11)
         second = run_steps(client, cfg, reg["prog_id"],
-                           make_feed(cfg.tokens))
+                           legacy_block_pipeline(cfg))
     assert first == second, (
         f"same-daemon rerun diverged: {first} vs {second} — an "
         f"engine/kernel change shifted numerics (in-process runs are "

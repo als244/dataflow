@@ -78,16 +78,19 @@ def parity_line(measured: dict, sim: dict) -> str:
             f"sim {log_makespan_us(sim):.0f}us")
 
 
-def put_step_rounds(client, feed, rounds: int, step: int) -> int:
-    """Put one step's token/target rounds; returns the step's valid
-    count (the global denominator)."""
-    valid = 0
-    for r in range(rounds):
-        tok, tgt = feed(step * rounds + r)
-        valid += int((tgt >= 0).sum())
-        client.put_object(f"tokens_0_{r}", tok.numpy().tobytes())
-        client.put_object(f"targets_0_{r}", tgt.numpy().tobytes())
-    return valid
+def put_packed_step(client, stepper, tokens_per_round: int):
+    """Put one PackedStep's rounds; returns (valid count, wire
+    seq_lens bounds by round)."""
+    packed = stepper.next_step()
+    lens = {}
+    for r, rnd in enumerate(packed.rounds):
+        bounds = rnd.bounds()
+        if rnd.content < tokens_per_round:
+            bounds = bounds + [tokens_per_round]
+        lens[str(r)] = bounds
+        client.put_object(f"tokens_0_{r}", rnd.tokens.tobytes())
+        client.put_object(f"targets_0_{r}", rnd.targets.tobytes())
+    return packed.valid_rows, lens
 
 
 def capture_run(client, cfg, recipe, feed, steps: int, *,
@@ -107,7 +110,8 @@ def capture_run(client, cfg, recipe, feed, steps: int, *,
     cd = cfg_dict(cfg)
     init_model(client, resolver_family(cfg), cd, seed=seed)
     R = cfg.grad_accum_rounds
-    valid0 = put_step_rounds(client, feed, R, 0)
+    stepper = feed(None)                    # feed is a pipeline factory
+    valid0, lens0 = put_packed_step(client, stepper, cfg.tokens)
     reg = client.register_program(
         program_to_dict(planned.program),
         resolver={"kind": "model_family",
@@ -120,10 +124,13 @@ def capture_run(client, cfg, recipe, feed, steps: int, *,
     losses = []
     fetch = [f"loss_0_{r}" for r in range(R)]
     for step in range(steps):
-        valid = valid0 if step == 0 else put_step_rounds(client, feed,
-                                                         R, step)
+        if step == 0:
+            valid, lens = valid0, lens0
+        else:
+            valid, lens = put_packed_step(client, stepper, cfg.tokens)
         out = client.run(reg["prog_id"],
-                         args={"step": step, "valid_rows": valid},
+                         args={"step": step, "valid_rows": valid,
+                               "seq_lens": lens},
                          fetch=fetch, trace=(step == steps - 1))
         if out.get("state") != "done":
             raise RuntimeError(f"step {step}: {out}")
@@ -143,7 +150,7 @@ def main() -> int:
     from dataflow.core.jsonio import program_to_dict
     from dataflow_training.run import presets as P
     from dataflow_training.run.driver import daemon_client
-    from dataflow_training.data.fineweb import make_feed
+    from dataflow_training.data.pipeline import legacy_block_pipeline
     from dataflow_training.run.recipe import Recipe
 
     ap = argparse.ArgumentParser()
@@ -160,7 +167,7 @@ def main() -> int:
     recipe = Recipe(peak_lr=3e-4, min_lr=3e-5, warmup_steps=1,
                     total_steps=args.steps)
     with daemon_client(slab_gib=args.slab, log=print) as client:
-        cap = capture_run(client, cfg, recipe, make_feed(cfg.tokens),
+        cap = capture_run(client, cfg, recipe, legacy_block_pipeline(cfg),
                           args.steps, budget_gib=args.budget)
 
     measured = measured_log_from_trace(cap["trace"])

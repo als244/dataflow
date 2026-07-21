@@ -80,12 +80,21 @@ class FlopReport:
     by_group: dict = field(default_factory=dict)
 
     def per_step(self, seq_lens_by_round=None, *, tokens: int = 0,
-                 seq_len: int = 0):
-        """(effective, hardware) flops for ONE step; doc-aware rounds
-        pass {round: [lens]} for the exact quadratic mass. Scaling
-        applies to the causal attention buckets only. Optimizer matmul
+                 seq_len: int = 0, content_fraction: float = 1.0):
+        """(effective, hardware) flops for ONE step; packed rounds
+        pass {round: [lens]} for the exact quadratic mass. Attention
+        scaling applies to the causal buckets only. Optimizer matmul
         work counts in BOTH (the sim's makespan includes optimizer-task
-        time — the ratio stays consistent; adamw contributes 0)."""
+        time — the ratio stays consistent; adamw contributes 0).
+
+        ``content_fraction`` (content tokens / buffer tokens over the
+        step) scales the TOKEN-LINEAR buckets of the EFFECTIVE count
+        when rounds are under-full: executed tail work (present in
+        hardware while execute-padding runs; absent entirely under
+        content re-view, where the CALLER passes the same fraction
+        for hardware by scaling its lens) is never useful work. The
+        attention buckets need no extra treatment — the passed
+        seq_lens already carry only real segments."""
         scale = 1.0
         if seq_lens_by_round:
             ratios = [seq_sq_ratio(lens, tokens, seq_len)
@@ -95,8 +104,11 @@ class FlopReport:
         a_bwd_eff = self.attn_bwd_eff * scale
         a_bwd_hw = self.attn_bwd_hw * scale
         a_rc = self.attn_recompute_hw * scale
-        effective = (self.mm_effective + a_fwd + a_bwd_eff
-                     + self.attn_static + self.optimizer)
+        cf = float(content_fraction)
+        # token-linear buckets scale with content; optimizer work is
+        # parameter-space and executes fully regardless of fill
+        effective = ((self.mm_effective + self.attn_static) * cf
+                     + a_fwd + a_bwd_eff + self.optimizer)
         hardware = (self.mm_hardware + a_fwd + a_bwd_hw + a_rc
                     + self.attn_static + self.attn_static_rc_hw
                     + self.optimizer)
