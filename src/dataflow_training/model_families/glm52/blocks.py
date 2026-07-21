@@ -92,6 +92,7 @@ class Glm52AuxTempState:
 
     def _aux_temp_state(self, ctx):
         d = self.dims
+        n = self.rows(ctx)
         layer = ctx.task.block_params["layer"]
         layout = self._aux_temp_layout()
         key = ctx.task.compute_block_key
@@ -104,17 +105,17 @@ class Glm52AuxTempState:
                     buf_of[int(oid.rsplit("_", 1)[1])] = self._in(ctx, j)
                 elif oid.startswith("dAuxTemp_"):
                     st["_dm_view"] = torch_view(
-                        self._in(ctx, j), (d.tokens, _dm_cols(d)), torch.float32)
+                        self._in(ctx, j), (d.tokens, _dm_cols(d)), torch.float32)[:n]
             for oid in ctx.task.mutates:
                 if oid.startswith("dAuxTemp_"):
                     st["_dm_view"] = torch_view(
-                        ctx.mutates[oid], (d.tokens, _dm_cols(d)), torch.float32)
+                        ctx.mutates[oid], (d.tokens, _dm_cols(d)), torch.float32)[:n]
             if key.endswith("_bwd"):
                 for j, o in enumerate(ctx.task.outputs):
                     if o.id.startswith("dAuxTemp_"):
                         st["_dm_view"] = torch_view(
                             self._out(ctx, j), (d.tokens, _dm_cols(d)),
-                            torch.float32)
+                            torch.float32)[:n]
                         st["_dm_create"] = True
             if key.endswith("_recompute"):
                 st["aux_temp_ready"] = True
@@ -126,14 +127,14 @@ class Glm52AuxTempState:
                 if oid.startswith("AuxTemp_"):
                     buf_of[int(oid.rsplit("_", 1)[1])] = self._in(ctx, j)
         if layout.fields and layer in buf_of:
-            st["aux_temp"] = layout.views(buf_of[layer])
+            st["aux_temp"] = self.content_views(layout.views(buf_of[layer]), ctx)
         producer = d.leader_index(layer)
         if (getattr(d, "sparse_mode", True)
                 and producer != layer and producer in buf_of):
             # the shared selection: dsa_idx is the FIRST field (offset 0)
             # in every producer layout — kind-agnostic by construction
             st["shared_idx"] = torch_view(
-                buf_of[producer], (d.tokens, d.index_topk), torch.int32)
+                buf_of[producer], (d.tokens, d.index_topk), torch.int32)[:n]
         st["_kl_n"] = len(d.group_members(producer))
         return st or None
 
@@ -228,7 +229,7 @@ class _Glm52LeaderKL:
         from ..dsv32.blocks import _indexer_inputs
 
         K = self.kernels
-        t = d.tokens
+        t = h1.shape[0]
         h, qk, rope = d.n_heads, d.qk_head_dim, d.qk_rope_dim
         n = float(a["_kl_n"])
         q_idx, k_idx, wts = _indexer_inputs(kctx, K, d, h1, q_lora_n, w, pos)
@@ -285,7 +286,7 @@ class _Glm52LeaderKL:
         # linear-triple conversion pending (exemplar: llama3)
 
         K = self.kernels
-        t = d.tokens
+        t = q_lora_n.shape[0]
         rope = d.qk_rope_dim
         hi_, di = d.index_n_heads, d.index_head_dim
         K.rope_bwd(kctx, dq_idx, dq_idx, pos, hi_, rope, d.rope_base,

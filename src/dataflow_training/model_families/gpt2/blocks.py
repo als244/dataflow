@@ -51,8 +51,8 @@ class Gpt2BlockFwd(BlockFwd):
     def _stage_ln1(kctx, K, d, st):
         x, w = st["x"], st["w"]
         h1 = torch.empty_like(x)
-        mean = torch.empty(d.tokens, dtype=torch.float32, device=x.device)
-        rstd = torch.empty(d.tokens, dtype=torch.float32, device=x.device)
+        mean = torch.empty(x.shape[0], dtype=torch.float32, device=x.device)
+        rstd = torch.empty(x.shape[0], dtype=torch.float32, device=x.device)
         K.layernorm_fwd(kctx, x, w["attn_norm_w"], w.get("attn_norm_b"),
                         h1, mean, rstd)
         st["h1"] = h1
@@ -103,8 +103,8 @@ class Gpt2BlockFwd(BlockFwd):
             h_mid = torch.matmul(st["attn_out"], w["wo"], out=out)
         h_mid.add_(st["x"])
         h2 = torch.empty_like(h_mid)
-        mean = torch.empty(d.tokens, dtype=torch.float32, device=h_mid.device)
-        rstd = torch.empty(d.tokens, dtype=torch.float32, device=h_mid.device)
+        mean = torch.empty(h_mid.shape[0], dtype=torch.float32, device=h_mid.device)
+        rstd = torch.empty(h_mid.shape[0], dtype=torch.float32, device=h_mid.device)
         K.layernorm_fwd(kctx, h_mid, w["ffn_norm_w"], w.get("ffn_norm_b"),
                         h2, mean, rstd)
         st.pop("attn_out")
@@ -273,10 +273,11 @@ class Gpt2EmbedFwd(_Base):
         from ...data.segments import resolve_segments
 
         d = self.dims
+        n = self.rows(ctx)
         with torch.cuda.stream(external_stream(ctx.stream)):
-            tokens = torch_view(self._in(ctx, 0), (d.tokens,), torch.int32)
+            tokens = torch_view(self._in(ctx, 0), (d.tokens,), torch.int32)[:n]
             w = self.el.views(self._in(ctx, 1))
-            y = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
+            y = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)[:n]
             r = parse_object_round(ctx.task.outputs[0].id)
             seg = resolve_segments(ctx, d, r)
             if seg.lengths and max(seg.lengths) > d.n_ctx:
@@ -309,13 +310,14 @@ class Gpt2EmbedBwd(_Base):
         from ...data.segments import resolve_segments
 
         d = self.dims
+        n = self.rows(ctx)
         es = external_stream(ctx.stream)
         from ...kernels import KernelCtx
 
         kctx = KernelCtx(stream_handle=es.cuda_stream, torch_stream=es)
         with torch.cuda.stream(es):
-            dy = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
-            tokens = torch_view(self._in(ctx, 1), (d.tokens,), torch.int32)
+            dy = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)[:n]
+            tokens = torch_view(self._in(ctx, 1), (d.tokens,), torch.int32)[:n]
             accum = bool(ctx.task.mutates)
             buf = ctx.mutates[ctx.task.mutates[0]] if accum else self._out(ctx, 0)
             views = self.egl.views(buf)
@@ -345,14 +347,15 @@ class Gpt2HeadLoss(HeadLoss):
         from ...blocks.base_blocks import head_chunk_rows
 
         d = self.dims
+        n = self.rows(ctx)
         es, kctx = self._stream_ctx(ctx)
         with torch.cuda.stream(es):
             K = self.kernels
-            y = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
-            targets = torch_view(self._in(ctx, 1), (d.tokens,), torch.int32)
+            y = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)[:n]
+            targets = torch_view(self._in(ctx, 1), (d.tokens,), torch.int32)[:n]
             wh = self.hl.views(self._in(ctx, 2))
             accum = bool(ctx.task.mutates)
-            dy = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
+            dy = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)[:n]
             loss = torch_view(self._out(ctx, 1), (1,), torch.float32)
             if accum:
                 dwh = self.hgl.views(ctx.mutates[ctx.task.mutates[0]])
@@ -362,7 +365,7 @@ class Gpt2HeadLoss(HeadLoss):
                 dwh = None
             ra_h = ctx.run_args or {}
             vr = ra_h.get("valid_rows")
-            norm_rows = d.tokens
+            norm_rows = n
             if vr is not None:
                 if isinstance(vr, dict):
                     _r = (ctx.task.outputs[1].id.rsplit("_", 1)[-1]
@@ -383,8 +386,8 @@ class Gpt2HeadLoss(HeadLoss):
             dnb_acc = torch.zeros(d.d_model, dtype=torch.float32, device=y.device)
             dnw_c = torch.empty(d.d_model, dtype=torch.float32, device=y.device)
             dnb_c = torch.empty(d.d_model, dtype=torch.float32, device=y.device)
-            for lo in range(0, d.tokens, chunk):
-                hi = min(lo + chunk, d.tokens)
+            for lo in range(0, n, chunk):
+                hi = min(lo + chunk, n)
                 y_c = y[lo:hi]
                 yn = torch.empty_like(y_c)
                 mean = torch.empty(hi - lo, dtype=torch.float32, device=y.device)

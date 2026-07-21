@@ -75,10 +75,10 @@ def stage_moe_route(kctx, K, d, st):
         route_w, route_ids = dst["route_w"], dst["route_ids"]
     else:
         route_w = torch.empty(
-            (d.tokens, moe.top_k), dtype=torch.bfloat16, device=h2.device
+            (h2.shape[0], moe.top_k), dtype=torch.bfloat16, device=h2.device
         )
         route_ids = torch.empty(
-            (d.tokens, moe.top_k), dtype=torch.int32, device=h2.device
+            (h2.shape[0], moe.top_k), dtype=torch.int32, device=h2.device
         )
     if st.get("aux_temp_ready"):
         # recompute with the decision supplied: NEVER re-select
@@ -116,11 +116,13 @@ def stage_moe_route(kctx, K, d, st):
 def stage_moe_dispatch(kctx, K, d, st):
     moe, a = _spec(d), st["a"]
     h2 = st["h2"]
-    rows = moe_local_rows(moe, d.tokens)
+    rows = moe_local_rows(moe, h2.shape[0])
     aux_temp = st.get("aux_temp")
     dst = aux_temp if aux_temp is not None else a
     if dst is not None:
-        order, offsets = dst["route_order"], dst["route_offsets"]
+        # route_order is FLAT (tokens*top_k) — content-slice by slots here,
+        # the one token-axis field the dim-0 rule cannot see
+        order, offsets = dst["route_order"][:rows], dst["route_offsets"]
     else:
         order = torch.empty(rows, dtype=torch.int32, device=h2.device)
         offsets = torch.empty(
@@ -132,7 +134,7 @@ def stage_moe_dispatch(kctx, K, d, st):
     K.moe_dispatch_fwd(kctx, h2, order, xp, top_k=moe.top_k)
     st.update(
         order=order, offsets=offsets,
-        slot_of=_slot_of_from_order(order, d.tokens, moe.top_k), xp=xp,
+        slot_of=_slot_of_from_order(order, h2.shape[0], moe.top_k), xp=xp,
     )
 
 
@@ -191,7 +193,7 @@ def stage_moe_experts2_combine(kctx, K, d, st):
     if moe.n_shared_experts:
         fs = moe.d_ff_shared
         s13 = st.pop("s13")
-        s_act = torch.empty((d.tokens, fs), dtype=torch.bfloat16, device=h13.device)
+        s_act = torch.empty((s13.shape[0], fs), dtype=torch.bfloat16, device=h13.device)
         K.swiglu_packed_fwd(kctx, s13, s_act)
         sh = s_act @ w["w_s2"]
         del s_act
@@ -251,13 +253,13 @@ def moe_mlp_tail_bwd(kctx, K, d, dy, a, w, dw, accum, acc, norm_bwd, *, resid_fi
     bf16 via addmm_ — the dense tail's convention.
     """
     moe = _spec(d)
-    t, topk, f = d.tokens, moe.top_k, moe.d_ff_expert
+    t, topk, f = dy.shape[0], moe.top_k, moe.d_ff_expert
 
     resid = a[resid_field]
     h2 = torch.empty_like(resid)
     K.rmsnorm_apply(kctx, resid, a["rstd_ffn"], w["ffn_norm_w"], h2)
 
-    order, offsets = a["route_order"], a["route_offsets"]
+    order, offsets = a["route_order"][:t * topk], a["route_offsets"]
     rows = order.shape[0]
     slot_of = _slot_of_from_order(order, t, topk)
 
@@ -356,7 +358,7 @@ def moe_mlp_tail_bwd(kctx, K, d, dy, a, w, dw, accum, acc, norm_bwd, *, resid_fi
         packs = a.get("lbl_retained")
         if packs is None:   # ga=1: the own round's views are merged into a
             packs = [{"lbl_x": a["lbl_x"], "lbl_probs": a["lbl_probs"]}]
-        t_step = t * len(packs)
+        t_step = sum(pk["lbl_probs"].shape[0] for pk in packs)
         counts_f = lbl_counts["expert_counts_current_step"].float()
         fvec = counts_f / (t_step * moe.top_k)
         lbl_scale = moe.aux_coef * moe.n_experts / t_step
@@ -448,8 +450,10 @@ class MoEAuxTempState:
             found = []      # (round, views) for every AuxTemp input
             for j, oid in enumerate(ctx.task.inputs):
                 if oid.startswith("AuxTemp_"):
-                    found.append((int(oid.split("_")[-2]),
-                                  layout.views(self._in(ctx, j))))
+                    r = int(oid.split("_")[-2])
+                    found.append((r, self.content_views(
+                        layout.views(self._in(ctx, j)), ctx,
+                        rows=self.rows_of_round(ctx, r))))
             if not found:
                 raise RuntimeError(f"no AuxTemp_ input on {ctx.task.id}")
             own_round = int(ctx.task.id.split("_")[-2])
@@ -465,7 +469,8 @@ class MoEAuxTempState:
             return st
         for j, o in enumerate(ctx.task.outputs):
             if o.id.startswith("AuxTemp_"):
-                return {"aux_temp": layout.views(self._out(ctx, j))}
+                return {"aux_temp": self.content_views(
+                    layout.views(self._out(ctx, j)), ctx)}
         raise RuntimeError(f"no AuxTemp_ output on {ctx.task.id}")
 
     def _backward(self, kctx, dy, a, x, w, dx_out, dw, accum, aux_temp=None):

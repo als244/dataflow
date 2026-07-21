@@ -61,7 +61,7 @@ class OlmoeBlockFwd(MoEAuxTempState, MoEProfileFill, BlockFwd):
         # through to ctx (bwd reads PRE-norm qm/km).
         # linear-triple conversion pending (exemplar: llama3)
         h1, w, a = st["h1"], st["w"], st["a"]
-        t = d.tokens
+        t = h1.shape[0]
         if a is not None:
             qm, km, v = a["qm"], a["km"], a["v"]
             torch.matmul(h1, w["wq"], out=qm)

@@ -136,14 +136,16 @@ class Dsv32AuxTempState:
         if key.endswith(("_recompute", "_bwd")):
             for j, oid in enumerate(ctx.task.inputs):
                 if oid.startswith("AuxTemp_"):
-                    st = {"aux_temp": layout.views(self._in(ctx, j))}
+                    st = {"aux_temp": self.content_views(
+                        layout.views(self._in(ctx, j)), ctx)}
                     if key.endswith("_recompute"):
                         st["aux_temp_ready"] = True
                     return st
             raise RuntimeError(f"no M_ input on {ctx.task.id}")
         for j, o in enumerate(ctx.task.outputs):
             if o.id.startswith("AuxTemp_"):
-                return {"aux_temp": layout.views(self._out(ctx, j))}
+                return {"aux_temp": self.content_views(
+                    layout.views(self._out(ctx, j)), ctx)}
         raise RuntimeError(f"no M_ output on {ctx.task.id}")
 
 
@@ -241,7 +243,7 @@ class Dsv32DenseBlockFwd(Dsv32AuxTempState, Dsv32ProfileFill, Dsv3DenseBlockFwd)
             # linear-triple conversion pending (exemplar: llama3)
             src = st["h1"] @ w["w_q_a"]
             q_lora_n = torch.empty_like(src)
-            r = torch.empty(d.tokens, dtype=torch.float32, device=src.device)
+            r = torch.empty(src.shape[0], dtype=torch.float32, device=src.device)
             K.rmsnorm_fwd(kctx, src, w["q_a_norm_w"], q_lora_n, r)
         else:
             q_lora_n = torch.empty_like(src)
@@ -284,10 +286,12 @@ class Dsv32DenseBlockFwd(Dsv32AuxTempState, Dsv32ProfileFill, Dsv3DenseBlockFwd)
     @staticmethod
     def _stage_dsa_attn(kctx, K, d, st):
         a = st["a"]
-        t, h, qk, v = d.tokens, d.n_heads, d.qk_head_dim, d.v_head_dim
+        v_pad = st.pop("v_pad")
+        t = v_pad.shape[0]
+        h, qk, v = d.n_heads, d.qk_head_dim, d.v_head_dim
         # native-DV core: our kernels don't need flash's equal-dims pad —
         # strip the base stage's zero pad (columns provably zero)
-        vals = st.pop("v_pad").view(t, h, qk)[..., :v].reshape(t, h * v)
+        vals = v_pad.view(t, h, qk)[..., :v].reshape(t, h * v)
         vals = vals.contiguous()
         attn_out = torch.empty(t, h * v, dtype=torch.bfloat16,
                                device=st["q_full"].device)
@@ -347,7 +351,7 @@ class Dsv32DenseBlockBwd(Dsv32AuxTempState, Dsv32ProfileFill, Dsv3DenseBlockBwd)
         the train_indexer=False ablation skips it wholesale."""
         # linear-triple conversion pending (exemplar: llama3)
         K = self.kernels
-        t = d.tokens
+        t = h1.shape[0]
         h, qk, rope = d.n_heads, d.qk_head_dim, d.qk_rope_dim
         q_idx, k_idx, wts = _indexer_inputs(kctx, K, d, h1, q_lora_n, w, pos)
         dq_idx = torch.empty_like(q_idx)
@@ -391,7 +395,7 @@ class Dsv32DenseBlockBwd(Dsv32AuxTempState, Dsv32ProfileFill, Dsv3DenseBlockBwd)
             K.dsa_probs_sum(
                 kctx, q_full, k_full,
                 idx if idx is not None else torch.zeros(
-                    d.tokens, 1, dtype=torch.int32, device=x.device),
+                    x.shape[0], 1, dtype=torch.int32, device=x.device),
                 lse, p,
                 n_heads=h, head_dim=qk, seq_bounds=((lo, hi),),
                 bits_by_seq=seq_bits,
@@ -450,7 +454,7 @@ class Dsv32DenseBlockBwd(Dsv32AuxTempState, Dsv32ProfileFill, Dsv3DenseBlockBwd)
         # linear-triple conversion pending (exemplar: llama3)
         d = self.dims
         K = self.kernels
-        t = d.tokens
+        t = dh_mid.shape[0]
         h, nope, rope, v = d.n_heads, d.qk_nope_dim, d.qk_rope_dim, d.v_head_dim
         qk, kvl = d.qk_head_dim, d.kv_lora_rank
         seg = a["_seg"]
@@ -594,9 +598,9 @@ class _WarmupKLMixin:
         d = self.dims
         es, kctx = self._stream_ctx(ctx)
         with torch.cuda.stream(es):
-            a = self.cl.views(self._in(ctx, 0))
+            a = self.content_views(self.cl.views(self._in(ctx, 0)), ctx)
             x = torch_view(self._in(ctx, 1), (d.tokens, d.d_model),
-                           torch.bfloat16)
+                           torch.bfloat16)[:self.rows(ctx)]
             w = self.task_weight_layout(ctx.task).views(self._in(ctx, 2))
             dw = None
             accum = False
@@ -637,7 +641,7 @@ class _WarmupKLMixin:
         # (warm-up + train_indexer=False is rejected at resolver build.)
         acc = (self._acc_fn(dw, accum) if dw
                else (lambda name, value: None))
-        t = d.tokens
+        t = x.shape[0]
         seg = a["_seg"]
         bounds = _seq_bounds(seg)
         pos = seg.positions          # always varlen; run_args prologue

@@ -112,7 +112,7 @@ class Dsv3DenseBlockFwd(BlockFwd):
     @staticmethod
     def _stage_mla_q(kctx, K, d, st):
         h1, w, a = st["h1"], st["w"], st["a"]
-        t = d.tokens
+        t = h1.shape[0]
         # linear-triple conversion pending (exemplar: llama3)
         if a is not None and "q_a" in a:
             q_a = a["q_a"]
@@ -140,7 +140,7 @@ class Dsv3DenseBlockFwd(BlockFwd):
     def _stage_mla_kv(kctx, K, d, st):
         h1, w, a = st.pop("h1"), st["w"], st["a"]
         # linear-triple conversion pending (exemplar: llama3)
-        t = d.tokens
+        t = h1.shape[0]
         if a is not None and "kv_a" in a:
             kv_a = a["kv_a"]
             torch.matmul(h1, w["w_kv_a"], out=kv_a)
@@ -168,7 +168,8 @@ class Dsv3DenseBlockFwd(BlockFwd):
     @staticmethod
     def _stage_mla_attn(kctx, K, d, st):
         a = st["a"]
-        t, h, qk, v = d.tokens, d.n_heads, d.qk_head_dim, d.v_head_dim
+        t = st["q_full"].shape[0]
+        h, qk, v = d.n_heads, d.qk_head_dim, d.v_head_dim
         out_pad, lse = ops.flash_fwd(
             st.pop("q_full"), st.pop("k_full"), st.pop("v_pad"),
             h, h, qk, cu_seqlens=st["seg"].cu, max_seqlen=st["seg"].max_len,
@@ -195,7 +196,7 @@ class Dsv3DenseBlockFwd(BlockFwd):
             torch.addmm(x, attn_out, w["wo"], out=h_mid)
         else:
             h_mid = torch.addmm(x, attn_out, w["wo"])
-        rstd_ffn = torch.empty(d.tokens, dtype=torch.float32, device=x.device)
+        rstd_ffn = torch.empty(x.shape[0], dtype=torch.float32, device=x.device)
         h2 = torch.empty_like(h_mid)
         K.rmsnorm_fwd(kctx, h_mid, w["ffn_norm_w"], h2, rstd_ffn)
         if a is not None:
@@ -252,7 +253,7 @@ class Dsv3DenseBlockBwd(BlockBwd):
         # linear-triple conversion pending (exemplar: llama3)
         d = self.dims
         K = self.kernels
-        t = d.tokens
+        t = dh_mid.shape[0]
         h, nope, rope, v = d.n_heads, d.qk_nope_dim, d.qk_rope_dim, d.v_head_dim
         qk, kvl = d.qk_head_dim, d.kv_lora_rank
 

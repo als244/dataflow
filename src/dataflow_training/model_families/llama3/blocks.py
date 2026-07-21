@@ -142,11 +142,12 @@ class BlockFwd(_Base):
 
     def launch(self, ctx: TaskContext) -> None:
         d = self.dims
+        n = self.rows(ctx)
         es, kctx = self._stream_ctx(ctx)
         with torch.cuda.stream(es):
-            x = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
+            x = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)[:n]
             w = self.task_weight_layout(ctx.task).views(self._in(ctx, 1))
-            y = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
+            y = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)[:n]
             a = None
             if self.emit_context:
                 # A located by id, not position: metadata families append
@@ -154,7 +155,8 @@ class BlockFwd(_Base):
                 # planning while keeping the metadata)
                 for j, o in enumerate(ctx.task.outputs[1:], start=1):
                     if o.id.startswith("A_"):
-                        a = self.task_context_layout(ctx.task).views(self._out(ctx, j))
+                        a = self.content_views(
+                            self.task_context_layout(ctx.task).views(self._out(ctx, j)), ctx)
                         break
             extras = self._aux_temp_state(ctx) or {}
             extras["seg"] = self._attn_meta(ctx)
@@ -183,7 +185,7 @@ class BlockFwd(_Base):
     def _stage_attn_norm(kctx, K, d, st):
         x = st["x"]
         h1 = torch.empty_like(x)
-        rstd = torch.empty(d.tokens, dtype=torch.float32, device=x.device)
+        rstd = torch.empty(x.shape[0], dtype=torch.float32, device=x.device)
         K.rmsnorm_fwd(kctx, x, st["w"]["attn_norm_w"], h1, rstd)
         st["h1"] = h1
         if st["a"] is not None:
@@ -232,7 +234,7 @@ class BlockFwd(_Base):
         else:
             h_mid = wo.fwd(kctx, st["attn_out"], st["w"], add=st["x"])
         h2 = torch.empty_like(h_mid)
-        rstd = torch.empty(d.tokens, dtype=torch.float32, device=h_mid.device)
+        rstd = torch.empty(h_mid.shape[0], dtype=torch.float32, device=h_mid.device)
         K.rmsnorm_fwd(kctx, h_mid, st["w"]["ffn_norm_w"], h2, rstd)
         st.pop("attn_out")
         st.update(h_mid=h_mid, h2=h2)
@@ -331,11 +333,13 @@ class BlockRecompute(BlockFwd):
     context-emitting one to repopulate A from the block input."""
     def launch(self, ctx: TaskContext) -> None:
         d = self.dims
+        n = self.rows(ctx)
         es, kctx = self._stream_ctx(ctx)
         with torch.cuda.stream(es):
-            x = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
+            x = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)[:n]
             w = self.task_weight_layout(ctx.task).views(self._in(ctx, 1))
-            a = self.task_context_layout(ctx.task).views(self._out(ctx, 0))
+            a = self.content_views(
+                self.task_context_layout(ctx.task).views(self._out(ctx, 0)), ctx)
             extras = self._aux_temp_state(ctx) or {}
             extras["seg"] = self._attn_meta(ctx)
             extras["lin"] = self.linears(self.parse_layer(ctx.task))
@@ -470,23 +474,25 @@ class BlockBwd(_Base):
 
     def launch(self, ctx: TaskContext) -> None:
         d = self.dims
+        n = self.rows(ctx)
         es, kctx = self._stream_ctx(ctx)
         with torch.cuda.stream(es):
-            dy = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
-            a = self.task_context_layout(ctx.task).views(self._in(ctx, 1))
-            x = torch_view(self._in(ctx, 2), (d.tokens, d.d_model), torch.bfloat16)
+            dy = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)[:n]
+            a = self.content_views(
+                self.task_context_layout(ctx.task).views(self._in(ctx, 1)), ctx)
+            x = torch_view(self._in(ctx, 2), (d.tokens, d.d_model), torch.bfloat16)[:n]
             w = self.task_weight_layout(ctx.task).views(self._in(ctx, 3))
             accum = bool(ctx.task.mutates) and ctx.task.mutates[0].startswith("dW_")
             if accum:
                 dw = self.task_grad_layout(ctx.task).views(ctx.mutates[ctx.task.mutates[0]])
-                dx = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
+                dx = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)[:n]
             else:
                 dw = None
                 for j, o in enumerate(ctx.task.outputs[1:], start=1):
                     if o.id.startswith("dW_"):
                         dw = self.task_grad_layout(ctx.task).views(self._out(ctx, j))
                         break
-                dx = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
+                dx = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)[:n]
             a = {**a, "_seg": self._attn_meta(ctx),
                  "lin": self.linears(self.parse_layer(ctx.task))}
             aux_counts = self._aux_counts_state(ctx)

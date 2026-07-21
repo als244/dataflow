@@ -175,7 +175,7 @@ class Qwen35LinBlockFwd(BlockFwd):
     def _stage_ffn_norm(kctx, K, d, st):
         h_mid = st["h_mid"]
         h2 = torch.empty_like(h_mid)
-        rstd = torch.empty(d.tokens, dtype=torch.float32, device=h_mid.device)
+        rstd = torch.empty(h_mid.shape[0], dtype=torch.float32, device=h_mid.device)
         K.rmsnorm_fwd(kctx, h_mid, st["w"]["ffn_norm_w"], h2, rstd)
         st["h2"] = h2
         if st["a"] is not None:
@@ -241,7 +241,7 @@ class Qwen35LinBlockBwd(BlockBwd):
 
         d = self.dims
         K = self.kernels
-        t = d.tokens
+        t = dxo.shape[0]
 
         # --- gated norm + out projection (fused kernel; y recomputed for
         # free by the bwd and reused for the out-projection weight grad) ---
@@ -492,7 +492,7 @@ class Qwen35AttnBlockBwd(BlockBwd):
         # additive joins in place (see the lin-block backward note).
         d = self.dims
         K = self.kernels
-        t = d.tokens
+        t = dxo.shape[0]
         h, kvh, hd = d.n_heads, d.n_kv_heads, d.head_dim
 
         # --- output gate + o projection ---

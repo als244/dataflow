@@ -215,6 +215,45 @@ class _Base:
         parts = ctx.task.id.rsplit("_", 3)
         return parts[2] if len(parts) >= 3 else "0"
 
+    def content_views(self, views: dict, ctx, rows: int | None = None) -> dict:
+        """Slice a ctx-field view dict to the round's content rows,
+        token-axis-aware: dim 0 slices when it spans the round's
+        buffer tokens (the T-major convention: activations, rstds,
+        routing packs); dim 1 slices for head-major fields like lse
+        (n_heads, tokens); fields without a token axis (recurrent
+        state, counts) pass through. Identity when the round is
+        exactly full."""
+        n = self.rows(ctx) if rows is None else rows
+        T = self.dims.tokens
+        if n == T or views is None:
+            return views
+        out = {}
+        for name, v in views.items():
+            if hasattr(v, "shape") and v.ndim >= 1 and v.shape[0] == T:
+                out[name] = v[:n]
+            elif hasattr(v, "shape") and v.ndim >= 2 and v.shape[1] == T:
+                out[name] = v[:, :n]
+            else:
+                out[name] = v
+        return out
+
+    def rows_of_round(self, ctx, r: int) -> int:
+        """Content rows of round ``r`` of this step — for tasks that
+        consume OTHER rounds' per-token objects (retained-inputs LBL),
+        whose fill differs per round."""
+        from ..data.segments import resolve_segments
+        return resolve_segments(ctx, self.dims, r).tokens
+
+    def rows(self, ctx) -> int:
+        """The round's CONTENT row count — the sum of its wire
+        segments (HOST arithmetic via the cached Segments; reading
+        seg.cu[-1] off-device would be a hidden sync). Per-token views
+        slice to [:rows]; an under-full round's buffer tail is dead
+        bytes no task reads. When the driver runs execute-padding the
+        wire includes the masked tail segment, so this equals the full
+        buffer and tasks transparently compute everything."""
+        return self._attn_meta(ctx).tokens
+
     def _attn_meta(self, ctx):
         """The round's ``Segments`` — the SINGLE varlen descriptor every
         family's fwd/bwd attention + rope reads (models ALWAYS run varlen).
@@ -292,10 +331,11 @@ class EmbedFwd(_Base):
         _fill_tokens(self, ctx)
     def launch(self, ctx: TaskContext) -> None:
         d = self.dims
+        n = self.rows(ctx)
         with torch.cuda.stream(external_stream(ctx.stream)):
-            tokens = torch_view(self._in(ctx, 0), (d.tokens,), torch.int32)
+            tokens = torch_view(self._in(ctx, 0), (d.tokens,), torch.int32)[:n]
             w = torch_view(self._in(ctx, 1), (d.vocab_size, d.d_model), torch.bfloat16)
-            y = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
+            y = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)[:n]
             ops.embed_fwd(tokens, w, y)
 
 
@@ -344,14 +384,15 @@ class HeadLoss(_Base):
 
     def launch(self, ctx: TaskContext) -> None:
         d = self.dims
+        n = self.rows(ctx)
         es, kctx = self._stream_ctx(ctx)
         with torch.cuda.stream(es):
             K = self.kernels
-            y = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
-            targets = torch_view(self._in(ctx, 1), (d.tokens,), torch.int32)
+            y = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)[:n]
+            targets = torch_view(self._in(ctx, 1), (d.tokens,), torch.int32)[:n]
             wh = self.hl.views(self._in(ctx, 2))
             accum = bool(ctx.task.mutates)
-            dy = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
+            dy = torch_view(self._out(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)[:n]
             loss = torch_view(self._out(ctx, 1), (1,), torch.float32)
             # frozen head: the dW_head object does not exist (policy-
             # filtered layout scrubbed it) — CE fwd + dy still run,
@@ -370,7 +411,7 @@ class HeadLoss(_Base):
             # (bit-identical legacy).
             ra_h = ctx.run_args or {}
             vr = ra_h.get("valid_rows")
-            norm_rows = d.tokens
+            norm_rows = n
             if vr is not None:
                 if isinstance(vr, dict):
                     _r = (ctx.task.outputs[1].id.rsplit("_", 1)[-1]
@@ -385,8 +426,8 @@ class HeadLoss(_Base):
             part = torch.empty(1, dtype=torch.float32, device=y.device)
             dnorm_acc = torch.zeros(d.d_model, dtype=torch.float32, device=y.device)
             dnorm_c = torch.empty(d.d_model, dtype=torch.float32, device=y.device)
-            for lo in range(0, d.tokens, chunk):
-                hi = min(lo + chunk, d.tokens)
+            for lo in range(0, n, chunk):
+                hi = min(lo + chunk, n)
                 y_c = y[lo:hi]
                 yn = torch.empty_like(y_c)
                 rstd = torch.empty(hi - lo, dtype=torch.float32, device=y.device)
@@ -441,10 +482,11 @@ class EmbedBwd(_Base):
 
     def launch(self, ctx: TaskContext) -> None:
         d = self.dims
+        n = self.rows(ctx)
         es, kctx = self._stream_ctx(ctx)
         with torch.cuda.stream(es):
-            dy = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)
-            tokens = torch_view(self._in(ctx, 1), (d.tokens,), torch.int32)
+            dy = torch_view(self._in(ctx, 0), (d.tokens, d.d_model), torch.bfloat16)[:n]
+            tokens = torch_view(self._in(ctx, 1), (d.tokens,), torch.int32)[:n]
             accum = bool(ctx.task.mutates)
             buf = ctx.mutates[ctx.task.mutates[0]] if accum else self._out(ctx, 0)
             dwe = self.egl.view(buf, "w")
