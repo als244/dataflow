@@ -308,6 +308,23 @@ def build_tp_mlp_resolver(dims: TpMlpDims, hyper=None, kernels=None):
 
 
 
+def family_layouts(cfg: TpMlpConfig):
+    """LayoutsFn conformance for the single-layer TP-MLP correctness
+    harness: its one weight layout as a one-layer FamilyLayouts (the
+    W_tp root rides the "block" pseudo-kind; no embed/head — empty
+    layouts keep the registry surface total)."""
+    from dataflow_training.blocks.layouts import PackedLayout
+    from dataflow_training.lowering.emit import FamilyLayouts, LayerLayout
+
+    dims = derive_dims(cfg)
+    empty = PackedLayout.build([])
+    return dims, FamilyLayouts(
+        layers=[LayerLayout(kind="block",
+                            weights=tp_weight_layout(dims),
+                            activations=tp_saved_layout(dims))],
+        embed=empty, head=empty)
+
+
 def tp_mlp_family():
     from dataflow_training.model_families.families import ModelFamily
 
@@ -318,6 +335,7 @@ def tp_mlp_family():
         lower=lower_tp_mlp,
         initial_values=initial_values_tp_mlp,
         build_resolver=build_tp_mlp_resolver,
+        family_layouts=family_layouts,
     )
 
 

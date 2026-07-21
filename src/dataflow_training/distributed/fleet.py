@@ -134,45 +134,21 @@ def resolve_resume(run_dir: Path, resume: str, log) -> dict:
     and auto skips that step)."""
     import json
 
+    from .manifest import read_manifest
+
     if resume != "auto":
-        mf = Path(resume) / "fleet.json"
-        if not mf.is_file():
-            raise RuntimeError(f"no fleet.json at {resume}")
-        return json.loads(mf.read_text())
+        manifest = read_manifest(Path(resume))
+        manifest["_step_dir"] = str(resume)
+        return manifest
     candidates = sorted(run_dir.glob("step_*/fleet.json"))
     if not candidates:
         raise RuntimeError(f"resume=auto found no complete checkpoint "
                            f"under {run_dir}")
     mf = candidates[-1]
     log(f"[fleet] resume=auto -> {mf.parent}")
-    return json.loads(mf.read_text())
-
-
-def save_plan(parallels, world: int,
-                  opt_shard: str | None = None) -> dict:
-    """The SavePlan (Shein's design): who saves what, derived from
-    the ownership algebra. Data objects (tokens/targets/losses) are
-    never saved — resume re-derives them from the stream. Returns
-    {"shared": [id prefixes identical on every rank; rank 0 writes
-    them once], "per_rank": [prefixes unique per rank; every rank
-    writes its own]}.
-
-      plain DP: shared = W_* + O_* (fully replicated) — only rank 0
-        writes anything;
-      zero1:    shared = W_* (replicated weights); per-rank = O_*
-        (owned shards);
-      tp:       per-rank = W_* + O_* (physically sharded objects).
-    """
-    if opt_shard == "zero1rs":
-        # byte-equal shards: replicated W, per-rank slice O
-        return {"shared": ["W_"], "per_rank": ["O_"]}
-    par = parallels[0] if parallels else None
-    if par is None or par.plan is None:
-        return {"shared": ["W_", "O_"], "per_rank": []}
-    narrowed = any(a.resident != ALL_RANKS for a in par.plan.assignments)
-    if narrowed:
-        return {"shared": [], "per_rank": ["W_", "O_"]}
-    return {"shared": ["W_"], "per_rank": ["O_"]}
+    manifest = read_manifest(mf.parent)
+    manifest["_step_dir"] = str(mf.parent)
+    return manifest
 
 
 def push_dir(host, src_dir: str, dest_dir: str) -> None:
@@ -190,111 +166,83 @@ def push_dir(host, src_dir: str, dest_dir: str) -> None:
                     f"{host.ssh}:{dest}/"], check=True)
 
 
-def distribute_shared(fleet_manifest: dict, hosts, log) -> None:
-    """Make the shared (rank-0-deduped) artifact locally available on
-    every resuming host; records per-rank local paths in the
-    manifest. Redundant copies made at save time shortcut this."""
-    import subprocess
-
-    shared = fleet_manifest.get("shared_path")
-    if not shared:
-        fleet_manifest["local_shared"] = [None] * len(hosts)
-        return
-    if not Path(shared).is_dir():
-        # primary gone: pull a redundant copy back (same path layout)
-        by_name = {h.name: h for h in hosts}
-        for name in fleet_manifest.get("shared_copies", []):
-            host = by_name.get(name)
-            if host is None or host.is_local():
-                continue
-            probe = run_on(host, f"test -d {repo_path(host, shared)} "
-                                 f"&& echo yes || echo no").strip()
-            if probe == "yes":
-                subprocess.run(
-                    ["scp", "-q", "-r",
-                     f"{host.ssh}:{repo_path(host, shared)}",
-                     str(Path(shared).parent)], check=True)
-                log(f"[fleet] shared artifact recovered from "
-                    f"{name}'s redundant copy")
-                break
-        if not Path(shared).is_dir():
+def distribute_artifacts(fleet_manifest: dict, hosts, log) -> None:
+    """Make EVERY rank artifact locally available on every resuming
+    host (each rank replays all artifacts — parameter ranges compose
+    across them). Same path layout on every host; hosts that already
+    hold an artifact (its writer, or a same-box peer) skip the push."""
+    step_dir = Path(fleet_manifest["_step_dir"])
+    for art in fleet_manifest["artifacts"]:
+        src = step_dir / art
+        if not src.is_dir():
             raise RuntimeError(
-                f"shared checkpoint artifact missing at {shared} and "
-                f"no redundant copy reachable")
-    local = []
-    for host in hosts:
-        if host.is_local():
-            local.append(shared)
-            continue
-        probe = run_on(host, f"test -d {repo_path(host, shared)} && "
-                             f"echo yes || echo no").strip()
-        if probe != "yes":
-            push_dir(host, shared, str(Path(shared).parent))
-            log(f"[fleet] shared checkpoint artifact -> {host.name}")
-        local.append(shared)   # same path layout on every host
-    fleet_manifest["local_shared"] = local
+                f"checkpoint artifact missing at {src} — its writer "
+                f"host may be unreachable (redundant copies land in a "
+                f"later hardening pass)")
+        for host in hosts:
+            if host.is_local():
+                continue
+            probe = run_on(host, f"test -d {repo_path(host, str(src))} "
+                                 f"&& echo yes || echo no").strip()
+            if probe != "yes":
+                push_dir(host, str(src), str(step_dir))
+                log(f"[fleet] artifact {art} -> {host.name}")
 
 
 def checkpoint_fleet(ranks, ck: dict, step_next: int, meta: dict,
                      losses_so_far: list, log) -> None:
-    """Conductor-orchestrated fleet checkpoint at a step boundary:
-    every rank snapshots its WHOLE store to a host-LOCAL path (per-
-    rank stores already hold exactly their shards, so this is
-    correct for plain/zero1/tp alike; the SavePlan dedup layer comes
-    separately), then the conductor writes fleet.json LAST as the
-    completeness marker."""
-    import json
+    """Conductor-orchestrated checkpoint at a step boundary, manifest
+    v2: each rank snapshots exactly what it is RESPONSIBLE for (its
+    param byte ranges + its own whole objects — rank_save_args over
+    the responsibility map), the conductor saves every rank's planned
+    program beside the artifacts, and fleet.json (format 2) is
+    written LAST as the completeness marker."""
     import os
+
+    from .manifest import launch_record, save_programs, write_manifest
+    from .responsibility import rank_save_args
 
     step_dir = ck["dir"] / f"step_{step_next:06d}"
     os.makedirs(step_dir, exist_ok=True)   # conductor side (fleet.json)
-    plan = ck["save_plan"]
+    plan = ck["responsibility"]
     snaps = []
-    rank_paths = []
-    shared_path = None
     for i, rank in enumerate(ranks):
-        # dest is DAEMON-LOCAL: the snapshot writer mkdirs on its host
-        own = [oid for oid in rank.persist_ids
-               if any(oid.startswith(p) for p in plan["per_rank"])]
-        if i == 0 and plan["shared"]:
-            shared = [oid for oid in rank.persist_ids
-                      if any(oid.startswith(p) for p in plan["shared"])]
-            shared_path = str(step_dir / "shared")
-            out = rank.client.snapshot(
-                "all", shared_path, ids=shared,
-                client_meta={"step": step_next, "shared": True, **meta})
-            snaps.append((rank, out["snap_id"]))
-        dest = None
-        if own:
-            dest = str(step_dir / f"rank{i}")
-            out = rank.client.snapshot(
-                "all", dest, ids=own,
-                client_meta={"step": step_next, "rank": i, **meta})
-            snaps.append((rank, out["snap_id"]))
-        rank_paths.append(dest)
+        persist = set(rank.persist_ids)
+        own = sorted(oid for oid in persist if oid.startswith("O_"))
+        ids, ranges = rank_save_args(plan, i, own_objects=own)
+        ids = [oid for oid in ids if oid in persist]
+        ranges = {oid: rng for oid, rng in ranges.items()
+                  if oid in persist}
+        dest = str(step_dir / f"rank{i}")
+        out = rank.client.snapshot(
+            "all", dest, ids=ids, ranges=ranges,
+            client_meta={"step": step_next, "rank": i, **meta})
+        snaps.append((rank, out["snap_id"]))
     for rank, snap_id in snaps:
         s = rank.client.wait_snapshot(snap_id, timeout=600.0)
         if s["state"] != "done":
             raise RuntimeError(f"{rank.name} snapshot failed: {s}")
-    copies = []
-    if shared_path and ck.get("redundancy", 1) > 1:
-        # k-redundant shared artifact: copies live on distinct hosts
-        # (fault tolerance — resume can source any of them)
-        for rank in ranks[1:ck["redundancy"]]:
-            host = ck["hosts_by_name"][rank.name]
-            push_dir(host, shared_path, str(step_dir))
-            copies.append(rank.name)
-    manifest = {"step": step_next, **meta,
-                "save_plan": plan,
-                "shared_path": shared_path,
-                "shared_copies": copies,
-                "rank_paths": rank_paths,
-                "losses": list(losses_so_far)}
-    with open(step_dir / "fleet.json", "w") as f:
-        json.dump(manifest, f)
+    progs = save_programs(step_dir,
+                          [rank.prog_dict for rank in ranks])
+    launch = launch_record(
+        argv=ck.get("argv"),
+        resolved=dict(ck.get("resolved") or {},
+                      world=len(ranks),
+                      rank_rounds=meta.get("rank_rounds"),
+                      backend=meta.get("backend"),
+                      hosts=meta.get("hosts")),
+        data=ck.get("data_meta") or {},
+        ranks=[{"host": r.name,
+                "device": ck["hosts_by_name"][r.name].device}
+               for r in ranks],
+        repo=Path.cwd(), programs=progs)
+    write_manifest(step_dir, step=step_next, seed=meta["seed"],
+                   world=len(ranks), data_cursor=meta.get("data_cursor"),
+                   losses=losses_so_far, save_plan=plan,
+                   artifacts=[f"rank{i}" for i in range(len(ranks))],
+                   launch=launch)
     log(f"[fleet] checkpoint @ step {step_next} -> {step_dir} "
-        f"(shared: {bool(shared_path)}, per-rank: "
-        f"{sum(1 for d in rank_paths if d)})")
+        f"(v2, {len(ranks)} artifact(s))")
     keep = ck.get("keep_last", 0)
     if keep > 0:
         import shutil
@@ -533,6 +481,31 @@ def local_topology(*, budget_gib: float = 8.0, slab_gib: float = 8.0,
                     source="<local world-1>")
 
 
+def local_pair_topology(*, budget_gib: float = 4.0,
+                        slab_gib: float = 4.0, device: int = 0,
+                        ports=(29721, 29722)) -> "Topology":
+    """Two localhost members sharing one GPU over the hostmem backend
+    — the same-box world-2 pattern the drills and CI ride."""
+    import os
+
+    from .topology import GroupSpec, HostSpec, Topology
+
+    hosts = {}
+    for i, port in enumerate(ports):
+        name = f"local{i}"
+        hosts[name] = HostSpec(name=name,
+                               peer_listen=f"127.0.0.1:{port}",
+                               ssh=None, repo=os.getcwd(),
+                               slab_gib=slab_gib, budget_gib=budget_gib,
+                               device=device)
+    return Topology(conductor="local0", hosts=hosts,
+                    groups={"pair": GroupSpec(name="pair",
+                                              members=("local0",
+                                                       "local1"),
+                                              backend="hostmem")},
+                    source="<local world-2 pair>")
+
+
 def run_fleet_dp(global_cfg, recipe: Recipe, pipeline, steps: int, *,
                  rank_rounds=(6, 2), budgets=None, slabs=None,
                  topology=None, group: str = "dp", attach=None,
@@ -541,6 +514,7 @@ def run_fleet_dp(global_cfg, recipe: Recipe, pipeline, steps: int, *,
                  backend: str | None = None, opt_shard: str | None = None,
                  tp_mlp: bool = False,
                  execute_padding: bool = False,
+                 launch_argv=None,
                  checkpoint_every: int | None = None,
                  checkpoint_dir: str = "results/pretrain/checkpoints",
                  checkpoint_redundancy: int = 1,
@@ -564,6 +538,14 @@ def run_fleet_dp(global_cfg, recipe: Recipe, pipeline, steps: int, *,
                           backend=backend)
     hosts = topo.group_hosts(group)
     world = len(hosts)
+    # DP DEFAULT (responsibility model): zero1rs at world > 1 — each
+    # rank steps params/n. opt_shard="co" is the co-responsible
+    # DIAGNOSTIC lane (replicated stepping; certified bitwise
+    # equality across ranks as a comm-corruption tripwire).
+    if opt_shard is None and world > 1 and not tp_mlp:
+        opt_shard = "zero1rs"
+    if opt_shard == "co":
+        opt_shard = None
     if world < 1:
         raise ValueError(f"group {group!r} has no members")
     if world == 1 and opt_shard is not None:
@@ -624,10 +606,30 @@ def run_fleet_dp(global_cfg, recipe: Recipe, pipeline, steps: int, *,
 
     ck = None
     if checkpoint_every:
+        from dataflow_training.model_families.families import resolve_family
+
+        from .responsibility import responsibility_map
+
+        if world == 1:
+            resp = responsibility_map(global_cfg, 1)
+        elif opt_shard == "zero1rs":
+            fam0 = resolve_family(global_cfg)
+            dims0, _ = fam0.family_layouts(global_cfg)
+            resp = responsibility_map(
+                global_cfg, world, mode="zero1rs",
+                shard_params=zero1rs_block_params(
+                    layer_fields_by_root(global_cfg), dims0, world))
+        else:
+            resp = responsibility_map(global_cfg, world, mode="co")
         ck = {"every": int(checkpoint_every),
               "dir": Path(checkpoint_dir) / run_name, "run": run_name,
-              "save_plan": save_plan(parallels, world,
-                                         opt_shard=opt_shard),
+              "responsibility": resp,
+              "argv": launch_argv,
+              "resolved": {"preset": getattr(global_cfg, "preset", None),
+                           "seed": seed,
+                           "opt_shard": opt_shard, "tp_mlp": tp_mlp},
+              "data_meta": (pipeline.describe()
+                            if hasattr(pipeline, "describe") else {}),
               "redundancy": int(checkpoint_redundancy),
               "keep_last": int(checkpoint_keep_last),
               "hosts_by_name": {h.name: h for h in hosts}}
@@ -635,12 +637,16 @@ def run_fleet_dp(global_cfg, recipe: Recipe, pipeline, steps: int, *,
     if resume is not None:
         fleet_manifest = resolve_resume(
             Path(checkpoint_dir) / run_name, resume, log)
-        distribute_shared(fleet_manifest, hosts, log)
-        expect = {"world": world, "rank_rounds": list(rank_rounds),
-                  "backend": gspec.backend, "seed": seed,
-                  "hosts": [h.name for h in hosts]}
-        for key, want in expect.items():
-            got = fleet_manifest[key]
+        distribute_artifacts(fleet_manifest, hosts, log)
+        resolved = fleet_manifest["launch"]["resolved"]
+        expect = {"world": (fleet_manifest["world"], world),
+                  "seed": (fleet_manifest["seed"], seed),
+                  "rank_rounds": (resolved.get("rank_rounds"),
+                                  [len(m) for m in round_map]),
+                  "backend": (resolved.get("backend"), gspec.backend),
+                  "hosts": (resolved.get("hosts"),
+                            [h.name for h in hosts])}
+        for key, (got, want) in expect.items():
             if got != want:
                 raise RuntimeError(
                     f"resume manifest mismatch: {key} was {got!r} at "
@@ -787,6 +793,8 @@ def fleet_loop(ranks, gspec, recipe, pipeline, steps, *, budgets, seed,
                                               parallel=par,
                                               zero1rs_world=zero1rs_world))
         prog_dict = program_to_dict(planned.program)
+        rank.prog_dict = prog_dict          # manifest v2: saved beside
+                                            # the checkpoint artifacts
         from dataflow_training.run.presets import resolver_family
 
         fam_name = resolver_family(rank.cfg)
@@ -850,21 +858,14 @@ def fleet_loop(ranks, gspec, recipe, pipeline, steps, *, budgets, seed,
             # the START step's rounds. Restores the shared artifact
             # (rank-0-deduped state, distributed to this host by the
             # conductor) plus this rank's own artifact, if any.
+            from .manifest import artifacts_for_restore
+
             restored_step = None
-            shared = fleet_manifest.get("shared_path")
-            if shared:
+            step_dir = Path(fleet_manifest["_step_dir"])
+            for art in artifacts_for_restore(fleet_manifest, i):
                 res = rank.client.restore_snapshot(
-                    fleet_manifest["local_shared"][i], overwrite=True)
+                    str(step_dir / art), overwrite=True)
                 restored_step = res["client_meta"]["step"]
-            own = fleet_manifest["rank_paths"][i]
-            if own:
-                res = rank.client.restore_snapshot(own, overwrite=True)
-                meta = res["client_meta"]
-                if meta["rank"] != i:
-                    raise RuntimeError(
-                        f"{rank.name}: rank artifact meta {meta} is "
-                        f"not rank {i}")
-                restored_step = meta["step"]
             if restored_step != start_step:
                 raise RuntimeError(
                     f"{rank.name}: restored step {restored_step} != "
