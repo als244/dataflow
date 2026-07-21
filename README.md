@@ -90,6 +90,43 @@ inspected (full guide: [docs/exporting_runs.md](docs/exporting_runs.md)).
 
 ---
 
+### Quickstart: distributed training
+
+The same `train.py` drives a data-parallel fleet — the only addition
+is a `topology.toml` describing the machines (copy
+`topology.example.toml`; full guide:
+[docs/distributed_training.md](docs/distributed_training.md)). Each
+member needs passwordless ssh from the conductor box, the same repo
+at the same git commit (launches refuse version skew), the same
+Python environment, and the dataset shards on local disk. Per-host
+entries carry the peer address, NIC/RDMA device, and default memory
+sizes; groups name the participating members:
+
+```toml
+conductor = "boxA"
+[hosts.boxA]
+peer_listen = "192.168.50.23:29700"
+[hosts.boxB]
+ssh = "boxB"                     # ssh alias from the conductor
+python = "/home/me/env/bin/python"
+repo = "/home/me/dataflow"
+peer_listen = "192.168.50.32:29700"
+[groups.dp]
+members = ["boxA", "boxB"]
+backend = "auto"                 # nccl on real fabrics
+```
+
+```bash
+# weighted data parallelism: 6 of 8 grad-accum rounds on boxA's
+# faster GPU, 2 on boxB; per-rank fast/backing memory, comma per rank.
+# Checkpoints and --resume auto work exactly as in the solo quickstart.
+python tools/train/train.py train --preset gpt2_124m --steps 1000 \
+    --data datasets/fineweb10B --ga-rounds 8 \
+    --topology topology.toml --group dp --rounds 6,2 \
+    --fast-budget 14,12 --backing-budget 60,30 \
+    --checkpoint-every 100 --run-name fleet-demo
+```
+
 # High Level Components
 
 ## Dataflow Engine
