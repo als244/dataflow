@@ -85,11 +85,6 @@ inspected (full guide: [docs/exporting_runs.md](docs/exporting_runs.md)).
 
 # High Level Components
 
-Codebase map: [docs/architecture.md](docs/architecture.md); frozen-parameter training (freeze API, warm-up):
-[docs/frozen_training.md](docs/frozen_training.md); programmatic
-end-to-end walkthrough (config → plan → engine, in Python):
-[docs/usage.md](docs/usage.md).
-
 ## Dataflow Engine
 
 At its core is a `Dataflow Engine`
@@ -219,3 +214,36 @@ greedy search — each candidate assignment is re-lowered and priced in
 `dataflow_sim` on measured task costs before it is accepted. Custom
 (non-training) programs skip this stage and place recompute tasks
 explicitly.
+
+---
+
+# Documentation References
+
+### Using the runtime
+- [usage.md](docs/usage.md) — programmatic end-to-end walkthrough: config → plan → engine, in Python
+- [builtin_models.md](docs/builtin_models.md) — the builtin model families and preset table
+- [benchmarking.md](docs/benchmarking.md) — the throughput workflow: predict (simulated), measure (real), profile (Nsight)
+- [throughput.md](docs/throughput.md) — throughput methodology and reference numbers
+- [exporting_runs.md](docs/exporting_runs.md) — exporting measured runs and programs to the webapp simulator
+
+### Training
+- [distributed_training.md](docs/distributed_training.md) — fleets: topology, parallelism scheme, responsibility, resume
+- [checkpointing.md](docs/checkpointing.md) — snapshot/restore engine API, lease protection, checkpoint record, resuming
+- [data_feeds.md](docs/data_feeds.md) — data pipelines, packing, and the content-view contract
+- [frozen_training.md](docs/frozen_training.md) — frozen-parameter training: the freeze API and warm-up phases
+- [correctness_compare.md](docs/correctness_compare.md) — the parity methodology: weight-space instruments and envelopes
+
+### Engine and program model
+- [architecture.md](docs/architecture.md) — codebase map and dependency rules
+- [engine_api.md](docs/engine_api.md) — the in-process engine API
+- [engine_service.md](docs/engine_service.md) — the persistent daemon: verbs, store, peers
+- [program_contract.md](docs/program_contract.md) — what a valid program promises
+- [program_schema.md](docs/program_schema.md) — the serialized program format
+- [task-contract.md](docs/task-contract.md) — the task execution contract
+- [task_kinds.md](docs/task_kinds.md) — the registry of task kinds
+- [kernel_registry.md](docs/kernel_registry.md) — registered kernels, variants, and determinism flags
+
+### Extending
+- [extending.md](docs/extending.md) — adding a model family inside the repo
+- [extending_external.md](docs/extending_external.md) — external families via the program-resolver plugin contract
+- [extending_programs.md](docs/extending_programs.md) — authoring custom (non-training) programs
