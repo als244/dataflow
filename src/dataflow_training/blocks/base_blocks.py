@@ -384,7 +384,7 @@ class EmbedFwd(_Base):
 
 
 
-HEAD_CHUNK_SCRATCH_BYTES = 128 << 20  # per (chunk, vocab) bf16 buffer
+HEAD_CHUNK_SCRATCH_BYTES = 256 << 20  # per (chunk, vocab) bf16 buffer
 
 
 def max_head_chunk_tokens(vocab_size: int) -> int:
