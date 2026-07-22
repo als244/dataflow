@@ -1,5 +1,5 @@
-"""Ladder 1 for the pluggable MoE module: every op fwd AND bwd pinned
-against dataflow_training.blocks.modules.moe.forms + autograd, then the full tail
+"""The pluggable MoE module: every op fwd AND bwd pinned against
+dataflow_training.blocks.modules.moe.forms + autograd, then the full tail
 (stages + moe_mlp_tail_bwd) against moe_mlp_reference — family-independent.
 
 Pinned contracts:
@@ -18,6 +18,27 @@ Pinned contracts:
   experts stage on a local shard matches the reference restricted to the
   held experts; program-level lowering of partial specs is rejected
   (multi-rank runtime pending).
+
+Tests:
+- test_topk_softmax_vs_reference_incl_ties: the top-k softmax kernel matches the reference ids/weights including crafted exact ties, with the smallest-index tie-break.
+- test_topk_eager_matches_reference_bitwise: the eager top-k kernel matches the reference weights and ids bitwise in both routing modes.
+- test_router_bwd_vs_autograd: moe_router_bwd matches autograd of the reference routing-weight loss in both modes.
+- test_aux_grad_vs_autograd_and_finite_difference: moe_aux_lb_grad matches autograd of the aux load-balance loss and finite differences of the reference loss.
+- test_moe_sort_permutation_offsets_stability: moe_sort yields a full, stable, expert-monotone permutation with correct cumulative offsets.
+- test_dispatch_and_combine_vs_einsum: dispatch, combine, and dispatch_bwd kernels match fp32 einsum forms and combine is bitwise repeatable.
+- test_grouped_mm_vs_dense_loop: grouped fwd/dgrad/wgrad match a per-segment dense loop with uneven/zero/non-tile counts; create-mode zeros empty experts and accumulate-mode adds.
+- test_grouped_mm_bitwise_repeatable: grouped_mm_fwd produces bitwise-identical output across two runs.
+- test_swiglu_packed_matches_unpacked_bitwise: packed swiglu fwd/bwd equals the unpacked swiglu bit-for-bit under both the triton and eager impls.
+- test_moe_tail_fwd_bwd_vs_reference: the full MoE tail fwd+bwd matches moe_mlp_reference autograd for output and every gradient and is bitwise deterministic across two bwd passes.
+- test_moe_tail_recompute_reproduces_ctx_bitwise: re-running the tail fwd reproduces the output and every context field bitwise.
+- test_moe_tail_eager_kernels_match_fused: the eager and fused kernel sets give matching tail-fwd output.
+- test_partial_ownership_sizes_and_sharded_experts_math: partial-ownership specs size weight/context layouts locally (router stays global width) and the sharded experts stage matches the reference restricted to held experts.
+- test_moespec_rejects_invalid_configs: MoESpec raises ValueError on out-of-range top_k, unsupported routing_mode, unsupported dispatch_dtype, duplicate expert_ids, and more than one shared expert.
+- test_topk_sigmoid_noaux_kernel_vs_reference_and_semantics: the sigmoid_noaux_tc top-k kernel matches the reference and pins routed-scaling renorm, group masking, bias-selects-but-raw-weights, and tie-break semantics.
+- test_router_bwd_sigmoid_vs_autograd: moe_router_bwd_sigmoid matches autograd of the sigmoid-renormalized routing weights.
+- test_seq_aux_grad_vs_autograd: moe_seq_aux_grad matches autograd of the per-sequence aux loss and the reference-loss helper matches the inline expression.
+- test_bias_update_sign_rule_and_aux_counts_layout: the aux counts layout has the two expected fields and the V3 bias sign-rule nudges the bias by +/-speed toward the mean count (sign(0) = 0 leaves equal loads unmoved).
+- test_moe_mlp_reference_ungated_shared_and_noaux_mode: moe_mlp_reference with an ungated shared expert and sigmoid_noaux gives finite output and positive aux, flows gradients to every weight, and leaves the router bias without an autograd gradient.
 """
 from __future__ import annotations
 
@@ -26,10 +47,9 @@ import dataclasses
 import pytest
 
 torch = pytest.importorskip("torch")
-if not torch.cuda.is_available():  # pragma: no cover
-    pytest.skip("MoE ladder-1 needs CUDA", allow_module_level=True)
-
-pytestmark = pytest.mark.gpu
+if torch.cuda.is_available() and torch.cuda.get_device_capability() < (8, 0):
+    pytest.skip("bf16 MoE kernels need compute capability >= (8, 0)",
+                allow_module_level=True)
 
 from dataflow_training.blocks import ops
 from dataflow_training.kernels import KernelCtx, resolve_kernels
@@ -82,6 +102,7 @@ def _randb(*shape, gen, scale=1.0):
 # --- routing --------------------------------------------------------------------
 
 
+@pytest.mark.gpu
 @pytest.mark.parametrize("mode", MODES)
 def test_topk_softmax_vs_reference_incl_ties(mode):
     g = _gen(1)
@@ -107,6 +128,7 @@ def test_topk_softmax_vs_reference_incl_ties(mode):
     assert ref_ids[2, 0].item() == 0
 
 
+@pytest.mark.gpu
 def test_topk_eager_matches_reference_bitwise():
     g = _gen(2)
     logits = _randb(129, 16, gen=g, scale=3.0)
@@ -121,6 +143,7 @@ def test_topk_eager_matches_reference_bitwise():
         assert torch.equal(ids_out.long(), ref_ids)
 
 
+@pytest.mark.gpu
 @pytest.mark.parametrize("mode", MODES)
 def test_router_bwd_vs_autograd(mode):
     g = _gen(3)
@@ -143,6 +166,7 @@ def test_router_bwd_vs_autograd(mode):
         assert rel_l2(dlogits, leaf.grad) < tol, f"eager={eager}"
 
 
+@pytest.mark.gpu
 def test_aux_grad_vs_autograd_and_finite_difference():
     g = _gen(4)
     t, e, k, alpha = 96, 8, 2, 0.05
@@ -177,6 +201,7 @@ def test_aux_grad_vs_autograd_and_finite_difference():
 # --- sort / dispatch / combine ----------------------------------------------------
 
 
+@pytest.mark.gpu
 def test_moe_sort_permutation_offsets_stability():
     g = _gen(5)
     t, k, e = 300, 4, 16
@@ -199,6 +224,7 @@ def test_moe_sort_permutation_offsets_stability():
     assert torch.equal(offsets[1:].long(), counts.cumsum(0))
 
 
+@pytest.mark.gpu
 def test_dispatch_and_combine_vs_einsum():
     g = _gen(6)
     t, k, e, d = 128, 3, 8, 64
@@ -251,6 +277,7 @@ def _uneven_offsets(counts):
     return off
 
 
+@pytest.mark.gpu
 @pytest.mark.parametrize("eager", (False, True))
 def test_grouped_mm_vs_dense_loop(eager):
     g = _gen(7)
@@ -297,6 +324,7 @@ def test_grouped_mm_vs_dense_loop(eager):
         lo = hi
 
 
+@pytest.mark.gpu
 def test_grouped_mm_bitwise_repeatable():
     g = _gen(8)
     counts = [64, 0, 200, 56]
@@ -315,7 +343,9 @@ def test_grouped_mm_bitwise_repeatable():
 # --- swiglu packed ------------------------------------------------------------------
 
 
+@pytest.mark.gpu
 def test_swiglu_packed_matches_unpacked_bitwise():
+    pytest.importorskip("triton")   # both impl legs are FORCED below
     g = _gen(9)
     rows, f = 513, 96
     h13 = _randb(rows, 2 * f, gen=g, scale=4.0)
@@ -382,6 +412,7 @@ def _ctx_dict(dims, moe):
     return a
 
 
+@pytest.mark.gpu
 @pytest.mark.parametrize("shared,aux,mode", [
     (False, 0.0, "softmax_then_topk"),
     (False, 0.01, "softmax_then_topk"),
@@ -460,6 +491,7 @@ def test_moe_tail_fwd_bwd_vs_reference(shared, aux, mode):
         assert torch.equal(dw[name], dw2[name]), name
 
 
+@pytest.mark.gpu
 def test_moe_tail_recompute_reproduces_ctx_bitwise():
     """Recompute-mode re-derives the WHOLE ctx from (x, W): int fields must
     be torch.equal, float fields bitwise too (same kernels, same stream)."""
@@ -479,6 +511,7 @@ def test_moe_tail_recompute_reproduces_ctx_bitwise():
         assert torch.equal(a1[name], a2[name]), name
 
 
+@pytest.mark.gpu
 def test_moe_tail_eager_kernels_match_fused():
     g = _gen(13)
     moe = MoESpec(
@@ -500,6 +533,7 @@ def test_moe_tail_eager_kernels_match_fused():
 # --- EP accounting -------------------------------------------------------------------
 
 
+@pytest.mark.gpu
 def test_partial_ownership_sizes_and_sharded_experts_math():
     g = _gen(14)
     e, k, f, d_model, t = 8, 2, 32, 64, 96
@@ -535,7 +569,7 @@ def test_partial_ownership_sizes_and_sharded_experts_math():
         lo = hi
 
 
-def test_spec_validation():
+def test_moespec_rejects_invalid_configs():
     with pytest.raises(ValueError):
         MoESpec(n_experts=8, top_k=9, d_ff_expert=32)
     with pytest.raises(ValueError):
@@ -551,6 +585,7 @@ def test_spec_validation():
 # --- sigmoid_noaux_tc (DeepSeek-V3) pins ------------------------------------
 
 
+@pytest.mark.gpu
 def test_topk_sigmoid_noaux_kernel_vs_reference_and_semantics():
     from dataflow_training.kernels import KernelCtx, resolve_kernels
     from dataflow_training.blocks.modules.moe.forms import moe_topk_reference
@@ -616,6 +651,7 @@ def test_topk_sigmoid_noaux_kernel_vs_reference_and_semantics():
     assert ids4[0].tolist() == [0, 1]
 
 
+@pytest.mark.gpu
 def test_router_bwd_sigmoid_vs_autograd():
     from dataflow_training.kernels import KernelCtx, resolve_kernels
     from dataflow_training.blocks.modules.moe.forms import moe_topk_reference
@@ -648,6 +684,7 @@ def test_router_bwd_sigmoid_vs_autograd():
     assert rel_l2(dl, g_ref) < 2e-2  # bf16 route_w storage in the c-term
 
 
+@pytest.mark.gpu
 def test_seq_aux_grad_vs_autograd():
     from dataflow_training.kernels import KernelCtx, resolve_kernels
     from dataflow_training.blocks.modules.moe.forms import (
@@ -695,7 +732,8 @@ def test_seq_aux_grad_vs_autograd():
     assert torch.allclose(ref_loss, total.detach(), rtol=1e-5, atol=1e-9)
 
 
-def test_bias_update_rule_per_step_counts():
+@pytest.mark.gpu
+def test_bias_update_sign_rule_and_aux_counts_layout():
     """The V3 sign rule as the moe bwd tail applies it: reading the
     persistent Aux counts (the STEP aggregate) and nudging the bias in W —
     once, on the last round (the grammar hands the Aux input only there)."""
@@ -723,6 +761,7 @@ def test_bias_update_rule_per_step_counts():
     assert torch.allclose(bias2, torch.full((4,), 0.5, device="cuda"))
 
 
+@pytest.mark.gpu
 def test_moe_mlp_reference_ungated_shared_and_noaux_mode():
     from dataflow_training.blocks.modules.moe.forms import moe_mlp_reference
     from dataflow_training.blocks.modules.moe.spec import MoESpec
@@ -754,7 +793,7 @@ def test_moe_mlp_reference_ungated_shared_and_noaux_mode():
     resid = (torch.randn(t, d, generator=g, device="cuda") * 0.5).to(torch.bfloat16)
     y, aux = moe_mlp_reference(h2, w, moe, resid, seq_lens=(8, 16))
     assert y.shape == (t, d) and torch.isfinite(y.float()).all()
-    assert float(aux) > 0
+    assert float(aux.detach()) > 0
     (y.float().sum() + aux).backward()
     for name in ("w_router", "w13_experts", "w2_experts", "w_s13", "w_s2"):
         assert w[name].grad is not None and torch.isfinite(w[name].grad.float()).all(), name

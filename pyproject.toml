@@ -35,4 +35,19 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q -m 'not fleet'"   # fleet lane is opt-in: pytest -m fleet
-markers = ["gpu: requires a CUDA device", "fleet: multi-daemon gates (opt-in lane: pytest -m fleet)"]
+filterwarnings = [
+    # test/helper code must never convert a grad-tracking tensor to a
+    # Python scalar (float()/int()) — detach at the call site. Errored so
+    # it can never slip back in on an import-order-lucky run.
+    "error:Converting a tensor with requires_grad=True to a scalar:UserWarning",
+]
+markers = [
+    "gpu: requires a CUDA device",
+    "fleet: multi-daemon gates (opt-in lane: pytest -m fleet)",
+    "sim: requires the dataflow_sim extra (planner/simulator interop)",
+    "corpus: requires the shard corpus at datasets/fineweb10B",
+    "topology_remote: requires a topology.toml with a remote host",
+    "rdma: requires an rdma device with an ACTIVE RoCE v2 IPv4 port",
+    "ncclbind: requires a loadable libnccl",
+    "vram: requires N GiB free device memory, vram(gib=N)",
+]

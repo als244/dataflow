@@ -3,6 +3,15 @@ value integrity through map cycles, and E2E equivalence with the slab path.
 
 Covers the VMM slab: per-object stable VAs backed by pooled physical
 extents sized to the ledger.
+
+Tests:
+- test_stable_va_and_value_integrity: a put then same-size re-get adopts the parked slot at the same VA with zero driver calls, written values survive the cycle, and a different tag of that size adopts the same slot (VAs belong to slots, not tags).
+- test_size_change_takes_new_slot: after a put, re-getting the same tag at a different size lands on a different slot with a different VA.
+- test_budget_reflow_across_size_classes: demanding a size the budget can only meet by releasing cached handles triggers reflow, keeps written values intact, and later same-size round-trips create zero new handles.
+- test_guard_deferred_reclaim_and_fresh_va: a put with a pending guard event defers reclaim, an immediate re-get never blocks and serves a fresh slot, and drain_reclaim clears the deferred set and returns all bytes.
+- test_pool_exhaustion_is_loud: once the pool is fully occupied, another get raises VmmError ("cannot back").
+- test_parked_adoption_and_full_occupancy_accounting: a parked slot is re-adopted with no new maps, and byte accounting stays consistent at full pool occupancy and returns everything to cached/parked after release.
+- test_e2e_mini_vmm_matches_static: one engine step on the mini config yields bitwise-identical loss, final weight bytes, and slab-overflow count between the vmm fast pool and the static pool.
 """
 import pytest
 
@@ -16,7 +25,32 @@ from dataflow.runtime.device.cuda import CudaBackend  # noqa: E402
 from dataflow.runtime.device.vmm import GRANULE, VmmArena, VmmError  # noqa: E402
 from dataflow.runtime.interop import torch_view  # noqa: E402
 
+pytestmark = pytest.mark.gpu
+
 MB = 1024**2
+
+
+def vmm_supported() -> bool:
+    """Construct+close a granule-sized arena once: on stacks where the
+    CUDA VMM API is unavailable the arena's warmup self-test raises
+    VmmError, so the whole module skips cleanly instead of every test
+    failing at its first allocation."""
+    backend = CudaBackend()
+    try:
+        arena = VmmArena(
+            device_index=getattr(backend, "device", 0),
+            capacity_bytes=GRANULE,
+            event_complete=backend.event_complete,
+            headroom_bytes=0,
+        )
+    except VmmError:
+        return False
+    arena.close()
+    return True
+
+
+if not vmm_supported():
+    pytest.skip("CUDA VMM unsupported", allow_module_level=True)
 
 
 @pytest.fixture()
@@ -153,7 +187,7 @@ def test_pool_exhaustion_is_loud(backend):
         arena.close()
 
 
-def test_parked_reuse_and_eviction_accounting(backend):
+def test_parked_adoption_and_full_occupancy_accounting(backend):
     arena = make_arena(backend, cap=8 * MB, headroom=0)
     try:
         # park then re-get: zero driver calls, slot adopted
@@ -182,6 +216,7 @@ def test_parked_reuse_and_eviction_accounting(backend):
         arena.close()
 
 
+@pytest.mark.sim
 def test_e2e_mini_vmm_matches_static():
     """One engine step on the mini config: the vmm fast pool produces
     BITWISE-identical loss and final weights vs the static pool (same

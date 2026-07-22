@@ -1,6 +1,12 @@
 """Topology loader + portable daemonizer: the pieces that keep every
 machine-specific fact out of the codebase and daemon lifecycles out of
-ssh sessions. Pure-local (no GPU, no network)."""
+ssh sessions. Pure-local (no GPU, no network).
+
+Tests:
+- test_loader_roundtrip: load_topology parses hosts and groups, resolves the local host's python/repo/device, lists remotes, and exposes group members and backends including a second local GPU entry.
+- test_loader_validation: load_topology raises ValueError for a missing peer_listen, a remote missing python, an unknown conductor, and a ghost group member, and load_topology_or_none returns None for an absent file.
+- test_daemonize_detach_and_group_kill: daemonize.py returns immediately with the daemon pid, the daemon is a detached process-group leader with stdio redirected, and one signal to the pgid takes down the whole tree.
+"""
 import os
 import subprocess
 import sys
@@ -20,7 +26,7 @@ conductor = "alpha"
 
 [hosts.alpha]
 peer_listen = "10.0.0.1:29700"
-ib_dev = "mlx5_0"
+ib_dev = "ibdev0"
 backing_gib = 2.0
 budget_gib = 1.0
 
@@ -100,6 +106,8 @@ def read_pidfile(pidfile):
     return int(pid_s), int(pgid_s)
 
 
+@pytest.mark.skipif(not hasattr(os, "killpg"),
+                    reason="POSIX process groups required")
 def test_daemonize_detach_and_group_kill(tmp_path):
     """Launch a process tree via tools/train/daemonize.py: the launcher must
     return immediately with the daemon pid, the daemon must be a

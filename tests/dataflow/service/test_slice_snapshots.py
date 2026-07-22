@@ -3,11 +3,10 @@ for; restore composes ranges back into complete objects (the
 responsibility model's checkpoint primitive). CPU-only (fake engine —
 the slice logic is store-level).
 
-Gates: (1) two half-range snapshots restored onto a zeroed resident
-object reassemble it BITWISE; (2) the same two slices restored into a
-FRESH daemon (absent object -> full-size create + partial fills)
-reassemble bitwise; (3) slice-compose equals the whole-object
-snapshot byte-for-byte; (4) out-of-bounds ranges are refused."""
+Tests:
+- test_slice_snapshot_roundtrip_and_compose: two half-range slice snapshots recompose bitwise in place and into a fresh daemon, equal the whole-object snapshot byte-for-byte, and an out-of-bounds range is refused.
+- test_second_daemon_on_live_socket_refuses: a second server on a live socket refuses loudly instead of unlinking it, while a stale socket file is reclaimed.
+"""
 import threading
 import time
 

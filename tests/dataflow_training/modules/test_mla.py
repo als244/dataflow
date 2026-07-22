@@ -1,22 +1,27 @@
-"""MLA op-level pins (GPU): the DeepSeek-V3 attention reference and its
-load-bearing conventions, BEFORE any block executable exists.
+"""MLA op-level pins: the DeepSeek-V3 attention reference and its
+load-bearing conventions, plus the DeepSeek-V3 block executables checked
+against an autograd golden.
 
 Pins: padded-v exactness (flash/SDPA at shared head_dim with zero-padded
 values == unpadded math, output AND gradients), shared-k_rope broadcast
-gradient (sum over heads), rope-slice conventions, and reference
-self-consistency across packed sequences.
+gradient flow through the rope columns, rope-slice conventions, and
+reference self-consistency across packed sequences.
+
+Tests:
+- test_padded_v_attention_is_exact: attention on values zero-padded to head_dim equals unpadded causal SDPA in the real columns (padding stays exactly zero) and matches the q/k/v gradients.
+- test_mla_forms_shapes_and_grads_flow: mla_block_reference returns (max_tokens, d_model) and backward yields finite, non-None gradients for every weight and the input.
+- test_mla_shared_k_rope_grad_flows_through_rope_columns: the rope-column block of the w_kv_a gradient is finite with nonzero mass (the shared k_rope broadcast reduction reaches it).
+- test_mla_forms_ragged_packing_matches_per_sequence: a packed (64, 32) run equals concatenating the two sequences run separately.
+- test_dsv3_block_fwd_recompute_bwd_accum_match_autograd_golden: dense/moe fwd, recompute, and bwd block executables match the autograd golden for y/dx/dW, recompute reproduces the context, accumulate mode doubles dW, and the frozen router bias keeps a zero dW slot.
+- test_dsv3_stage_context_completeness: each dense/moe fwd block's declared activation-layout fields equal its emitted context fields and its recompute stage count is fewer than its total stages.
 """
 from dataclasses import dataclass
 
 import pytest
 
 torch = pytest.importorskip("torch")
-if not torch.cuda.is_available():
-    pytest.skip("no CUDA device", allow_module_level=True)
 
 from dataflow_training.testing.gradcheck import rel_l2  # noqa: E402
-
-pytestmark = pytest.mark.gpu
 
 
 @dataclass(frozen=True)
@@ -53,6 +58,7 @@ def _weights(d: _Dims, seed=0, dtype=torch.float32):
     }
 
 
+@pytest.mark.gpu
 def test_padded_v_attention_is_exact():
     """softmax(QK^T) @ [V|0] == [softmax(QK^T) @ V | 0], fwd and bwd."""
     from dataflow_training.blocks import ops
@@ -91,6 +97,7 @@ def test_padded_v_attention_is_exact():
     assert rel_l2(gv2, gv) < 1e-5
 
 
+@pytest.mark.gpu
 def test_mla_forms_shapes_and_grads_flow():
     from dataflow_training.blocks.modules.mla_forms import mla_block_reference
 
@@ -107,11 +114,12 @@ def test_mla_forms_shapes_and_grads_flow():
     assert torch.isfinite(x.grad).all()
 
 
-def test_mla_shared_k_rope_broadcast_gradient():
-    """k_rope is one 64-dim vector per token expanded across heads: its
-    gradient must equal the SUM over heads of per-head k-rope grads.
-    Verified by comparing against a variant with independent per-head
-    copies whose grads are summed."""
+@pytest.mark.gpu
+def test_mla_shared_k_rope_grad_flows_through_rope_columns():
+    """k_rope is one vector per token expanded across heads, so its
+    gradient reaches w_kv_a only as a broadcast reduction: the
+    rope-column block of d(w_kv_a) must come out finite with nonzero
+    mass."""
     from dataflow_training.blocks import ops
     from dataflow_training.blocks.modules.mla_forms import mla_attention_reference
 
@@ -132,6 +140,7 @@ def test_mla_shared_k_rope_broadcast_gradient():
     assert rope_cols.abs().sum() > 0
 
 
+@pytest.mark.gpu
 def test_mla_forms_ragged_packing_matches_per_sequence():
     from dataclasses import replace
 
@@ -149,7 +158,7 @@ def test_mla_forms_ragged_packing_matches_per_sequence():
     assert rel_l2(y, torch.cat([ya, yb])) < 1e-5
 
 
-# --- block executables vs golden autograd (M-G1b/G3 gate) --------------------------
+# --- block executables vs golden autograd ------------------------------------------
 
 
 def _dsv3_dims(kind="moe", **over):
@@ -217,8 +226,11 @@ def _golden_block(x_ref, leaves, dims, kind, route_ids=None, segments=None):
                              route_ids=route_ids, seq_lens=tuple(lens))
 
 
+@pytest.mark.gpu
 @pytest.mark.parametrize("kind", ["dense", "moe"])
-def test_dsv3_block_ladder2(kind):
+def test_dsv3_block_fwd_recompute_bwd_accum_match_autograd_golden(kind):
+    if torch.cuda.get_device_capability() < (8, 0):
+        pytest.skip("bf16 block executables need compute capability >= (8, 0)")
     from dataflow_training.model_families.dsv3.blocks import (
         Dsv3DenseBlockBwd,
         Dsv3DenseBlockFwd,

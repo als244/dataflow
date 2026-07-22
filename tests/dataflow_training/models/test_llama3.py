@@ -1,5 +1,18 @@
 """Correctness ladder (GPU): ops (level 1), block (level 2), model (level 3),
 plus plan-invariance — the flagship async/buffer-bug detector.
+
+Tests:
+- test_rmsnorm_backward: the fused rmsnorm fwd/bwd matches the autograd reference for output and dx/dw.
+- test_rope_backward_is_transpose: rope_bwd is the transpose of rope_fwd (inner-product identity from rotation orthogonality).
+- test_flash_wrapper_matches_autograd: the flash-attention fwd/bwd wrapper matches the autograd attention reference for out and dq/dk/dv.
+- test_swiglu_backward: swiglu_bwd matches autograd through swiglu_fwd for both gate inputs.
+- test_ce_loss_fused: the fused cross-entropy fwd/bwd matches the reference loss and dlogits.
+- test_adamw_step_matches_manual: the fused adamw_step reproduces the manual bf16 formula byte-for-byte for weights and m/v state.
+- test_embed_roundtrip: embed_fwd gathers rows exactly and embed_bwd_accum matches an index_add scatter.
+- test_block_backward_vs_autograd: one transformer block's backward matches autograd.
+- test_model_step_vs_golden: one full model-step through the real engine matches the golden twin.
+- test_plan_invariance: the model-step math is identical across memory budgets and recompute levels.
+- test_model_step_muon_policy_golden_parity: opt_policy="muon" through the engine matches the policy-dispatched golden (matrix fields via muon, norms and embed/head via adamw).
 """
 import pytest
 
@@ -142,10 +155,12 @@ def test_block_backward_vs_autograd():
 
 # --- ladder level 3: full model step through the real engine ----------------------
 
+@pytest.mark.sim
 def test_model_step_vs_golden():
     check_model_step(CFG, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2).assert_ok()
 
 
+@pytest.mark.sim
 def test_plan_invariance():
     """Different plans (budgets + recompute) must produce the same math."""
     r1 = check_model_step(CFG, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2)
@@ -158,6 +173,7 @@ def test_plan_invariance():
         r.assert_ok()
 
 
+@pytest.mark.sim
 def test_model_step_muon_policy_golden_parity():
     """opt_policy="muon" through the REAL engine vs the policy-dispatched
     golden: matrix fields (wq/wk/wv/wo/w1/w2/w3) take the registry muon

@@ -1,15 +1,24 @@
 """Trace capture on the FAKE backend: every engine run records a
 RunTrace, and trace_to_dict wires it into the exporter/service shape the
 trace tool and the run verb's trace=True path serve. This is the cheap
-always-on gate for that surface — no GPU, no daemon."""
+gate for that surface — no GPU, no daemon; planning needs the sim
+extra.
+
+Tests:
+- test_trace_to_dict_covers_every_task_interval: trace_to_dict yields the exporter dict with a positive makespan, an interval for every task, a non-negative peak, and a memory_trace list.
+"""
+import pytest
+
 from dataflow.runtime import Engine
 from dataflow.runtime.device.fake import FakeBackend
 from dataflow.runtime.trace import trace_to_dict
 from dataflow_training.model_families.families import family
 from dataflow_training.model_families.llama3 import ShapedLlamaConfig
 
+pytestmark = pytest.mark.sim
 
-def test_fake_run_trace_round_trips():
+
+def test_trace_to_dict_covers_every_task_interval():
     cfg = ShapedLlamaConfig(
         n_layers=2, d_model=64, n_heads=4, n_kv_heads=2, d_ff=160,
         vocab_size=256, seq_len=32, batch=1)

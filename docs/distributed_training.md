@@ -328,12 +328,12 @@ which sit far above this floor.
 
 ## 5. Verifying a setup
 
-- `tests/fleet/test_checkpoint_drill.py` — single-daemon
+- `tests/fleet/checkpoint_resume/test_checkpoint_drill.py` — single-daemon
   snapshot/kill/restore/resume, bitwise gate.
 - The fleet drill sequence: run with checkpointing → kill the fleet
   mid-run → relaunch with `--resume auto` → compare the resumed curve
   against the run's own uninterrupted continuation.
-- `tests/fleet/test_coll_dtypes_crossbox.py` — per-(backend, dtype)
+- `tests/fleet/transport/test_coll_dtypes_crossbox.py` — per-(backend, dtype)
   verified collectives on the real wire.
 - The handshake runs automatically at every fleet launch.
 
@@ -416,9 +416,9 @@ daemons and exercise groups, sharding, and checkpointing end to end:
 
 ```
 python -m pytest -m fleet -q \
-    tests/fleet/test_zero1_loopback.py \
-    tests/fleet/test_zero1rs_loopback.py \
-    tests/fleet/test_checkpoint_drill.py
+    tests/fleet/dp/test_zero1_loopback.py \
+    tests/fleet/dp/test_zero1rs_loopback.py \
+    tests/fleet/checkpoint_resume/test_checkpoint_drill.py
 ```
 
 **Rung 4 — small fleet smoke, then scale the world.** Start at

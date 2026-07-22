@@ -1,4 +1,17 @@
-"""Phase C1 property gates for the general packer (pure, no GPU)."""
+"""Property gates for the general packer (pure, no GPU).
+
+Tests:
+- test_token_conservation_multiset_identity: packed rounds preserve the exact token multiset and total count.
+- test_boundaries_and_tail_padding: cu offsets are monotonic and sum to valid_count, tails are ignore-masked, and the sentinel fills past the last segment.
+- test_lpt_spread_bounded_by_largest_item: LPT packing bounds the per-round fill spread by the largest item length.
+- test_exact_fill_when_divisible: an exactly divisible input fills every round to t_round with zero pad fraction.
+- test_overflow_split_preserves_content: an oversize sequence splits across rounds while preserving the token multiset.
+- test_overflow_error_policy: on_overflow="error" raises both when an item exceeds t_round and when fragmentation leaves it fitting no round.
+- test_fixed_n_rounds_pads_whole_round: a fixed round count pads surplus rounds fully ignore-masked.
+- test_s_max_enforced: exceeding the per-round segment cap s_max raises.
+- test_pack_batch_deterministic_for_same_input: pack_batch yields identical tokens, targets, and cu for identical input.
+- test_sum_len_sq_statistic: the per-round sum_len_sq equals the sum of squared segment lengths.
+"""
 from __future__ import annotations
 
 import numpy as np
@@ -17,7 +30,7 @@ def _mk(rng, n, lo=1, hi=900):
     return seqs
 
 
-def test_token_conservation_and_order():
+def test_token_conservation_multiset_identity():
     rng = np.random.default_rng(0)
     seqs = _mk(rng, 37)
     step = pack_batch(seqs, t_round=2048)
@@ -47,7 +60,7 @@ def test_boundaries_and_tail_padding():
                       == step.t_round)
 
 
-def test_balance_objective():
+def test_lpt_spread_bounded_by_largest_item():
     rng = np.random.default_rng(2)
     seqs = _mk(rng, 64, lo=100, hi=1500)
     step = pack_batch(seqs, t_round=4096)
@@ -105,7 +118,7 @@ def test_s_max_enforced():
         pack_batch(seqs, t_round=4096, s_max=16)
 
 
-def test_determinism():
+def test_pack_batch_deterministic_for_same_input():
     rng = np.random.default_rng(4)
     seqs = _mk(rng, 41)
     a = pack_batch(seqs, t_round=1024)

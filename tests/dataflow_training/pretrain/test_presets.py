@@ -1,7 +1,22 @@
 """Gates for the model presets + training config: shapes, param counts,
 the locked token budget, cfg_dict round-trip, and that every preset lowers
-(planning of the full ladder is exercised by the runs / scaling tool)."""
+(planning of the full ladder is exercised by the runs / scaling tool).
+
+Tests:
+- test_locked_token_budget: the l3_1b preset carries the locked seq_len/batch/max_tokens/grad_accum/vocab and ~64K tokens per step.
+- test_preset_shapes_consistent: every ladder preset has head_dim 64, GQA-divisible heads spanning d_model, d_ff = 4*d_model, and the fixed vocab.
+- test_param_counts_monotone_and_1b_is_1b: param counts increase monotonically across the ladder and l3_1b totals ~1.18B with non-embedding in band.
+- test_cfg_dict_round_trip_matches_dims: cfg_dict rebuilds a config with identical derived dims for every ladder preset.
+- test_preset_lowers: every ladder preset lowers to a program with tasks and declared initial objects.
+- test_smoke_preset_lowers_and_plans: the smoke preset uses the real vocab, lowers, and plans within an 8 GiB fast-memory budget.
+- test_resolve_preset_bare_unique_names_across_families: bare unique preset names resolve to the correct config type across families.
+- test_resolve_preset_ambiguous_name_lists_qualified_forms: an ambiguous bare name raises KeyError listing the qualified forms.
+- test_resolve_preset_qualified_name_disambiguates: family-qualified names resolve to the correct config type.
+- test_resolve_preset_unknown_name_points_at_the_table: an unknown preset name raises KeyError pointing at the builtin_models table.
+"""
 import pytest
+
+pytest.importorskip("torch")
 
 from dataflow_training.run import presets as P
 from dataflow_training.model_families.families import resolve_family

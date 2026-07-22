@@ -5,11 +5,33 @@ and an in-process dataflowd — the loss curves must align. This is the direct
 engine leg of each family's cross-check triangle (reference == golden ==
 engine); llama3's original version is test_parity_smoke.py, and this file
 extends the gate family-by-family as bridges land. Boots one in-process
-daemon per family; GPU + a few seconds each."""
+daemon per family; GPU + a few seconds each.
+
+Tests:
+- test_gpt2_engine_vs_reference: gpt2 smoke preset — engine and reference loss curves align on the block pipeline.
+- test_gpt2_docaware_engine_vs_reference: gpt2 over the doc-aware varlen (EOT-split) pipeline — engine and reference curves align.
+- test_qwen3_engine_vs_reference: qwen3 smoke preset — engine and reference curves align.
+- test_olmoe_engine_vs_reference: olmoe with load-balance loss off (pure CE) — engine and reference curves align.
+- test_olmoe_engine_vs_reference_lbl_on: olmoe with load-balance loss on — the engine's analytic per-round LBL gradient tracks the reference's composite CE+LBL curve.
+- test_qwen3moe_engine_vs_reference: qwen3moe smoke preset — engine and reference curves align.
+- test_qwen35moe_engine_vs_reference: qwen35moe smoke preset — engine and reference curves align.
+- test_dsv3_engine_vs_reference: dsv3 with LBL off and bias speed 0 (pure CE + AdamW) — engine and reference curves align.
+- test_dsv32_engine_vs_reference: dsv32 with the indexer frozen at init driving sparse attention — engine and reference curves align.
+- test_glm52_engine_vs_reference: glm52 smoke preset — engine and reference curves align.
+- test_underfull_engine_vs_reference: each family's smoke preset on deliberately under-full rounds (content re-view) — engine and reference curves align.
+- test_underfull_execute_padding_equivalence: content re-view and masked-tail execute-padding engine runs give matching loss on under-full rounds.
+- test_underfull_poisoned_tail_is_dead_bytes: poisoning the under-full tail bytes (out-of-vocab tokens, absurd targets) leaves the loss byte-identical to the clean run.
+"""
 import math
 
 import pytest
-import torch
+
+torch = pytest.importorskip("torch")
+if torch.cuda.is_available() and torch.cuda.get_device_capability() < (8, 0):
+    pytest.skip("bf16 smoke models need compute capability >= (8, 0)",
+                allow_module_level=True)
+
+pytestmark = [pytest.mark.corpus, pytest.mark.vram(gib=6)]
 
 
 def quiet_log(*args, **kwargs):

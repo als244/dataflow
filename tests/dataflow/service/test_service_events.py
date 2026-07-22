@@ -1,10 +1,14 @@
-"""S1.4 gates: events + observability (fake daemon — protocol only).
+"""Events + observability (fake daemon — protocol only).
 
 Monitor-reattach: a subscriber that disconnects and reconnects with
-since_seq sees run_done EXACTLY once. Event-type coverage: a
+since_seq sees a completed event EXACTLY once. Event-type coverage: a
 scripted flow produces every service-event kind with schema fields.
 Status wiring: counters/sessions/snapshots_in_flight reflect real
 activity.
+
+Tests:
+- test_event_coverage_and_reattach: a put/snapshot/wipe/restore flow emits engine_started, snapshot_started, snapshot_done, and restore_done events (each carrying event/t/seq), and replaying events_since a boundary seq yields snapshot_done zero times after it and exactly once before it.
+- test_status_wiring: engine_status exposes an api_calls counter and an empty snapshots_in_flight (drained once a snapshot completes), and session_status counts only queued verbs (>= 2), not fast-path status queries.
 """
 from __future__ import annotations
 

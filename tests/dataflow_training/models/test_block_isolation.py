@@ -10,6 +10,9 @@ math must match at the bf16 FLOOR (median row-rel a few e-3, no
 broadband) — a real per-op defect cannot hide here at any band width.
 Followers isolate together with their leader (gotcha 9); budgets admit
 only countable near-tie hot rows.
+
+Tests:
+- test_isolated_block_at_floor: feeding the engine's own prior-block output into the twin forces each isolated block's gradient to match at the bf16 floor within the row-median, excluding-hot-rows, and hot-row-count budgets.
 """
 from dataclasses import replace
 
@@ -18,12 +21,14 @@ import pytest
 torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
     pytest.skip("no CUDA device", allow_module_level=True)
+pytest.importorskip("cuda.bindings.runtime")  # isolated_block_compare boots CudaBackend
+pytest.importorskip("dataflow_sim")            # ... and plans via plan_program
 
 from dataflow_training.testing.gradcheck import (  # noqa: E402
     isolated_block_compare,
 )
 
-pytestmark = pytest.mark.gpu
+pytestmark = [pytest.mark.gpu, pytest.mark.sim]
 
 # (family, blocks to isolate together, max hot rows). Blocks chosen to
 # cover each family's block KINDS: glm52 gml leader (1), the gml+gmf

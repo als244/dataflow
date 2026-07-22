@@ -29,13 +29,16 @@ FIXED: valve-freed bytes now go to the
 stalled caller and the lane is pumped on input waits only — this file
 pins the fixed semantics (completes; bounded single-shot recoveries;
 caller-priority ordering).
+
+Tests:
+- test_program_is_schema_valid: the hand-authored reserve-inversion program passes schema validation.
+- test_caller_priority_prevents_poke_starvation: valve-freed bytes reach the blocked caller (no transfer_reserve between the first eviction and y_0's reserve) and the run completes with at most a few single-shot recoveries.
 """
 from __future__ import annotations
 
 import time
 
 import pytest
-import torch
 
 from dataflow.core import ObjectSpec, OutputSpec, Program, TaskSpec, TransferDirective
 from dataflow.core.validate import validate_program
@@ -152,6 +155,7 @@ def test_caller_priority_prevents_poke_starvation():
     Ordering pin (caller priority): between the first pressure_evict
     and y_0's reserve there is NO transfer_reserve — every evicted
     byte reached the blocked reservation, not the transfer head."""
+    pytest.importorskip("cuda.bindings.runtime")
     from dataflow.runtime.device.cuda import CudaBackend
 
     engine = Engine(CudaBackend())

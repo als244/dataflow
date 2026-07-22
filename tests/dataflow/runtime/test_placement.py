@@ -1,5 +1,15 @@
 """Static placement: offline packing succeeds where online placement fails,
-runs at exact sim parity, and resets cleanly across multi-step epochs."""
+runs at exact sim parity, and resets cleanly across multi-step epochs.
+
+Tests:
+- test_online_placement_fails_where_offline_packing_fits: a fragmenting get/put sequence overflows the online slab but offline lifetime-aware packing fits it in exactly the capacity.
+- test_parity_with_placement_8b: assigned mode reproduces the sim's intervals and peak on 8B with contiguous-packing overhead under 1.35x.
+- test_placement_epoch_reset_multi_run: replaying a placed program repeatedly through one session resets incarnation counters with no overflows.
+- test_assigned_mode_rejects_shape_instability: assigned mode raises when a request size disagrees with the recorded footprint.
+- test_quiescent_lifetime_inversion_escapes_instead_of_deadlocking: an assigned offset overlapping a still-live instance escapes to a dynamic allocation and completes instead of deadlocking.
+- test_annotator_ranges_balanced_over_full_run: every task launch opens and closes exactly one annotator range, covering all tasks.
+- test_placed_reuse_inherits_pending_guard: a pending poison guard survives placed reuse by range, re-attaches to the next incarnation, then clears once complete.
+"""
 import pytest
 
 from dataflow.core.convert import to_sim_chain
@@ -61,6 +71,7 @@ def test_online_placement_fails_where_offline_packing_fits():
     assert assigned.slab_overflows == 0
 
 
+@pytest.mark.sim
 def test_parity_with_placement_8b():
     """Assigned mode must not perturb scheduling: exact interval + peak
     parity vs the simulator on the full 8B chain."""
@@ -72,8 +83,10 @@ def test_parity_with_placement_8b():
     recorder = PlacementRecorder()
     dry = Engine(FakeBackend()).execute(annotated, record_placement=recorder)
     dry.close()
-    # physical limit = device VRAM class, NOT the logical budget: contiguous
-    # packing carries a geometry tax over the peak load (reported first-class)
+    # physical limit = an arbitrary scenario ceiling above the logical budget
+    # (a planning input to the packer, not a machine fact — this run is on the
+    # fake backend): contiguous packing carries a geometry tax over the peak
+    # load (reported first-class)
     placement = compute_placement(recorder, physical_limit_bytes=28 * 1024**3)
     assert placement.overhead < 1.35, placement.overhead
 
@@ -84,6 +97,7 @@ def test_parity_with_placement_8b():
     result.close()
 
 
+@pytest.mark.sim
 def test_placement_epoch_reset_multi_run():
     """The same placed program replays through one pool (session semantics):
     incarnation counters reset per execute."""
@@ -155,6 +169,7 @@ def test_quiescent_lifetime_inversion_escapes_instead_of_deadlocking():
     result.close()
 
 
+@pytest.mark.sim
 def test_annotator_ranges_balanced_over_full_run():
     """Every task launch opens and closes exactly one range (depth never
     exceeds 1 from the engine side), so profiler timelines nest correctly."""

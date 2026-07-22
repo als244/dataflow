@@ -1,11 +1,16 @@
-"""T1 gates: per-rank tensor-parallel family layouts + init parity.
+"""Per-rank tensor-parallel family layouts + init parity.
 
 The tp_view layout transform must (a) materialize MLP weight fields
 and their tied saved activations at shard shape while leaving
 replicated fields untouched, and (b) keep init CERTIFICATION-GRADE:
 shard fields draw at the full single-GPU shape and slice, so every
 rank's bytes are exact slices of the single-GPU init and the
-generator stream stays aligned across later fields and layers."""
+generator stream stays aligned across later fields and layers.
+
+Tests:
+- test_per_rank_layout_shapes_and_sizes: the rank-0 narrowed layout shards w1/w3/w2 and x1/x3 to half width, keeps wq/q and embed/head replicated, and halves the MLP weight bytes exactly.
+- test_init_parity_shards_are_single_gpu_slices: each rank's sharded weight bytes equal the exact slice of the single-GPU seeded init while replicated fields match on both ranks, proving the draw stream stays aligned across layers.
+"""
 import pytest
 
 torch = pytest.importorskip("torch")
@@ -61,9 +66,11 @@ def test_per_rank_layout_shapes_and_sizes():
     assert fl0.head.total_bytes == full.head.total_bytes
 
 
+@pytest.mark.gpu
 def test_init_parity_shards_are_single_gpu_slices():
     if not torch.cuda.is_available():
         pytest.skip("pinned-host init needs a CUDA context")
+    pytest.importorskip("cuda.bindings")
     from dataflow.runtime.device.cuda import CudaBackend
 
     plan = build_plan()

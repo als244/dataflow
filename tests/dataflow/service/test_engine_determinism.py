@@ -7,12 +7,19 @@ algorithm selection varies, measured ~5e-5; that is why this gate is
 same-daemon and why the parity gate uses envelopes). A kernel or
 engine change that shifts numerics at all trips this before the
 envelope gates can notice.
+
+Tests:
+- test_same_daemon_rerun_bitwise: within one daemon, re-initializing with the same seed and re-running identical steps reproduces the per-step losses exactly (list equality).
 """
 import pytest
 
 torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
     pytest.skip("no CUDA device", allow_module_level=True)
+pytest.importorskip("cuda.bindings.runtime")
+pytest.importorskip("dataflow_sim")
+
+pytestmark = [pytest.mark.gpu, pytest.mark.sim, pytest.mark.corpus]
 
 from dataflow.core.jsonio import program_to_dict  # noqa: E402
 from dataflow_training.run.presets import (  # noqa: E402

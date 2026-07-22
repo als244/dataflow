@@ -7,6 +7,19 @@ engine vs a hand replica applying reference steps to the engine's own
 retained dW gradient backing (exactly the bytes the optimizer kernels
 consumed). Default policy byte-stability is covered by the lowering
 tripwires + every existing family ladder (all-adamw unchanged).
+
+Tests:
+- test_sgd_step_matches_inline_formula: the sgd step equals the inline decoupled-weight-decay update bitwise.
+- test_sgdm_step_matches_inline_formula: the sgdm step updates momentum and weights bitwise-equal to the inline momentum formula.
+- test_muon_orthogonalizes_2d_and_falls_back_1d: Newton-Schulz drives a 2D matrix's singular values into a well-conditioned band with positive input alignment, and a 1D field falls back to a nesterov momentum step in momentum dtype.
+- test_muon_recipe_classification_and_3d: the muon recipe routes 2D projections and 3D expert stacks to muon and norms/embed/head/router/1D to adamw (overrides win), and batched Newton-Schulz bands each expert slice.
+- test_policy_dispatch_and_validation: OptPolicy dispatches fields by glob override else default, and resolve_opt_policy sets the default and rejects an unknown recipe name.
+- test_opt_state_layout_slots_follow_policy: opt_state_layout emits m/v slots for adamw, zero bytes for sgd, and per-field slots following a mixed policy.
+- test_mixed_policy_model_step_vs_hand_replica: a mixed per-field policy (muon/sgdm/sgd/adamw) on llama3 tiny through the real engine matches inline reference steps fed the engine's own retained dW gradients.
+- test_muon_recipe_string_model_step_vs_hand_replica: the opt_policy="muon" recipe on llama3 tiny through the engine matches inline muon (2D) and adamw (embed/head/norm) reference steps on the retained dW.
+- test_layer_indexed_policy_sizes_and_model_step: a (layer, name) policy drops layer-0 optimizer state to zero bytes while later layers keep m+v, and the engine step matches a per-layer hand replica.
+- test_lr_schedules_shapes: the wsd, cosine, and constant LR schedules yield the expected scale at sampled steps and the bare default stays 1.0.
+- test_hyper_overrides_and_schedule_model_step: per-field hyperparameter overrides (norm wd=0, embed lr/10) plus a WSD warmup scale through the real engine match a hand replica.
 """
 from __future__ import annotations
 
@@ -37,6 +50,7 @@ def _mk(n=257, seed=0, dtype=torch.bfloat16):
     return w, grad
 
 
+@pytest.mark.gpu
 def test_sgd_step_matches_inline_formula():
     w, g = _mk()
     w0 = w.clone()
@@ -46,6 +60,7 @@ def test_sgd_step_matches_inline_formula():
     assert torch.equal(w, expect)
 
 
+@pytest.mark.gpu
 def test_sgdm_step_matches_inline_formula():
     w, g = _mk(seed=1)
     m = (torch.randn_like(w.float()) * 0.02).to(torch.bfloat16)
@@ -59,6 +74,7 @@ def test_sgdm_step_matches_inline_formula():
     assert torch.equal(w, w_expect)
 
 
+@pytest.mark.gpu
 def test_muon_orthogonalizes_2d_and_falls_back_1d():
     g = torch.Generator(device="cuda").manual_seed(2)
     m = torch.randn(64, 128, generator=g, device="cuda")
@@ -84,6 +100,7 @@ def test_muon_orthogonalizes_2d_and_falls_back_1d():
     assert torch.equal(m1, gm) and torch.equal(w1, expect)
 
 
+@pytest.mark.gpu
 def test_muon_recipe_classification_and_3d():
     from dataflow_training.kernels.muon import (
         ns_orthogonalize_batched as _ns_orthogonalize_batched,
@@ -190,11 +207,13 @@ def engine_grad_fields(result, dw_id, weights, dims, ns=None, layer=None):
             for f in gl.fields}
 
 
+@pytest.mark.gpu
 def test_mixed_policy_model_step_vs_hand_replica():
     """llama3 tiny, one step, per-field policy {wq: muon, w1: sgdm,
     wo: sgd, rest adamw} through the REAL engine — final weights must
     match independent inline reference steps fed the engine's retained
     dW gradient backing."""
+    pytest.importorskip("cuda.bindings")
     from dataflow.runtime import Engine
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.runtime.device.fake import FakeBackend
@@ -287,11 +306,13 @@ def test_mixed_policy_model_step_vs_hand_replica():
     assert worst[0] <= 3e-2, worst
 
 
+@pytest.mark.gpu
 def test_muon_recipe_string_model_step_vs_hand_replica():
     """opt_policy="muon" (THE RECIPE) on llama3 tiny through the real
     engine: 2D projections take nesterov-NS muon, embed/head/norms take
     adamw — verified against the engine's retained dW grads + inline
     reference steps for BOTH rules."""
+    pytest.importorskip("cuda.bindings")
     from dataflow.runtime import Engine
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.runtime.device.fake import FakeBackend
@@ -373,10 +394,12 @@ def test_muon_recipe_string_model_step_vs_hand_replica():
     assert worst[0] <= 3e-2, worst
 
 
+@pytest.mark.gpu
 def test_layer_indexed_policy_sizes_and_model_step():
     """(layer index, param name) addressing: layer 0 -> sgd (O_0 sizes
     to ZERO bytes), other layers -> adamw. Structural sizing through
     lowering + the real-engine step vs a per-layer hand replica."""
+    pytest.importorskip("cuda.bindings")
     from dataflow.runtime import Engine
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.runtime.device.fake import FakeBackend
@@ -475,10 +498,12 @@ def test_lr_schedules_shapes():
     assert LRSchedule().scale(123) == 1.0
 
 
+@pytest.mark.gpu
 def test_hyper_overrides_and_schedule_model_step():
     """Baseline hyper + per-field overrides (norms: wd=0; embed: lr/10)
     + a WSD warmup schedule (step 1 of warmup 2 => scale 0.5), through
     the REAL engine vs a hand replica."""
+    pytest.importorskip("cuda.bindings")
     from dataflow.runtime import Engine
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow.runtime.device.fake import FakeBackend

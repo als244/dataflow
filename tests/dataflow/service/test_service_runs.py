@@ -1,10 +1,16 @@
-"""S1.2 gates (GPU): programs + runs through the daemon.
+"""Programs + runs through the daemon: the service is a front door onto
+the engine, not a fork.
 
-The load-bearing gate: a tiny llama trained THROUGH THE DAEMON
-produces per-step losses BIT-EQUAL to the in-process train() on
-identical init/data — the service is a front door, not a fork.
-Plus: rebind, cancel-mid-run daemon health, poison isolation,
-run-after-run weight adoption.
+Covers per-run rebind of resident token slabs, poison isolation with
+daemon survival, run-after-run in-place weight adoption, cancel-mid-run
+health, and unified-budget transient accounting.
+
+Tests:
+- test_rebind_two_token_slabs: two resident token sets rebound per run give different losses across binds, and a rebind naming a missing object raises MISSING_INPUTS.
+- test_poison_isolation_and_next_run_succeeds: a run rebinding to a wrong-size resident raises BINDING_MISMATCH, after which the daemon stays healthy and the next run completes.
+- test_weights_adopted_not_refilled: W_0 changes in place after a run and a second run continues from those weights (loss decreases), with the object marked dirty in its lineage.
+- test_cancel_mid_run_leaves_healthy_daemon: cancelling a running job surfaces CANCELLED and a cancelled run state, and the daemon stays healthy so the next run completes.
+- test_transients_visible_and_reclaimed: after a run the backing reports owner-tagged transient bytes alongside residents, and unregistering the program returns that owner's transients to the free list.
 """
 from __future__ import annotations
 
@@ -17,8 +23,14 @@ import numpy as np
 import pytest
 import torch
 
-pytestmark = pytest.mark.skipif(not torch.cuda.is_available(),
-                                reason="needs CUDA")
+pytest.importorskip("cuda.bindings.runtime")
+
+pytestmark = [
+    pytest.mark.skipif(not torch.cuda.is_available(),
+                       reason="needs CUDA"),
+    pytest.mark.gpu,
+    pytest.mark.sim,
+]
 
 from dataflow.core.jsonio import program_to_dict
 from dataflow.service import EngineClient, EngineConfig, Server, ServiceError

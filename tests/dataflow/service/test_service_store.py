@@ -1,7 +1,21 @@
-"""S1.1 gates: allocator, object CRUD over the wire (binary frames both
+"""Store gates: allocator, object CRUD over the wire (binary frames both
 directions), groups/hierarchy/reserved names, duplicate+lineage,
 protect/wipe, queries — CPU (fake slab). GPU: real pinned boot +
 init-program byte-identity vs initial_values.
+
+Tests:
+- test_allocator_coalesce_and_reuse: the slab allocator aligns offsets, first-fit-reuses a freed gap, and coalesces back to one full-capacity extent once all is released.
+- test_allocator_capacity_error_detail: an over-capacity alloc raises CAPACITY carrying the largest free extent in its detail.
+- test_put_get_roundtrip_bytes: put/get round-trips bytes and query reports meta and a dirty, parentless lineage.
+- test_put_get_file_forms: the file-path put/get forms write and read byte-identical content on disk.
+- test_overwrite_same_size_ok_mismatch_rejected: a same-size overwrite succeeds but a different-size one raises BINDING_MISMATCH.
+- test_unknown_object: querying a missing object returns None and getting it raises UNKNOWN_OBJECT.
+- test_materialize_zeros_and_tokens: materialize produces zero bytes and per-seed-deterministic in-range token ids.
+- test_object_groups_hierarchy_and_reserved: groups compose hierarchically with correct member and byte counts while reserved and unknown names are refused.
+- test_duplicate_lineage_and_group_dup: duplicate records a clean parent lineage, group-duplicate maps members under a tag, and overwriting a parent dirties it.
+- test_protected_object_survives_wipe_unless_forced: a protected object refuses release and survives wipe until force=True.
+- test_query_backing_usage: query_backing reports object count, largest object, and used bytes consistent with engine_status.
+- test_real_boot_family_init_byte_identity: on a real pinned slab the init program persists weight and opt-state objects byte-identical to in-process initial_values and materializes no input-role object.
 """
 from __future__ import annotations
 
@@ -177,7 +191,7 @@ def test_duplicate_lineage_and_group_dup(daemon):
 
 # ------------------------------------------------------- protect + wipe
 
-def test_protect_release_wipe(daemon):
+def test_protected_object_survives_wipe_unless_forced(daemon):
     sock, _ = daemon
     with EngineClient(sock, client_name="pw") as c:
         c.put_object("keep", b"k" * 100)
@@ -212,12 +226,12 @@ def test_query_backing_usage(daemon):
 
 # ------------------------------------------------------------- GPU gates
 
-@pytest.mark.skipif(
-    not __import__("torch").cuda.is_available(), reason="needs CUDA")
+@pytest.mark.gpu
 def test_real_boot_family_init_byte_identity(tmp_path):
     """Real pinned slab: the init PROGRAM persists initial objects
     byte-identical to in-process initial_values (init-as-program
     replaced the retired materialize_group verb)."""
+    pytest.importorskip("cuda.bindings.runtime")  # real pinned slab + CudaBackend
     from dataflow_training.register import register_all
 
     register_all()      # in-process Server shares this registry

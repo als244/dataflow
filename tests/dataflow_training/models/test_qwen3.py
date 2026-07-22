@@ -5,6 +5,14 @@ kernels) — fwd + bwd vs the autograd reference at per-head shapes.
 Ladder 2: block fwd/bwd/recompute/accumulation vs autograd (family bundle).
 Ladder 3: full annotated program through the real engine vs GoldenQwen3,
 plus plan-invariance across budgets/recompute and a multi-step golden run.
+
+Tests:
+- test_qwen3_stage_context_completeness: the forward block's emitted context fields exactly equal the activation layout.
+- test_qwen3_derived_recompute_excludes_boundary_work: the recompute stage count stops just after the last emitter, keeping rope inside the boundary and the y-only swiglu tail outside.
+- test_qwen3_lowering_validates_and_plans: cfg lowers, validates, carries the qwen3-shaped family tag, and plans/simulates with nonzero task intervals.
+- test_qknorm_kernel_reuse_matches_reference: rmsnorm at (tokens*heads, head_dim) fwd/bwd matches the autograd reference, confirming qk-norm reuses the kernel.
+- test_qwen3_block_backward: one block's backward (dx, every packed dW incl. q/k norm weights, recompute-equivalence, 2x accumulation) matches autograd.
+- test_qwen3_plan_invariance: the model-step math is identical across memory budgets and recompute plans.
 """
 import pytest
 
@@ -42,6 +50,7 @@ def test_qwen3_derived_recompute_excludes_boundary_work():
     assert names.index("swiglu") >= n
 
 
+@pytest.mark.sim
 def test_qwen3_lowering_validates_and_plans():
     from dataflow.core import validate_program
     from dataflow_training.lowering.planning import plan_program, simulate_program
@@ -106,6 +115,7 @@ def test_qwen3_block_backward():
 
 @gpu
 @pytest.mark.gpu
+@pytest.mark.sim
 def test_qwen3_plan_invariance():
     """Different budgets + recompute plans must produce identical math."""
     from dataflow_training.testing.gradcheck import check_model_step

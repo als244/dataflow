@@ -4,14 +4,24 @@ Pins the M/dM metadata grammar: every layer's discrete artifacts live in
 its M object (never recomputed — locked invariant); IndexShare followers
 additionally consume the PRODUCER layer's M (the shared dsa selection);
 the KL-target accumulator dM follows the reverse-order
-create/mutate/consume chain; singleton groups have no dM."""
+create/mutate/consume chain; singleton groups have no dM.
+
+Tests:
+- test_tiny_lowering_m_dm_chain_grammar: every layer emits its own M, followers also consume the producer layer's M, the dM accumulator follows the reverse-order create/mutate/consume chain, and singleton leaders carry no dM.
+- test_recompute_never_reselects: with recompute levels set, both follower and producer recompute tasks re-consume the existing M rather than re-selecting.
+- test_full_scale_presets_lower: the glm52 and glm52_mini presets lower and validate, dM objects exist exactly for multi-member groups, follower forwards consume the producer M, and the forward-block count equals the layer count.
+- test_dense_warmup_and_frozen_indexer_modes: sparse_mode=False drops selection/M and carries full-prefix dM while pruning frozen dW/O/head/CE tasks to indexer-only grads; train_indexer=False lowers cleanly with no dM chain.
+- test_invalid_indexer_types_rejected: an indexer_types tuple of wrong length or unknown kind raises ValueError.
+"""
 import pytest
 
-from dataflow.core import validate_program
-from dataflow_training.model_families.glm52 import ShapedGlm52Config, lower_glm52
+pytest.importorskip("torch")
+
+from dataflow.core import validate_program  # noqa: E402
+from dataflow_training.model_families.glm52 import ShapedGlm52Config, lower_glm52  # noqa: E402
 
 
-def test_tiny_lowers_with_correct_sp_grammar():
+def test_tiny_lowering_m_dm_chain_grammar():
     cfg = ShapedGlm52Config.tiny()   # roles F F S S F S
     p = lower_glm52(cfg)
     validate_program(p)
@@ -122,7 +132,7 @@ def test_dense_warmup_and_frozen_indexer_modes():
     assert not [o for o in prog.initial_objects if o.id.startswith("dAuxTemp_")]
 
 
-def test_bad_patterns_rejected():
+def test_invalid_indexer_types_rejected():
     from dataclasses import replace as rep
 
     with pytest.raises(ValueError):

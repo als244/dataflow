@@ -1,9 +1,19 @@
 """The infra gate: a tiny real-vocab model trained via BOTH the pytorch
 reference and the service daemon from a byte-identical init on the identical
 fineweb feed must produce aligned loss curves. Boots an in-process daemon;
-GPU + a few seconds."""
+GPU + a few seconds.
+
+Tests:
+- test_reference_vs_service_parity_smoke: the reference and the service daemon, from a byte-identical init on the same fineweb feed, match at step 0, track along the trajectory, and both learn.
+"""
 import pytest
-import torch
+
+torch = pytest.importorskip("torch")
+if torch.cuda.is_available() and torch.cuda.get_device_capability() < (8, 0):
+    pytest.skip("bf16 smoke models need compute capability >= (8, 0)",
+                allow_module_level=True)
+
+pytestmark = [pytest.mark.corpus, pytest.mark.vram(gib=6)]
 
 
 @pytest.mark.gpu

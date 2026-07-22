@@ -8,6 +8,25 @@ abort (dead sender, corrupt chunk, reordered chunk), per-dest FIFO,
 inactivity timeouts, and the per-group collective FIFO. The threaded
 NetworkManager built on these cores is gated separately in the fleet
 lane; THIS battery is where protocol logic bugs die.
+
+Tests:
+- test_eager_happy_path: a payload under the eager threshold transfers in one shot, commits once with the exact bytes, and leaves no live reservation or receiver.
+- test_chunked_happy_path_byte_identity: a payload above the eager threshold transfers chunked with byte-identical commit, full byte counts, and no leftover state.
+- test_exact_chunk_multiple_boundary_byte_identity: a payload whose length is an exact multiple of the chunk size commits byte-identically.
+- test_busy_lease_backoff_then_success: a BUSY-lease NACK holds the send in NEGOTIATING until the lease clears and the backoff timer fires, then the retry completes and commits.
+- test_capacity_retries_exhaust_to_error: a CAPACITY NACK retried past the backoff limit ends in ERROR (TRANSFER_ABORTED / CAPACITY) with no commit and no live reservation.
+- test_collision_never_retries: a COLLISION against a resident object errors immediately with no reservation attempted and no retry.
+- test_overwrite_matrix: overwrite=True succeeds for a same-size resident but errors with COLLISION on a size mismatch.
+- test_duplicate_rts_single_reservation: a duplicated RTS frame still yields exactly one reservation and one commit.
+- test_lost_done_ack_resend_reacks_without_recommit: a dropped DONE_ACK leaves the sender COMMITTING though the receiver committed once, and a resend after inactivity re-acks via the dedup ring without a second commit.
+- test_eager_duplicate_rts_recommit_guard: a duplicated RTS on an eager transfer still commits exactly once.
+- test_dead_sender_frees_reservation_nothing_torn: a sender that stops mid-transfer triggers a receiver inactivity timeout that releases the reservation with no commit.
+- test_corrupt_chunk_aborts_without_commit: a corrupt chunk aborts the receive on checksum mismatch with release and no commit, and the sender's bounded DONE resends then error out with "no DONE_ACK".
+- test_reordered_chunks_are_protocol_violation: an out-of-order chunk is an ordered-stream violation that aborts and releases with no commit, and the late in-order frame is dropped.
+- test_per_dest_fifo_and_cross_dest_interleave: a second send to the same dest queues behind the first (only one RTS) while a distinct dest flies concurrently, all three finish, and the queued overwrite lands in order.
+- test_negotiating_inactivity_aborts: a swallowed RTS leaves the send NEGOTIATING until the inactivity timeout errors it.
+- test_collective_queue_fifo: CollectiveQueue takes and completes jobs in posted (FIFO) order and records the completed order.
+- test_async_commit_defers_ack_and_survives_inactivity: a queued commit (returns False) keeps the receiver COMMITTING without acking and unreaped past inactivity, and the deferred commit_done later drives the transfer to DONE with the right bytes.
 """
 from dataclasses import dataclass, field
 
@@ -119,7 +138,7 @@ def test_chunked_happy_path_byte_identity():
     assert not env.live and not b.receivers
 
 
-def test_zero_and_exact_chunk_boundaries():
+def test_exact_chunk_multiple_boundary_byte_identity():
     a, b, link, env, clock = make_pair(chunk_bytes=100)
     exact = big_payload(EAGER_MAX_BYTES + 400)   # multiple of 100
     t = a.start_send("W_2", exact)

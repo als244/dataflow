@@ -106,7 +106,7 @@ packed-byte truth + seeded init (`lowering.emit` — `FamilyLayouts`,
 Programmatic use (your own scripts) needs neither: import your plugin
 module, then call the dataflow APIs directly.
 
-Both paths are pinned by `tests/dataflow_training/training/test_plugins.py`
+Both paths are pinned by `tests/dataflow_training/training/surfaces/test_plugins.py`
 (explicit `load_plugins(explicit=[...])` + a stubbed
 `dataflow.families` entry point) and by the toy-family gate.
 
@@ -225,7 +225,7 @@ Small, cosmetic, and shrinking — none block a working external family:
   keep the `prefix_{step}_{round}_{layer}` naming shape (any prefix)
   and they hold.
 - The builtin lowering-stability tripwire file
-  (`tests/dataflow_training/training/test_lowering_stability.py`)
+  (`tests/dataflow_training/training/lowering/test_lowering_stability.py`)
   doesn't import plugin families; pin your hash in your own test
   module.
 - `verify_family`'s canon audit scans shared builtin op-suite modules

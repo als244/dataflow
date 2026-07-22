@@ -2,6 +2,13 @@
 
 The policy layer only; lowering/exec/golden integration is tested in the
 per-family ladders once wired.
+
+Tests:
+- test_default_policy_is_all_bf16: a default DTypePolicy maps every field name to bf16 param, grad, and opt dtypes.
+- test_first_matching_override_wins_else_default: the first matching override pattern wins (later patterns shadowed) and an unmatched field returns the default object.
+- test_mixed_roles_carry_independently: ParamDTypes carries distinct param, grad, and opt dtypes independently.
+- test_unknown_dtype_rejected_with_role: constructing ParamDTypes with an invalid dtype raises ValueError naming the offending role.
+- test_layer_overrides_select_sub_policy: a matched layer_overrides sub-policy owns every lookup for that layer with no fallthrough, the first overlapping entry wins, unlisted layers use the outer policy, and depth_dependent reflects whether layer overrides exist.
 """
 import pytest
 

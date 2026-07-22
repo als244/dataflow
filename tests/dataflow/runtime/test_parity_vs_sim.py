@@ -1,6 +1,17 @@
 """Parity gate: the engine on the fake backend must reproduce the simulator
 exactly — task intervals, transfer intervals (including naming), and peak
 fast memory — on annotated programs from tiny to full 8B scale.
+
+Tests:
+- test_parity_tiny: engine matches the sim on the tiny config at a comfortable budget.
+- test_parity_tiny_tighter: engine matches the sim on tiny at a tighter budget.
+- test_parity_tiny_recompute_all: engine matches the sim on tiny with recompute enabled on every layer.
+- test_parity_tiny_grad_accum: engine matches the sim on a small three-round grad-accum config.
+- test_parity_8b_16gib: engine matches the sim on the full 8B chain and its makespan equals the sim's last interval end exactly.
+- test_parity_8b_tight_budget: engine matches the sim on 8B at a tight budget.
+- test_parity_8b_starved_pcie_recompute: engine matches the sim on 8B under starved PCIe with recompute spliced in.
+- test_parity_grad_accum_8b_scale: engine matches the sim on an 8B-scale two-round grad-accum config at long sequence.
+- test_buffer_reuse_happens_at_scale: on the 8B chain the engine actually reuses buffers.
 """
 import pytest
 
@@ -13,6 +24,8 @@ from dataflow_training.model_families.llama3 import (
     ShapedLlamaConfig,
     build_shaped_llama3,
 )
+
+pytestmark = pytest.mark.sim
 
 GIB = 1024**3
 

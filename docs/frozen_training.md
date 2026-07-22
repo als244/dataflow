@@ -114,7 +114,7 @@ frozen, so default-policy signatures and their caches are untouched.
 
 ## 5. Verification
 
-`tests/dataflow_training/training/test_freeze_plan.py` gates the analyzer (every freeze
+`tests/dataflow_training/training/e2e/test_freeze_plan.py` gates the analyzer (every freeze
 axis), the composer precedence, and four end-to-end engine-vs-golden
 model steps: truncated prefix, pass-through, fleet-partial fields, and
 grad accumulation. The goldens honor the same policy through their

@@ -66,7 +66,7 @@ EXTRA_MODULES = {
 FLEET_MODULES = [
     "tests/dataflow/runtime/test_cuda_backend.py",
     "tests/dataflow/runtime/test_placement.py",
-    "tests/dataflow_training/training/test_planning.py",
+    "tests/dataflow_training/training/planning/test_planning.py",
 ]
 FLEET_OK = {"poison-on-free stress", "interleave stress",
             "profiling E2E (measured-costs replan)",
@@ -127,7 +127,7 @@ def main() -> None:
             print(f"  [ ] {label}")
             missing.append(label)
 
-    trip = (REPO / "tests/dataflow_training/training/test_lowering_stability.py").read_text()
+    trip = (REPO / "tests/dataflow_training/training/lowering/test_lowering_stability.py").read_text()
     if args.module:
         trip += src  # external families pin tripwires in their own module
     pinned = args.family in trip
@@ -142,7 +142,7 @@ def main() -> None:
 
     print(f"\nrunning pytest {mod.name} ...")
     r = subprocess.run([sys.executable, "-m", "pytest", str(mod),
-                        str(REPO / "tests/dataflow_training/training/test_lowering_stability.py"),
+                        str(REPO / "tests/dataflow_training/training/lowering/test_lowering_stability.py"),
                         "-q", "-p", "no:warnings"], cwd=REPO)
     print()
     if problems:

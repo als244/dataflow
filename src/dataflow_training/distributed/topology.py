@@ -16,7 +16,11 @@ from pathlib import Path
 
 
 def repo_root() -> Path:
-    return Path(__file__).resolve().parents[3]
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "pyproject.toml").exists():
+            return parent
+    raise RuntimeError("repo root (pyproject.toml) not found above "
+                       + str(Path(__file__).resolve()))
 
 
 @dataclass(frozen=True)

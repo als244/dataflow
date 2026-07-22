@@ -4,6 +4,20 @@ engine-specific assertions (trace events, error types).
 
 All chains use explicit per-trigger runtime overrides so no bandwidth is
 needed, keeping the arithmetic trivial to verify by hand.
+
+Tests:
+- test_deferred_prefetch_waits_for_offload: a prefetch fired during the same object's in-flight offload defers, then runs, with the expected interval timing.
+- test_blocked_queue_head_starts_when_bytes_free: a prefetch that will not fit blocks only the transfer queue while compute still dispatches, and starts the instant a release frees bytes.
+- test_mutation_offload_overwrites_backing_in_place: offloading a mutated object over its live backing copy overwrites in place without charging extra backing bytes.
+- test_re_prefetch_gets_distinct_interval_name: re-prefetching a re-offloaded object produces a distinct interval name alongside the first.
+- test_capacity_deadlock_raises: a task whose output can never fit raises DeadlockError, and the sim errors on the same chain.
+- test_release_of_non_live_object_errors: releasing an object not live in fast raises ExecutionError.
+- test_initial_memory_over_capacity_errors: initial objects exceeding fast capacity raise LedgerError.
+- test_stale_final_location_detected: mutating an object without offloading leaves backing stale and raises a final-location ExecutionError.
+- test_ledger_inversion_parity_baseline: under exact sim timing the inversion chain completes with zero pressure evictions.
+- test_ledger_inversion_eviction_valve: under distorted timing the valve evicts the farthest-next-use resident, reloads it, and completes within budget.
+- test_ledger_inversion_without_valve_deadlocks: disabling the valve under the same distorted timing deadlocks (negative control).
+- test_annotate_rename_rewrites_nvtx_only: the annotate_rename callback rewrites only NVTX push names, leaving trace and plan ids plan-relative.
 """
 import pytest
 
@@ -28,6 +42,7 @@ def run_both(program):
     return result, log
 
 
+@pytest.mark.sim
 def test_deferred_prefetch_waits_for_offload():
     """Prefetch fired while the same object's offload is in flight must wait
     for the offload, then run — sim's transfer_deferred semantics."""
@@ -57,6 +72,7 @@ def test_deferred_prefetch_waits_for_offload():
     assert by_id[("t2", "compute")].start == 67.0
 
 
+@pytest.mark.sim
 def test_blocked_queue_head_starts_when_bytes_free():
     """A prefetch whose destination doesn't fit must wait (blocking only the
     transfer queue, never compute dispatch) and start exactly when a release
@@ -89,6 +105,7 @@ def test_blocked_queue_head_starts_when_bytes_free():
     assert by_id[("t2", "compute")].start == 34.0
 
 
+@pytest.mark.sim
 def test_mutation_offload_overwrites_backing_in_place():
     """Offloading a mutated object with an existing live backing copy must
     overwrite it (no extra backing bytes) and refresh its version."""
@@ -112,6 +129,7 @@ def test_mutation_offload_overwrites_backing_in_place():
     assert result.final_location_violations == ()
 
 
+@pytest.mark.sim
 def test_re_prefetch_gets_distinct_interval_name():
     program = Program(
         name="re-prefetch",
@@ -139,6 +157,7 @@ def test_re_prefetch_gets_distinct_interval_name():
     assert names == {"from_slow:x", "from_slow:x#1"}
 
 
+@pytest.mark.sim
 def test_capacity_deadlock_raises():
     """A task whose outputs can never fit must produce a clear deadlock error
     (the sim raises its own error on the same chain)."""
@@ -238,6 +257,7 @@ def _inversion_program() -> Program:
     )
 
 
+@pytest.mark.sim
 def test_ledger_inversion_parity_baseline():
     """Under exact (sim) timing the chain completes with no evictions —
     the valve must never fire where parity holds."""

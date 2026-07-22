@@ -1,9 +1,35 @@
-"""D-phase gates: DataSource/DataFeed/Packer contracts + the legacy
-byte-identity gates (the new pipeline reproduces both legacy feeds
-exactly under the legacy flags)."""
+"""Data pipeline gates: DataSource/DataFeed/Packer contracts + the legacy
+byte-identity gates (the pipeline reproduces both legacy feeds
+exactly under the legacy flags).
+
+Tests:
+- test_synthetic_determinism_and_cursor_resume: SyntheticSource is deterministic across iterators and resumes the exact suffix from a mid-stream cursor.
+- test_sequence_validation_rejects_bad_ids: validate_sequence accepts in-range ids and raises on out-of-range token ids.
+- test_spec_parser: parse_spec splits scheme/main/key-values and resolve_data rejects an unknown scheme.
+- test_shard_doc_mode_tokens_in_range_and_cursor_resume: doc-mode ShardSource emits in-range non-delimiter tokens within max_seqlen and resumes piece-accurately from a cursor.
+- test_feed_requeue_leads_and_cursor_carries_content: a requeued sequence leads the feed and a still-pending requeue rides the cursor into a resumed feed.
+- test_capture_roundtrip: a capture file replays its recorded sequences identically through read_capture and CaptureSource.
+- test_ffd_invariants_and_determinism: FFD packing fills rounds within budget with masked tails, high fill ratio, and deterministic bytes.
+- test_greedy_no_split_defers_and_underfills: the greedy no-split policy keeps sequences whole, underfills, and defers the overflow to lead the next step.
+- test_cursor_roundtrip_regenerates_next_step: a packer resumed from a step cursor regenerates the following steps exactly.
+- test_prepacked_feed_bypass: PrepackedFeed replays prebuilt steps from a start index and reports a step cursor.
+- test_legacy_doc_configuration_pinned: whole-doc greedy/allow-split packing hashes to the pinned legacy-doc digest.
+- test_legacy_block_configuration_pinned: window-slice greedy packing hashes to the pinned legacy-block digest.
+- test_checkpoint_resume_tail_matches_uninterrupted_run: a checkpointed engine run's resumed tail reproduces the uninterrupted run's losses within the cross-process envelope.
+- test_jsonl_source_targets_and_masking: JsonlSource emits shifted targets with a doc-final end-of-text and the correct short-doc length.
+- test_jsonl_cursor_resume_and_epoch_wrap: JsonlSource wraps its epoch and resumes the exact sequence from a mid-stream cursor.
+- test_txt_source_delimiter_split: TextSource splits blank-line-delimited docs into per-doc sequences.
+- test_jsonl_end_to_end_pack_determinism: a JsonlSource-fed packer produces deterministic rounds with masked tails.
+- test_tiktoken_gpt2_vocab_bounds_and_eot_id: the gpt2 tiktoken tokenizer encodes in-range ids and reports end-of-text id 50256.
+- test_parquet_source_roundtrip: ParquetSource reads docs, wraps the epoch, and resumes across a row-group boundary.
+- test_threaded_feed_equals_sync: prefetching and synchronous feeds hand out identical sequences and cursors.
+- test_threaded_feed_error_surfaces: a source error propagates through the prefetching feed as the same exception.
+- test_threaded_packer_cursor_roundtrip: a packer resumed from a step cursor regenerates the next step's rounds exactly.
+"""
 from __future__ import annotations
 
 from pathlib import Path
+from dataflow_training.distributed.topology import repo_root
 
 import numpy as np
 import pytest
@@ -19,7 +45,7 @@ from dataflow_training.data.sources import parse_spec, resolve_data
 from dataflow_training.data.sources.capture import CaptureSource, read_capture
 from dataflow_training.data.sources.synthetic import SyntheticSource
 
-REPO = Path(__file__).resolve().parents[3]
+REPO = repo_root()
 CORPUS = REPO / "datasets" / "fineweb10B"
 needs_corpus = pytest.mark.skipif(not CORPUS.exists(),
                                   reason="fineweb10B corpus not present")
@@ -79,7 +105,7 @@ def test_spec_parser():
 
 
 @needs_corpus
-def test_shard_source_doc_mode_matches_corpus():
+def test_shard_doc_mode_tokens_in_range_and_cursor_resume():
     from dataflow_training.data.sources.shards import ShardSource
 
     src = ShardSource(str(CORPUS), max_seqlen=1024, long_policy="chunk",
@@ -246,15 +272,15 @@ def test_legacy_block_configuration_pinned():
 
 
 @needs_corpus
-def test_engine_resume_drill_with_cursor(tmp_path):
+@pytest.mark.gpu
+@pytest.mark.sim
+def test_checkpoint_resume_tail_matches_uninterrupted_run(tmp_path):
     """Cursor resume end-to-end on the engine (new-defaults pipeline —
     under-full rounds executing content-only): a checkpointed run's
     resumed tail must reproduce the uninterrupted run bitwise (one
     daemon; init re-seeds, restore overwrites)."""
-    import torch
-
-    if not torch.cuda.is_available():
-        pytest.skip("no CUDA")
+    pytest.importorskip("cuda.bindings.runtime")  # daemon boots a real CudaBackend
+    pytest.importorskip("dataflow_sim")            # run_engine -> plan_program
     from dataflow_training.data.pipeline import DataPipeline
     from dataflow_training.run.driver import daemon_client, run_engine
     from dataflow_training.run.presets import gpt2_smoke_preset
@@ -388,7 +414,7 @@ def test_jsonl_end_to_end_pack_determinism(tmp_path):
             assert np.all(ra.targets[ra.content:] == -1)
 
 
-def test_tiktoken_backend_if_available():
+def test_tiktoken_gpt2_vocab_bounds_and_eot_id():
     tk = pytest.importorskip("tiktoken")
     from dataflow_training.data.tokenizers import resolve_tokenizer
 

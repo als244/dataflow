@@ -1,6 +1,23 @@
-"""Z0 gates: the sharding API — plan invariants, realizability
-classification, the muon rejection, the expert-shards builder's
-owned/redundant views, and serialization. Pure CPU."""
+"""Gates for the sharding API: plan invariants, realizability
+classification, the muon rejection, the expert-shards and tensor-parallel
+MLP builders' owned/redundant views, the byte-equal reduce-scatter
+builder, and serialization. Pure CPU.
+
+Tests:
+- test_zero1_halves_invariants_and_views: zero1_halves gives disjoint per-rank ownership, replicates sub-threshold norms as redundant, and balances owned bytes within one field.
+- test_equal_shards_honest: equal_shards reports False for unequal field-snapped halves and True for a hand-built equal split.
+- test_row_split_and_cover_validation: a row-split plan validates and reports equal shards while gaps and out-of-bounds rows raise ValueError.
+- test_muon_rejects_row_splits: validate(opt_policy="muon") rejects row-split assignments but accepts a whole-field one.
+- test_expert_shards_views_and_ep_rejection: expert_shards assigns experts round-robin with the router replicated as redundant and v1_consumable rejects narrowed residency.
+- test_tp_mlp_shards_plan_and_views: tp_mlp_shards column-splits w1/w3 and row-splits w2, leaves no field redundant, and the optimizer/v1/byte-range consumers reject its residency and axes.
+- test_tp_axis_validation: mixed shard axes, dim-1 gaps, and non-dividing widths raise ValueError.
+- test_tp_serialization_roundtrip: a tp plan round-trips through to_dict/from_dict preserving region keys and residency and stays tp-consumable.
+- test_serialization_roundtrip_and_required_groups: a zero1 plan round-trips preserving group/world/assignments, reports its required root group, and ParallelConfig keeps the plan.
+- test_real_llama3_layouts_shard: real tiny-llama3 layouts shard with per-rank owned bytes balanced within each field and in aggregate.
+- test_world4_world8_plans_balance_cover_and_comm_identity: at world 4 and 8, zero1 and tp plans balance, cover, and divide, and carry an identical cross-rank comm sequence with in-range owners.
+- test_zero1rs_block_params_sizing: the byte-equal builder makes every tiny-llama3 root eligible with world-invariant slice+tail element totals and a matching flat opt-state slice layout.
+- test_zero1rs_eligibility_rejections: roots drop out of the byte-equal path under a muon-routed layer, any per-field hyper override, or non-uniform param/grad dtypes.
+"""
 import pytest
 
 from dataflow_training.distributed.sharding import (
@@ -232,10 +249,11 @@ def test_real_llama3_layouts_shard():
     assert min(agg) / max(agg) > 0.85, agg
 
 
-def test_world_n_plans():
-    """WN0: the builders and block-param derivations at world 4 and
+def test_world4_world8_plans_balance_cover_and_comm_identity():
+    """The builders and block-param derivations at world 4 and
     8 — balance, cover, divisibility, and the cross-rank comm-
     sequence identity that collective pairing depends on."""
+    pytest.importorskip("torch")
     from dataflow_training.run.presets import preset
     from dataflow_training.distributed.sharding import (
         layer_fields_by_root,
@@ -286,6 +304,7 @@ def test_zero1rs_block_params_sizing():
     is eligible under the default policy; slices are exact world-
     fractions of the packed element count (alignment gaps included);
     the flat opt-state layout sizes to slice+tail elements per slot."""
+    pytest.importorskip("torch")
     from dataflow_training.distributed.sharding import (
         layer_fields_by_root,
         zero1rs_block_params,
@@ -331,6 +350,7 @@ def test_zero1rs_eligibility_rejections():
     ONE flat hyper/rule/dtype story doesn't hold: a layer routed to
     the muon recipe, a hyper override touching any field (namespaced
     keys for embed/head), or non-uniform dtypes inside the root."""
+    pytest.importorskip("torch")
     from dataclasses import replace
 
     from dataflow_training.distributed.sharding import (

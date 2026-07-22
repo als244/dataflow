@@ -21,7 +21,7 @@ Adapter contract (see glm52/adapter.py for the richest example):
     bias_speed: float               router noaux bias speed (0 = none)
     adamw(golden, counts_of)        the family golden's optimizer replica
 
-Intermediates saved per family dir (Shein: users should SEE the
+Intermediates saved per family dir (so users can SEE the
 program): program.json (bare custom Program), plan.json (PressureFit-
 annotated), rollout.pt (artifacts).
 """

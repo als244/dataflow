@@ -1,7 +1,13 @@
 """Dead-everywhere semantics: an object whose last reference has passed and
 that has no terminal placement frees its BACKING copy at release — in the
 simulator and the runtime identically. Without this, grad-accum programs
-pile up dead pinned copies round after round."""
+pile up dead pinned copies round after round.
+
+Tests:
+- test_backing_freed_after_last_use: after the last use each round-tripped object has neither a fast nor a backing copy left.
+- test_tight_backing_capacity_feasible_via_dead_free: a backing budget holding one object at a time still completes, at event parity with the sim.
+- test_final_location_backing_survives: an object with a terminal backing placement stays live and reports no final-location violation.
+"""
 import pytest
 
 from dataflow.core import ObjectSpec, OutputSpec, Program, TaskSpec, TransferDirective
@@ -46,6 +52,7 @@ def test_backing_freed_after_last_use():
         assert rec.fast is None and rec.backing is None, f"x{n} not fully dead"
 
 
+@pytest.mark.sim
 def test_tight_backing_capacity_feasible_via_dead_free():
     """Backing fits ONE object at a time: only possible when each dead
     object's backing copy frees. Sim and runtime must agree (parity too)."""

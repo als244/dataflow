@@ -23,6 +23,12 @@ op by op:
 Cases are plain data (module-level builder functions, no closures): each
 returns fresh args from a seeded generator so the two poison runs see
 bit-identical inputs.
+
+Tests:
+- test_write_coverage_poison_invariance: running an op case twice with different output-buffer poison yields identical outputs (bitwise for deterministic impls, else rel-L2 within noise), proving no output byte is read-through.
+- test_degenerate_finite: an op's outputs on degenerate geometry contain no NaN (and no Inf unless the case documents -inf semantics).
+- test_degenerate_cross_impl: a fused impl matches the eager anchor on the edge geometry within tolerance (exact for integer outputs, finiteness pattern plus finite-subset closeness when -inf is allowed).
+- test_every_registered_op_is_audited: every registered kernel op carries audit cases or a reasoned exemption, with no stale entries and no op both audited and exempt.
 """
 from dataclasses import dataclass, field
 from typing import Callable
@@ -930,7 +936,7 @@ add_cases("causal_conv1d_silu_bwd",
 
 
 # ======================= case builders: DSA family ===========================
-# The two latent Part-1 bugs lived here: dead-row online softmax and a
+# Both latent bugs this battery targets lived here: dead-row online softmax and a
 # consumed-but-unwritten workspace region. Geometry deliberately ugly:
 # L % 64 != 0, ragged multi-seq, len-1 sequences, far-from-diagonal
 # selections (early tiles dead), k > L.
@@ -1135,9 +1141,10 @@ add_cases("dsa_pack_bits",
 
 EXEMPT["dsa_sparse_attn_fwd_absorbed"] = (
     "flashmla impl is shape-specialized to (d_qk, d_v) = (576, 512) and the "
-    "library is absent on dev boxes (requires() gates it); the eager anchor "
-    "is plain torch already covered by tests/dataflow_training/modules/test_mla.py absorbed "
-    "gates. Audit it when a flashmla-capable box joins CI."
+    "library is absent wherever it is not installed (requires() gates it); "
+    "the eager anchor is plain torch already covered by "
+    "tests/dataflow_training/modules/test_mla.py absorbed gates. Audit it "
+    "wherever a flashmla-capable device is available."
 )
 
 
@@ -1238,7 +1245,10 @@ def test_every_registered_op_is_audited():
     for m in pkgutil.iter_modules(kernels_pkg.__path__):
         if m.name != "registry":
             importlib.import_module(f"dataflow_training.kernels.{m.name}")
-    all_ops = set(reg._REGISTRY)
+    # reserved test-fixture namespace: suites register throwaway ops under a
+    # "test_" prefix (never real kernels), so they carry no audit obligation
+    # and their presence must not depend on collection order.
+    all_ops = {op for op in reg._REGISTRY if not op.startswith("test_")}
     covered = set(CASES) | set(EXEMPT)
     missing = sorted(all_ops - covered)
     stale = sorted((set(CASES) | set(EXEMPT)) - all_ops)

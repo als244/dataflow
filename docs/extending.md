@@ -73,7 +73,7 @@ context entirely. The structural analysis is
 consumed by `build_shaped_program(freeze=...)` via the surgery in
 `lowering/freeze_program.py` — the dense warm-up is the
 `objective="indexer_kl"` configuration of the same machinery. Gates:
-`tests/dataflow_training/training/test_freeze_plan.py`. Full guide:
+`tests/dataflow_training/training/e2e/test_freeze_plan.py`. Full guide:
 [frozen_training.md](frozen_training.md).
 
 ### The `acc` contract (frozen-safe weight gradients)
@@ -94,7 +94,7 @@ contract, not just a convenience:
   story.
 
 New block code MUST follow this split; the freeze gates
-(`tests/dataflow_training/training/test_freeze_plan.py`) exercise both
+(`tests/dataflow_training/training/e2e/test_freeze_plan.py`) exercise both
 paths.
 
 ## 1. Write an op (`blocks/ops.py` + `kernels/`)
@@ -294,7 +294,7 @@ DEPTH-DEPENDENT (`layer_overrides`: first matching layer-set wins, its
 sub-policy owns that layer); per-layer dtypes mean per-layer packed
 sizes, so layouts resolve per layer everywhere — block executables
 derive their layer from the task's `W_{i}` object. Mixed-policy E2E
-gates: `tests/dataflow_training/training/test_dtype_policy_e2e.py`.
+gates: `tests/dataflow_training/training/e2e/test_dtype_policy_e2e.py`.
 
 ## 4. Lower it (`model_families/<family>/model.py`)
 
@@ -639,7 +639,7 @@ The family test module's canonical ladder (copy the newest family's —
    family has them.
 4. stage completeness + derived-recompute truncation (structural).
 5. lowering validation + TRIPWIRE HASHES in
-   `tests/dataflow_training/training/test_lowering_stability.py`
+   `tests/dataflow_training/training/lowering/test_lowering_stability.py`
    (re-pin only with a structural-change justification in the commit
    message).
 6. `check_model_step` (+ ga2 variant; `field_atol` envelopes ONLY for

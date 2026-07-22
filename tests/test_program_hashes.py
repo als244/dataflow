@@ -10,17 +10,24 @@ program — bare (family lowering truth) and planned at a fixed budget
 Regenerate ONLY when a content change is intentional:
 
     DATAFLOW_REGEN_HASHES=1 python -m pytest tests/test_program_hashes.py
+
+Tests:
+- test_lowered_program_hashes_stable: each family's smoke-preset program, bare and planned at a fixed budget, hashes to the committed fixture (or rewrites the fixture when DATAFLOW_REGEN_HASHES is set).
 """
 import hashlib
 import json
 import os
 from pathlib import Path
+from dataflow_training.distributed.topology import repo_root
 
 import pytest
 
 torch = pytest.importorskip("torch")
+pytest.importorskip("dataflow_sim")
 
-FIXTURE = Path(__file__).parent / "fixtures" / "program_hashes.json"
+pytestmark = pytest.mark.sim
+
+FIXTURE = repo_root() / "tests" / "fixtures" / "program_hashes.json"
 PLAN_BUDGET = 1 << 30
 
 SMOKE_PRESETS = {
@@ -79,5 +86,5 @@ def test_lowered_program_hashes_stable():
         f"lowered-program content changed for {diffs} — the refactor "
         f"altered WHAT these families lower to (wire strings, "
         f"block_params, sizes, or task order). Either fix the "
-        f"regression or, if intentional, regenerate the fixture WITH "
-        f"Shein's sign-off.")
+        f"regression or, if intentional, regenerate the fixture with "
+        f"explicit sign-off.")

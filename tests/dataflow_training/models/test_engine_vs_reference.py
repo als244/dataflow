@@ -11,11 +11,15 @@ Two input modes per family:
   global denominator (exact — attention never crosses sequences).
 
 Bands are measured, not guessed: run with DATAFLOW_CALIBRATE=1 to
-print observed deltas on this machine instead of asserting; the
-pinned bands cover both fleet architectures (sm86/sm120) with
-headroom. Step-0 compares at the forward-noise floor; the trajectory
+print observed deltas instead of asserting; the pinned bands cover
+differing GPU architectures with headroom.
+Step-0 compares at the forward-noise floor; the trajectory
 band absorbs bf16 accumulation-order drift and (for MoE) top-k
 routing flips.
+
+Tests:
+- test_engine_matches_reference_uniform: each family's smoke preset trained N steps by both the daemon engine and the pure-torch twin yields per-step losses within the family's step-0 and trajectory bands.
+- test_engine_matches_reference_ragged: one grad-accum round of mixed-length sequences — the engine consumes them packed via the seq_lens wire contract while the twin runs each sequence independently under the global denominator, and the loss curves match within band.
 """
 import math
 import os
@@ -36,6 +40,8 @@ from dataflow_training.run.driver import (  # noqa: E402
 from dataflow_training.data.pipeline import legacy_block_pipeline  # noqa: E402
 from dataflow_training.run.recipe import Recipe  # noqa: E402
 
+pytestmark = [pytest.mark.gpu, pytest.mark.corpus, pytest.mark.sim]
+
 STEPS = 6
 CALIBRATE = bool(os.environ.get("DATAFLOW_CALIBRATE"))
 
@@ -53,8 +59,8 @@ FAMILY_PRESETS = {
 }
 
 # (step0_tol, trajectory_tol) per family, BOTH input modes: pinned at
-# ~4-5x the measured sm86 floors (refactor findings ledger, A1
-# calibration table); re-verified on sm120 at the chicago pull.
+# ~4-5x the measured floors on the tightest architecture, re-verified
+# on a differing architecture.
 # Dense families sit at 1e-4-scale; MoE adds routing discreteness;
 # the MLA trio (+DSA for dsv32) is the loosest.
 BANDS = {
@@ -97,6 +103,8 @@ def compare_curves(name: str, mode: str, ref, eng) -> None:
 
 @pytest.mark.parametrize("name", sorted(FAMILY_PRESETS))
 def test_engine_matches_reference_uniform(name):
+    if name in {"qwen35", "qwen35moe"}:
+        pytest.importorskip("fla")
     cfg = getattr(P, FAMILY_PRESETS[name])()
     recipe = smoke_recipe()
     ref = run_reference(cfg, recipe, legacy_block_pipeline(cfg),
@@ -113,6 +121,8 @@ RAGGED_LENGTHS = (37, 256, 128, 91)     # sums to a 512-token round
 
 @pytest.mark.parametrize("name", sorted(FAMILY_PRESETS))
 def test_engine_matches_reference_ragged(name):
+    if name in {"qwen35", "qwen35moe"}:
+        pytest.importorskip("fla")
     from dataclasses import replace
 
     from dataflow.core.jsonio import program_to_dict

@@ -8,7 +8,11 @@ one free extent at quiesce. Allocation is SIDE-EFFECT-FREE by design
 (no catalog/ledger mutation inside an alloc/free) — reserve_inbound
 does its collision/lease checks and its alloc ATOMICALLY under
 catalog_lock, because put()'s unlocked pre-checks are a
-single-writer luxury the NM does not get."""
+single-writer luxury the NM does not get.
+
+Tests:
+- test_two_writer_allocator_invariants: concurrent inbound reservations and dispatcher put/release keep live extents non-overlapping, keep bookkeeping balanced against the free list, and coalesce to one full free extent at quiesce.
+"""
 import threading
 
 from dataflow.service.store import Store

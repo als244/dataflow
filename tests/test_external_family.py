@@ -7,11 +7,16 @@ contract validator, and composes with the SERVICE path — registration +
 CPU-only: resolution builds executables, never launches them; no CUDA
 imports at module scope (dataflow imports live inside the tests, the
 test_plugins.py convention).
+
+Tests:
+- test_external_family_registers_lowers_and_validates: an out-of-src family loads via the plugin seam, config dispatch reaches it, its lowering validates and carries the expected block/compute keys, recompute re-lowering still validates and yields a recompute block, and validate_family reports no broken surface.
+- test_external_family_composes_with_service_path: the external family registers with the service, lookup_resolver builds a launchable executable for every lowered task (block tasks resolving to the family's own executable classes), and the init-as-program task resolves through the same kind.
 """
 import sys
 from pathlib import Path
+from dataflow_training.distributed.topology import repo_root
 
-FIXTURE_DIR = Path(__file__).parent / "fixtures" / "external_family"
+FIXTURE_DIR = repo_root() / "tests" / "fixtures" / "external_family"
 
 
 def cleanup_toyfam():

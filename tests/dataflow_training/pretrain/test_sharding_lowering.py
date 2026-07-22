@@ -1,8 +1,16 @@
-"""Z1 lowering gates (pure, no daemons): sharded-optimizer lowering —
-per-rank O objects shrink to owned slots while W/dW stay full, shard
-block_params carry an identical collective sequence on every rank with
-disjoint whole-field ownership, programs stay JSON-serializable, and a
-plain (no-shard) lowering is byte-indistinguishable from before."""
+"""Lowering gates for the sharded optimizer (pure, no daemons): per-rank
+O objects shrink to owned slots while W/dW stay full, shard block_params
+carry an identical collective sequence on every rank with disjoint
+whole-field ownership, programs stay JSON-serializable, and a plain
+(no-shard) lowering is byte-indistinguishable from before.
+
+Tests:
+- test_zero1_o_shrinks_w_and_dw_do_not: under a zero1 shard the per-rank O objects shrink (near half plus replicated slack) while W stays identical and dW stays full on every rank.
+- test_shard_block_params_consistent_across_ranks: optimizer shard block_params carry a matching collective sequence across ranks with whole-field regions updated by exactly one rank, and the embed root shards by rows.
+- test_programs_json_serializable_and_plain_unchanged: sharded programs are JSON-serializable and a plain lowering is byte-identical to the parallel=None spelling.
+- test_tp_lowering_params_sizes_and_serialization: tp lowering halves the mlp weights, stamps the tp_block fwd/bwd/optimizer keys and comm_groups, keeps tp shard fields local, and replicates embed/head with owner broadcast.
+- test_runtime_o_layout_matches_lowered_size: the AdamW block's O layout sized from update_regions matches the lowered O object bytes field by field for layers and embed.
+"""
 import json
 
 import pytest

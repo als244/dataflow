@@ -1,4 +1,13 @@
-"""Converter tests against the real dataflow_sim package."""
+"""Converter tests against the real dataflow_sim package.
+
+Tests:
+- test_to_sim_chain_preserves_ids_and_sizes: to_sim_chain keeps task ids, initial-memory ids, and per-output sizes.
+- test_annotated_chain_validates: a pressurefit-annotated chain passes the sim's location-aware validate_chain.
+- test_from_sim_chain_roundtrip: from_sim_chain then to_sim_chain reproduces the original chain (sim-visible content lossless).
+- test_annotation_join_is_lossless: program to chain to pressurefit to joined program preserves annotations and capacity and yields the same chain.
+- test_annotated_program_simulates_identically: the joined annotated program simulates to the same task intervals and peak memory as the direct chain.
+- test_webapp_export_realizes: the exported DataflowProgram validates, realizes in the sim, and simulates within the memory budget.
+"""
 import pytest
 
 from dataflow.core import validate_program
@@ -10,13 +19,15 @@ from dataflow.core.convert import (
 )
 from dataflow_training.model_families.llama3 import ShapedLlamaConfig, build_shaped_llama3
 
+pytestmark = pytest.mark.sim
+
 
 @pytest.fixture(scope="module")
 def tiny_program():
     return build_shaped_llama3(ShapedLlamaConfig.tiny())
 
 
-def test_sim_chain_structure(tiny_program):
+def test_to_sim_chain_preserves_ids_and_sizes(tiny_program):
     # NOTE: the sim's validate_chain is location-aware and only meaningful for
     # ANNOTATED chains (a bare chain has no prefetches for its backing-source
     # objects yet). Structural fidelity is asserted here; annotated-chain
@@ -79,7 +90,9 @@ def test_webapp_export_realizes(tiny_program):
 
     payload = to_webapp_program(tiny_program)
     prog = DataflowProgram.model_validate(payload)
-    hw = HARDWARE_PRESETS["RTX_5090"]
+    # any preset serves: the assertions below are structural
+    preset_name = sorted(HARDWARE_PRESETS)[0]
+    hw = HARDWARE_PRESETS[preset_name]
     workload = realize_dataflow_program(prog, hw)
     assert len(workload.chain.tasks) == len(tiny_program.tasks)
 

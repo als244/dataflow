@@ -1,11 +1,22 @@
-"""Gates for FLOP accounting (lowering/flops.py, plan v3): the walker
-reads the SAME cost_subops the simulator prices — these gates pin the
-hand formulas, the varlen quadratic scaling, the effective/hardware
-attention split, the opt-policy optimizer bucket, and the completeness
-walk over every registered family. CPU-only (metadata arithmetic)."""
+"""Gates for FLOP accounting (lowering/flops.py): the walker reads the
+SAME cost_subops the simulator prices — these gates pin the hand
+formulas, the varlen quadratic scaling, the effective/hardware attention
+split, the opt-policy optimizer bucket, and the completeness walk over
+every registered family. CPU-only (metadata arithmetic).
+
+Tests:
+- test_gpt2_walker_matches_hand_formula: the walker's per-step effective and hardware totals for gpt2-tiny match the closed-form hand formula (adamw adds no optimizer flops).
+- test_attention_split_factors: causal-dense attention bwd effective/hardware equals the fixed ratio and fwd equals the stamped 2*t*s*d.
+- test_varlen_quadratic_scaling: halving every segment length halves the attention quadratic mass exactly and leaves matmul flops unchanged; seq_sq_ratio matches.
+- test_optimizer_bucket_policy_aware: adamw contributes zero optimizer matmul flops while muon counts Newton-Schulz over the 2D fields into both totals; muon_ns_flops formula and orientation symmetry hold.
+- test_hybrid_split_causal_vs_static: for qwen35's hybrid the softmax layers' quadratic mass lands in the varlen-scalable causal buckets while linear-attention scans land in the never-scaled static bucket.
+- test_every_family_walks: every registered family's tiny program walks with positive effective flops and hardware >= effective (no unstamped tasks).
+"""
 from dataclasses import replace
 
 import pytest
+
+pytest.importorskip("torch")
 
 from dataflow_training.lowering.flops import (
     ATTN_BWD_EFFECTIVE_OVER_HARDWARE,
@@ -16,7 +27,7 @@ from dataflow_training.lowering.flops import (
 from dataflow_training.model_families.families import _FAMILIES, family
 
 
-def test_gpt2_hand_formula():
+def test_gpt2_walker_matches_hand_formula():
     """Walker vs closed-form for gpt2 tiny (all-causal, biased)."""
     fam = family("gpt2")
     cfg = fam.config_type.tiny()

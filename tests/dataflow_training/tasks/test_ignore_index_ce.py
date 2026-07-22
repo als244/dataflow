@@ -1,17 +1,22 @@
-"""Phase C2 gate: ignore-index CE (packing pads) — both impls.
+"""Ignore-index CE (packing pads) — both impls.
 
 Padded round (tail IGNORE_INDEX targets, valid-count normalization)
 must equal the plain CE of the same real rows: loss AND per-row
 dlogits; ignored rows contribute exactly zero gradient. Legacy
 behavior (no negatives, default normalization) stays bit-identical.
+
+Tests:
+- test_padded_equals_unpadded: padded targets with valid-count normalization give bitwise-equal per-row dlogits, zero gradient on ignored rows, and loss matching plain CE of the real rows within reduction noise.
+- test_no_ignore_rows_matches_torch_ce_and_rerun_is_bitwise: with no ignored rows the loss matches torch cross_entropy and a rerun is bitwise-identical in loss and dlogits.
 """
 from __future__ import annotations
 
 import pytest
 import torch
 
-pytestmark = pytest.mark.skipif(not torch.cuda.is_available(),
-                                reason="needs CUDA")
+pytestmark = [pytest.mark.gpu,
+              pytest.mark.skipif(not torch.cuda.is_available(),
+                                 reason="needs CUDA")]
 
 from dataflow_training.data.lpt_packing import IGNORE_INDEX
 from dataflow_training.blocks import ops
@@ -77,7 +82,7 @@ def test_padded_equals_unpadded(impl):
 
 
 @pytest.mark.parametrize("impl", ["eager", "triton"])
-def test_legacy_bit_identical(impl):
+def test_no_ignore_rows_matches_torch_ce_and_rerun_is_bitwise(impl):
     fns = _impls()
     if impl not in fns:
         pytest.skip(f"{impl} unavailable")

@@ -1,17 +1,27 @@
-"""Phase C3 gates: single-launch varlen (block-diagonal) attention.
+"""Single-launch varlen (block-diagonal) attention.
 
 Contract: varlen path ≡ the per-segment ragged fallback within bf16
 tolerance (different kernel configs), BIT-level segment isolation,
 determinism-twice bitwise, zero-philox bwd equals round-tripped rng,
 GQA reduction correct, pad-tail segment well-defined.
+
+Tests:
+- test_fwd_matches_ragged_fallback: the single-launch varlen forward output and lse match the per-segment ragged fallback within bf16 tolerance.
+- test_bwd_matches_ragged_fallback: the varlen backward dq/dk/dv match the per-segment ragged fallback within tolerance.
+- test_bitlevel_segment_isolation: perturbing one segment's queries leaves every later segment's output and lse bit-identical and changes only that segment.
+- test_bwd_bitlevel_segment_isolation: perturbing one segment's output-grad leaves later segments' dq/dk/dv bit-identical, proving no leak through the kv-head reduction.
+- test_determinism_twice_bitwise: two identical varlen forward+backward calls are bitwise-equal in outputs and grads (currently skipped: the aten split-k heuristic is allocator-state dependent).
+- test_zero_philox_bwd_matches_roundtripped_rng_within_tol: at dropout 0 the flash backward with a zeroed philox seed matches the round-tripped-rng backward within tolerance.
+- test_no_hidden_syncs: varlen forward and backward launch under CUDA sync-debug error mode with no hidden host-device synchronization.
 """
 from __future__ import annotations
 
 import pytest
 import torch
 
-pytestmark = pytest.mark.skipif(not torch.cuda.is_available(),
-                                reason="needs CUDA")
+pytestmark = [pytest.mark.gpu,
+              pytest.mark.skipif(not torch.cuda.is_available(),
+                                 reason="needs CUDA")]
 
 from dataflow_training.blocks import ops
 
@@ -129,13 +139,12 @@ def test_bwd_bitlevel_segment_isolation():
     assert not torch.equal(dq_a[:s0], dq_b[:s0])
 
 
-@pytest.mark.skip(reason="HIDDEN by decision (2026-07-11): aten "
-                  "flash-bwd split-k heuristic is allocator-state-"
-                  "dependent -> occasional non-bitwise dq/dk/dv between "
-                  "identical calls; got noisier (~1/3 isolated). Tracked "
-                  "in docs/notes/distributed_plumbing_findings.md FLAG; "
-                  "un-skip when the heuristic is pinned or the gate is "
-                  "relaxed to documented split noise.")
+@pytest.mark.skip(reason="Skipped by decision: the aten flash-bwd split-k "
+                  "heuristic is allocator-state-dependent, so dq/dk/dv can "
+                  "differ at the ULP scale between identical calls (a past "
+                  "run saw roughly a third of isolated invocations drift). "
+                  "Un-skip when the heuristic is pinned or this gate is "
+                  "relaxed to the documented split noise.")
 def test_determinism_twice_bitwise():
     q, k, v, cu = _case(3)
     out_a, lse_a = _varlen(q, k, v, cu)
@@ -150,7 +159,7 @@ def test_determinism_twice_bitwise():
     assert all(torch.equal(a, b) for a, b in zip(grads_a, grads_b))
 
 
-def test_zero_philox_equals_roundtripped_rng():
+def test_zero_philox_bwd_matches_roundtripped_rng_within_tol():
     q, k, v, cu = _case(4)
     t = T
     q3 = q.view(t, H, D)
@@ -175,6 +184,7 @@ def test_zero_philox_equals_roundtripped_rng():
         assert (a - b).abs().max().item() <= 2e-2
 
 
+@pytest.mark.filterwarnings("ignore:Synchronization debug mode is a prototype")
 def test_no_hidden_syncs():
     q, k, v, cu = _case(5)
     torch.cuda.synchronize()

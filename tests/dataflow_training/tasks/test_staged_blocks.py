@@ -6,6 +6,10 @@
   (the waste tripwire — recompute == full forward means boundary work
   crept back in);
 - the boundary sits exactly after the last context-emitting stage.
+
+Tests:
+- test_stage_context_completeness: the declared activation-context fields exactly equal the fields emitted across the block's forward stages.
+- test_derived_recompute_excludes_boundary_work: the recompute stage count is fewer than all stages and lands exactly one past the last context-emitting stage.
 """
 from dataflow_training.model_families.llama3.blocks import BlockFwd
 from dataflow_training.blocks.layouts import activation_layout

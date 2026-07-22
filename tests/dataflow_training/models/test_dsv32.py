@@ -13,6 +13,22 @@ that lands a count on the mean boundary flips a whole +-speed bias step
 (measured: rel 0.378 = sqrt(1/7), exactly one slot). Same phenomenon as
 qwen35moe's dt_bias sign lottery; the honest comparison is the
 field_atol envelope |db| <= 2*speed + slack, not a relative bound.
+
+Tests:
+- test_dsv32_lowering_validates_and_plans: dsv32 lowering validates, tags the family metadata, carries the DSA dense/moe block keys and the expected dense-block count, and plans to a positive-makespan schedule.
+- test_dsv32_full_scale_presets_lower_and_validate: the mini, 671b, and glm5 presets lower and validate with the expected DSA block depth.
+- test_dsv32_partial_ownership_lowering_rejected: a partial-ownership MoE expert set raises NotImplementedError at lowering.
+- test_dsv32_aux_zero_model_step_vs_golden: an aux-off model step matches golden with the bias and index-LayerNorm-bias fields held under the atol envelope.
+- test_dsv32_plan_invariance: the model step matches golden across fast-memory capacities and a recompute-levels plan.
+- test_dsv32_batch2_packed_sequences_vs_golden: a batch-2 packed-sequence model step matches golden.
+- test_dsv32_short_sequences_lt_index_topk_vs_golden: sequences shorter than index_topk clamp DSA selection to min(k, L) per sequence and match golden.
+- test_dsv32_ga2_matches_reference: two grad-accum rounds with the LBL composite, indexer KL, and noaux bias rule match the twin under step-aggregated assignment counts.
+- test_dsv32_fixed_seed_bitwise_deterministic: two fixed-seed engine runs produce bit-identical loss and weight bytes.
+- test_dsv32_measured_costs_replan_still_golden: profiling, applying measured costs, and replanning still reproduce the base run.
+- test_dsv32_frozen_indexer_ablation: with train_indexer off the model step matches golden and the indexer fields stay bit-frozen across the step.
+- test_dsv32_dense_warmup_model_step: in dense warm-up the main model (including embed and head) stays bit-frozen while the indexer fields move under a live full-prefix KL.
+- test_dsv32_poison_on_free_changes_nothing: enabling poison-on-free leaves loss and weights unchanged and non-NaN.
+- test_dsv32_interleaving_stress_changes_nothing: random per-launch jitter leaves loss and weights unchanged.
 """
 from dataclasses import replace
 
@@ -21,6 +37,8 @@ import pytest
 torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
     pytest.skip("no CUDA device", allow_module_level=True)
+pytest.importorskip("cuda.bindings.runtime")  # real CudaBackend + SpinKernel
+pytest.importorskip("dataflow_sim")            # plan_program / simulate_program
 
 from dataflow_training.testing.gradcheck import (  # noqa: E402
     check_model_step,
@@ -28,7 +46,7 @@ from dataflow_training.testing.gradcheck import (  # noqa: E402
     rel_l2,
 )
 
-pytestmark = pytest.mark.gpu
+pytestmark = [pytest.mark.gpu, pytest.mark.sim]
 
 
 def _tiny_cfg(**over):

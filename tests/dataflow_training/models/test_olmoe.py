@@ -7,6 +7,19 @@ golden's autograd objective is CE + aux while its reported loss is CE),
 recompute reproducing the ROUTING DECISION bit-exactly (int ctx fields
 compared with torch.equal), and end-to-end engine determinism (fixed seed
 twice -> identical bytes).
+
+Tests:
+- test_olmoe_stage_context_completeness: the forward block's emitted context fields exactly equal the activation layout and only the y-only combine epilogue sits past the recompute boundary.
+- test_olmoe_lowering_validates_and_plans: tiny cfg lowers and validates as olmoe with untied embed/head and moeattn/head_loss block keys, and plans/simulates with nonzero task intervals.
+- test_olmoe_partial_ownership_lowering_rejected: lowering with a partial expert-ownership MoE spec raises NotImplementedError.
+- test_olmoe_aux_zero_model_step_vs_golden: an aux_coef=0 model-step matches the golden twin.
+- test_olmoe_plan_invariance: the model-step matches golden across memory budgets and recompute levels.
+- test_olmoe_batch2_packed_sequences_vs_golden: a batch=2 packed-sequence model-step matches golden.
+- test_olmoe_grad_accum_two_rounds_matches_reference: two grad-accum rounds (per-round CE+aux summed, one backward) leave engine final weights matching the twin.
+- test_olmoe_fixed_seed_bitwise_deterministic: two runs at the same seed produce identical loss bytes and weights.
+- test_olmoe_poison_on_free_changes_nothing: the poison_on_free engine option leaves loss and weights unchanged and non-NaN.
+- test_olmoe_interleaving_stress_changes_nothing: random per-task launch jitter leaves loss and weights unchanged.
+- test_olmoe_measured_costs_replan_still_golden: profiling every signature then replanning on measured costs leaves the math unchanged.
 """
 from dataclasses import replace
 
@@ -67,6 +80,7 @@ def test_olmoe_stage_context_completeness():
     assert names[OlmoeBlockFwd.recompute_stage_count():] == ["moe_experts2_combine"]
 
 
+@pytest.mark.sim
 def test_olmoe_lowering_validates_and_plans():
     from dataflow.core import validate_program
     from dataflow_training.model_families.families import resolve_family
@@ -108,6 +122,7 @@ def test_olmoe_partial_ownership_lowering_rejected():
 
 
 
+@pytest.mark.sim
 def test_olmoe_aux_zero_model_step_vs_golden():
     check_model_step(
         _tiny_cfg(aux_coef=0.0), fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
@@ -115,6 +130,7 @@ def test_olmoe_aux_zero_model_step_vs_golden():
     ).assert_ok()
 
 
+@pytest.mark.sim
 def test_olmoe_plan_invariance():
     cfg = _tiny_cfg()
     r1 = check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
@@ -130,13 +146,15 @@ def test_olmoe_plan_invariance():
         r.assert_ok()
 
 
+@pytest.mark.sim
 def test_olmoe_batch2_packed_sequences_vs_golden():
     cfg = _tiny_cfg(batch=2, seq_len=64)
     check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
                      **family_gate_kwargs("olmoe")).assert_ok()
 
 
-def test_olmoe_ga2_matches_reference():
+@pytest.mark.sim
+def test_olmoe_grad_accum_two_rounds_matches_reference():
     """Grad accumulation with the aux objective: per-round CE + per-round
     aux summed across rounds, ONE backward on the total — engine == the
     isolated twin (each round is one packed forward, so the twin's
@@ -254,6 +272,7 @@ def _assert_same(a: dict, b: dict, tol: float = 1e-3):
         assert err < tol, f"{k}: rel_l2={err}"
 
 
+@pytest.mark.sim
 def test_olmoe_fixed_seed_bitwise_deterministic():
     """Same seed, same plan, twice -> identical LOSS BYTES and weights
     (routing ties, sort, grouped GEMMs, combine: all deterministic)."""
@@ -265,6 +284,7 @@ def test_olmoe_fixed_seed_bitwise_deterministic():
             assert torch.equal(a[k], b[k]), k
 
 
+@pytest.mark.sim
 def test_olmoe_poison_on_free_changes_nothing():
     base = _run()
     poisoned = _run(engine_kwargs={"poison_on_free": True})
@@ -272,6 +292,7 @@ def test_olmoe_poison_on_free_changes_nothing():
     assert poisoned["loss"] == poisoned["loss"]  # not NaN
 
 
+@pytest.mark.sim
 def test_olmoe_interleaving_stress_changes_nothing():
     from dataflow.runtime.device.cuda_spin import SpinKernel
 
@@ -295,6 +316,7 @@ def test_olmoe_interleaving_stress_changes_nothing():
     _assert_same(jittered, base)
 
 
+@pytest.mark.sim
 def test_olmoe_measured_costs_replan_still_golden():
     """The end-to-end profiling gate: every signature (incl. moeattn_bwd,
     whose packed ctx carries int32 routing fields) must profile through the

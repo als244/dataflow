@@ -6,15 +6,32 @@ in tasks/ops.py) is pinned three ways:
      spec vs spec);
   2. fla's CHUNK kernels (the ones the blocks will call) == our recurrence
      at bf16 tolerances — forward AND backward (the backward is the
-     Blackwell check: fla issue #640's Hopper workaround must not be needed
-     on sm_120);
+     arch-sensitivity check: fla issue #640 documented a chunk-backward
+     Triton failure on an earlier GPU architecture — verify the current
+     device does not need that workaround);
   3. the conv + l2norm helpers == their references.
+
+Tests:
+- test_reference_recurrence_matches_fla_naive: our fp32 gated-delta-rule recurrence matches fla's naive reference (spec vs spec).
+- test_fla_chunk_fwd_matches_reference: fla's chunk forward output matches our recurrence at bf16 tolerance and its saved g_input equals the raw gate input.
+- test_fla_chunk_bwd_matches_reference_autograd: fla's chunk backward grads (dq/dk/dv/dbeta/da/dA_log/ddt_bias) match autograd through the fp32 recurrence.
+- test_conv_and_l2norm_helpers_match_references: the fla causal-conv1d-silu and l2norm helpers match our references.
+- test_qwen35_stage_context_completeness: both lin and attn forward blocks' emitted context fields equal their activation layouts, with recompute stopping before the last stage.
+- test_qwen35_lowering_validates_and_plans: the untied cfg lowers with separate W_head/O_head and plans/simulates, while the tied variant emits a single W_embed serving embed and head.
+- test_qwen35_tied_model_step_vs_golden: the tied variant's model-step matches golden with the shared dW_embed created by head_bwd.
+- test_qwen35_plan_invariance: the model-step math is identical across memory budgets and recompute plans.
+- test_qwen35_batch2_packed_sequences_vs_golden: a batch=2 packed-sequence model-step matches golden with conv and DeltaNet recurrence reset at boundaries.
+- test_qwen35_poison_on_free_changes_nothing: the poison_on_free engine option leaves loss and weights unchanged and non-NaN.
+- test_qwen35_interleaving_stress_changes_nothing: random per-task launch jitter leaves loss and weights unchanged.
+- test_qwen35_measured_costs_replan_still_golden: profiling the heterogeneous task set then replanning on measured costs leaves the math unchanged.
 """
 import pytest
 
 torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
     pytest.skip("no CUDA device", allow_module_level=True)
+
+pytest.importorskip("fla")
 
 from dataflow_training.blocks import ops  # noqa: E402
 from dataflow_training.testing.gradcheck import rel_l2  # noqa: E402
@@ -82,9 +99,10 @@ def test_fla_chunk_fwd_matches_reference():
 
 
 def test_fla_chunk_bwd_matches_reference_autograd():
-    """THE Blackwell check: fla's chunk bwd on sm_120 vs autograd through
-    our recurrence (fla #640 documents a Hopper-only Triton bwd failure;
-    verify sm_120 does not need the expand/reduce workaround)."""
+    """The arch-sensitivity check: fla's chunk bwd vs autograd through our
+    recurrence (fla #640 documented a Triton bwd failure on an earlier GPU
+    architecture; verify the current device does not need the expand/reduce
+    workaround)."""
     from fla.ops.gated_delta_rule.chunk import (
         chunk_gated_delta_rule_bwd,
         chunk_gated_delta_rule_fwd,
@@ -191,6 +209,7 @@ def test_qwen35_stage_context_completeness():
         assert cls.recompute_stage_count() < len(cls.STAGES)
 
 
+@pytest.mark.sim
 def test_qwen35_lowering_validates_and_plans():
     from dataflow.core import validate_program
     from dataflow_training.model_families.families import resolve_family
@@ -219,6 +238,7 @@ def test_qwen35_lowering_validates_and_plans():
 
 
 
+@pytest.mark.sim
 def test_qwen35_tied_model_step_vs_golden():
     """The 2B-style tied variant stays golden-verified E2E (one W_embed
     leaf, head_bwd round-0 creates the shared dW_embed)."""
@@ -236,6 +256,7 @@ def test_qwen35_tied_model_step_vs_golden():
     ).assert_ok()
 
 
+@pytest.mark.sim
 def test_qwen35_plan_invariance():
     """Different budgets + recompute plans must produce identical math.
 
@@ -262,6 +283,7 @@ def test_qwen35_plan_invariance():
         r.assert_ok()
 
 
+@pytest.mark.sim
 def test_qwen35_batch2_packed_sequences_vs_golden():
     """batch=2 packs two sequences into one token axis: cu_seqlens must reset
     the conv window and the DeltaNet recurrence at the boundary (the golden
@@ -359,6 +381,7 @@ def _assert_same35(a: dict, b: dict, tol: float = 1e-3):
         assert err < tol, f"{k}: rel_l2={err}"
 
 
+@pytest.mark.sim
 def test_qwen35_poison_on_free_changes_nothing():
     base = _run35()
     poisoned = _run35(engine_kwargs={"poison_on_free": True})
@@ -366,6 +389,7 @@ def test_qwen35_poison_on_free_changes_nothing():
     assert poisoned["loss"] == poisoned["loss"]  # not NaN
 
 
+@pytest.mark.sim
 def test_qwen35_interleaving_stress_changes_nothing():
     from dataflow.runtime.device.cuda_spin import SpinKernel
 
@@ -389,6 +413,7 @@ def test_qwen35_interleaving_stress_changes_nothing():
     _assert_same35(jittered, base)
 
 
+@pytest.mark.sim
 def test_qwen35_measured_costs_replan_still_golden():
     """Profiling must handle the heterogeneous task set (linattn_*/gattn_*
     keys); re-planning on measured costs must not change the math."""

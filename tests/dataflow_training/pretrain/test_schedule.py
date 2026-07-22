@@ -1,5 +1,16 @@
 """Gates for the LR schedule: warmup->cosine shape, and BYTE-exact
-agreement with the engine's LRSchedule (the parity authority)."""
+agreement with the engine's LRSchedule (the parity authority).
+
+Tests:
+- test_warmup_then_cosine_shape: the cosine schedule ramps linearly to peak at the last warmup step, decays to min at the horizon, and starts at a nonzero fraction of peak.
+- test_matches_engine_lrschedule_exactly: the reference schedule equals peak * engine LRSchedule.scale(step+1) to the bit at every step.
+- test_recipe_hyper_spec_matches_base_hyper: Recipe.base_hyper and hyper_spec agree on lr/weight_decay/betas and the baked-in schedule fields.
+- test_lr_delegates_to_schedule: Recipe.lr(step) equals its schedule's value at every sampled step.
+"""
+import pytest
+
+pytest.importorskip("torch")
+
 from dataflow_training.run.recipe import Recipe
 from dataflow_training.run.schedule import CosineSchedule
 from dataflow_training.blocks.optim import LRSchedule

@@ -1,4 +1,4 @@
-"""S1.3 gates (GPU): snapshot / restore / read-leases.
+"""Snapshot / restore / read-leases (GPU).
 
 Load-bearing gate: checkpoint round-trip — train 2 steps, snapshot,
 wipe everything, restore, train 2 more ⇒ losses continue EXACTLY as
@@ -6,6 +6,12 @@ an uninterrupted 4-step run (same process ⇒ bit-equal). Plus: the
 dedup soundness pair (clean dup dedups; parent-mutated dup does NOT
 — the version-counter rule), lease-parked writers waking on release,
 and client_meta round-trip.
+
+Tests:
+- test_checkpoint_roundtrip_bit_continuity: a snapshot/wipe/restore split at step 2 reproduces the uninterrupted 4-step loss sequence and round-trips client_meta.
+- test_dedup_clean_vs_mutated_parent: a clean duplicate dedups to one payload while mutating the parent via a run drops the dedup count to zero.
+- test_leased_writer_parks_until_release: a release on a leased object parks until the lease is dropped, while an unrelated writer proceeds, then completes.
+- test_snapshot_status_unknown_id_rejected: snapshot_status on an unknown id raises ServiceError with code UNKNOWN_SNAPSHOT.
 """
 from __future__ import annotations
 
@@ -13,10 +19,16 @@ import threading
 import time
 
 import pytest
-import torch
 
-pytestmark = pytest.mark.skipif(not torch.cuda.is_available(),
-                                reason="needs CUDA")
+torch = pytest.importorskip("torch")
+pytest.importorskip("cuda.bindings.runtime")  # real (fake=False) boot + CudaBackend
+pytest.importorskip("dataflow_sim")           # rig plans the program (plan_program)
+
+pytestmark = [
+    pytest.mark.gpu,
+    pytest.mark.sim,
+    pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA"),
+]
 
 from dataflow.core.jsonio import program_to_dict
 from dataflow.service import EngineClient, EngineConfig, Server, ServiceError
@@ -166,7 +178,7 @@ def test_leased_writer_parks_until_release(rig):
         c.release_object("bystander")
 
 
-def test_snapshot_status_unknown(rig):
+def test_snapshot_status_unknown_id_rejected(rig):
     with EngineClient(rig["sock"], client_name="status") as c:
         with pytest.raises(ServiceError) as ei:
             c.snapshot_status("snap-999999")

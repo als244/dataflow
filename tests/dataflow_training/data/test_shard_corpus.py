@@ -1,13 +1,19 @@
-"""Gates for the shard-corpus machinery: header parse,
-deterministic + in-range ids, delimiter indexing."""
+"""Gates for the shard-corpus machinery: header parse, circular
+wrap-around reads, and shard-boundary stitching.
+
+Tests:
+- test_header_parse: shard headers parse to the expected magic, version, and per-shard token count, and the corpus total equals the summed per-shard counts.
+- test_read_circular_wraps: a read starting past the corpus end wraps deterministically to the beginning.
+- test_read_spans_shard_boundary: a window straddling a shard boundary stitches the two shards' tokens correctly.
+"""
 
 import numpy as np
 
 import pytest
 
-import torch
-
 from dataflow_training.data.sources import shards as fineweb
+
+pytestmark = pytest.mark.corpus
 
 @pytest.fixture(scope="module")
 def corpus():

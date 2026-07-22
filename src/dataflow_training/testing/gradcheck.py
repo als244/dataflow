@@ -29,8 +29,8 @@ def cos_sim(actual: torch.Tensor, expected: torch.Tensor) -> float:
     > 0.995; zero-vectors count as aligned (nothing to disagree on)."""
     a = actual.detach().double().reshape(-1)
     b = expected.detach().double().reshape(-1).to(a.device)
-    na = float(a.norm())
-    nb = float(b.norm())
+    na = float(a.norm().detach())
+    nb = float(b.norm().detach())
     if na == 0.0 and nb == 0.0:
         return 1.0
     if na == 0.0 or nb == 0.0:
@@ -487,7 +487,7 @@ def isolated_block_compare(cfg, isolate, *, seed: int = 0,
                      torch.bfloat16).float().cpu()
     twn = torch.cat(recorders[last].outs)
     rowrel = (eng - twn).norm(dim=1) / twn.norm(dim=1).clamp_min(1e-12)
-    med = float(rowrel.median())
+    med = float(rowrel.median().detach())
     hot = (rowrel > max(hot_mult * med, 0.05)).nonzero().flatten().tolist()
     mask = torch.ones(dims.max_tokens, dtype=torch.bool)
     mask[hot] = False
@@ -728,7 +728,7 @@ def check_model_step(
     if getattr(cfg, "sparse_mode", True) is False:
         # warm-up's loss CHANNEL is the multi-layer indexer objective
         # (main model frozen), not CE — compare like for like
-        twin_loss = float(twin.indexer_loss())
+        twin_loss = float(twin.indexer_loss().detach())
 
     if run_args is None:
         from dataflow_training.data.segments import uniform_segments

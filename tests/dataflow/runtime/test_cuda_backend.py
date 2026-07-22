@@ -1,4 +1,12 @@
-"""GPU-marked tests for the CUDA backend (skipped without a device)."""
+"""GPU-marked tests for the CUDA backend (skipped without a device).
+
+Tests:
+- test_memcpy_roundtrip_integrity: a host to device to host copy returns the bytes intact behind an in-order completion token.
+- test_completion_tokens_in_order: sequential kernel launches surface completion tokens in launch order, then None once drained.
+- test_spin_wall_accuracy: the wall-clock spin holds its target duration at long and short targets, warm or cold clocks.
+- test_mini_program_execution_matches_plan: a real mini shaped run completes, matches the plan's peak bytes, lands near the predicted makespan, and performs transfers.
+- test_slab_flush_preserves_pending_poison_guard: a freed buffer's pending poison guard survives a fragmentation flush so a reused range is not corrupted.
+"""
 import ctypes
 
 import pytest
@@ -68,7 +76,9 @@ def test_spin_wall_accuracy(backend):
         assert measured == pytest.approx(target, rel=0.15, abs=25.0)
 
 
-def test_mini_program_end_to_end():
+@pytest.mark.sim
+@pytest.mark.vram(gib=1)
+def test_mini_program_execution_matches_plan():
     """Real execution of a mini shaped program: completes, respects the
     budget, and lands near the simulator's predicted makespan."""
     from dataclasses import replace
@@ -81,8 +91,8 @@ def test_mini_program_end_to_end():
     )
     cap = 256 * 1024 * 1024
     backend = CudaBackend()
-    # plan against measured bidirectional bandwidth (directions contend on
-    # this platform; see CudaBackend.measure_pcie)
+    # plan against measured bidirectional bandwidth (the probe captures any
+    # direction contention the host's fabric has; see CudaBackend.measure_pcie)
     pcie = backend.measure_pcie(nbytes=128 * 1024 * 1024)
     program = replace(
         build_shaped_llama3(cfg),
@@ -119,7 +129,7 @@ def test_slab_flush_preserves_pending_poison_guard():
     it the guard, so the range's next owner takes an unguarded write race
     against the straggling memset. Broken code: the poison lands on the new
     owner's freshly-written bytes."""
-    import torch
+    torch = pytest.importorskip("torch")
 
     from dataflow.runtime.device.cuda_spin import SpinKernel
     from dataflow.runtime.pool import BufferPool

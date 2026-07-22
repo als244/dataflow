@@ -1,3 +1,14 @@
+"""Program serialization: dict and JSON round-trips preserve program
+equality across variants, and program_from_dict guards schema version and
+comm-group typing.
+
+Tests:
+- test_roundtrip_equality: a program survives program_to_dict/from_dict and save/load unchanged.
+- test_unknown_schema_version_rejected: program_from_dict raises on an unsupported schema_version.
+- test_grad_accum_variant_roundtrips: a grad-accum program round-trips through dict form unchanged.
+- test_recompute_variant_roundtrips: a recompute-annotated program keeps its recompute tasks and round-trips unchanged.
+- test_comm_groups_roundtrip_and_validation: comm_groups serializes only when set, round-trips exactly, and the validator rejects an empty role name.
+"""
 import pytest
 
 from dataflow.core import (

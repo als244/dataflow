@@ -2,7 +2,12 @@
 the conductor-shaped flow — connect the coordinator star, create the
 group on rank 0, members adopt with correct ranks, the join barrier
 holds the verb, the whole table exposes as TaskContext handles, and
-group_error fans out member -> coordinator -> members (two hops)."""
+group_error fans out member -> coordinator -> members (two hops).
+
+Tests:
+- test_group_lifecycle_and_error_fanout: creating a three-member group on the coordinator gives each daemon its own rank and a ready handle, rejects non-rank-0 creation and duplicate names, and propagates a member's group_error two hops to a peer with no direct link while dropping the errored group from the handle table.
+- test_world_one_group_is_immediately_ready: a single-member group reports world 1 and is ready immediately.
+"""
 import threading
 import time
 
@@ -96,7 +101,7 @@ def test_group_lifecycle_and_error_fanout(tmp_path):
                 pass
 
 
-def test_world_one_group(tmp_path):
+def test_world_one_group_is_immediately_ready(tmp_path):
     server, client = boot(tmp_path, "g-solo")
     try:
         out = client._call("create_peer_group",

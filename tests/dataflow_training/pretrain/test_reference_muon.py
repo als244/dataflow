@@ -1,6 +1,14 @@
 """Reference muon (the yardstick side): the hybrid classification
 must mirror the engine recipe, the Newton-Schulz core must actually
-orthogonalize, and a tiny end-to-end reference run must train."""
+orthogonalize, and a tiny end-to-end reference run must train.
+
+Tests:
+- test_fragments_mirror_engine_recipe: the reference's MUON_ADAMW_FRAGMENTS equal the engine's adamw recipe fragments.
+- test_ns_orthogonalize_matches_engine_and_conditions: reference Newton-Schulz agrees with the engine kernel and pulls singular values into a tight band around 1 while preserving shape for tall inputs.
+- test_classification_on_reference_llama3: ReferenceMuon routes the seven rank-2 projections per layer to muon and the tables/norms to adamw, disjointly and in the expected counts.
+- test_reference_optimizer_dispatch: reference_optimizer returns ReferenceAdamW for adamw, ReferenceMuon for muon, and raises ValueError for an unsupported policy.
+- test_tiny_muon_reference_trains: a tiny end-to-end ReferenceMuon run stays NaN-free and reduces the loss.
+"""
 import pytest
 
 torch = pytest.importorskip("torch")
@@ -36,7 +44,7 @@ def test_ns_orthogonalize_matches_engine_and_conditions():
         # muon): singular values pulled into a tight band around 1
         # from an unconditioned random matrix
         s = torch.linalg.svdvals(o[0])
-        assert float(s.min()) > 0.3 and float(s.max()) < 1.5, (
+        assert float(s.min().detach()) > 0.3 and float(s.max().detach()) < 1.5, (
             s.min(), s.max())
         assert float(s.max() / s.min()) < 5.0, (s.min(), s.max())
         # tall inputs must round-trip the transpose (shape preserved)
@@ -94,6 +102,8 @@ def test_reference_optimizer_dispatch():
 def test_tiny_muon_reference_trains():
     if not torch.cuda.is_available():
         pytest.skip("no CUDA device")
+    if torch.cuda.get_device_capability() < (8, 0):
+        pytest.skip("bf16 model needs compute capability >= (8, 0)")
     from reference_models.llama3 import Llama3Config, Llama3
 
     cfg = Llama3Config(n_layers=2, d_model=64, n_heads=2, n_kv_heads=2,
@@ -109,6 +119,6 @@ def test_tiny_muon_reference_trains():
         loss = model.loss(tok[step % 4], tok[(step + 1) % 4])
         loss.backward()
         opt.step(step)
-        losses.append(float(loss))
+        losses.append(float(loss.detach()))
         assert loss == loss, f"NaN at step {step}"     # NaN guard
     assert losses[-1] < losses[0], losses              # it learns

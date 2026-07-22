@@ -37,13 +37,23 @@ is judged by the module (``dataflow.service``), so pulling a
 non-exported submodule through an allowed package would pass; the
 allowed packages re-export their public surface, so the rule tracks
 the real contract.
+
+Tests:
+- test_core_is_dependency_free: importing dataflow.core in a fresh interpreter drags in none of torch/jax/cuda/dataflow_sim.
+- test_runtime_never_imports_torch_or_sim: importing dataflow.runtime drags in none of torch/jax/dataflow_sim.
+- test_blocks_never_imports_sim: importing dataflow_training.blocks does not drag in dataflow_sim.
+- test_r1_engine_never_imports_workload_or_twins: no module under src/dataflow imports dataflow_training or reference_models.
+- test_r2_workload_uses_engine_public_surfaces_only: modules under src/dataflow_training reach dataflow only through the sanctioned core/runtime/service surfaces.
+- test_r3_tools_stay_near_package_roots: files under tools/ import only the engine's three subtrees and dataflow_training at most two levels deep (deeper only under model_families/blocks).
+- test_r4_sim_required_only_under_lowering: a module-top-level dataflow_sim import appears only under dataflow_training.lowering; elsewhere in src/ it must be a lazy in-function import.
 """
 import ast
 import subprocess
 import sys
 from pathlib import Path
+from dataflow_training.distributed.topology import repo_root
 
-REPO = Path(__file__).resolve().parents[1]
+REPO = repo_root()
 SRC = REPO / "src"
 TOOLS = REPO / "tools"
 
@@ -73,7 +83,7 @@ def test_runtime_never_imports_torch_or_sim():
     _check("dataflow.runtime", ("torch", "jax", "dataflow_sim"))
 
 
-def test_tasks_never_imports_sim():
+def test_blocks_never_imports_sim():
     _check("dataflow_training.blocks", ("dataflow_sim",))
 
 

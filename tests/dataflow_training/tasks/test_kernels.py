@@ -3,6 +3,18 @@
 Every fused implementation must match the eager ops.py form at bf16 output
 tolerance (identical fp32 math modulo transcendental/FMA ulps) and the
 autograd gradient of the shared reference. Odd sizes exercise masking.
+
+Tests:
+- test_registry_selection_override_and_gating: kernel resolution picks the highest-priority available impl, an override beats priority, a capability gate enables an impl and flips all_deterministic, and a missing override or duplicate registration raises.
+- test_builtin_ops_all_have_eager_fallback: every builtin op registers an eager impl that requires neither CUDA nor triton.
+- test_fused_set_is_fully_fused_and_deterministic: the triton-overridden kernel set resolves to triton for each fused op and reports all-deterministic.
+- test_swiglu_fused: fused swiglu forward and backward match the eager op and the autograd reference gradient.
+- test_rope_fused: fused rope forward and backward match eager and autograd across single, uniform-pair, and ragged packings.
+- test_rmsnorm_fused: fused rmsnorm forward, apply, noweight, and backward match the eager ops, the rstd, and the autograd reference.
+- test_ce_fused: fused cross-entropy loss and dlogits match the eager op and the autograd reference.
+- test_ce_fused_past_int32_elements: cross-entropy over more than 2^31 elements stays finite and rows past the int32 boundary match a per-row fp32 reference (int64 row-offset regression).
+- test_adamw_fused: the fused AdamW step matches the eager step for weights and moments across small and large sizes.
+- test_fused_steady_state_no_torch_allocation: a warmed-up steady-state launch of the fused swiglu/rope/rmsnorm/adamw ops triggers no torch allocator growth.
 """
 import pytest
 

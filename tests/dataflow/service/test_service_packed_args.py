@@ -1,7 +1,9 @@
-"""C4 daemon gate (redesigned): per-step DIFFERENT packing via
-run_args seq_lens (+ valid_rows for a padded round) — losses
-BIT-EQUAL to the in-process engine on identical bytes. No extra
-objects; args carry the metadata.
+"""Per-step DIFFERENT packing via run_args seq_lens (+ valid_rows for a
+padded round) — daemon losses BIT-EQUAL to the in-process engine on
+identical bytes. No extra objects; args carry the metadata.
+
+Tests:
+- test_daemon_packed_args_bit_equal: three steps with different sequence packings (one round padded) give daemon losses matching the in-process engine to ten decimals and all distinct from one another.
 """
 from __future__ import annotations
 
@@ -12,8 +14,14 @@ import numpy as np
 import pytest
 import torch
 
-pytestmark = pytest.mark.skipif(not torch.cuda.is_available(),
-                                reason="needs CUDA")
+pytest.importorskip("cuda.bindings.runtime")
+
+pytestmark = [
+    pytest.mark.skipif(not torch.cuda.is_available(),
+                       reason="needs CUDA"),
+    pytest.mark.gpu,
+    pytest.mark.sim,
+]
 
 from dataflow.core.jsonio import program_to_dict
 from dataflow.service import EngineClient, EngineConfig, Server

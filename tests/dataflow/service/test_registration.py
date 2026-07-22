@@ -1,7 +1,12 @@
 """Registration smoke: a bare registry + register_all resolves every
 family through the ONE contract key ("kind"); unknown kinds fail loudly
 naming what IS registered. CPU-only — resolution builds executables,
-it does not launch them."""
+it does not launch them.
+
+Tests:
+- test_register_all_resolves_every_family: after register_all, "model_family" is registered and for every family the resolver resolves all training tasks plus the init program's single "family_init" task, whose outputs cover exactly the non-input initial objects.
+- test_unknown_kind_is_loud: an unknown kind and a spec missing "kind" each raise ServiceError, naming the registered "model_family" kind and the missing "kind" respectively.
+"""
 import pytest
 
 from dataflow.service.registry import (

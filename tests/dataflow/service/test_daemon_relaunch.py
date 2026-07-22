@@ -5,14 +5,25 @@ bridge's session cache is module-level. Before server shutdown closed
 the cached sessions (before freeing the store slab), the second daemon
 inherited a BufferPool full of pointers into the FIRST daemon's freed
 slab and segfaulted in its first backing copy (cudaMemcpyAsync). Found
-by the first back-to-back same-family boots in the parity suite."""
+by the first back-to-back same-family boots in the parity suite.
+
+Tests:
+- test_relaunched_daemon_same_program_reruns_clean_and_reproduces_losses: running the same program in two sequential fresh in-process daemons yields finite losses both times and per-step losses that agree within 1e-6.
+"""
 import math
 
 import pytest
 import torch
 
-pytestmark = pytest.mark.skipif(not torch.cuda.is_available(),
-                                reason="needs CUDA")
+pytest.importorskip("cuda.bindings.runtime")
+
+pytestmark = [
+    pytest.mark.skipif(not torch.cuda.is_available(),
+                       reason="needs CUDA"),
+    pytest.mark.gpu,
+    pytest.mark.sim,
+    pytest.mark.corpus,
+]
 
 
 def quiet_log(*args, **kwargs):
@@ -35,8 +46,7 @@ def one_daemon_run(steps: int) -> list[float]:
     return res.losses
 
 
-@pytest.mark.gpu
-def test_same_program_across_daemon_relaunch():
+def test_relaunched_daemon_same_program_reruns_clean_and_reproduces_losses():
     first = one_daemon_run(3)
     second = one_daemon_run(3)   # same prog_id in a fresh daemon
     assert all(math.isfinite(x) for x in first + second), (first, second)

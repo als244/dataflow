@@ -1,3 +1,19 @@
+"""Program IR validation: validate_program accepts well-formed programs and
+collects every structural error found in a malformed one.
+
+Tests:
+- test_valid_minimal_program: a one-object, one-task program with a single output validates.
+- test_errors_collected: one raise reports duplicate initial object, missing input, negative runtime, and duplicate task id together.
+- test_dual_location_initial_allowed: the same id may be an initial object in both backing and fast.
+- test_dual_location_initial_size_mismatch_rejected: dual-location initials with differing sizes are rejected as inconsistent.
+- test_future_input_rejected: an input produced only by a later task is rejected as not existing yet.
+- test_output_collision_rejected: an output id that collides with an existing object is rejected.
+- test_mutates_must_be_input: a mutates entry that is not one of the task's inputs is rejected.
+- test_tensor_size_mismatch_rejected: an object whose size_bytes disagrees with its dense tensor shape and dtype is rejected.
+- test_tensor_size_exact_ok: an object whose size_bytes exactly matches its tensor footprint validates.
+- test_directive_requires_bandwidth: a transfer directive needs bandwidth_to_slow unless it carries a per-directive runtime override.
+- test_release_and_offload_contradiction: releasing and offloading the same object after one task is rejected.
+"""
 import pytest
 
 from dataflow.core import (

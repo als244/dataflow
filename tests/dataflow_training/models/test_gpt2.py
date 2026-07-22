@@ -2,7 +2,20 @@
 model-step dW gates uniform/ragged/tied (level 3), and the twin's packed
 fp32 equivalence — the varlen-native bar for the learned-position family
 (positions restart per segment; LayerNorm itself is per-token and has no
-sequence axis)."""
+sequence axis).
+
+Tests:
+- test_layernorm_backward: the fused layernorm fwd/bwd matches the autograd reference for output and dx/dw/db.
+- test_layernorm_apply_matches_fwd: layernorm_apply reproduces the fwd output byte-for-byte given the saved mean/rstd.
+- test_gelu_backward_matches_autograd: tanh-approx gelu forward and the aten gelu_backward match autograd.
+- test_twin_packed_matches_per_sequence_fp32: the fp32 twin's packed-sequence loss equals the token-weighted mean of the per-sequence losses.
+- test_twin_rejects_overlong_segment: a segment longer than n_ctx raises ValueError in the twin forward.
+- test_model_step_uniform: a uniform tiny-cfg model-step matches golden, bias params under the walk envelope.
+- test_model_step_ragged: a ragged sequence-length model-step matches golden.
+- test_model_step_tied: the tied embed/head variant's model-step matches golden.
+- test_model_step_nobias: the bias-free variant (no b_* fields) model-step matches golden without an envelope.
+- test_qkv_bias_grad_sections: c_attn.bias q/v grad sections agree tightly (cos > 0.999) while both engine and twin k sections sit at the structural-zero noise floor.
+"""
 import pytest
 
 torch = pytest.importorskip("torch")
@@ -122,12 +135,14 @@ def test_twin_rejects_overlong_segment():
 BIAS_WALK_PARAM_ATOL = {"bias": 3e-2}
 
 
+@pytest.mark.sim
 def test_model_step_uniform():
     check_model_step(ShapedGpt2Config.tiny(), fast_memory_capacity=FAST_MEM,
                      param_atol=BIAS_WALK_PARAM_ATOL,
                      **family_gate_kwargs("gpt2")).assert_ok()
 
 
+@pytest.mark.sim
 def test_model_step_ragged():
     cfg = replace(ShapedGpt2Config.tiny(), seq_lens=(35, 17, 12))
     check_model_step(cfg, fast_memory_capacity=FAST_MEM,
@@ -135,6 +150,7 @@ def test_model_step_ragged():
                      **family_gate_kwargs("gpt2")).assert_ok()
 
 
+@pytest.mark.sim
 def test_model_step_tied():
     check_model_step(ShapedGpt2Config.tiny_tied(),
                      fast_memory_capacity=FAST_MEM,
@@ -142,6 +158,7 @@ def test_model_step_tied():
                      **family_gate_kwargs("gpt2")).assert_ok()
 
 
+@pytest.mark.sim
 def test_model_step_nobias():
     """The bias-free variant has no b_* fields at all — no envelope."""
     check_model_step(ShapedGpt2Config.tiny_nobias(),
@@ -149,6 +166,7 @@ def test_model_step_nobias():
                      **family_gate_kwargs("gpt2")).assert_ok()
 
 
+@pytest.mark.sim
 def test_qkv_bias_grad_sections():
     """The sharp instrument behind the c_attn.bias envelope: the q/v bias
     grad sections must agree tightly (real signal, tracked at rel ~3e-3),
@@ -174,7 +192,7 @@ def test_qkv_bias_grad_sections():
             assert cos_sim(e[sl], t[sl]) > 0.999, (name, sec)
         k_e, k_t = e[d:2 * d], t[d:2 * d]
         live = min(float(e[:d].norm()), float(e[2 * d:].norm()))
-        assert float(k_e.norm()) < 0.05 * live, (name, "engine k not ~0")
-        assert float(k_t.norm()) < 0.05 * live, (name, "twin k not ~0")
+        assert float(k_e.norm().detach()) < 0.05 * live, (name, "engine k not ~0")
+        assert float(k_t.norm().detach()) < 0.05 * live, (name, "twin k not ~0")
         checked += 1
     assert checked == cfg.n_layers

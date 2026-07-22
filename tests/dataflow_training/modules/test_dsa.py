@@ -8,6 +8,17 @@ scatter+causal mask re-suppresses them); mask-form == gather-form
 attention equality (fwd AND grads — softmax permutation invariance);
 indexer KL gradient == softmax(I) - p on the live set, with ZERO
 gradient into detached inputs; varlen.
+
+Tests:
+- test_index_scores_vs_hand_loop: the einsum'd index-scores reference matches a literal per-(t,s,j) hand loop of the paper's score formula.
+- test_topk_padding_is_mask_safe_and_tie_rule_consistent: under total score ties the live set after causal re-suppression is exactly the causal prefix, full rows select topk live entries, and the runtime dsa_topk kernel agrees with the reference.
+- test_mask_form_equals_gather_form_fwd_and_bwd: masked-softmax attention over the full set equals gather-then-dense-softmax over the selected set for both outputs and input gradients.
+- test_indexer_kl_grad_is_softmax_minus_p_and_inputs_detached: the indexer-KL gradient equals softmax(I)-p on the live set, with no gradient reaching the detached main-path inputs while indexer weights stay live.
+- test_index_scores_ragged_packing_matches_per_sequence: packed ragged index scores fully mask cross-sequence blocks and match per-sequence computation within bf16 tolerance.
+- test_dsa_kernels_vs_references_and_autograd: the dsa_topk and sparse-attention fwd/bwd kernels match the references and autograd, zero the value-padding grads, and reproduce bitwise on rerun.
+- test_dsa_index_bwd_vs_autograd: the dsa_index_bwd kernel's dq/dk/dw match autograd through the score formula.
+- test_dsv32_block_fwd_recompute_bwd_match_golden: the dense and moe dsv32 block fwd/recompute/bwd match the golden autograd twin, including the policy-frozen router-bias empty dW slot.
+- test_absorbed_op_matches_expanded_reference: the absorbed-layout sparse-attention op matches the MHA-expanded mask reference when all heads share one K=V row.
 """
 from dataclasses import dataclass
 
@@ -124,7 +135,6 @@ def test_topk_padding_is_mask_safe_and_tie_rule_consistent():
     # row 3 has prefix {0..3}: whatever the tie order, the LIVE set after
     # causal re-suppression is exactly the prefix
     assert (mask[3] == 0).nonzero().flatten().tolist() == [0, 1, 2, 3]
-    assert set(idx[3, :4].tolist()) <= {0, 1, 2, 3} or True  # pad slots free
     # a full row (t=15) selects exactly 8 live entries
     assert (mask[15] == 0).sum().item() == 8
     # runtime kernel op agrees with the reference on the SAME input
@@ -252,7 +262,7 @@ def test_index_scores_ragged_packing_matches_per_sequence():
         # continuous form — docs/correctness_compare.md gotcha 4)
 
 
-# --- eager kernel ops vs references (M-H1b) ----------------------------------------
+# --- eager kernel ops vs references ----------------------------------------
 
 
 def _mla_pad_tensors(d, seed):
@@ -375,7 +385,7 @@ def test_dsa_index_bwd_vs_autograd():
     assert rel_l2(dw, gw) < 1e-4
 
 
-# --- dsv32 block executables vs golden autograd (M-H1c gate) ----------------------
+# --- dsv32 block executables vs golden autograd ----------------------
 
 
 def _dsv32_dims(**over):
@@ -463,7 +473,7 @@ def _golden_dsv32_block(x_ref, leaves, dims, kind, sel_idx=None, route_ids=None,
 
 
 @pytest.mark.parametrize("kind", ["dense", "moe"])
-def test_dsv32_block_ladder2(kind):
+def test_dsv32_block_fwd_recompute_bwd_match_golden(kind):
     from dataflow_training.model_families.dsv32.blocks import (
         Dsv32DenseBlockBwd,
         Dsv32DenseBlockFwd,

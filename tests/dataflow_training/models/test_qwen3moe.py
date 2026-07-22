@@ -7,6 +7,20 @@ qwen3 classes; per-head rstds), GQA exercised in the tiny config (4 q /
 routing (norm_topk_prob=true), aux at 0.001, NO shared expert, recompute
 reproducing the routing decision bit-exactly, fixed-seed engine
 determinism.
+
+Tests:
+- test_qwen3moe_stage_context_completeness: the forward block's emitted context fields equal the activation layout and only the y-only combine epilogue sits past the recompute boundary.
+- test_qwen3moe_lowering_validates_and_plans: tiny cfg lowers and validates as qwen3moe with untied embed/head and q3moeattn/head_loss block keys, and plans/simulates with nonzero task intervals.
+- test_qwen3moe_full_scale_presets_lower_and_validate: the 30B and 235B presets lower, validate, and emit one attention block per layer despite oversized weight footprints.
+- test_qwen3moe_partial_ownership_lowering_rejected: lowering with a partial expert-ownership MoE spec raises NotImplementedError.
+- test_qwen3moe_aux_zero_model_step_vs_golden: an aux_coef=0 model-step matches the golden twin.
+- test_qwen3moe_plan_invariance: the model-step matches golden across memory budgets and recompute levels.
+- test_qwen3moe_batch2_packed_sequences_vs_golden: a batch=2 packed-sequence model-step matches golden.
+- test_qwen3moe_grad_accum_two_rounds_matches_reference: two grad-accum rounds (per-round CE+aux, one backward) leave engine final weights matching the twin.
+- test_qwen3moe_fixed_seed_bitwise_deterministic: two runs at the same seed produce identical loss and weights.
+- test_qwen3moe_measured_costs_replan_still_golden: profiling then replanning on measured costs leaves the math unchanged.
+- test_qwen3moe_poison_on_free_changes_nothing: the poison_on_free engine option leaves loss and weights unchanged and non-NaN.
+- test_qwen3moe_interleaving_stress_changes_nothing: random per-task launch jitter leaves loss and weights unchanged.
 """
 from dataclasses import replace
 
@@ -66,6 +80,7 @@ def test_qwen3moe_stage_context_completeness():
     assert names[Qwen3MoeBlockFwd.recompute_stage_count():] == ["moe_experts2_combine"]
 
 
+@pytest.mark.sim
 def test_qwen3moe_lowering_validates_and_plans():
     from dataflow.core import validate_program
     from dataflow_training.model_families.families import resolve_family
@@ -88,8 +103,9 @@ def test_qwen3moe_lowering_validates_and_plans():
 
 def test_qwen3moe_full_scale_presets_lower_and_validate():
     """30B (48L) and 235B are definition-validated: lowering + exact sizes
-    succeed even though neither trains on this host (183 GiB / 1.4 TiB
-    pinned — documented in training/models/qwen3moe.py)."""
+    succeed even though their weight footprints (183 GiB / 1.4 TiB) exceed
+    any single small-VRAM device — lowering-only here (sizes documented in
+    training/models/qwen3moe.py)."""
     from dataflow.core import validate_program
     from dataflow_training.model_families.qwen3moe import ShapedQwen3MoeConfig, lower_qwen3moe
 
@@ -119,6 +135,7 @@ def test_qwen3moe_partial_ownership_lowering_rejected():
 
 
 
+@pytest.mark.sim
 def test_qwen3moe_aux_zero_model_step_vs_golden():
     check_model_step(
         _tiny_cfg(aux_coef=0.0), fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
@@ -126,6 +143,7 @@ def test_qwen3moe_aux_zero_model_step_vs_golden():
     ).assert_ok()
 
 
+@pytest.mark.sim
 def test_qwen3moe_plan_invariance():
     cfg = _tiny_cfg()
     r1 = check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
@@ -141,13 +159,15 @@ def test_qwen3moe_plan_invariance():
         r.assert_ok()
 
 
+@pytest.mark.sim
 def test_qwen3moe_batch2_packed_sequences_vs_golden():
     cfg = _tiny_cfg(batch=2, seq_len=64)
     check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
                      **family_gate_kwargs("qwen3moe")).assert_ok()
 
 
-def test_qwen3moe_ga2_matches_reference():
+@pytest.mark.sim
+def test_qwen3moe_grad_accum_two_rounds_matches_reference():
     """Two grad-accum rounds with per-round CE + per-round aux, ONE
     backward on the total — engine == the isolated twin (each round is
     one packed forward, so the twin's forward-global aux IS the engine's
@@ -265,6 +285,7 @@ def _assert_same(a: dict, b: dict, tol: float = 1e-3):
         assert err < tol, f"{k}: rel_l2={err}"
 
 
+@pytest.mark.sim
 def test_qwen3moe_fixed_seed_bitwise_deterministic():
     a = _run()
     b = _run()
@@ -274,6 +295,7 @@ def test_qwen3moe_fixed_seed_bitwise_deterministic():
             assert torch.equal(a[k], b[k]), k
 
 
+@pytest.mark.sim
 def test_qwen3moe_measured_costs_replan_still_golden():
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow_training.model_families.families import resolve_family
@@ -296,6 +318,7 @@ def test_qwen3moe_measured_costs_replan_still_golden():
 
 
 
+@pytest.mark.sim
 def test_qwen3moe_poison_on_free_changes_nothing():
     base = _run()
     poisoned = _run(engine_kwargs={"poison_on_free": True})
@@ -303,6 +326,7 @@ def test_qwen3moe_poison_on_free_changes_nothing():
     assert poisoned["loss"] == poisoned["loss"]  # not NaN
 
 
+@pytest.mark.sim
 def test_qwen3moe_interleaving_stress_changes_nothing():
     from dataflow.runtime.device.cuda_spin import SpinKernel
 

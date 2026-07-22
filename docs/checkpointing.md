@@ -339,9 +339,9 @@ Two optimizations for the stall window, in recommended order:
 - ranged saves and slice round-trips
   (`tests/dataflow/service/test_slice_snapshots.py`)
 - record format, own-artifact-last reassembly, completeness marker
-  (`tests/dataflow_training/training/test_checkpoint_record.py`)
+  (`tests/dataflow_training/training/surfaces/test_checkpoint_record.py`)
 - end-to-end resume drills — single box, same-box world 2 with
   partitioned saves, cross-box with artifact redistribution — each
   asserting the resumed tail reproduces the uninterrupted run
-  (`tests/fleet/test_world1_resume_drill.py`,
+  (`tests/fleet/checkpoint_resume/test_world1_resume_drill.py`,
   `test_world2_resume_drill.py`, `test_crossbox_resume_drill.py`)
