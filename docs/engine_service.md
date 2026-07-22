@@ -158,47 +158,16 @@ trained stores its own bytes — soundness over savings).
 back your `client_meta` — step counter, LR state, data cursor —
 so resume is one call.
 
-## The peer plane: links, groups, backends
+## The peer plane
 
-Daemons speak to each other over **peer links** — TCP control
-connections the client wires up with `peer_connect(name,
-"ip:port")`. A link carries framed control messages, object
-transfers (`send_object`; payloads ride the link on the socket lane
-or one-sided RDMA writes when both ends brought RC QPs up), and the
-collective frames below. For a fleet, the conductor connects a
-**star**: the daemon that will coordinate each group holds a link to
-every other member.
-
-**Groups are created by one verb, on one daemon.** There is no join
-verb: the client calls `create_peer_group(name, members, backend)`
-once, on the daemon it thereby makes the **coordinator** (rank 0 —
-member ranks are positions in the member list). The coordinator
-pushes a `GROUP_JOIN` frame down its star links; each member adopts
-the group from the frame, **attaches its backend, and only then**
-answers `GROUP_ACK`. When the ack barrier fills, the coordinator
-attaches its own backend and the verb returns. The join barrier is
-therefore an **attachment barrier**: `create_peer_group` returning
-means every rank's backend is live and the group can carry
-collectives immediately — no rank ever races bring-up against
-traffic.
-
-**Backends attach the same way on both lanes.** With
-`backend="nccl"`, attachment is the NCCL bootstrap (the uniqueId
-rides the join frame; init is collective, so members bootstrap on
-dedicated threads between join and ack). With `backend="hostmem"`,
-attachment builds the staged-exchange machinery — pinned staging
-regions, the exchange worker, the stream-release flag — and rides
-RDMA between members when their link has it, sockets otherwise.
-Either way a member that fails to attach withholds its ack, the
-coordinator's barrier times out, and the verb fails loudly; a
-member that dies later fans `GROUP_ERROR` through the coordinator
-to every rank and the group refuses further work.
-
-Tasks reach their groups by *role*: a program task declares
-`comm_groups={"dp": <group name>}` and the engine injects the live
-handles into its context — see
-[distributed_training.md](distributed_training.md) for how training
-composes this.
+Daemons talk to each other over peer links (`peer_connect`), form
+named collective **groups** with one `create_peer_group` verb on the
+group's coordinator (no join verb — members join and attach their
+backends inside the barrier, so the verb returning means every
+rank's backend is live), and carry object transfers and collectives
+over socket, RDMA, or nccl lanes. The full design — planes, links,
+threading, groups, backends, and how tasks consume groups — lives
+in [engine_networking.md](engine_networking.md).
 
 ## Watching
 

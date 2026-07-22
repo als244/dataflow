@@ -20,7 +20,7 @@ crosses the wire as programs, objects, and run calls.
 by the conductor — one `create_peer_group` verb on the coordinator
 daemon; members join and attach their backends inside the barrier
 (the protocol lives in
-[engine_service.md](engine_service.md#the-peer-plane-links-groups-backends)). The group's backend comes from the topology
+[engine_networking.md](engine_networking.md)). The group's backend comes from the topology
 (`backend = "auto"` resolves to **nccl** on any real boot; the
 hostmem lane remains for CI/loopback). Before any fleet run the
 conductor performs a **handshake**: every member must be on the same
