@@ -454,10 +454,13 @@ refuse or warn rather than corrupt):
 
 - world > 2 requires `backend = "nccl"` — hostmem collectives are
   pairwise.
-- NCCL env defaults in `daemons.py` were tuned for a socket fabric
-  (`NCCL_IB_DISABLE=1` etc.). Harmless intra-node (NVLink/P2P
-  ignores them), but a MULTI-node IB/RoCE cluster needs them moved
-  to per-fabric topology settings first.
+- NCCL env defaults in `daemons.py` enable the IB/RoCE transport
+  with the GID index pinned per host from the topology
+  (`gid_index`, default 3 — NCCL's own GID selection is not
+  trustworthy on multi-GID ports); multi-QP spreads each connection,
+  and the tuned socket transport remains the fallback for links
+  without RDMA. A new fabric sets `gid_index` per host in its
+  topology file.
 - Tensor parallelism (`--tp-mlp`) is valid on this substrate
   (matched GPUs) but is a correctness track, not a throughput one.
 - Fleet mode requires `--rounds` explicitly (launches refuse without it); always pass it
