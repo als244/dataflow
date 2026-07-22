@@ -372,13 +372,17 @@ class EngineClient:
         import time as _t
 
         t0 = _t.monotonic()
+        pause = 0.0002
         while True:
             row = self.transfer_status(send_id)
             if row["state"] in ("done", "error"):
                 return row
             if _t.monotonic() - t0 > timeout:
                 raise TimeoutError(f"transfer {send_id}: {row}")
-            _t.sleep(0.02)
+            # start near the sub-ms completion floor and back off
+            # toward 10 ms so long transfers don't spin the verb plane
+            _t.sleep(pause)
+            pause = min(pause * 2, 0.01)
 
     def run(self, prog_id: str, *, args: dict | None = None,
             rebind: dict | None = None, fetch=(), label=None,

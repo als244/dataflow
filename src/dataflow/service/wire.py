@@ -68,6 +68,14 @@ class Conn:
     def __init__(self, sock: socket.socket):
         self.sock = sock
         self._rbuf = b""
+        if sock.family in (socket.AF_INET, socket.AF_INET6):
+            # control frames are small and latency-critical: without
+            # NODELAY the second sub-MSS write of an exchange sits in
+            # Nagle waiting out the peer's delayed ACK — a flat ~40 ms
+            # tax on every small transfer (measured). Unix sockets
+            # have no Nagle, so only INET links get the option.
+            self.sock.setsockopt(socket.IPPROTO_TCP,
+                                 socket.TCP_NODELAY, 1)
 
     # ---- send ----
     def send(self, msg: dict, payload: bytes | memoryview | None = None) -> None:
