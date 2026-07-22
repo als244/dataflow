@@ -12,6 +12,7 @@ import threading
 import time
 
 from dataflow.service import EngineClient, EngineConfig, Server
+from dataflow.service.wire import ServiceError
 
 PORTS = {"g-a": 29491, "g-b": 29492, "g-c": 29493, "g-solo": 29494}
 
@@ -72,16 +73,17 @@ def test_group_lifecycle_and_error_fanout(tmp_path):
             cb._call("create_peer_group",
                      {"name": "bad", "members": ["g-a", "g-b"]})
             raise AssertionError("expected BAD_REQUEST")
-        except Exception as e:
-            assert "rank 0" in str(e)
+        except ServiceError as e:
+            assert e.code == "BAD_REQUEST", e
+            assert "rank 0" in e.message
 
         # duplicate name refused
         try:
             ca._call("create_peer_group",
                      {"name": "dp", "members": ["g-a", "g-b", "g-c"]})
             raise AssertionError("expected GROUP_EXISTS")
-        except Exception as e:
-            assert "GROUP_EXISTS" in str(e) or "exists" in str(e)
+        except ServiceError as e:
+            assert e.code == "GROUP_EXISTS", e
 
         # group_error two-hop fan-out: member b reports; c hears it
         # via the coordinator despite having NO link to b
