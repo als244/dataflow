@@ -17,7 +17,10 @@ Daemons never talk to the conductor's Python state — everything
 crosses the wire as programs, objects, and run calls.
 
 **Groups and backends.** Collectives run over a *peer group* created
-by the conductor. The group's backend comes from the topology
+by the conductor — one `create_peer_group` verb on the coordinator
+daemon; members join and attach their backends inside the barrier
+(the protocol lives in
+[engine_service.md](engine_service.md#the-peer-plane-links-groups-backends)). The group's backend comes from the topology
 (`backend = "auto"` resolves to **nccl** on any real boot; the
 hostmem lane remains for CI/loopback). Before any fleet run the
 conductor performs a **handshake**: every member must be on the same
