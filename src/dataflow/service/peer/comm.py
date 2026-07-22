@@ -89,6 +89,15 @@ def run_wait_value_probe() -> bool:
         return False
 
 
+def peer_read_tensor(peer):
+    """A uint8 tensor over the received (immutable) peer bytes, for
+    READING only — the caller sums or copies it into a target, never
+    writes it. bytearray hands torch a writable buffer so it does not
+    warn about wrapping a non-writable one; the extra copy stays on the
+    socket fallback lane, which the rdma lane sits above."""
+    return torch.frombuffer(bytearray(peer), dtype=torch.uint8)
+
+
 class CollJob:
     def __init__(self, seq: int, ready_event, action, lane: str):
         self.seq = seq
@@ -427,7 +436,7 @@ class HostmemComm:
         stats["sock_send_s"] += t1 - t0
         peer = self.await_entry(seq, "data")
         stats["sock_recv_s"] += time.monotonic() - t1
-        return torch.frombuffer(peer, dtype=torch.uint8)
+        return peer_read_tensor(peer)
 
     def reduce_into_stage(self, stage_bytes, theirs_bytes, dtype,
                           lo: int = 0) -> None:
@@ -458,14 +467,14 @@ class HostmemComm:
                 self.send_data(job.seq, self.out.np[:nbytes])
             else:
                 peer = self.await_entry(job.seq, "data")
-                stage.copy_(torch.frombuffer(peer, dtype=torch.uint8))
+                stage.copy_(peer_read_tensor(peer))
         elif action == "reduce":
             if self.rank != root:
                 self.send_data(job.seq, self.out.np[:nbytes])
             else:
                 peer = self.await_entry(job.seq, "data")
                 self.reduce_into_stage(
-                    stage, torch.frombuffer(peer, dtype=torch.uint8),
+                    stage, peer_read_tensor(peer),
                     dtype)
         elif action == "reduce_scatter":
             half = nbytes // 2
@@ -475,7 +484,7 @@ class HostmemComm:
             peer = self.await_entry(job.seq, "data")
             own = self.out.t[own_lo:own_lo + half]
             self.reduce_into_stage(
-                own, torch.frombuffer(peer, dtype=torch.uint8), dtype)
+                own, peer_read_tensor(peer), dtype)
             if own_lo != 0:
                 stage[:half].copy_(own)
         elif action == "all_gather":
@@ -485,7 +494,7 @@ class HostmemComm:
             peer = self.await_entry(job.seq, "data")
             peer_lo = half if self.rank == 0 else 0
             self.out.t[peer_lo:peer_lo + half].copy_(
-                torch.frombuffer(peer, dtype=torch.uint8))
+                peer_read_tensor(peer))
         else:
             raise ValueError(action)
 
