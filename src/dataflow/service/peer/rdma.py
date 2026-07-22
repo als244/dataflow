@@ -90,7 +90,8 @@ class RdmaLinkQP:
     def local_info(self) -> dict:
         return {"gid": self.engine.gid_str,
                 "gid_index": self.engine.gid_index,
-                "qpn": self.qp.qp_num, "psn": 0}
+                "qpn": self.qp.qp_num, "psn": 0,
+                "mtu": self.engine.active_mtu}
 
     def connect(self, remote: dict) -> None:
         attr = QPAttr(qp_state=ibv_qp_state.IBV_QPS_INIT)
@@ -102,7 +103,10 @@ class RdmaLinkQP:
                          sgid_index=self.engine.gid_index)
         ah = AHAttr(gr=gr, is_global=1, port_num=self.engine.port)
         attr = QPAttr(qp_state=ibv_qp_state.IBV_QPS_RTR)
-        attr.path_mtu = ibv_mtu.IBV_MTU_1024
+        # both ends compute the same min; peers that predate the mtu
+        # field are driven at the old fixed 1024
+        attr.path_mtu = min(self.engine.active_mtu,
+                            int(remote.get("mtu", ibv_mtu.IBV_MTU_1024)))
         attr.dest_qp_num = int(remote["qpn"])
         attr.rq_psn = int(remote.get("psn", 0))
         attr.max_dest_rd_atomic = 1
@@ -160,6 +164,7 @@ class RdmaEngine:
         self.device = device
         self.port = port
         self.ctx = Context(name=device)
+        self.active_mtu = int(self.ctx.query_port(port).active_mtu)
         self.pd = PD(self.ctx)
         self.slab_mr: MR | None = None
         self.slab_base = 0
