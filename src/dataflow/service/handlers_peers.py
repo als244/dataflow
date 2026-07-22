@@ -20,6 +20,18 @@ class SendCompletion:
         self.store.release_leases([self.oid])
 
 
+class BenchFinish:
+    """p2p_bench per-transfer completion latch."""
+
+    def __init__(self):
+        import threading
+
+        self.done = threading.Event()
+
+    def __call__(self, ticket) -> None:
+        self.done.set()
+
+
 def install(server) -> None:
     store = server.store
     st = server.state
@@ -119,6 +131,85 @@ def install(server) -> None:
         nm_now.groups.drop(a["name"])
         return {"ok": True}
 
+    def p2p_bench(call):
+        """Point-to-point transfer bench — coll_bench's sibling for
+        the TRANSFER path. Not a collective, so it runs on ONE
+        daemon: timed sends of slab-scratch payloads to ``peer``
+        over the link's engine-default lane (rdma when the link
+        has it, socket otherwise — the lane real send_object
+        traffic takes); each wall runs from start_send to the
+        remote-commit acknowledgement with no verb-plane hops
+        inside the window. args {peer, sizes: [bytes...], iters}.
+        Returns the lane, per-size acked walls, and a pipelined
+        sustained wall (all sends in flight, then wait all).
+        Remote-side bench objects land as p2pbench_*."""
+        import time as time_mod
+
+        a = call.args
+        m = require_nm()
+        if store.slab is None:
+            raise ServiceError("BAD_REQUEST",
+                               "p2p_bench requires a real "
+                               "(pinned) boot")
+        peer = a["peer"]
+        link = m.links.get(peer)
+        if link is None or not link.alive:
+            raise ServiceError("PEER_UNREACHABLE", peer)
+        qp = getattr(link, "rdma_qp", None)
+        lane = ("rdma" if m.rdma is not None and qp is not None
+                and qp.ready else "socket")
+        sizes = [int(s) for s in a["sizes"]]
+        iters = int(a.get("iters", 5))
+        from .hostmem import bytes_view
+
+        rows = []
+        for nbytes in sizes:
+            ext = store.alloc_scratch(nbytes)
+            try:
+                ptr = store.slab.ptr + ext.offset
+                view = bytes_view(ptr, nbytes)
+                view[:1] = b"\x5a"
+                view[-1:] = b"\xa5"
+                walls = []
+                for rep in range(iters + 1):
+                    fin = BenchFinish()
+                    t0 = time_mod.monotonic()
+                    send_id = m.start_send(
+                        peer, f"p2pbench_{nbytes}", view,
+                        overwrite=True, meta={}, on_finish=fin,
+                        src_ptr=ptr)
+                    if not fin.done.wait(120.0):
+                        raise ServiceError(
+                            "INTERNAL", f"p2p_bench {nbytes}B "
+                                        f"rep {rep}: timeout")
+                    row = m.transfers.get(send_id, {})
+                    if row.get("state") != "done":
+                        raise ServiceError(
+                            "INTERNAL", f"p2p_bench {nbytes}B "
+                                        f"rep {rep}: "
+                                        f"{row.get('state')}")
+                    if rep:
+                        walls.append(time_mod.monotonic() - t0)
+                fins = []
+                t0 = time_mod.monotonic()
+                for k in range(iters):
+                    fin = BenchFinish()
+                    fins.append(fin)
+                    m.start_send(peer, f"p2pbench_{nbytes}_p{k}",
+                                 view, overwrite=True, meta={},
+                                 on_finish=fin, src_ptr=ptr)
+                for fin in fins:
+                    if not fin.done.wait(300.0):
+                        raise ServiceError(
+                            "INTERNAL", f"p2p_bench {nbytes}B "
+                                        f"sustained: timeout")
+                sustained = time_mod.monotonic() - t0
+                rows.append({"bytes": nbytes, "walls_s": walls,
+                             "sustained_s": sustained})
+            finally:
+                store.release_scratch(ext)
+        return {"lane": lane, "iters": iters, "rows": rows}
+
     def coll_bench(call):
         """Replay a transfer PATTERN through the real collective path
         (the same enqueue/exchange/reduce the optimizer tasks drive):
@@ -208,6 +299,7 @@ def install(server) -> None:
 
     server.dispatcher.handlers.update({
         "coll_bench": coll_bench,
+        "p2p_bench": p2p_bench,
         "create_peer_group": create_peer_group,
         "destroy_peer_group": destroy_peer_group,
         "peer_connect": peer_connect,

@@ -361,6 +361,15 @@ class EngineClient:
     def transfer_status(self, send_id: str) -> dict:
         return self._call("transfer_status", {"send_id": send_id})
 
+    def p2p_bench(self, peer: str, sizes, *, iters: int = 5,
+                  timeout: float = 900.0) -> dict:
+        """In-engine peer-transfer bench: timed acked sends + a
+        pipelined sustained pass per size, over the link's default
+        lane (see engine_networking.md, Benchmarking the planes)."""
+        return self._call("p2p_bench",
+                          {"peer": peer, "sizes": list(sizes),
+                           "iters": iters}, timeout=timeout)
+
     def profiler_control(self, action: str) -> dict:
         """start|stop the daemon-side profiler capture (vendor API via
         the annotator abstraction; nsys capture-range pairs with it)."""

@@ -71,15 +71,20 @@ and how the count scales:
 | nm-housekeeping | 1 | heartbeats, peer-down sweeps, protocol ticks |
 | nm-coll-\<group\> | per hostmem group | the collective exchange worker |
 | nm-comm-build-\<group\> | transient | attaches a group's backend, then exits |
+| nm-rdma-write-\<transfer\> | transient | one-sided writer for one outbound rdma transfer |
 | snapshot-writer | 1 | background snapshot streaming |
 
 The census is therefore: a **fixed four** (main, nm-accept,
 nm-housekeeping, snapshot-writer) **+ one per client connection +
 one per active run + one per peer link + one per hostmem group**,
-with a short-lived builder per group creation. nccl groups add no
-persistent threads (collectives enqueue device-direct on the group
-stream), and links add no sender threads — sends are issued by
-whichever thread holds the frame, serialized per link.
+with two short-lived kinds: a builder per group creation and a
+writer per outbound rdma transfer. Links add NO persistent sender
+threads: socket-lane sends (frames and payload chunks alike) are
+issued inline by whichever thread holds the frame, serialized per
+link, while an rdma transfer spawns its transient writer precisely
+so the reader never blocks on the write's completion polling. nccl
+groups add no persistent threads either — collectives enqueue
+device-direct on the group stream.
 
 Two rules make the concurrency tractable. **The reader never
 blocks**: a link's reader thread dispatches frames and returns —
@@ -185,6 +190,39 @@ member on the same repo commit and torch/cuda stack, the conductor
 itself clean — because the failure modes of skew are silent
 ([distributed_training.md](distributed_training.md)).
 
+## Benchmarking the planes
+
+Two verbs measure the peer plane from inside the engine — through
+the real transports, with no verb-plane round trips inside the
+timed window.
+
+**`coll_bench` — the collective path.** Replays a transfer pattern
+through the same enqueue/exchange/reduce machinery the optimizer
+tasks drive. Collectives are collective: **both group members must
+be inside the verb concurrently** (drive the second member's client
+from its own process). Args: `{group, sizes: [bytes, ...], dtype,
+reps, verify, rs_ag_identity}` — `verify` fills known patterns and
+checks the reduced result; `rs_ag_identity` additionally asserts
+the reduce_scatter + all_gather == allreduce identity at the given
+size. Returns per-rep walls plus the comm's phase-time breakdown
+(staging, exchange, reduce) and which lane served it.
+
+**`p2p_bench` — the transfer path.** Point-to-point is not a
+collective, so this verb runs on **one** daemon: it drives timed
+transfers to a named peer over the link's engine-default lane
+(rdma when the link has it, socket otherwise — the same lane real
+`send_object` traffic takes) and times each transfer to its
+remote-commit acknowledgement inside the daemon. Args:
+`{peer, sizes: [bytes, ...], iters}`. Returns per-transfer walls, a
+sustained back-to-back figure per size, and the lane that served
+the run — the honest engine-side answer to "what does an object
+transfer cost on this link".
+
+Both verbs report the lane they actually used; a demoted link
+benches as what it is. The standalone sweep harness in the bench
+tooling drives these across size grids and renders
+perftest-style tables.
+
 ## Interface quick reference
 
 | surface | calls |
@@ -192,4 +230,4 @@ itself clean — because the failure modes of skew are silent
 | links | `peer_connect`, `peer_disconnect`, `list_peers` |
 | groups | `create_peer_group` (coordinator only; returns = all attached) |
 | transfers | `send_object`, `send_object_group`, `transfer_status`, `wait_transfer` |
-| diagnostics | `coll_bench` (replay a collective pattern through the real path), `subscribe_events` (`peer_up/peer_down/peer_rdma_up/group_*`), `engine_status` |
+| diagnostics | `coll_bench`, `p2p_bench` (see Benchmarking the planes), `subscribe_events` (`peer_up/peer_down/peer_rdma_up/group_*`), `engine_status` |
