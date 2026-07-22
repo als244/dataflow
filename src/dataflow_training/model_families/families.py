@@ -542,7 +542,10 @@ def build_init_program(fam, cfg, *, seed: int = 0,
     in-process ``initial_values`` path by construction. Replaces the
     retired materialize_group service verb: register + run this
     program through the ordinary verbs, and the daemon's final-object
-    capture persists every W_/O_/Aux_/data object into the store.
+    capture persists every W_/O_/Aux_ object into the store. DATA
+    objects (role "input") are deliberately NOT created here —
+    external inputs must be put_object'd, and registration fails
+    loudly on any that are missing.
 
     ``object_sizes`` overrides per-object byte sizes (sharded-optimizer
     runs shrink O_*); ``tp_view`` selects a per-rank weight view for
@@ -554,6 +557,14 @@ def build_init_program(fam, cfg, *, seed: int = 0,
     train = fam.lower(cfg)
     outs = []
     for spec in train.initial_objects:
+        if spec.role == "input":
+            # DATA IS EXTERNAL: tokens/targets are the program's real
+            # inputs and must arrive via put_object. Fabricating them
+            # here (the old behavior: seeded random fill) made
+            # never-fed data silently trainable — registration's
+            # missing_inputs is the loud gate that now enforces
+            # external provisioning.
+            continue
         size = spec.size_bytes
         if object_sizes and spec.id in object_sizes:
             size = int(object_sizes[spec.id])
