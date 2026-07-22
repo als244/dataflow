@@ -32,7 +32,7 @@ from dataclasses import asdict, replace  # noqa: E402
 
 import dataflow_training.model_families.tp_mlp as tp  # noqa: E402  (registers)
 from dataflow.core.jsonio import program_to_dict  # noqa: E402
-from dataflow.service import EngineClient, EngineConfig, Server  # noqa: E402
+from dataflow.service import EngineClient  # noqa: E402
 from dataflow_training.lowering.planning import plan_program  # noqa: E402
 from dataflow_training.register import register_all  # noqa: E402
 from dataflow_training.run.driver import init_model  # noqa: E402
@@ -78,21 +78,6 @@ def reference(cfg, seed):
             "dx": dx_parts[0] + dx_parts[1],
             "y_full": hf @ dev["w2"],
             "dx_full": da1f @ dev["w1"].T + da3f @ dev["w3"].T}
-
-
-def boot(tmp, name, peer_port):
-    sock = str(tmp / f"{name}.sock")
-    server = Server(EngineConfig(
-        socket_path=sock, fake=False, slab_backing_gib=0.4,
-        peer_name=name, peer_listen=f"127.0.0.1:{peer_port}"))
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    for _ in range(600):
-        try:
-            EngineClient(sock, client_name="probe").close()
-            break
-        except OSError:
-            time.sleep(0.01)
-    return EngineClient(sock, client_name=name)
 
 
 class RankRun:
@@ -212,17 +197,56 @@ def check_pair(got, ref, hetero_ranks=()):
     assert y_band < 3e-2 and dx_band < 3e-2, (y_band, dx_band)
 
 
-def test_tp_mlp_loopback_hostmem(tmp_path):
-    ca = boot(tmp_path, "tp-a", PA)
-    cb = boot(tmp_path, "tp-b", PB)
+def test_tp_mlp_loopback_hostmem():
+    # REAL child-process daemons, one per rank (the local_pair
+    # pattern): in-process cohabitation shares one CUDA context,
+    # where a parked collective stream can block the OTHER rank's
+    # lazy module loads — a deadlock class production never has
+    # (separate processes). The trace that convicted the old rig:
+    # rank 0 sent seq 1 and waited; rank 1 never reached its enqueue.
+    from dataflow_training.distributed import daemons
+    from dataflow_training.distributed.topology import local_pair_topology
+
+    topo = local_pair_topology(ports=(PA, PB))
+    ranks = [topo.host("local0"), topo.host("local1")]
+    lanes = ("tpa", "tpb")
+    clients = []
     try:
-        ca.peer_connect("tp-b", f"127.0.0.1:{PB}")
-        got = drive_pair([ca, cb], ["tp-a", "tp-b"], "hostmem")
+        for host, lane in zip(ranks, lanes):
+            daemons.kill(host, lane=lane)
+            daemons.launch(
+                host, lane=lane, backing_gib=0.4,
+                peer_port=int(host.peer_listen.rsplit(":", 1)[1]),
+                extra_flags="--plugin "
+                            "dataflow_training.model_families.tp_mlp")
+        deadline = time.time() + 120
+        while time.time() < deadline and len(clients) < 2:
+            try:
+                socks = []
+                for host, lane in zip(ranks, lanes):
+                    sock = daemons.paths(host, lane)["sock"]
+                    probe = EngineClient(sock, client_name="probe")
+                    probe.health()
+                    probe.close()
+                    socks.append(sock)
+                clients = [EngineClient(s, client_name=h.name)
+                           for s, h in zip(socks, ranks)]
+            except Exception:
+                time.sleep(1.0)
+        assert len(clients) == 2, "local pair daemons unreachable"
+        clients[0].peer_connect("local1", ranks[1].peer_listen)
+        time.sleep(1.0)
+        got = drive_pair(clients, ["local0", "local1"], "hostmem")
         check_pair(got, reference(CFG, SEED))
     finally:
-        for c in (ca, cb):
+        for c in clients:
             try:
                 c.shutdown()
+            except Exception:
+                pass
+        for host, lane in zip(ranks, lanes):
+            try:
+                daemons.kill(host, lane=lane)
             except Exception:
                 pass
 
