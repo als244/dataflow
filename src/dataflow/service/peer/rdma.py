@@ -105,8 +105,14 @@ class RdmaLinkQP:
         attr = QPAttr(qp_state=ibv_qp_state.IBV_QPS_RTR)
         # both ends compute the same min; peers that predate the mtu
         # field are driven at the old fixed 1024
-        attr.path_mtu = min(self.engine.active_mtu,
-                            int(remote.get("mtu", ibv_mtu.IBV_MTU_1024)))
+        mtu = min(self.engine.active_mtu,
+                  int(remote.get("mtu", ibv_mtu.IBV_MTU_1024)))
+        if remote["gid"] == self.engine.gid_str:
+            # mlx5 internal loopback: RC to our own GID never reaches
+            # RTS at path MTU 4096 (wire paths negotiate 4096 fine) —
+            # self-connections cap at the empirically-reliable 2048
+            mtu = min(mtu, int(ibv_mtu.IBV_MTU_2048))
+        attr.path_mtu = mtu
         attr.dest_qp_num = int(remote["qpn"])
         attr.rq_psn = int(remote.get("psn", 0))
         attr.max_dest_rd_atomic = 1
