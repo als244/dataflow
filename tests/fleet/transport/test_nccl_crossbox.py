@@ -7,7 +7,7 @@ daemons.launch from the topology's iface/ib_dev).
 
 Tests:
 - test_nccl_bootstrap_and_verified_collectives: creating an nccl peer group bootstraps the comm, and on both ranks allreduce verifies and the rs+ag==allreduce identity holds.
-- test_nccl_fused_layer_allreduce_within_plausible_wall: a fused single-layer bf16 allreduce verifies on both ranks and its steady-state wall stays under a liveness ceiling (self-creating the group if the bootstrap test did not run first).
+- test_nccl_fused_layer_allreduce_within_plausible_wall: a fused single-layer bf16 allreduce verifies on both ranks and its steady-state wall stays under a liveness ceiling, on its own group.
 """
 import json
 import threading
@@ -24,7 +24,6 @@ from dataflow_training.distributed.hosts import run_py, uds_forward
 from dataflow_training.distributed import daemons
 from dataflow_training.distributed.topology import load_topology_or_none  # noqa: E402
 from dataflow.service import EngineClient  # noqa: E402
-from dataflow.service.wire import ServiceError  # noqa: E402
 
 TOPO = load_topology_or_none()
 if TOPO is None or not TOPO.remotes():
@@ -160,17 +159,14 @@ def test_nccl_bootstrap_and_verified_collectives(rig):
 
 def test_nccl_fused_layer_allreduce_within_plausible_wall(rig):
     client = rig["client"]
-    # self-sufficient under -k: create the nccl group if the bootstrap
-    # test did not run first (create_peer_group is not idempotent)
-    try:
-        client._call(
-            "create_peer_group",
-            {"name": GROUP, "members": [LOCAL.name, REMOTE.name],
-             "backend": "nccl"}, timeout=120)
-    except ServiceError as exc:
-        if exc.code != "GROUP_EXISTS":
-            raise
-    args = {"group": GROUP, "sizes": [LAYER_FUSED], "dtype": "bf16",
+    # own group: this test is order-independent and self-contained — it
+    # never shares state with, or depends on the order of, another test
+    group = "ndpwall"
+    client._call(
+        "create_peer_group",
+        {"name": group, "members": [LOCAL.name, REMOTE.name],
+         "backend": "nccl"}, timeout=120)
+    args = {"group": group, "sizes": [LAYER_FUSED], "dtype": "bf16",
             "reps": 4, "verify": True}
     la, ra = run_both(client, rig["remote_sock"], args)
     for side, r in (("local", la), ("remote", ra)):
