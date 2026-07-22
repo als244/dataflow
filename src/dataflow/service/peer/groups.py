@@ -29,7 +29,15 @@ class GroupRecord:
     ready: bool = False
     acks: set = field(default_factory=set)
     error: str | None = None
-    handle: object = None          # cached GroupHandle (NM builds lazily)
+    handle: object = None          # cached GroupHandle — build ONLY via
+                                   # NM.ensure_handle: the run path and
+                                   # the inbound-frame path otherwise
+                                   # race the lazy build, and a double-
+                                   # built comm strands the peer's first
+                                   # frames in the orphan's inbox (the
+                                   # "collective seq 1 peer data
+                                   # timeout" flake)
+    build_lock: object = field(default_factory=threading.Lock)
     comm_obj: object = None        # nccl: comm built at BOOTSTRAP (init
                                    # is collective — never lazy)
 

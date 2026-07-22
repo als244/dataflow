@@ -410,16 +410,29 @@ class NetworkManager:
         self.state.emit("group_created", name=name)
         return {"ok": True, "backend": backend, "world": len(members)}
 
+    def ensure_handle(self, rec):
+        """The ONLY lazy-build path for a record's GroupHandle.
+        Serialized per record: the run path (group_handles) and the
+        inbound-frame path (lookup_comm) otherwise race the
+        check-then-build, each constructing a HostmemComm — two
+        workers, and whichever loses rec.handle strands every frame
+        the reader already delivered into its inbox (the seq-1 peer
+        data timeout). Per-record lock, NOT groups.lock: a build can
+        legitimately take seconds (rdma bring-up wait), and frame
+        dispatch must not stall behind an unrelated group's build."""
+        with rec.build_lock:
+            if rec.handle is None:
+                from .comm import build_handle
+
+                rec.handle = build_handle(self, rec)
+        return rec.handle
+
     def group_handles(self) -> dict:
         """{name -> GroupHandle} for TaskContext injection: READY,
         non-errored groups; comm backends built + cached lazily."""
         out = {}
         for rec in self.groups.ready_records():
-            if rec.handle is None:
-                from .comm import build_handle
-
-                rec.handle = build_handle(self, rec)
-            out[rec.name] = rec.handle
+            out[rec.name] = self.ensure_handle(rec)
         return out
 
     def lookup_comm(self, name: str):
@@ -427,11 +440,7 @@ class NetworkManager:
             rec = self.groups.groups.get(name)
         if rec is None or not rec.ready or rec.error is not None:
             return None
-        if rec.handle is None:
-            from .comm import build_handle
-
-            rec.handle = build_handle(self, rec)
-        return rec.handle.comm
+        return self.ensure_handle(rec).comm
 
     def abort_group_comm(self, name: str) -> None:
         with self.groups.lock:
