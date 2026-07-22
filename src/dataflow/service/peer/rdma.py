@@ -108,10 +108,12 @@ class RdmaLinkQP:
         mtu = min(self.engine.active_mtu,
                   int(remote.get("mtu", ibv_mtu.IBV_MTU_1024)))
         if remote["gid"] == self.engine.gid_str:
-            # mlx5 internal loopback: RC to our own GID never reaches
-            # RTS at path MTU 4096 (wire paths negotiate 4096 fine) —
-            # self-connections cap at the empirically-reliable 2048
-            mtu = min(mtu, int(ibv_mtu.IBV_MTU_2048))
+            # mlx5 internal loopback is not wire-equivalent: RC to our
+            # own GID never reaches RTS at path MTU 4096, and at 2048
+            # bring-up succeeds but sustained collective exchange hits
+            # data timeouts — self-connections stay at 1024, the value
+            # every loopback gate has always run
+            mtu = min(mtu, int(ibv_mtu.IBV_MTU_1024))
         attr.path_mtu = mtu
         attr.dest_qp_num = int(remote["qpn"])
         attr.rq_psn = int(remote.get("psn", 0))
