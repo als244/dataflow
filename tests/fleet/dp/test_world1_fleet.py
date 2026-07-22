@@ -17,7 +17,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
-    pytest.skip("no CUDA device", allow_module_level=True)
+    pytest.skip("no GPU", allow_module_level=True)
 
 from dataclasses import replace  # noqa: E402
 

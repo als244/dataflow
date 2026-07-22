@@ -34,7 +34,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
-    pytest.skip("no CUDA device", allow_module_level=True)
+    pytest.skip("no GPU", allow_module_level=True)
 if torch.cuda.get_device_capability() < (8, 0):
     pytest.skip("bf16 triton kernels need compute capability >= (8, 0)",
                 allow_module_level=True)

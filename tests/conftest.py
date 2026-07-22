@@ -11,12 +11,18 @@ declare requirements here and derive any bound they need from probes
 or from structure.
 
 Markers (register in pyproject.toml):
-  gpu              a CUDA device
+  gpu              a GPU torch can drive (CUDA or ROCm) — most
+                   modeling/training tests need only this
+  cuda             an NVIDIA CUDA runtime specifically — the CUDA backend
+                   and cuda-python paths, which are CUDA-only until an AMD
+                   backend exists (a GPU is not necessarily CUDA)
   fleet            multi-daemon gates (opt-in lane: pytest -m fleet)
   sim              the dataflow_sim extra (planner/simulator interop)
   corpus           the shard corpus at datasets/fineweb10B
   topology_remote  a topology.toml declaring at least one remote host
-  rdma             an rdma device with an ACTIVE RoCE v2 IPv4 port
+  rdma             an active RDMA port the engine can bring up — RoCE
+                   today; InfiniBand is a documented drop-in, so an
+                   IB-only host skips these rather than failing
   ncclbind         a loadable libnccl
   vram(gib=N)      at least N GiB of free device memory at collection
 """
@@ -25,11 +31,27 @@ from pathlib import Path
 import pytest
 
 
-def has_cuda() -> bool:
+def has_gpu() -> bool:
+    """A GPU torch can drive — CUDA or ROCm (torch's ROCm build exposes
+    HIP through the torch.cuda API). Modeling/training tests only need a
+    GPU, not CUDA specifically."""
     try:
         import torch
 
         return torch.cuda.is_available()
+    except Exception:
+        return False
+
+
+def has_cuda() -> bool:
+    """An NVIDIA CUDA runtime specifically (not ROCm) — for tests of the
+    CUDA backend and the cuda-python paths, which are CUDA-only until an
+    AMD backend exists. torch.version.cuda distinguishes a CUDA build
+    from a ROCm one."""
+    try:
+        import torch
+
+        return torch.cuda.is_available() and torch.version.cuda is not None
     except Exception:
         return False
 
@@ -58,9 +80,14 @@ def has_topology_remote() -> bool:
         return False
 
 
-def has_active_roce_port() -> bool:
-    """An rdma device with an ACTIVE port carrying a RoCE v2
-    IPv4-mapped GID — sysfs only, no pyverbs needed for the probe."""
+def has_active_rdma_port() -> bool:
+    """An active RDMA port the engine can currently bring a connection up
+    on — sysfs only, no pyverbs needed for the probe.
+
+    The engine wires RDMA over RoCE (an Ethernet-link-layer port with a
+    RoCE v2 IPv4 GID). InfiniBand is a documented drop-in that isn't
+    wired yet, so an IB-only host has no usable port here and its
+    rdma-marked tests skip cleanly instead of failing."""
     root = Path("/sys/class/infiniband")
     if not root.is_dir():
         return False
@@ -103,14 +130,15 @@ def free_vram_gib() -> float:
 
 
 PROBES = {
-    "gpu": (has_cuda, "no CUDA device"),
+    "gpu": (has_gpu, "no GPU available"),
+    "cuda": (has_cuda, "no NVIDIA CUDA runtime (ROCm or CPU-only)"),
     "sim": (has_sim, "dataflow_sim extra not installed"),
     "corpus": (has_corpus, "shard corpus not present "
                            "(datasets/fineweb10B)"),
     "topology_remote": (has_topology_remote,
                         "no topology.toml with a remote host"),
-    "rdma": (has_active_roce_port,
-             "no ACTIVE RoCE v2 IPv4 rdma port"),
+    "rdma": (has_active_rdma_port,
+             "no active RDMA port the engine can use (RoCE today)"),
     "ncclbind": (has_libnccl, "libnccl not loadable"),
 }
 

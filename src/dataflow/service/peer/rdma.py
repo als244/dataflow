@@ -72,6 +72,18 @@ def path_index(p: Path) -> int:
     return int(p.name)
 
 
+def port_link_layer(device: str, port: int = 1) -> str:
+    """The port's link layer, from sysfs: 'Ethernet' (RoCE) or
+    'InfiniBand' (IB). RoCE and IB share the RDMA verbs but address a
+    connection differently — RoCE by GID, IB by LID — so the engine
+    branches on this."""
+    try:
+        return (Path(f"/sys/class/infiniband/{device}/ports/{port}")
+                / "link_layer").read_text().strip()
+    except OSError:
+        return "unknown"
+
+
 class RdmaLinkQP:
     """One peer link's RC QP (+ its CQ). Serialized by ``wlock`` — the
     writer thread owns posts; connect happens once from the reader."""
@@ -99,6 +111,9 @@ class RdmaLinkQP:
         attr.port_num = self.engine.port
         attr.qp_access_flags = ACCESS
         self.qp.to_init(attr)
+        # RoCE addressing: a global route over the peer's GID. The IB
+        # drop-in branches here to LID addressing instead —
+        # AHAttr(dlid=remote["lid"], is_global=0), no GlobalRoute.
         gr = GlobalRoute(dgid=GID(remote["gid"]),
                          sgid_index=self.engine.gid_index)
         ah = AHAttr(gr=gr, is_global=1, port_num=self.engine.port)
@@ -168,6 +183,19 @@ class RdmaLinkQP:
 
 class RdmaEngine:
     def __init__(self, device: str, *, port: int = 1):
+        # The engine wires RDMA over RoCE (Ethernet link layer, GID
+        # addressing). InfiniBand (LID addressing) is a documented
+        # drop-in: select the port's LID here instead of a RoCE GID, and
+        # use LID-based AHAttr in RdmaLinkQP.connect — the RC QP /
+        # RDMA_WRITE / MR data plane is identical. Until then a
+        # non-Ethernet port stops here loudly rather than arming a QP
+        # that cannot pass traffic.
+        link_layer = port_link_layer(device, port)
+        if link_layer != "Ethernet":
+            raise RuntimeError(
+                f"{device} port {port} link layer is {link_layer!r}; only "
+                "RoCE (Ethernet) is wired so far — InfiniBand is a clean "
+                "drop-in at the RdmaEngine/RdmaLinkQP seams")
         picked = roce_v2_ipv4_gid(device, port)
         if picked is None:
             raise RuntimeError(f"no RoCE v2 GID on {device} port {port}")

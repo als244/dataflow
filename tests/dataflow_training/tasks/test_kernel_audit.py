@@ -39,7 +39,7 @@ from dataflow_training.kernels import registry as reg
 
 torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
-    pytest.skip("no CUDA device", allow_module_level=True)
+    pytest.skip("no GPU", allow_module_level=True)
 
 pytestmark = pytest.mark.gpu
 

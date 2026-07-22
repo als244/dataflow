@@ -17,7 +17,7 @@ import pytest
 
 cudart = pytest.importorskip("cuda.bindings.runtime")
 if cudart.cudaGetDeviceCount()[0] != cudart.cudaError_t.cudaSuccess or cudart.cudaGetDeviceCount()[1] < 1:
-    pytest.skip("no CUDA device", allow_module_level=True)
+    pytest.skip("no GPU", allow_module_level=True)
 
 import torch  # noqa: E402
 
@@ -25,7 +25,7 @@ from dataflow.runtime.device.cuda import CudaBackend  # noqa: E402
 from dataflow.runtime.device.vmm import GRANULE, VmmArena, VmmError  # noqa: E402
 from dataflow.runtime.interop import torch_view  # noqa: E402
 
-pytestmark = pytest.mark.gpu
+pytestmark = pytest.mark.cuda
 
 MB = 1024**2
 

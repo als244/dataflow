@@ -19,7 +19,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
-    pytest.skip("no CUDA device", allow_module_level=True)
+    pytest.skip("no GPU", allow_module_level=True)
 
 from dataflow_training.data.pipeline import legacy_block_pipeline  # noqa: E402
 from dataflow_training.distributed.fleet import (  # noqa: E402

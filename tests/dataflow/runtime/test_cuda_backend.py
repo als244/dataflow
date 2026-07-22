@@ -13,7 +13,7 @@ import pytest
 
 cudart = pytest.importorskip("cuda.bindings.runtime")
 if cudart.cudaGetDeviceCount()[0] != cudart.cudaError_t.cudaSuccess or cudart.cudaGetDeviceCount()[1] < 1:
-    pytest.skip("no CUDA device", allow_module_level=True)
+    pytest.skip("no GPU", allow_module_level=True)
 
 from dataflow.runtime import Engine  # noqa: E402
 from dataflow.runtime.device.cuda import CudaBackend  # noqa: E402
@@ -21,7 +21,7 @@ from dataflow.runtime.device.cuda_spin import SpinKernel, make_spin_resolver  # 
 from dataflow_training.lowering.planning import plan_program, simulate_program  # noqa: E402
 from dataflow_training.model_families.llama3 import ShapedLlamaConfig, build_shaped_llama3  # noqa: E402
 
-pytestmark = pytest.mark.gpu
+pytestmark = pytest.mark.cuda
 
 
 @pytest.fixture(scope="module")
@@ -120,7 +120,7 @@ def test_mini_program_execution_matches_plan():
     result.close()
 
 
-@pytest.mark.gpu
+@pytest.mark.cuda
 def test_slab_flush_preserves_pending_poison_guard():
     """Deterministic repro of the poison-test flake's mechanism: a freed
     buffer with a PENDING guard (its 0xFF poison memset still queued behind

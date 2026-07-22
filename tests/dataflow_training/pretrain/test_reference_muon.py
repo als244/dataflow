@@ -101,7 +101,7 @@ def test_reference_optimizer_dispatch():
 @pytest.mark.gpu
 def test_tiny_muon_reference_trains():
     if not torch.cuda.is_available():
-        pytest.skip("no CUDA device")
+        pytest.skip("no GPU")
     if torch.cuda.get_device_capability() < (8, 0):
         pytest.skip("bf16 model needs compute capability >= (8, 0)")
     from reference_models.llama3 import Llama3Config, Llama3

@@ -45,12 +45,19 @@ peer that goes silent past the down-threshold, which parks its transfers and fan
 errors to any groups that spanned it.
 
 When both ends advertised RDMA, the link additionally brings up a
-reliable-connected QP pair: GID selection (an ACTIVE port with an
-IPv4-mapped RoCE v2 GID — anything less reports no-RDMA rather
-than arming a QP that cannot pass traffic), an `RDMA_INFO` exchange
-over the control plane carrying each end's qpn/gid/path-MTU (the
-QPs run at the min of both ends' active MTUs), and an `RDMA_UP`
-confirmation once both sides reach RTS. RDMA that fails to come up
+reliable-connected QP pair. RDMA is transport-agnostic at the verbs
+level — the same RC QPs and one-sided `RDMA_WRITE`s run over either
+RoCE (Ethernet link layer) or InfiniBand — but a connection is
+*addressed* differently on each: RoCE by GID, InfiniBand by LID. The
+engine wires the RoCE path today (an ACTIVE Ethernet port with an
+IPv4-mapped RoCE v2 GID — anything less reports no-RDMA rather than
+arming a QP that cannot pass traffic) and stops loudly on a
+non-Ethernet port; InfiniBand is a clean drop-in at that seam (LID
+selection and LID-based addressing, nothing else changes). Bring-up
+is an `RDMA_INFO` exchange over the control plane carrying each end's
+qpn, addressing, and path-MTU (the QPs run at the min of both ends'
+active MTUs), then an `RDMA_UP` confirmation once both sides reach
+RTS. RDMA that fails to come up
 **demotes the link to the socket data plane, loudly and
 symmetrically — never fatally**; both ends make the same lane
 decision from the same handshake facts, because a link whose two

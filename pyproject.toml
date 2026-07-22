@@ -42,12 +42,13 @@ filterwarnings = [
     "error:Converting a tensor with requires_grad=True to a scalar:UserWarning",
 ]
 markers = [
-    "gpu: requires a CUDA device",
+    "gpu: requires a GPU torch can drive (CUDA or ROCm)",
+    "cuda: requires an NVIDIA CUDA runtime (the CUDA backend / cuda-python)",
     "fleet: multi-daemon gates (opt-in lane: pytest -m fleet)",
     "sim: requires the dataflow_sim extra (planner/simulator interop)",
     "corpus: requires the shard corpus at datasets/fineweb10B",
     "topology_remote: requires a topology.toml with a remote host",
-    "rdma: requires an rdma device with an ACTIVE RoCE v2 IPv4 port",
+    "rdma: requires an active RDMA port the engine can use (RoCE today; IB is a drop-in)",
     "ncclbind: requires a loadable libnccl",
     "vram: requires N GiB free device memory, vram(gib=N)",
 ]

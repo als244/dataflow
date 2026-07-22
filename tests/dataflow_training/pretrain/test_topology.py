@@ -72,7 +72,7 @@ def test_loader_roundtrip(tmp_path):
     group = topo.group("dp")
     assert group.members == ("alpha", "beta")
     assert [h.name for h in topo.group_hosts("dp")] == ["alpha", "beta"]
-    # multi-GPU single machine: a second LOCAL entry with its own CUDA
+    # multi-GPU single machine: a second LOCAL entry with its own GPU
     # device — the world-N pattern (one daemon per GPU, same host)
     assert local.device == 0
     g1 = topo.host("alpha_g1")

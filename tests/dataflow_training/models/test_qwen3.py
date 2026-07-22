@@ -65,7 +65,7 @@ def test_qwen3_lowering_validates_and_plans():
 
 # --- GPU ladders --------------------------------------------------------------
 
-gpu = pytest.mark.skipif(not torch.cuda.is_available(), reason="no CUDA device")
+gpu = pytest.mark.skipif(not torch.cuda.is_available(), reason="no GPU")
 
 
 @gpu
