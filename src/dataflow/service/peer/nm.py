@@ -407,40 +407,80 @@ class NetworkManager:
                                f"{name}: join barrier timeout")
         if len(members) == 1:
             self.groups.adopt(rec)
+        self.start_comm_build(name, inline=True)
         self.state.emit("group_created", name=name)
         return {"ok": True, "backend": backend, "world": len(members)}
 
-    def ensure_handle(self, rec):
-        """The ONLY lazy-build path for a record's GroupHandle.
-        Serialized per record: the run path (group_handles) and the
-        inbound-frame path (lookup_comm) otherwise race the
-        check-then-build, each constructing a HostmemComm — two
-        workers, and whichever loses rec.handle strands every frame
-        the reader already delivered into its inbox (the seq-1 peer
-        data timeout). Per-record lock, NOT groups.lock: a build can
-        legitimately take seconds (rdma bring-up wait), and frame
-        dispatch must not stall behind an unrelated group's build."""
-        with rec.build_lock:
-            if rec.handle is None:
-                from .comm import build_handle
+    def start_comm_build(self, name: str, ack_link=None,
+                         inline: bool = False) -> None:
+        """Run the ONE comm builder for a record. THE CONTRACT (both
+        backends, one shape): a member ATTACHES ITS BACKEND FIRST and
+        only then sends GROUP_ACK (the builder sends it via
+        ``ack_link``), so the join barrier is an ATTACHMENT barrier —
+        create_peer_group returning means every member is attached;
+        the coordinator attaches ``inline`` before the verb returns.
+        Idempotent via the record's spawn guard; the reader never
+        builds — it parks frames until ``built`` (belt-and-suspenders:
+        under this contract no collective frame should legally arrive
+        pre-attach, since runs start only after create returns)."""
+        with self.groups.lock:
+            rec = self.groups.groups.get(name)
+            if rec is None or rec.build_started:
+                return
+            rec.build_started = True
+        builder = CommBuild(self, rec, ack_link=ack_link)
+        if inline:
+            builder()
+            return
+        threading.Thread(target=builder,
+                         name=f"nm-comm-build-{name}",
+                         daemon=True).start()
 
-                rec.handle = build_handle(self, rec)
+    def ensure_handle(self, rec):
+        """Await the eagerly-spawned builder; never builds in place."""
+        if not rec.built.wait(60.0):
+            raise RuntimeError(f"group {rec.name}: comm attach never "
+                               f"completed (builder missing or hung)")
+        if rec.error is not None:
+            raise RuntimeError(f"group {rec.name} errored: {rec.error}")
+        if rec.handle is None:
+            raise RuntimeError(f"group {rec.name}: no handle after "
+                               f"attach")
         return rec.handle
 
     def group_handles(self) -> dict:
         """{name -> GroupHandle} for TaskContext injection: READY,
-        non-errored groups; comm backends built + cached lazily."""
+        non-errored groups; backends attached eagerly at readiness."""
         out = {}
         for rec in self.groups.ready_records():
             out[rec.name] = self.ensure_handle(rec)
         return out
 
     def lookup_comm(self, name: str):
+        """Await-accessor for NON-reader callers (the reader parks via
+        deliver_coll instead — it must never block on a build)."""
         with self.groups.lock:
             rec = self.groups.groups.get(name)
         if rec is None or not rec.ready or rec.error is not None:
             return None
         return self.ensure_handle(rec).comm
+
+    def deliver_coll(self, msg: dict, payload: bytes) -> None:
+        """Reader-side COLL dispatch. Before the comm is attached,
+        frames PARK on the record; the builder drains them FIFO into
+        the comm before setting ``built``, so a direct delivery can
+        never overtake a parked one."""
+        with self.groups.lock:
+            rec = self.groups.groups.get(msg["group"])
+            if rec is None or rec.error is not None:
+                return
+            if not rec.built.is_set():
+                rec.pending_frames.append((msg, payload))
+                return
+        handle = rec.handle
+        comm = handle.comm if handle is not None else None
+        if comm is not None:
+            comm.deliver(msg, payload)
 
     def abort_group_comm(self, name: str) -> None:
         with self.groups.lock:
@@ -598,8 +638,7 @@ class NetworkManager:
                         name=f"nm-nccl-join-{rec.name}",
                         daemon=True).start()
                     continue
-                link.send_frame({"kind": "GROUP_ACK", "name": msg["name"],
-                                 "member": self.peer_name})
+                self.start_comm_build(rec.name, ack_link=link)
                 self.state.emit("group_joined", name=msg["name"],
                                 rank=rec.self_rank)
                 continue
@@ -665,9 +704,7 @@ class NetworkManager:
                     self.record_bw(link, "rdma", float(msg["gbps"]))
                 continue
             if kind == "COLL":
-                comm = self.lookup_comm(msg["group"])
-                if comm is not None:
-                    comm.deliver(msg, payload or b"")
+                self.deliver_coll(msg, payload or b"")
                 continue
             with self.lock:
                 link.core.handle(msg, payload)
@@ -868,9 +905,50 @@ class NcclJoin:
             self.nm.state.emit("group_error", name=self.rec.name,
                                why=f"nccl bootstrap: {ex}")
             return
-        self.link.send_frame({"kind": "GROUP_ACK",
-                              "name": self.rec.name,
-                              "member": self.nm.peer_name})
+        self.nm.start_comm_build(self.rec.name, ack_link=self.link)
+
+
+class CommBuild:
+    """The single comm builder for one group record (spawned by
+    start_comm_build). Attaches the backend, then — under the groups
+    lock — drains frames the reader parked pre-attach into the comm
+    FIFO and flips ``built``. Failure marks the record errored and
+    still flips ``built`` so awaiting consumers wake and see the
+    error instead of timing out."""
+
+    def __init__(self, nm, rec, ack_link=None):
+        self.nm = nm
+        self.rec = rec
+        self.ack_link = ack_link   # member side: ack AFTER attaching —
+                                   # a withheld ack on failure trips the
+                                   # coordinator's barrier timeout, the
+                                   # same loud shape as a failed nccl
+                                   # bootstrap
+
+    def __call__(self) -> None:
+        from .comm import build_handle
+
+        rec = self.rec
+        try:
+            handle = build_handle(self.nm, rec)
+        except Exception as ex:
+            self.nm.groups.mark_error(rec.name, f"comm attach: {ex}")
+            with self.nm.groups.lock:
+                rec.pending_frames.clear()
+                rec.built.set()
+            return
+        with self.nm.groups.lock:
+            rec.handle = handle
+            comm = handle.comm if handle is not None else None
+            if comm is not None:
+                for msg, payload in rec.pending_frames:
+                    comm.deliver(msg, payload)
+            rec.pending_frames.clear()
+            rec.built.set()
+        if self.ack_link is not None:
+            self.ack_link.send_frame({"kind": "GROUP_ACK",
+                                      "name": rec.name,
+                                      "member": self.nm.peer_name})
 
 
 class BwProbeRdma:

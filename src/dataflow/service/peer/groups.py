@@ -29,15 +29,19 @@ class GroupRecord:
     ready: bool = False
     acks: set = field(default_factory=set)
     error: str | None = None
-    handle: object = None          # cached GroupHandle — build ONLY via
-                                   # NM.ensure_handle: the run path and
-                                   # the inbound-frame path otherwise
-                                   # race the lazy build, and a double-
-                                   # built comm strands the peer's first
-                                   # frames in the orphan's inbox (the
-                                   # "collective seq 1 peer data
-                                   # timeout" flake)
-    build_lock: object = field(default_factory=threading.Lock)
+    handle: object = None          # GroupHandle, attached EAGERLY by
+                                   # the comm builder NM spawns at the
+                                   # backend-attachable moment (READY
+                                   # => attached contract). Consumers
+                                   # await ``built``; the reader parks
+                                   # frames instead of building — a
+                                   # lazy two-trigger build once raced,
+                                   # double-built the comm, and
+                                   # stranded the peer's first frames
+                                   # (the seq-1 peer-data-timeout bug)
+    built: object = field(default_factory=threading.Event)
+    build_started: bool = False    # spawn guard (under GroupTable.lock)
+    pending_frames: list = field(default_factory=list)
     comm_obj: object = None        # nccl: comm built at BOOTSTRAP (init
                                    # is collective — never lazy)
 
