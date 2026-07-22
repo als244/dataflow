@@ -42,9 +42,18 @@ POLL_BUDGET = 200_000_000        # spins before declaring a wedge
 
 
 def roce_v2_ipv4_gid(device: str, port: int = 1):
-    """(gid_index, gid_str) of the RoCE v2 IPv4-mapped GID, or None."""
+    """(gid_index, gid_str) of the RoCE v2 IPv4-mapped GID on an
+    ACTIVE port, or None. Link-local (fe80) v2 GIDs are deliberately
+    rejected: they are MAC-derived and exist even on ports that are
+    down or address-less, so accepting one arms QPs that can never
+    pass traffic — report no-RDMA instead and let the transport
+    demote to socket."""
     base = Path(f"/sys/class/infiniband/{device}/ports/{port}")
-    fallback = None
+    try:
+        if not (base / "state").read_text().strip().startswith("4"):
+            return None
+    except OSError:
+        return None
     for entry in sorted((base / "gid_attrs/types").iterdir(),
                         key=path_index):
         try:
@@ -52,13 +61,11 @@ def roce_v2_ipv4_gid(device: str, port: int = 1):
             gid = (base / "gids" / entry.name).read_text().strip()
         except OSError:
             continue
-        if typ != "RoCE v2" or gid == "0000:0000:0000:0000:0000:0000:0000:0000":
+        if typ != "RoCE v2":
             continue
         if gid.startswith("0000:0000:0000:0000:0000:ffff"):
             return int(entry.name), gid
-        if fallback is None:
-            fallback = (int(entry.name), gid)
-    return fallback
+    return None
 
 
 def path_index(p: Path) -> int:
