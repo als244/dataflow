@@ -28,6 +28,9 @@ class HostSpec:
     repo: str = ""
     nsys: str = "nsys"
     ib_dev: str | None = None
+    gid_index: int = 3             # RoCE v2 IPv4 GID index on ib_dev
+                                   # (NCCL_IB_GID_INDEX; the populate
+                                   # helper will probe this per device)
     iface: str | None = None       # fast-link netdev (NCCL_SOCKET_IFNAME)
     backing_gib: float = 8.0
     budget_gib: float = 8.0
@@ -111,6 +114,7 @@ def build_host(name: str, entry: dict) -> HostSpec:
         repo=entry.get("repo", str(repo_root())),
         nsys=entry.get("nsys", "nsys"),
         ib_dev=entry.get("ib_dev"),
+        gid_index=int(entry.get("gid_index", 3)),
         iface=entry.get("iface"),
         backing_gib=float(entry.get("backing_gib", 8.0)),
         budget_gib=float(entry.get("budget_gib", 8.0)),

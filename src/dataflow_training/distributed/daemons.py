@@ -31,12 +31,15 @@ def paths(host: HostSpec, lane: str = "fleet") -> dict:
             "pid": f"{base}.pid"}
 
 
-# NCCL transport defaults — the N2 bench's winner. NCCL's own
-# RoCE/IB path errors on this fabric even with GID_INDEX=3 (WR_FLUSH
-# + local access violation; our pyverbs lane works because we control
-# every QP knob). Tuned multi-socket transport: 16 Gbit/s on the 25G
-# link vs 11.4 untuned.
-NCCL_DEFAULT_ENV = {"NCCL_IB_DISABLE": "1",
+# NCCL transport defaults. The IB/RoCE path runs when the topology
+# names an HCA (GID index pinned per host — NCCL's own GID selection
+# is not trustworthy on multi-GID ports) and beats the tuned
+# multi-socket transport on the collective path (19.7 vs 16.5 Gb/s
+# per direction at 256M, 66 vs 178 us at 4K). Multi-QP spreads a
+# connection across the wire; the socket tuning stays as the
+# fallback for links without RDMA.
+NCCL_DEFAULT_ENV = {"NCCL_IB_QPS_PER_CONNECTION": "4",
+                    "NCCL_IB_SPLIT_DATA_ON_QPS": "1",
                     "NCCL_SOCKET_NTHREADS": "4",
                     "NCCL_NSOCKS_PERTHREAD": "4"}
 
@@ -50,6 +53,7 @@ def env(host: HostSpec, extra: dict | None = None) -> str:
         merged["NCCL_SOCKET_IFNAME"] = host.iface
     if host.ib_dev:
         merged["NCCL_IB_HCA"] = host.ib_dev
+        merged["NCCL_IB_GID_INDEX"] = str(host.gid_index)
     merged.update(extra or {})
     return " ".join(f"{k}={v}" for k, v in merged.items())
 
