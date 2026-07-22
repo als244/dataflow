@@ -41,8 +41,14 @@ def test_register_all_resolves_every_family():
         assert resolver(init.tasks[0]) is not None, name
         assert init.tasks[0].compute_block_key == "family_init"
         assert not init.initial_objects
-        assert {o.id for o in init.tasks[0].outputs} == {
-            s.id for s in program.initial_objects}
+        # init covers every initial object EXCEPT data: input-role
+        # objects (tokens/targets) are externally fed, never fabricated
+        non_data = {s.id for s in program.initial_objects
+                    if s.role != "input"}
+        data = {s.id for s in program.initial_objects
+                if s.role == "input"}
+        assert {o.id for o in init.tasks[0].outputs} == non_data, name
+        assert data, name
 
 
 def test_unknown_kind_is_loud():

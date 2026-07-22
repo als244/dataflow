@@ -244,14 +244,19 @@ def test_real_boot_family_init_byte_identity(tmp_path):
             ref = fam.initial_values(prog, ref_cfg, CudaBackend(), seed=7)
             import torch
 
-            for oid in ("W_0", "O_0", "W_embed", "tokens_0_0"):
+            for oid in ("W_0", "O_0", "W_embed"):
                 got = c.get_object(oid)
                 want = torch_view(ref[oid], (ref[oid].size_bytes,),
                                   torch.uint8).cpu().numpy().tobytes()
                 assert got == want, f"{oid}: bytes differ"
+            # data is external: init must NOT have materialized any
+            # input-role object — absence is the contract
+            with pytest.raises(ServiceError, match="tokens_0_0"):
+                c.get_object("tokens_0_0")
             u = c.query_backing()
             assert u["used_bytes"] >= sum(
-                s.size_bytes for s in prog.initial_objects)
+                s.size_bytes for s in prog.initial_objects
+                if s.role != "input")
     finally:
         server.state.shutdown_requested.set()
         server.dispatcher.stop()
