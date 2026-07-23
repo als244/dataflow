@@ -23,6 +23,8 @@ accounting) is a deferred experiment.
 """
 from __future__ import annotations
 
+import enum
+import traceback
 from dataclasses import dataclass, field
 from typing import Mapping
 
@@ -30,12 +32,14 @@ from dataflow.core import ObjectSpec, Program, TaskSpec, validate_program
 
 from .device.base import PRIORITY_TASK_DONE, Buffer, DeviceBackend, Event
 from .executable import ExecutableResolver, TaskContext, synthetic_resolver
-from .ledger import Ledger
+from .ledger import Ledger, LedgerError
 from .objects import ObjectRecord, ObjectTable, Slot
 from .pool import BufferPool
+from .placement import PlacementError
+from .slab import SlabError
 from .device.annotate import NoopAnnotator
 from .trace import Interval, RunTrace, TraceEvent
-from .transfers import TransferDone, TransferEngine, TransferJob
+from .transfers import TransferDone, TransferEngine, TransferError, TransferJob
 
 
 class CancelledRun(RuntimeError):
@@ -53,6 +57,58 @@ _NOOP_ANNOTATOR = NoopAnnotator()
 
 class DeadlockError(RuntimeError):
     """The engine is blocked and no in-flight work can unblock it."""
+
+
+# The engine's OWN typed invariant violations: a plan/structural error the
+# engine itself detected (ledger over-commit, slot collision, wedged transfer,
+# impossible placement, slab fault). These are bugs to SURFACE, so the boundary
+# re-raises them scrubbed — distinct from a run-level failure (a task raising, a
+# device/kernel error), which the boundary converts to a FAILED outcome.
+ENGINE_INVARIANT_ERRORS = (
+    ExecutionError, DeadlockError, LedgerError, SlabError,
+    TransferError, PlacementError,
+)
+
+
+class RunOutcomeKind(enum.Enum):
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+@dataclass(frozen=True)
+class RunOutcome:
+    """The terminal status of a run, carrying COPIED-OUT diagnostics only —
+    never a live device view.
+
+    A run-level failure (a task raising, an unforeseen resource failure) or a
+    cancel is reported by RETURNING a ``RunResult`` whose ``outcome`` is
+    FAILED/CANCELLED — the run never propagates an exception, so no traceback
+    frame outlives the buffers it referenced (the memory-safety invariant the
+    contract exists to guarantee). The engine's OWN invariant violations (slot
+    collision, final_locations, deadlock) RAISE instead — those are bugs to
+    surface, not run outcomes. ``kind`` is this dedicated enum; the service
+    boundary maps it to a wire ServiceError.
+    """
+    kind: RunOutcomeKind
+    message: str = ""
+    task_id: "str | None" = None
+    traceback_text: str = ""
+
+    @property
+    def is_success(self) -> bool:
+        return self.kind is RunOutcomeKind.SUCCEEDED
+
+    @property
+    def is_failed(self) -> bool:
+        return self.kind is RunOutcomeKind.FAILED
+
+    @property
+    def is_cancelled(self) -> bool:
+        return self.kind is RunOutcomeKind.CANCELLED
+
+
+SUCCEEDED = RunOutcome(kind=RunOutcomeKind.SUCCEEDED)
 
 
 @dataclass(frozen=True)
@@ -84,10 +140,27 @@ class RunResult:
     # readback to release the slab/arena — tests and one-shot runs that skip
     # this leak the reservations for the process lifetime
     _owned_pool: BufferPool = None  # type: ignore[assignment]
+    # terminal status: SUCCEEDED for a completed run; FAILED/CANCELLED when a
+    # run-level failure was caught and converted at the engine boundary. A
+    # FAILED/CANCELLED result carries a view-free diagnostic and a partial
+    # object table; its numeric stats are best-effort.
+    outcome: RunOutcome = SUCCEEDED
 
     def close(self) -> None:
         if self._owned_pool is not None:
             self._owned_pool.drain()
+
+    def raise_if_failed(self) -> "RunResult":
+        """Surface a run-level failure as a view-free exception, for callers
+        that only handle success (the isolated reference-parity helpers). No
+        device view is referenced, so this stays memory-safe; on success it
+        returns self for chaining."""
+        if self.outcome.is_success:
+            return self
+        detail = (f" (task {self.outcome.task_id})"
+                  if self.outcome.task_id else "")
+        raise RuntimeError(
+            f"run {self.outcome.kind.value}: {self.outcome.message}{detail}")
 
 
 @dataclass
@@ -111,6 +184,11 @@ class Session:
     # allocator keys cached blocks per-stream, so per-execute stream churn
     # multiplies the scratch cache by the number of steps
     streams: tuple | None = None
+    # set when a run's abort-drain hit a sticky/corrupted CUDA context (e.g. a
+    # kernel illegal-access): the context can no longer be trusted, so every
+    # later run on this session refuses to start — a fresh session/daemon is
+    # required. A healthy failed run leaves this False (the session is reusable).
+    unrecoverable: bool = False
 
     def ensure_streams(self) -> tuple:
         if self.streams is None:
@@ -166,6 +244,56 @@ class Session:
             self.pool = None
 
 
+class RunScope:
+    """Owns a run's terminal cleanup — the ONE ordered sequence
+    (drain -> invalidate -> reclaim) that runs on every terminal transition,
+    so no call site hand-writes drain/reclaim and no non-owning view outlives
+    the buffers it points at.
+
+    Held by the engine boundary: on a run-level failure the boundary drives
+    abort -> invalidate -> reclaim before building a FAILED outcome; on an
+    engine-invariant violation the same sequence runs before the scrubbed
+    re-raise; on success the normal drain already ran, so only reclaim remains.
+    """
+
+    def __init__(self, *, backend, session, table, pool, provided):
+        self.backend = backend
+        self.session = session
+        self.table = table
+        self.pool = pool
+        self.provided = provided
+
+    def abort(self) -> bool:
+        """Error-path DRAIN: wait for all device work and discard pending
+        completion tokens, so the dead run's tokens cannot leak into the next
+        run on a reused session. A sticky/corrupted context makes the sync
+        itself fail -> mark the session UNRECOVERABLE (no later run reuses the
+        poisoned context) and report the drain as failed."""
+        try:
+            self.backend.drain_aborted()
+        except Exception:
+            if self.session is not None:
+                self.session.unrecoverable = True
+            return False
+        return True
+
+    def invalidate(self) -> None:
+        """Mark every non-owning view into this run's buffers dead. The
+        boundary's copied-diagnostic + no-raise contract already stops any view
+        from escaping into a propagated error; the view-cache/generation/poison
+        hardening arrives in a dedicated pass."""
+        return None
+
+    def reclaim(self) -> None:
+        """RECLAIM: return every pool-owned buffer still held by an object to
+        the pool (caller-provided initial buffers are not pool-owned). Runs
+        only after the drain, so every buffer is safe to reuse."""
+        for rec in self.table.records.values():
+            for slot in (rec.fast, rec.backing):
+                if slot is not None and id(slot.buffer) not in self.provided:
+                    self.pool.put(slot.buffer)
+
+
 @dataclass
 class Engine:
     backend: DeviceBackend
@@ -181,6 +309,102 @@ class Engine:
 
     def execute(
         self,
+        program: Program,
+        resolver: ExecutableResolver | None = None,
+        *,
+        initial_buffers: Mapping[str, Buffer] | None = None,
+        pool_prewarm: Mapping[tuple[str, int], int] | None = None,
+        placement=None,
+        record_placement=None,
+        vmm: bool = False,
+        run_args: Mapping[str, object] | None = None,
+        groups: Mapping[str, dict] | None = None,
+        cancel_event=None,
+        annotate_rename=None,
+    ) -> RunResult:
+        """Run ``program`` to a terminal outcome — the engine failure-mode
+        boundary.
+
+        A run-level failure (a task raising, an unforeseen resource failure) or
+        a cancel is caught HERE, cleaned up via the run's RunScope
+        (drain -> invalidate -> reclaim), and RETURNED as a RunResult whose
+        ``outcome`` is FAILED/CANCELLED — so no exception carrying a live device
+        view ever escapes (the memory-safety invariant). The engine's OWN
+        invariant violations (slot collision, final_locations, deadlock) are
+        cleaned up the same way, then RE-RAISED scrubbed of their frames (they
+        are bugs to surface, not run outcomes). On success the outcome is
+        SUCCEEDED and the result is exactly the completed run.
+        """
+        if self.session is not None and self.session.unrecoverable:
+            raise ExecutionError(
+                "session is unrecoverable — a prior run left the CUDA context "
+                "corrupted; a fresh session/daemon is required")
+        holder: dict = {}
+        invariant = None
+        try:
+            return self.run_dispatch(
+                holder, program, resolver,
+                initial_buffers=initial_buffers, pool_prewarm=pool_prewarm,
+                placement=placement, record_placement=record_placement,
+                vmm=vmm, run_args=run_args, groups=groups,
+                cancel_event=cancel_event, annotate_rename=annotate_rename)
+        except CancelledRun as exc:
+            self.finish_failed(holder)
+            return self.make_failed_result(
+                holder, RunOutcome(kind=RunOutcomeKind.CANCELLED,
+                                   message=str(exc),
+                                   task_id=self.failed_task_id(holder)))
+        except ENGINE_INVARIANT_ERRORS as exc:
+            # engine-invariant violation (our bug): INV-2 still runs, then a
+            # SCRUBBED re-raise. Build the fresh exception here but raise it
+            # OUTSIDE the except block (below), where no exception is being
+            # handled — so it carries no __context__/__traceback__ back to the
+            # run's frames, and no view is reachable from the propagated error.
+            self.finish_failed(holder)
+            invariant = type(exc)(str(exc))
+        except Exception as exc:  # noqa: BLE001 — task/foreign run failure
+            tb_text = traceback.format_exc()
+            self.finish_failed(holder)
+            return self.make_failed_result(
+                holder, RunOutcome(kind=RunOutcomeKind.FAILED,
+                                   message=f"{type(exc).__name__}: {exc}",
+                                   task_id=self.failed_task_id(holder),
+                                   traceback_text=tb_text))
+        raise invariant
+
+    def finish_failed(self, holder: dict) -> None:
+        """The ordered INV-2 cleanup for a failed/cancelled run: drain (discard
+        pending tokens) -> invalidate views -> reclaim buffers. A no-op if the
+        run failed before its scope was built (setup-time)."""
+        scope = holder.get("scope")
+        if scope is not None:
+            scope.abort()
+            scope.invalidate()
+            scope.reclaim()
+
+    def failed_task_id(self, holder: dict):
+        state = holder.get("state")
+        return getattr(state, "current_task_id", None) if state is not None \
+            else None
+
+    def make_failed_result(self, holder: dict, outcome: RunOutcome) -> RunResult:
+        """Build the RETURNED RunResult for a failed/cancelled run: the
+        view-free outcome plus whatever partial object table the run produced.
+        Numeric stats are best-effort (the run did not complete)."""
+        table = holder.get("table")
+        trace = holder.get("trace") or RunTrace()
+        pool = holder.get("pool")
+        return RunResult(
+            trace=trace, makespan_us=trace.makespan_us(),
+            peak_fast_bytes=0, final_location_violations=(),
+            buffers_allocated=0, buffers_reused=0, slab_overflows=0,
+            objects=table,
+            _owned_pool=None if self.session is not None else pool,
+            outcome=outcome)
+
+    def run_dispatch(
+        self,
+        holder: dict,
         program: Program,
         resolver: ExecutableResolver | None = None,
         *,
@@ -330,6 +554,16 @@ class Engine:
             final_locations=dict(program.final_locations),
             provided_buffer_ids={id(b) for b in initial_buffers.values()},
         )
+        # hand the boundary this run's cleanup handles: if any task raises, the
+        # RunScope drains + reclaims and the failure is converted to a returned
+        # outcome — no exception carrying a live view ever escapes.
+        provided = {id(b) for b in initial_buffers.values()}
+        holder["scope"] = RunScope(backend=self.backend, session=self.session,
+                                   table=table, pool=pool, provided=provided)
+        holder["state"] = state
+        holder["table"] = table
+        holder["trace"] = trace
+        holder["pool"] = pool
         annotator = getattr(self.backend, "annotator", None) or _NOOP_ANNOTATOR
         import os as _os
         import time as _time

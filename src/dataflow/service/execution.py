@@ -173,9 +173,16 @@ def execute_run(program, resolver, values, *, prog_id, store=None,
                 placement, pool_demand, run_args, cancel_event,
                 groups=None):
     """One engine run over store-backed buffers. Returns (result,
-    error_kind, error_msg); the caller owns result.close()."""
+    error_kind, error_msg); the caller owns result.close().
+
+    The engine boundary owns the failure contract: a run-level failure or a
+    cancel comes back as a RunResult carrying a FAILED/CANCELLED outcome (the
+    drain already ran inside execute()), so there is no post-hoc abort_drain
+    and no raw exception carrying a live view. Only the engine's OWN invariant
+    violations still raise (scrubbed) — those are bugs; the daemon logs them
+    loud and survives."""
     from dataflow.runtime import Engine
-    from dataflow.runtime.engine import CancelledRun, ExecutionError
+    from dataflow.runtime.engine import DeadlockError, ExecutionError
 
     try:
         result = Engine(get_backend(store),
@@ -184,26 +191,21 @@ def execute_run(program, resolver, values, *, prog_id, store=None,
             pool_prewarm=pool_demand, placement=placement,
             run_args=run_args, cancel_event=cancel_event, groups=groups,
         )
-        return result, None, None
-    except CancelledRun as e:
-        abort_drain(store)
-        return None, "CANCELLED", str(e)
-    except ExecutionError as e:
-        # print BEFORE draining: the drain can wedge behind pending
-        # collectives whose peer died with us, and the error must
-        # reach the daemon log even then (the fp32-partials incident:
-        # the run's real exception was unreadable behind a drain
-        # deadlock)
-        print(f"[run-failed] {e}", flush=True)
-        abort_drain(store)
-        return None, "RUN_FAILED", str(e)
-    except Exception as e:  # noqa: BLE001 — daemon survives anything
-        import traceback
-
-        print(f"[run-failed] {type(e).__name__}: {e}", flush=True)
-        traceback.print_exc()
-        abort_drain(store)
+    except (ExecutionError, DeadlockError) as e:
+        # engine-invariant violation (a bug): INV-2 already ran inside
+        # execute() and the raise is scrubbed of frames. Log loud; the daemon
+        # survives and the client gets a structured error.
+        print(f"[engine-invariant] {type(e).__name__}: {e}", flush=True)
         return None, "RUN_FAILED", f"{type(e).__name__}: {e}"
+    if result.outcome.is_success:
+        return result, None, None
+    if result.outcome.is_cancelled:
+        return None, "CANCELLED", result.outcome.message
+    # FAILED: the copied traceback is view-free text — safe to log
+    print(f"[run-failed] {result.outcome.message}", flush=True)
+    if result.outcome.traceback_text:
+        print(result.outcome.traceback_text, flush=True)
+    return None, "RUN_FAILED", result.outcome.message
 
 
 def abort_drain(store=None):

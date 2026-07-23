@@ -451,7 +451,7 @@ def isolated_block_compare(cfg, isolate, *, seed: int = 0,
     result = Engine(backend).execute(
         planned.program, resolver=fam.build_resolver(dims),
         initial_buffers=values, pool_prewarm=dry.pool_demand,
-        run_args=run_args)
+        run_args=run_args).raise_if_failed()
 
     lens = tuple(getattr(dims, "seq_lens", None)
                  or (dims.seq_len,) * (dims.max_tokens // dims.seq_len))
@@ -742,7 +742,7 @@ def check_model_step(
         initial_buffers=values,
         pool_prewarm=dry.pool_demand,
         run_args=run_args,
-    )
+    ).raise_if_failed()
 
     errors: dict[str, float] = {}
     cosines: dict[str, float] = {}

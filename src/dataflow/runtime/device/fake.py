@@ -108,3 +108,11 @@ class FakeBackend:
     def sync_all(self) -> None:
         while self._pending:
             self.next_completion()
+
+    def drain_aborted(self) -> int:
+        """Abort-path cleanup: discard every pending completion token so a
+        cancelled/failed run's tokens cannot leak into the next run on a reused
+        session. Virtual time has no in-flight device work to wait on."""
+        n = len(self._pending)
+        self._pending.clear()
+        return n
