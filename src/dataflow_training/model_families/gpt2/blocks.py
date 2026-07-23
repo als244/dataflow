@@ -281,11 +281,11 @@ class Gpt2EmbedFwd(_Base):
             y = torch_view(self._out(ctx, 0), (d.max_tokens, d.d_model), torch.bfloat16)[:n]
             r = parse_object_round(ctx.task.outputs[0].id)
             seg = resolve_segments(ctx, d, r)
-            if seg.lengths and max(seg.lengths) > d.n_ctx:
+            if seg.lengths and max(seg.lengths) > d.max_seq_len:
                 raise ValueError(
-                    f"segment length {max(seg.lengths)} exceeds n_ctx "
-                    f"{d.n_ctx} (learned positions cannot extend past the "
-                    f"table)")
+                    f"segment length {max(seg.lengths)} exceeds max_seq_len "
+                    f"{d.max_seq_len} (learned positions cannot extend past "
+                    f"the table)")
             ops.embed_fwd(tokens, w["w"], y)
             y.add_(torch.index_select(w["wpe"], 0, seg.positions))
 

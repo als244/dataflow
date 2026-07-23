@@ -22,7 +22,7 @@ def gpt2_preset() -> ShapedGpt2Config:
     return ShapedGpt2Config(
         n_layers=12, d_model=768, n_heads=12, d_ff=3072,
         vocab_size=VOCAB_SIZE, seq_len=GPT2_SEQ_LEN, batch=GPT2_BATCH,
-        grad_accum_rounds=GRAD_ACCUM_ROUNDS,
+        max_seq_len=GPT2_SEQ_LEN, grad_accum_rounds=GRAD_ACCUM_ROUNDS,
     )
 
 
@@ -51,6 +51,5 @@ def gpt2_cfg_dict(cfg) -> dict:
         num_steps=cfg.num_steps, tied_embeddings=cfg.tied_embeddings,
         use_bias=cfg.use_bias,
     )
-    if cfg.n_ctx is not None:
-        d["n_ctx"] = cfg.n_ctx
+    d["max_seq_len"] = cfg.max_seq_len
     return d

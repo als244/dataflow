@@ -47,9 +47,11 @@ class ShapedGpt2Config:
     batch: int = 1
     grad_accum_rounds: int = 1
     num_steps: int = 1
-    # learned-position table rows; None = seq_len. Every sequence of a
-    # round (uniform seq_len or ragged seq_lens entry) must fit inside it.
-    n_ctx: int | None = None
+    # learned-position table rows: the model's FIXED maximum context. Sized
+    # independently of the per-program seq_len (or ragged seq_lens) — every
+    # sequence of a round must fit inside it, and W_embed's wpe region is
+    # always this many rows no matter the sequence length a program runs at.
+    max_seq_len: int = 4096
     # tied embed/head (classic GPT-2). Default UNTIED — the repo baseline
     # convention (llama3 ladder, modded-nanogpt).
     tied_embeddings: bool = False
@@ -87,10 +89,6 @@ class ShapedGpt2Config:
     def kv_dim(self) -> int:
         return self.d_model          # full MHA (roofline spec reads this)
 
-    @property
-    def position_rows(self) -> int:
-        return self.n_ctx if self.n_ctx is not None else self.seq_len
-
     # -- parameter counts (roofline seeds; exact sizes come from layouts) ------
     @property
     def block_params(self) -> int:
@@ -106,7 +104,7 @@ class ShapedGpt2Config:
 
     @property
     def embed_params(self) -> int:
-        n = self.vocab_size * self.d_model + self.position_rows * self.d_model
+        n = self.vocab_size * self.d_model + self.max_seq_len * self.d_model
         if self.tied_embeddings:
             n += (2 if self.use_bias else 1) * self.d_model  # final LN rides W_embed
         return n
@@ -159,14 +157,16 @@ def derive_dims(cfg: ShapedGpt2Config) -> Gpt2Dims:
     if cfg.d_model % cfg.n_heads != 0:
         raise ValueError(f"d_model {cfg.d_model} not divisible by "
                          f"n_heads {cfg.n_heads}")
-    n_ctx = cfg.position_rows
+    max_seq_len = cfg.max_seq_len
     if cfg.seq_lens is not None:
-        if max(cfg.seq_lens) > n_ctx:
+        if max(cfg.seq_lens) > max_seq_len:
             raise ValueError(
-                f"segment length {max(cfg.seq_lens)} exceeds n_ctx {n_ctx} "
-                f"(learned positions cannot extend past the table)")
-    elif cfg.seq_len > n_ctx:
-        raise ValueError(f"seq_len {cfg.seq_len} exceeds n_ctx {n_ctx}")
+                f"segment length {max(cfg.seq_lens)} exceeds max_seq_len "
+                f"{max_seq_len} (learned positions cannot extend past the "
+                f"table)")
+    elif cfg.seq_len > max_seq_len:
+        raise ValueError(
+            f"seq_len {cfg.seq_len} exceeds max_seq_len {max_seq_len}")
     return Gpt2Dims(
         opt_policy=cfg.opt_policy,
         d_model=cfg.d_model,
@@ -175,7 +175,7 @@ def derive_dims(cfg: ShapedGpt2Config) -> Gpt2Dims:
         vocab_size=cfg.vocab_size,
         max_tokens=cfg.max_tokens,
         seq_len=cfg.seq_len,
-        n_ctx=n_ctx,
+        max_seq_len=max_seq_len,
         tied=cfg.tied_embeddings,
         use_bias=cfg.use_bias,
         dtypes=getattr(cfg, "dtypes", None) or DTypePolicy(),

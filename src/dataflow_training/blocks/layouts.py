@@ -1040,9 +1040,10 @@ class Gpt2Dims:
     """GPT-2 dimensions (the nanogpt-speedrun baseline shape): pre-LN
     blocks with LayerNorm (gain AND bias), fused c_attn QKV (one (d, 3d)
     matrix + bias), full MHA (no GQA, no rope — LEARNED positions),
-    GELU-tanh MLP with biases, untied embed/head. ``n_ctx`` is the
-    learned-position table's row count — every segment of a packed round
-    must fit inside it (positions restart per sequence)."""
+    GELU-tanh MLP with biases, untied embed/head. ``max_seq_len`` is the
+    learned-position table's row count (the model's fixed maximum context,
+    independent of the per-program sequence length) — every segment of a
+    packed round must fit inside it (positions restart per sequence)."""
 
     d_model: int
     n_heads: int
@@ -1050,7 +1051,7 @@ class Gpt2Dims:
     vocab_size: int
     max_tokens: int
     seq_len: int
-    n_ctx: int
+    max_seq_len: int
     # tied embed/head (config option; classic GPT-2 ties, the repo default
     # is untied like the llama3 baselines): ONE W_embed packs
     # [w | wpe | final_norm_w | final_norm_b] and serves both ends
@@ -1129,7 +1130,7 @@ def gpt2_embed_layout(dims: Gpt2Dims) -> PackedLayout:
     head too (policy ns follows the serving side: "head" when tied)."""
     specs = [
         ("w", (dims.vocab_size, dims.d_model)),
-        ("wpe", (dims.n_ctx, dims.d_model)),
+        ("wpe", (dims.max_seq_len, dims.d_model)),
     ]
     if dims.tied:
         specs.append(("final_norm_w", (dims.d_model,)))

@@ -22,7 +22,10 @@ from dataflow_training.model_families.layout_registry import (
 # tiny-config digests captured 2026-07-21 from the battery-certified
 # builders, BEFORE any declarative migration.
 PINNED = {
-    "gpt2": "1f753d515bd23990",
+    # gpt2 re-pinned: the learned-position table (wpe) is now sized by the
+    # fixed max_seq_len, not the per-program seq_len, so W_embed's layout
+    # changed once and for all.
+    "gpt2": "a4af5a38911bb749",
     "llama3": "44c503e642931caf",
     "qwen3": "27b6b862319f6095",
     "qwen35": "78746cee5d18fd47",

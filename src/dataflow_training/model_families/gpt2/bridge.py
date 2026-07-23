@@ -17,7 +17,7 @@ from ..bridge_common import assert_state_dict_byte_identical, load_state_dict_st
 def reference_config(cfg) -> Gpt2Config:
     return Gpt2Config(
         n_layers=cfg.n_layers, d_model=cfg.d_model, n_heads=cfg.n_heads,
-        d_ff=cfg.d_ff, vocab_size=cfg.vocab_size, n_ctx=cfg.position_rows,
+        d_ff=cfg.d_ff, vocab_size=cfg.vocab_size, n_ctx=cfg.max_seq_len,
         tied=cfg.tied_embeddings, use_bias=cfg.use_bias,
     )
 
