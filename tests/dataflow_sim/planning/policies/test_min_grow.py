@@ -1,4 +1,4 @@
-"""Tests for the min_grow policy (MAX→shrink). See dataflow_sim/policy/min_grow.py.
+"""Tests for the min_grow policy (MAX→shrink). See dataflow_sim/policies/min_grow.py.
 
 Tests:
 - test_min_plan_inputs_use_half_open_interval: the MIN plan gives each backing input a half-open residency interval spanning only its single-use boundary.
@@ -139,8 +139,8 @@ def test_max_plan_produced_starts_at_producer():
 
 def test_max_plan_mutated_grad_exits_at_mutator():
     """For backing-init mutated only at task k (e.g., dW_i at b_i): MAX interval [-1, k).
-    This makes derive_schedule fire the offload at task k, the mutation task —
-    the 'offload ASAP after mutation' behavior the user asked for.
+    This makes derive_schedule fire the offload at task k, the mutation task,
+    which realizes 'offload ASAP after mutation'.
     """
     bare = TaskChain(
         initial_memory=[Object(id="dW", size=10, location="backing", type="gradient")],
@@ -255,8 +255,8 @@ def test_derive_schedule_emits_prefetch_for_non_pre_placed_backing_init():
 
 
 def test_derive_schedule_mutated_backing_init_offloads_at_mutator():
-    """User's 'offload dW_i ASAP after mutation' requirement.
-    For dW mutated at task 1 with MAX interval [-1, 1), offload trigger on task 1.
+    """Offload dW_i ASAP after mutation: for dW mutated at task 1 (MAX interval
+    [-1,1)), the offload trigger lands on task 1.
     """
     bare = TaskChain(
         initial_memory=[Object(id="dW", size=10, location="backing", type="gradient")],
@@ -276,8 +276,8 @@ def test_derive_schedule_mutated_backing_init_offloads_at_mutator():
 
 
 def test_derive_schedule_released_after_last_use():
-    """User's 'release W_i after last use' requirement.
-    For a non-mutated backing-init last used at task k, release on task k.
+    """Release W_i after its last use: a non-mutated backing-init last used at
+    task k gets its release on task k.
     """
     bare = TaskChain(
         initial_memory=[Object(id="W", size=10, location="backing", type="weight")],
@@ -357,7 +357,7 @@ def test_bare_invariant_check():
 
 
 # ============================================================================
-# Smart prefetch placement (Phase B trigger smarts)
+# Smart prefetch placement (trigger placement)
 # ============================================================================
 
 def test_smart_prefetch_avoids_zero_runtime_task():
@@ -372,7 +372,6 @@ def test_smart_prefetch_avoids_zero_runtime_task():
     #   start at 100 and need 10 ticks → t2 stalls.
     # - Task 0 ends at time 100. from_slow starts at 100, takes 10, completes at 110.
     #   t1 has 0 runtime so t2 starts at 100 too. STILL STALLS.
-    # Hmm — for this to test the "walk back past zero runtime" we need more layers.
 
     bare = TaskChain(
         initial_memory=[Object(id="W", size=100, location="backing", type="weight")],
@@ -381,7 +380,7 @@ def test_smart_prefetch_avoids_zero_runtime_task():
             Task(id="t1", inputs=[], outputs=[], runtime=0),  # zero-runtime
             Task(id="t2", inputs=["W"], outputs=[], runtime=10),
         ],
-        fast_memory_capacity=None,  # no cap → MAX is optimal (pre-place W) — different test
+        fast_memory_capacity=None,
         bandwidth_from_slow=10, bandwidth_to_slow=10,
     )
     # With cap=None min_grow returns MAX (pre-place W); not a useful test of trigger placement.
@@ -389,7 +388,8 @@ def test_smart_prefetch_avoids_zero_runtime_task():
     bare = replace(bare, fast_memory_capacity=110)  # 100 (W) + 10 (o0 reservation) = 110
     ann = apply_min_grow_policy(bare, time_budget_s=2.0)
     # With cap=110, MAX (pre-place W at -1) puts pool at 100 + 10 (next-output) = 110. OK.
-    # So min_grow should still pre-place W. Let me just check the chain runs.
+    # This asserts only that the annotated chain runs; it does not itself
+    # exercise the zero-runtime walk-back path.
     log = simulator_run(ann)
     assert log.task_intervals
 
@@ -421,7 +421,7 @@ def test_smart_prefetch_returns_int_in_range():
 
 
 # ============================================================================
-# Analytic pre-pass (Phase A0)
+# Analytic pre-pass (greedy static-cap shrink)
 # ============================================================================
 
 def test_analytic_pre_pass_reaches_static_feasibility():

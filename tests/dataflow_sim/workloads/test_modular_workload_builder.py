@@ -12,8 +12,8 @@ Tests:
 - test_invalid_ep_group_size_for_moe_raises_clear_error: an ep_group_size that does not divide the routed expert count raises a clear error.
 - test_compute_precision_changes_realized_runtime_under_unlimited_memory: fp8 compute precision lowers realized forward-block runtime under unlimited memory, with hand-checked op byte counts.
 - test_family_presets_are_easy_to_override: every family preset applies its named defaults and accepts keyword overrides, exposing the expected preset_name and layer types.
-- test_new_family_public_preset_values_match_source_configs: the public presets for the newer families match their source config values (dims, experts, indexer, layer-type counts).
-- test_new_op_helper_formulas_are_hand_checkable: the new forward/backward op helpers (conv, delta rule, MLA, relu2, mamba, sliding, index, DSA) compute hand-checkable flops and byte counts.
+- test_family_public_preset_values_match_source_configs: the public presets for the families match their source config values (dims, experts, indexer, layer-type counts).
+- test_op_helper_formulas_are_hand_checkable: the forward/backward op helpers (conv, delta rule, MLA, relu2, mamba, sliding, index, DSA) compute hand-checkable flops and byte counts.
 - test_qwen_deepseek_and_gpt_oss_reuse_existing_moe_subops_without_router_ops: Qwen/DeepSeek/GPT-OSS MoE layers reuse the shared MoE subops and emit no router ops.
 - test_deepseek_v32_modules_emit_expected_subop_chains_blocks_and_indexer_dtypes: DeepSeek-V3.2 dense/MoE blocks emit the expected subop chains and block keys, GLM-5 reuses them, and indexer dtype and freeze options change activation bytes and drop indexer gradients.
 - test_glm52_indexshare_blocks_skip_shared_indexer_work: GLM-5.2 shared-index blocks skip the indexer subops and gradients, and per-layer indexer param counts match the shared/full mode split.
@@ -678,7 +678,7 @@ def test_family_presets_are_easy_to_override():
     )
 
 
-def test_new_family_public_preset_values_match_source_configs():
+def test_family_public_preset_values_match_source_configs():
     qwen_dense = QwenHybridDenseConfig.preset("qwen3_5_27B")
     qwen3_moe = Qwen3MoEConfig.preset("qwen3_moe_235B-A22B")
     qwen_moe = QwenHybridMoEConfig.preset("qwen3_5_35B-A3B")
@@ -833,7 +833,7 @@ def test_new_family_public_preset_values_match_source_configs():
         assert {name: layer_types.count(name) for name in counts} == counts
 
 
-def test_new_op_helper_formulas_are_hand_checkable():
+def test_op_helper_formulas_are_hand_checkable():
     conv = fwd.depthwise_causal_conv1d(
         "conv",
         tokens=5,
@@ -1678,7 +1678,7 @@ def test_training_program_uses_model_order_reverse_backward_and_optimizer():
         "step_0_embed",
     ]
 
-    # legacy tail placement: same task ids, all optimizers after all rounds
+    # tail placement: same task ids, all optimizers after all rounds
     # (embedding first, then layers, then head — the runtime's tail order)
     tail = Llama3ForTraining(config).build_training_program(
         TrainingConfig(
@@ -1899,7 +1899,7 @@ def test_moe_recompute_variant_rewires_activation_producer_and_block_metadata():
     opt_rows = {row["name"]: row for row in optimizer_blocks[0]["subops"]}
     assert opt_rows["routed_mlp_gate_muon_step"]["count"] == config.num_routed_experts
     assert opt_rows["routed_mlp_up_muon_step"]["count"] == config.num_routed_experts
-    old_fused_gate_up_flops, _ = opt_ops.muon_matrix_flops_bytes(
+    fused_gate_up_flops, _ = opt_ops.muon_matrix_flops_bytes(
         config.d_model,
         2 * config.expert_dim,
     )
@@ -1909,7 +1909,7 @@ def test_moe_recompute_variant_rewires_activation_producer_and_block_metadata():
         + opt_rows["routed_mlp_up_muon_step"]["flops"]
         * opt_rows["routed_mlp_up_muon_step"]["count"]
     )
-    assert split_gate_up_flops < old_fused_gate_up_flops * config.num_routed_experts
+    assert split_gate_up_flops < fused_gate_up_flops * config.num_routed_experts
 
 
 def test_varied_family_workloads_run_and_report_kpis():

@@ -5,7 +5,7 @@ Tests:
 - test_stall_report_attributes_capacity_wait: the stall report attributes a stall to capacity wait, not input wait, when an offload must free bytes first.
 - test_stall_report_backlog_windows_cover_queued_transfers: the stall report's transfer backlog covers a second prefetch queued behind the first.
 - test_recompute_variant_rewires_activation_producer: a recompute variant drops the saved activation from its forward output and rewires it to a recompute task feeding backward, with matching block metadata and unchanged backward runtimes.
-- test_removing_noop_recompute_placeholders_does_not_reduce_throughput: dropping zero-runtime recompute placeholder stubs keeps makespan within 1% of the legacy chain.
+- test_zero_runtime_recompute_placeholders_are_schedule_neutral: inserting zero-runtime recompute placeholder tasks keeps makespan within 1% (they are schedule-neutral).
 - test_recompute_variant_rejects_unknown_object: requesting recompute for an unknown object id raises ValueError.
 - test_recompute_loop_converts_under_pressure_and_improves: under memory pressure the recompute planner converts activations and beats the baseline makespan.
 - test_recompute_loop_keeps_everything_saved_when_memory_is_loose: with loose memory the recompute planner saves every activation and matches the baseline makespan with no recompute tasks.
@@ -30,7 +30,7 @@ _BWD_TASK_ID = re.compile(r"^b_(\d+)_(\d+)_(\d+)$")
 _RECOMPUTE_TASK_ID = re.compile(r"^r_(\d+)_(\d+)_(\d+)$")
 
 
-def _legacy_placeholder_recompute_chain(chain: TaskChain) -> TaskChain:
+def _with_zero_runtime_recompute_placeholders(chain: TaskChain) -> TaskChain:
     real_recompute = {
         tuple(map(int, _RECOMPUTE_TASK_ID.match(task.id).groups()))
         for task in chain.tasks
@@ -205,26 +205,26 @@ def test_recompute_variant_rewires_activation_producer():
     annotated = apply_pressurefit_policy(var.chain)
     run(annotated, snapshots=False)
     ann_tasks = {t.id: t for t in annotated.tasks}
-    # x feeds its OWN backward too (the runtime's norm-bwd input edge), so
-    # each y_i now stays live until b_{i+1} — releases moved from the next
-    # forward/recompute to the consuming backward
+    # x feeds its own backward (the norm-bwd input edge), so each y_i stays
+    # live until b_{i+1}: the release sits on the consuming backward, not the
+    # next forward/recompute.
     assert "y_0_0_0" in ann_tasks["b_0_0_1"].releases_after
     assert "y_0_0_1" in ann_tasks["b_0_0_2"].releases_after
     assert "y_0_0_2" in ann_tasks["b_0_0_3"].releases_after
 
 
-def test_removing_noop_recompute_placeholders_does_not_reduce_throughput():
+def test_zero_runtime_recompute_placeholders_are_schedule_neutral():
     model, hw, cfg = _small()
     chain = model.build_training_workload(cfg, hw).chain
-    legacy = _legacy_placeholder_recompute_chain(chain)
+    padded = _with_zero_runtime_recompute_placeholders(chain)
 
     current_makespan = _makespan_us(chain, fast_memory_capacity=96 * 1024 * 1024)
-    legacy_makespan = _makespan_us(legacy, fast_memory_capacity=96 * 1024 * 1024)
+    padded_makespan = _makespan_us(padded, fast_memory_capacity=96 * 1024 * 1024)
 
     # 1% tolerance: the 0-runtime placeholder stubs perturb greedy
     # eviction/prefetch ties (their y input acts as an accidental prefetch
     # hint under a tight cap) — bounded noise, not a real throughput cost
-    assert current_makespan <= legacy_makespan * 1.01
+    assert current_makespan <= padded_makespan * 1.01
 
 
 def test_recompute_variant_rejects_unknown_object():

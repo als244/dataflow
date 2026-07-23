@@ -11,17 +11,17 @@ Tests:
 - test_initial_placement_must_place_T1_inputs: initial placement must place the first compute task's backing inputs; the already-resident input is excluded.
 - test_initial_placement_raises_when_widest_T1_too_big: initial placement raises widest-task infeasibility when the first task cannot fit under the cap.
 - test_auto_policy_L3_works_at_loose_caps: the belady_reactive policy runs an L=3 chain across None and 1200..500 caps with the first forward and backward tasks present.
-- test_auto_policy_L5_works_at_v2_envelope: belady_reactive runs an L=5 chain down to cap=500 with the first backward task present.
-- test_auto_policy_L10_works_at_v2_envelope: belady_reactive runs an L=10 chain down to cap=500 with the first backward task present.
-- test_phase5_recovers_l10_cap600: at L=10 cap=600 iterative refinement yields a valid run with makespan under 400.
-- test_v3_enumerates_roundtrips_for_l3: round-trip enumeration finds candidates for the wide-gap forward weights W_0 and W_1.
-- test_v3_object_uses_by_task_idx_collapses_duplicates: per-task use events collapse duplicate references so W_0 records exactly its three ordered uses.
+- test_auto_policy_L5_works_down_to_cap_500: belady_reactive runs an L=5 chain down to cap=500 with the first backward task present.
+- test_auto_policy_L10_works_down_to_cap_500: belady_reactive runs an L=10 chain down to cap=500 with the first backward task present.
+- test_iterative_refinement_recovers_valid_plan_at_tight_cap: at L=10 cap=600 iterative refinement yields a valid run with makespan under 400.
+- test_roundtrip_enumeration_finds_wide_gap_weights: round-trip enumeration finds candidates for the wide-gap forward weights W_0 and W_1.
+- test_per_task_use_events_collapse_duplicates: per-task use events collapse duplicate references so W_0 records exactly its three ordered uses.
 - test_initial_placement_leaves_slack_for_widest_task: slack-aware initial placement leaves room for the widest single-task footprint under a tight cap.
 - test_auto_policy_L3_zero_stalls_at_unlimited: at unlimited cap the L=3 schedule has no gaps between consecutive compute tasks.
 - test_auto_policy_L3_unlimited_emits_no_transfers_without_final_locations: at unlimited cap with no final-location constraints the policy emits no prefetches or offloads.
 - test_auto_policy_L3_unlimited_honors_final_backing_locations: a final-backing constraint yields exactly one write-back offload per pinned gradient and no prefetches.
 - test_auto_policy_emits_releases_at_tight_cap: at a tight-but-feasible cap the policy emits at least one release trigger.
-- test_v2_releases_w_instead_of_offloading_when_backing_copy_exists: weights with a byte-identical backing copy are released, never offloaded, when their compute bytes must be freed.
+- test_releases_weight_instead_of_offloading_when_backing_copy_exists: weights with a byte-identical backing copy are released, never offloaded, when their compute bytes must be freed.
 - test_smart_initial_placement_defers_to_leave_room_for_outputs: smart initial placement defers late-first-use backing objects at a tight cap but places all of them at a loose cap.
 - test_smart_initial_placement_at_loose_cap_eliminates_forward_stalls: with enough room, smart initial placement runs all five forward tasks back-to-back with zero stall.
 - test_auto_writes_back_final_backing_objects: objects listed in final_locations end live on backing after the run.
@@ -47,7 +47,7 @@ from dataflow_sim.engine.simulator import run
 from chain_fixtures import build_bare_training_chain
 
 
-# ---------- Phase 0a / reference stream ----------
+# ---------- next-use / reference-stream helpers ----------
 
 def test_next_use_after_returns_first_use_at_or_after():
     uses = {"a": [0, 10, 20], "b": [5, 15]}
@@ -69,7 +69,7 @@ def test_compute_uses_collects_input_timestamps():
     assert 0 in uses["W_0"]
 
 
-# ---------- Phase 1 / initial placement ----------
+# ---------- initial placement ----------
 
 def test_initial_placement_must_place_T1_inputs():
     bare = build_bare_training_chain(L=3)
@@ -107,7 +107,7 @@ def test_auto_policy_L3_works_at_loose_caps(cap):
 
 
 @pytest.mark.parametrize("cap", [None, 1200, 1000, 800, 600, 500])
-def test_auto_policy_L5_works_at_v2_envelope(cap):
+def test_auto_policy_L5_works_down_to_cap_500(cap):
     """belady_reactive extends L=5 down to cap=500."""
     bare = build_bare_training_chain(L=5)
     annotated = apply_auto_policy(bare, fast_memory_capacity=cap)
@@ -117,8 +117,8 @@ def test_auto_policy_L5_works_at_v2_envelope(cap):
 
 
 @pytest.mark.parametrize("cap", [None, 1500, 1000, 800, 600, 500])
-def test_auto_policy_L10_works_at_v2_envelope(cap):
-    """belady_reactive extends L=10 down to cap=500 (was unlimited-only in the early prototype)."""
+def test_auto_policy_L10_works_down_to_cap_500(cap):
+    """belady_reactive extends L=10 down to cap=500."""
     bare = build_bare_training_chain(L=10)
     annotated = apply_auto_policy(bare, fast_memory_capacity=cap)
     log = run(annotated)
@@ -126,9 +126,9 @@ def test_auto_policy_L10_works_at_v2_envelope(cap):
     assert "b_0" in compute_ids
 
 
-def test_phase5_recovers_l10_cap600():
-    """Phase 5 iterative refinement: at L=10 cap=600 the initial planning
-    overshoots capacity at some prefetches; Phase 5 shifts the prefetch
+def test_iterative_refinement_recovers_valid_plan_at_tight_cap():
+    """The policy's iterative refinement: at L=10 cap=600 the initial planning
+    overshoots capacity at some prefetches; refinement shifts the prefetch
     earlier until the simulator accepts."""
     bare = build_bare_training_chain(L=10)
     annotated = apply_auto_policy(bare, fast_memory_capacity=600)
@@ -138,7 +138,7 @@ def test_phase5_recovers_l10_cap600():
     assert makespan < 400
 
 
-def test_v3_enumerates_roundtrips_for_l3():
+def test_roundtrip_enumeration_finds_wide_gap_weights():
     """roundtrip_planner's gap enumeration should find candidate round-trips for forward
     weights (W_0..W_2) since they have large gaps between f_i and r_i/b_i."""
     from dataflow_sim.policies._common import (
@@ -157,7 +157,7 @@ def test_v3_enumerates_roundtrips_for_l3():
     assert "W_1" in obj_ids
 
 
-def test_v3_object_uses_by_task_idx_collapses_duplicates():
+def test_per_task_use_events_collapse_duplicates():
     """A task's input list may reference the same object once; we should
     record a single use event per (task, obj) pair."""
     from dataflow_sim.policies._common import _compute_ideal_starts, _object_uses_by_task_idx
@@ -244,12 +244,12 @@ def test_auto_policy_emits_releases_at_tight_cap():
 
 # ---------- equivalence at generous capacity ----------
 
-def test_v2_releases_w_instead_of_offloading_when_backing_copy_exists():
+def test_releases_weight_instead_of_offloading_when_backing_copy_exists():
     """W_i is backing-initial and never mutated (workload contract). When the
-    planner needs to free its compute bytes between fwd-use and bwd-use, it
-    should RELEASE (instant, no to_slow cost) — NOT offload — because the backing
-    copy is byte-identical. Pre-fix belady_reactive always offloaded weights with a
-    future use, wasting to_slow bandwidth on a write-back to identical data."""
+    planner needs to free its compute bytes between fwd-use and bwd-use, the
+    backing copy is byte-identical, so a release (instant, no to_slow) is
+    correct; an offload would waste to_slow bandwidth re-writing identical
+    bytes."""
     bare = build_bare_training_chain(L=5)
     annotated = apply_auto_policy(bare, fast_memory_capacity=600)
     # Collect every per-task to_slow trigger by object.
@@ -266,9 +266,9 @@ def test_smart_initial_placement_defers_to_leave_room_for_outputs():
     """The smart initial placement should DEFER backing objects whose
     pre-placement would push pessimistic-bps over cap at some boundary,
     leaving room for task outputs (activations) that accumulate over
-    forward. Regression for: the old greedy fill would pre-place every
-    dW_i + W_head + dW_head as long as the SUM fit under cap, ignoring
-    that activations would arrive later and need that room."""
+    forward. Smart init must not pre-place every dW_i + W_head + dW_head
+    just because their SUM fits under cap; it must leave room for
+    activations that accumulate later during forward."""
     from dataflow_sim.policies.belady_reactive import _smart_initial_placement
     from dataflow_sim.policies._common import (
         _compute_ideal_starts, _object_sizes, _object_uses_by_task_idx,
@@ -304,10 +304,9 @@ def test_smart_initial_placement_defers_to_leave_room_for_outputs():
 
 
 def test_smart_initial_placement_at_loose_cap_eliminates_forward_stalls():
-    """Concrete user-reported scenario: with cap big enough that smart init
-    has room to fit everything live during forward (without pre-placing
-    things that aren't needed until backward), forward tasks should run
-    back-to-back with no stall."""
+    """With cap big enough that smart init has room to fit everything live
+    during forward (without pre-placing things that aren't needed until
+    backward), forward tasks should run back-to-back with no stall."""
     bare = build_bare_training_chain(
         L=5, input_size=50, weight_size=100, activation_size=200,
         grad_size=100, head_weight_size=100,
@@ -356,11 +355,10 @@ def test_auto_writes_back_final_backing_objects():
 
 
 def test_activation_offload_fires_eagerly_at_production():
-    """When belady_reactive decides an activation (no backing source) must be offloaded,
-    it should pick the EARLIEST safe boundary (right after production) so
-    the to_slow fires while the stream would otherwise be idle. Previously belady_reactive
-    used 'latest boundary that still meets deadline', which delayed A_0's
-    offload by tens of ms even though to_slow was sitting idle the whole time."""
+    """When belady_reactive decides an activation (no backing source) must be
+    offloaded, the offload must fire at the EARLIEST safe boundary (right
+    after production) while to_slow is idle, not at the latest boundary that
+    still meets the deadline."""
     # Tight cap that forces activation offloads.
     bare = build_bare_training_chain(
         L=8, input_size=50, weight_size=100, activation_size=500,
@@ -368,9 +366,9 @@ def test_activation_offload_fires_eagerly_at_production():
         fwd_runtime=10, head_runtime=10, bwd_runtime=20,
         bandwidth_from_slow=50, bandwidth_to_slow=50,
     )
-    # Cap chosen so A_0 MUST be offloaded — the assertion below otherwise
-    # no-ops (was a defensive skip pre-restructure). At cap=2000 the L=8
-    # backward-needed activations cycle off-compute during forward.
+    # Cap chosen so A_0 MUST be offloaded, else the assertion below no-ops.
+    # At cap=2000 the L=8 backward-needed activations cycle off-compute during
+    # forward.
     annotated = apply_auto_policy(bare, fast_memory_capacity=2000)
     log = run(annotated)
     f_0 = next(iv for iv in log.task_intervals if iv.task_id == "f_0")
@@ -381,7 +379,7 @@ def test_activation_offload_fires_eagerly_at_production():
         None,
     )
     assert a0_to_slow is not None, (
-        "A_0 wasn't offloaded at cap=1600; tighten further or check policy "
+        "A_0 wasn't offloaded at cap=2000; tighten further or check policy "
         "behaviour — the eagerness assertion below needs a real to_slow to inspect"
     )
     # A_0 must start within ONE compute task of production (not "as late as

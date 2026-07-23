@@ -1,11 +1,8 @@
-"""Simulator-side test fixtures.
+"""Minimal bare-chain builders for the policy tests.
 
-Provides minimal legacy bare-chain builders for policy tests that exercise
-the original `f_i` / `b_i` task-id convention.
-
-The `build_bare_training_chain` function is a local copy of the
-training-chain builder used by belady_reactive / min_grow tests. It
-mirrors the workload-side helper without importing it.
+build_bare_training_chain constructs the L-layer forward/backward
+training-chain skeleton (the `f_i` / `b_i` task-id convention) consumed by
+the belady_reactive, min_grow, and pressurefit policy tests.
 """
 from __future__ import annotations
 

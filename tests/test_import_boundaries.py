@@ -42,10 +42,10 @@ Tests:
 - test_core_is_dependency_free: importing dataflow.core in a fresh interpreter drags in none of torch/jax/cuda/dataflow_sim.
 - test_runtime_never_imports_torch_or_sim: importing dataflow.runtime drags in none of torch/jax/dataflow_sim.
 - test_blocks_never_imports_sim: importing dataflow_training.blocks does not drag in dataflow_sim.
-- test_r1_engine_never_imports_workload_or_twins: no module under src/dataflow imports dataflow_training or reference_models.
-- test_r2_workload_uses_engine_public_surfaces_only: modules under src/dataflow_training reach dataflow only through the sanctioned core/runtime/service surfaces.
-- test_r3_tools_stay_near_package_roots: files under tools/ import only the engine's three subtrees and dataflow_training at most two levels deep (deeper only under model_families/blocks).
-- test_r4_sim_required_only_under_lowering: a module-top-level dataflow_sim import appears only under dataflow_training.lowering; elsewhere in src/ it must be a lazy in-function import.
+- test_engine_never_imports_workload_or_twins: no module under src/dataflow imports dataflow_training or reference_models.
+- test_workload_uses_engine_public_surfaces_only: modules under src/dataflow_training reach dataflow only through the sanctioned core/runtime/service surfaces.
+- test_tools_stay_near_package_roots: files under tools/ import only the engine's three subtrees and dataflow_training at most two levels deep (deeper only under model_families/blocks).
+- test_sim_required_only_under_lowering: a module-top-level dataflow_sim import appears only under dataflow_training.lowering; elsewhere in src/ it must be a lazy in-function import.
 """
 import ast
 import subprocess
@@ -151,7 +151,7 @@ def offender_lines(offenders: list[tuple[Path, int, str]]) -> str:
                      for path, lineno, ref in offenders)
 
 
-def test_r1_engine_never_imports_workload_or_twins():
+def test_engine_never_imports_workload_or_twins():
     """R1: src/dataflow is blind to dataflow_training and reference_models."""
     offenders = [(path, lineno, ref)
                  for path, lineno, ref, top_level in scan_refs(SRC / "dataflow")
@@ -171,7 +171,7 @@ R2_ALLOWED_SUBTREES = (
 R2_ALLOWED_EXACT = ("dataflow.service",)
 
 
-def test_r2_workload_uses_engine_public_surfaces_only():
+def test_workload_uses_engine_public_surfaces_only():
     """R2: dataflow_training touches dataflow only via core/runtime ABIs
     and the sanctioned service surfaces."""
     offenders = []
@@ -209,7 +209,7 @@ def r3_allows(ref: str) -> bool:
     return True  # other roots (torch, reference_models, dataflow_sim, ...) are out of scope
 
 
-def test_r3_tools_stay_near_package_roots():
+def test_tools_stay_near_package_roots():
     """R3: tools import the engine's three subtrees and dataflow_training
     at most two levels deep (deeper only under model_families/blocks)."""
     offenders = [(path, lineno, ref)
@@ -224,7 +224,7 @@ R4_SIM_TOPLEVEL_ALLOWED = SRC / "dataflow_training" / "lowering"
 R4_SIM_PACKAGE = SRC / "dataflow_sim"
 
 
-def test_r4_sim_required_only_under_lowering():
+def test_sim_required_only_under_lowering():
     """R4: a module-top-level (required) dataflow_sim import may exist
     only under dataflow_training.lowering; everywhere else in the CONSUMER
     packages the simulator must stay a lazy in-function import. The

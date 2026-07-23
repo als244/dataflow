@@ -366,7 +366,7 @@ def test_task_intervals_match_runtime_sum():
 
 
 # ============================================================
-# Transfer + stall + capacity tests (Phase 2)
+# Transfer + stall + capacity tests
 # ============================================================
 
 
@@ -687,7 +687,7 @@ def test_prefetch_defers_when_backing_source_pending_inbound():
 
 def test_truly_absent_backing_source_still_raises():
     """Prefetch where the backing source neither exists nor is in flight
-    is still a hard error (matches the user's invariant)."""
+    is still a hard error."""
     chain = _xfer_chain(
         [{"id": "A", "size": 4, "location": "fast"}],
         [_task("t0", inputs=[], runtime=1, prefetches=["X"])],  # X doesn't exist

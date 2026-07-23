@@ -1,12 +1,12 @@
 """Invalid TaskChain fixtures for the ID-RESOLUTION violation category.
 
 Each fixture in this file builds the MINIMAL TaskChain that violates exactly
-one ID-resolution invariant from docs/policy/principles.md (§1 Correctness).
-The simulator (or an upcoming static prepass validator) should reject each
+one ID-resolution invariant from docs/dataflow_sim/policy/principles.md (§1 Correctness).
+The simulator (or the static prepass validator) should reject each
 chain with an error message whose text contains the corresponding keyword
 from `EXPECTED_ERROR_KEYWORDS`.
 
-This file is consumed by tests/test_validate_chain.py (phase 4).
+This file is consumed by test_validate_chain.py.
 """
 
 from dataflow_sim.core.schema import Object, OutputAlloc, Task, TaskChain, TransferTrigger
@@ -37,7 +37,7 @@ def make_invalid_id_resolution_unknown_input() -> TaskChain:
 def make_invalid_id_resolution_release_not_in_inputs() -> TaskChain:
     """task.releases_after lists an id that is not known anywhere in the chain.
 
-    Note: per docs/policy/principles.md §1, a task may only release ids it
+    Note: per docs/dataflow_sim/policy/principles.md §1, a task may only release ids it
     consumed as inputs. The current validator relaxes this to "release any
     statically-known id" (matching the runtime's contract; the principle-
     strict check is a future tightening an open design question). This
@@ -203,14 +203,14 @@ EXPECTED_ERROR_KEYWORDS: dict[str, str | list[str]] = {
 # ---------------------------------------------------------------------------
 # Category: TRIGGER VALIDITY
 #
-# Principles cited (docs/policy/principles.md §1):
+# Principles cited (docs/dataflow_sim/policy/principles.md §1):
 #   * "Prefetch of X is valid only when X's compute entry is absent or in-flight
 #      outbound; offload of X is valid only when compute entry is `live` and any
 #      backing entry is `live` with matching size."
 #
 # All five fixtures below violate this trigger-validity invariant in distinct
-# ways. The simulator should reject each (today: at runtime; eventually: via
-# the static prepass we are building toward).
+# ways. The simulator should reject each — at runtime, or up front via the
+# static prepass validator.
 # ---------------------------------------------------------------------------
 
 
@@ -397,7 +397,7 @@ EXPECTED_ERROR_KEYWORDS.update(
 # ---------------------------------------------------------------------------
 # Category: RELEASE & MUTATION
 #
-# Principles cited (docs/policy/principles.md §1):
+# Principles cited (docs/dataflow_sim/policy/principles.md §1):
 #   * "An object may be released only by a task that names it as input, and
 #      only when its compute entry is `live`."
 #   * "An object cannot be released if it has another use AND (backing lacks a
@@ -406,8 +406,8 @@ EXPECTED_ERROR_KEYWORDS.update(
 #      bare release of the same object."
 #
 # Each fixture below violates one of these rules in isolation. The bare
-# release of a dirty / compute-only object is the user's seed bug; the others
-# pin down adjacent corners of the same invariant family.
+# release of a dirty / compute-only object is the central violation here; the
+# others pin down adjacent corners of the same invariant family.
 # ---------------------------------------------------------------------------
 
 
@@ -633,7 +633,7 @@ EXPECTED_ERROR_KEYWORDS.update(
 # ---------------------------------------------------------------------------
 # Category: TOPOLOGICAL / DEADLOCK
 #
-# Principles cited (docs/policy/principles.md §1):
+# Principles cited (docs/dataflow_sim/policy/principles.md §1):
 #   * "Every task input must be `live` on compute by task start — either
 #      resident or via a prefetch whose from-slow (plus any blocking to-slow)
 #      completes before the earliest start." (missing-input deadlock raise)
@@ -644,8 +644,8 @@ EXPECTED_ERROR_KEYWORDS.update(
 #      an EARLIER task — no self-edges, no forward references.
 #
 # The simulator catches most of these mid-run via:
-#   * simulator.py L396 — `input {inp!r} is not present in pool`
-#   * simulator.py L494-497 — `task {id!r} deadlocked at t=...`
+#   * the simulator's "input ... is not present in pool" check
+#   * the simulator's "deadlocked at t=" raise
 # A static prepass should reject them up front with a producer/consumer
 # graph reason. The keyword sets below accept either the runtime message
 # or the (future) prepass message.
@@ -802,8 +802,7 @@ def make_invalid_topological_duplicate_input_id() -> TaskChain:
 
 # Skipped: "compute task with backing-located output."
 # Verified against schema.py (OutputAlloc.location accepts "backing") and
-# simulator.py L501-507 (the main loop explicitly handles backing-located
-# outputs via backing_outputs_size capacity check + backing pool allocation).
+# the main loop's backing_outputs_size handling.
 # This is a valid construct — a compute task whose result is written
 # directly to backing — not a violation. No fixture written.
 
@@ -832,7 +831,7 @@ EXPECTED_ERROR_KEYWORDS.update(
 # ---------------------------------------------------------------------------
 # Category: CAPACITY FEASIBILITY
 #
-# Principles cited (docs/policy/principles.md §1):
+# Principles cited (docs/dataflow_sim/policy/principles.md §1):
 #   * "Free compute bytes + scheduled-to-slow reclaim must cover the task's
 #      compute-located output footprint at dispatch."
 #   * "Backing pool + task's backing-located outputs must fit `backing_memory_capacity` at
