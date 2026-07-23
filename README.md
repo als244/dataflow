@@ -12,14 +12,8 @@ memory.
 Python 3.12+, from a clean environment:
 
 ```bash
-pip install -e ".[ops,cuda,data,dev]"
+pip install -e ".[ops,cuda,data,dev,webapp]"
 ```
-
-`ops` = GPU kernel libraries, `cuda` = device backend, `data` =
-tokenizers/datasets, `dev` = the test runner; with these the test suite
-runs or cleanly skips. The planner/simulator (`dataflow_sim`) and its
-webapp are a first-party package (`src/dataflow_sim/`) installed by
-default — no separate checkout or extra.
 
 ### Quickstart: train
 

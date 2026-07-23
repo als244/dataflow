@@ -7,15 +7,12 @@ name = "dataflow"
 version = "0.0.1"
 description = "CPU-GPU dataflow runtime: executes annotated dataflow programs with runtime-owned memory, streams, and transfers."
 requires-python = ">=3.12"
-# torch (with its bundled triton) is the one hard GPU dependency. The
-# in-tree dataflow_sim package adds pydantic (workload schema) and its
-# webapp deps (fastapi + uvicorn) — kept in the default install so the
-# simulator webapp and its upload round-trip test work out of the box.
+# torch (with its bundled triton) is the one hard runtime dependency —
+# the core runtime, training, and simulator planner import nothing else
+# at base. The simulator webapp and its workload-schema layer live behind
+# the [webapp] extra below.
 dependencies = [
-    "torch>=2.9",
-    "pydantic>=2",
-    "fastapi>=0.110",
-    "uvicorn[standard]>=0.27",
+    "torch>=2.12",
 ]
 
 [project.optional-dependencies]
@@ -26,9 +23,13 @@ dev = ["pytest>=8", "httpx"]
 data = ["tokenizers", "tiktoken", "datasets", "pyarrow"]
 # GPU kernels for the linear-attention / hybrid families (qwen35, dsv3,
 # dsv32, glm52): flash-linear-attention supplies the DeltaNet kernels and
-# on Hopper dispatches to tilelang. Tests that need these skip cleanly
-# without the extra; install it to run those families on a GPU.
+# on Hopper dispatches to tilelang. Assumed present in the standard
+# install — those families' tests fail without it rather than gating.
 ops = ["flash-linear-attention", "tilelang"]
+# Simulator webapp: FastAPI/uvicorn for the upload/preview server.
+# Assumed present in the standard install — its tests fail without it,
+# the same as the [ops] families.
+webapp = ["fastapi>=0.110", "uvicorn[standard]>=0.27"]
 
 [dependency-groups]
 dev = ["pytest>=8", "httpx"]
