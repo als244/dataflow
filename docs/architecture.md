@@ -69,7 +69,8 @@ examples/                    runnable custom-Program demos (rl_training/
 tools/                       CLIs over both packages (dataflowd, train,
 tests/                       measure_step, verify_family, …);
                              tests mirror the split (tests/dataflow/,
-                             tests/dataflow_training/) plus tests/fleet/
+                             tests/dataflow_training/, tests/dataflow_sim/)
+                             plus tests/fleet/
                              (multi-daemon opt-in lane), tests/examples/,
                              tests/fixtures/, and the root-level seam gates
                              (test_external_family, test_import_boundaries,
