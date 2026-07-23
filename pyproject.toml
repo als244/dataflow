@@ -50,6 +50,11 @@ filterwarnings = [
     # Python scalar (float()/int()) — detach at the call site. Errored so
     # it can never slip back in on an import-order-lucky run.
     "error:Converting a tensor with requires_grad=True to a scalar:UserWarning",
+    # flash-linear-attention eagerly torch.compile()s at import, which pulls
+    # torch's inductor -> torch.utils.mkldnn, and torch 2.12's mkldnn still
+    # uses its own deprecated torch.jit.script_method. Third-party noise
+    # (torch warning about torch); nothing in src/ touches that API.
+    "ignore:`torch.jit.script_method` is deprecated:DeprecationWarning",
 ]
 markers = [
     "gpu: requires a GPU torch can drive (CUDA or ROCm)",
