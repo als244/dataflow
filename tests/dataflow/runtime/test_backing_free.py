@@ -52,7 +52,6 @@ def test_backing_freed_after_last_use():
         assert rec.fast is None and rec.backing is None, f"x{n} not fully dead"
 
 
-@pytest.mark.sim
 def test_tight_backing_capacity_feasible_via_dead_free():
     """Backing fits ONE object at a time: only possible when each dead
     object's backing copy frees. Sim and runtime must agree (parity too)."""

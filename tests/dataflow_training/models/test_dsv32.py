@@ -38,7 +38,6 @@ torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
     pytest.skip("no GPU", allow_module_level=True)
 pytest.importorskip("cuda.bindings.runtime")  # real CudaBackend + SpinKernel
-pytest.importorskip("dataflow_sim")            # plan_program / simulate_program
 
 from dataflow_training.testing.gradcheck import (  # noqa: E402
     check_model_step,
@@ -46,7 +45,7 @@ from dataflow_training.testing.gradcheck import (  # noqa: E402
     rel_l2,
 )
 
-pytestmark = [pytest.mark.gpu, pytest.mark.sim]
+pytestmark = [pytest.mark.gpu]
 
 
 def _tiny_cfg(**over):

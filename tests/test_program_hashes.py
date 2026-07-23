@@ -23,9 +23,7 @@ from dataflow_training.distributed.topology import repo_root
 import pytest
 
 torch = pytest.importorskip("torch")
-pytest.importorskip("dataflow_sim")
 
-pytestmark = pytest.mark.sim
 
 FIXTURE = repo_root() / "tests" / "fixtures" / "program_hashes.json"
 PLAN_BUDGET = 1 << 30

@@ -22,11 +22,9 @@ import pytest
 
 torch = pytest.importorskip("torch")
 pytest.importorskip("cuda.bindings.runtime")  # real (fake=False) boot + CudaBackend
-pytest.importorskip("dataflow_sim")           # rig plans the program (plan_program)
 
 pytestmark = [
     pytest.mark.gpu,
-    pytest.mark.sim,
     pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA"),
 ]
 

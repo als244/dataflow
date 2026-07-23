@@ -17,13 +17,12 @@ import pytest
 torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
     pytest.skip("no GPU", allow_module_level=True)
-pytest.importorskip("dataflow_sim")
 pytest.importorskip("cuda.bindings")
 
 REPO = repo_root()
 FAMILIES = ["llama3", "qwen35", "qwen3moe", "dsv32", "glm52"]
 
-pytestmark = [pytest.mark.gpu, pytest.mark.sim, pytest.mark.vram(gib=8)]
+pytestmark = [pytest.mark.gpu, pytest.mark.vram(gib=8)]
 
 
 def _run(family: str, loss: str, tmp_path: Path):

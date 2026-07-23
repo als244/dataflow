@@ -7,30 +7,39 @@ name = "dataflow"
 version = "0.0.1"
 description = "CPU-GPU dataflow runtime: executes annotated dataflow programs with runtime-owned memory, streams, and transfers."
 requires-python = ">=3.12"
-# torch (with its bundled triton) is the one hard runtime dependency;
-# everything GPU-side resolves through it.
-dependencies = ["torch>=2.9"]
+# torch (with its bundled triton) is the one hard GPU dependency. The
+# in-tree dataflow_sim package adds pydantic (workload schema) and its
+# webapp deps (fastapi + uvicorn) — kept in the default install so the
+# simulator webapp and its upload round-trip test work out of the box.
+dependencies = [
+    "torch>=2.9",
+    "pydantic>=2",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+]
 
 [project.optional-dependencies]
-# Planning/verification/webapp-export integration (only dataflow.training imports it).
-sim = ["dataflow_sim"]
 # Real device backend (only dataflow.runtime.device.cuda imports it).
 cuda = ["cuda-python"]
 dev = ["pytest>=8", "httpx"]
 # Data ingestion: tokenizers + local/hub dataset sources (docs/data_feeds.md).
 data = ["tokenizers", "tiktoken", "datasets", "pyarrow"]
-
-# `uv sync` resolves the sibling simulator checkout in editable mode;
-# a standalone install can drop the sources table and use a published
-# dataflow_sim instead.
-[tool.uv.sources]
-dataflow_sim = { path = "../dataflow_sim", editable = true }
+# GPU kernels for the linear-attention / hybrid families (qwen35, dsv3,
+# dsv32, glm52): flash-linear-attention supplies the DeltaNet kernels and
+# on Hopper dispatches to tilelang. Tests that need these skip cleanly
+# without the extra; install it to run those families on a GPU.
+ops = ["flash-linear-attention", "tilelang"]
 
 [dependency-groups]
 dev = ["pytest>=8", "httpx"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+# ship the in-tree dataflow_sim model-dimensions table (loaded via
+# importlib.resources) so built wheels carry it, not just editable installs.
+"dataflow_sim.workloads.models" = ["*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -45,7 +54,6 @@ markers = [
     "gpu: requires a GPU torch can drive (CUDA or ROCm)",
     "cuda: requires an NVIDIA CUDA runtime (the CUDA backend / cuda-python)",
     "fleet: multi-daemon gates (opt-in lane: pytest -m fleet)",
-    "sim: requires the dataflow_sim extra (planner/simulator interop)",
     "corpus: requires the shard corpus at datasets/fineweb10B",
     "topology_remote: requires a topology.toml with a remote host",
     "rdma: requires an active RDMA port the engine can use (RoCE today; IB is a drop-in)",

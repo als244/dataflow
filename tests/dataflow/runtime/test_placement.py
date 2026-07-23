@@ -71,7 +71,6 @@ def test_online_placement_fails_where_offline_packing_fits():
     assert assigned.slab_overflows == 0
 
 
-@pytest.mark.sim
 def test_parity_with_placement_8b():
     """Assigned mode must not perturb scheduling: exact interval + peak
     parity vs the simulator on the full 8B chain."""
@@ -97,7 +96,6 @@ def test_parity_with_placement_8b():
     result.close()
 
 
-@pytest.mark.sim
 def test_placement_epoch_reset_multi_run():
     """The same placed program replays through one pool (session semantics):
     incarnation counters reset per execute."""
@@ -169,7 +167,6 @@ def test_quiescent_lifetime_inversion_escapes_instead_of_deadlocking():
     result.close()
 
 
-@pytest.mark.sim
 def test_annotator_ranges_balanced_over_full_run():
     """Every task launch opens and closes exactly one range (depth never
     exceeds 1 from the engine side), so profiler timelines nest correctly."""

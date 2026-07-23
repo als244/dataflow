@@ -19,7 +19,6 @@ from dataflow.core.convert import (
 )
 from dataflow_training.model_families.llama3 import ShapedLlamaConfig, build_shaped_llama3
 
-pytestmark = pytest.mark.sim
 
 
 @pytest.fixture(scope="module")

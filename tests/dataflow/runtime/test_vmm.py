@@ -216,7 +216,6 @@ def test_parked_adoption_and_full_occupancy_accounting(backend):
         arena.close()
 
 
-@pytest.mark.sim
 def test_e2e_mini_vmm_matches_static():
     """One engine step on the mini config: the vmm fast pool produces
     BITWISE-identical loss and final weights vs the static pool (same

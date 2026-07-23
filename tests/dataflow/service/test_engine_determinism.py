@@ -17,9 +17,8 @@ torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
     pytest.skip("no GPU", allow_module_level=True)
 pytest.importorskip("cuda.bindings.runtime")
-pytest.importorskip("dataflow_sim")
 
-pytestmark = [pytest.mark.gpu, pytest.mark.sim, pytest.mark.corpus]
+pytestmark = [pytest.mark.gpu, pytest.mark.corpus]
 
 from dataflow.core.jsonio import program_to_dict  # noqa: E402
 from dataflow_training.run.presets import (  # noqa: E402

@@ -155,12 +155,10 @@ def test_block_backward_vs_autograd():
 
 # --- ladder level 3: full model step through the real engine ----------------------
 
-@pytest.mark.sim
 def test_model_step_vs_golden():
     check_model_step(CFG, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2).assert_ok()
 
 
-@pytest.mark.sim
 def test_plan_invariance():
     """Different plans (budgets + recompute) must produce the same math."""
     r1 = check_model_step(CFG, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2)
@@ -173,7 +171,6 @@ def test_plan_invariance():
         r.assert_ok()
 
 
-@pytest.mark.sim
 def test_model_step_muon_policy_golden_parity():
     """opt_policy="muon" through the REAL engine vs the policy-dispatched
     golden: matrix fields (wq/wk/wv/wo/w1/w2/w3) take the registry muon

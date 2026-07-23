@@ -221,16 +221,21 @@ def test_r3_tools_stay_near_package_roots():
 
 
 R4_SIM_TOPLEVEL_ALLOWED = SRC / "dataflow_training" / "lowering"
+R4_SIM_PACKAGE = SRC / "dataflow_sim"
 
 
 def test_r4_sim_required_only_under_lowering():
     """R4: a module-top-level (required) dataflow_sim import may exist
-    only under dataflow_training.lowering; everywhere else in src/ the
-    simulator must stay a lazy in-function import."""
+    only under dataflow_training.lowering; everywhere else in the CONSUMER
+    packages the simulator must stay a lazy in-function import. The
+    dataflow_sim package itself is exempt — it IS the simulator, so its
+    own internal imports are not a cross-package dependency on it."""
     offenders = []
     for path, lineno, ref, top_level in scan_refs(SRC):
         if ref.split(".")[0] != "dataflow_sim" or not top_level:
             continue
+        if R4_SIM_PACKAGE in path.parents:
+            continue  # the simulator's own internal imports are fine
         if R4_SIM_TOPLEVEL_ALLOWED in path.parents:
             continue
         offenders.append((path, lineno, ref))

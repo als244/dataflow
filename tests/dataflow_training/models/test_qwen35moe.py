@@ -83,7 +83,6 @@ def test_qwen35moe_stage_context_completeness():
         assert names[cls.recompute_stage_count():] == ["moe_experts2_combine"]
 
 
-@pytest.mark.sim
 def test_qwen35moe_lowering_validates_and_plans():
     from dataflow.core import validate_program
     from dataflow_training.model_families.families import resolve_family
@@ -128,9 +127,7 @@ def plan_invariance_gate() -> dict:
 
 # capacities here were 12MB pre-A2: the gradient gate's dW
 # retention (final_locations) raises steady fast-memory demand
-@pytest.mark.sim
 def test_qwen35moe_plan_invariance():
-    pytest.importorskip("fla")
     cfg = _tiny_cfg()
     r1 = check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
                           field_atol=_ATOL, **plan_invariance_gate())
@@ -145,11 +142,9 @@ def test_qwen35moe_plan_invariance():
         r.assert_ok()
 
 
-@pytest.mark.sim
 def test_qwen35moe_batch2_packed_sequences_vs_golden():
     """Packed sequences must reset conv/recurrence at boundaries AND route
     per-token regardless of packing (MoE is token-parallel)."""
-    pytest.importorskip("fla")
     cfg = _tiny_cfg(batch=2, seq_len=64)
     check_model_step(
         cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2, field_atol=_ATOL,
@@ -237,9 +232,7 @@ def _assert_same(a: dict, b: dict, tol: float = 1e-3):
         assert err < tol, f"{k}: rel_l2={err}"
 
 
-@pytest.mark.sim
 def test_qwen35moe_fixed_seed_bitwise_deterministic():
-    pytest.importorskip("fla")
     a = _run()
     b = _run()
     assert a["loss"] == b["loss"]
@@ -248,18 +241,14 @@ def test_qwen35moe_fixed_seed_bitwise_deterministic():
             assert torch.equal(a[k], b[k]), k
 
 
-@pytest.mark.sim
 def test_qwen35moe_poison_on_free_changes_nothing():
-    pytest.importorskip("fla")
     base = _run()
     poisoned = _run(engine_kwargs={"poison_on_free": True})
     _assert_same(poisoned, base)
     assert poisoned["loss"] == poisoned["loss"]  # not NaN
 
 
-@pytest.mark.sim
 def test_qwen35moe_interleaving_stress_changes_nothing():
-    pytest.importorskip("fla")
     from dataflow.runtime.device.cuda_spin import SpinKernel
 
     def wrapper(resolver, backend):
@@ -282,12 +271,10 @@ def test_qwen35moe_interleaving_stress_changes_nothing():
     _assert_same(jittered, base)
 
 
-@pytest.mark.sim
 def test_qwen35moe_measured_costs_replan_still_golden():
     """Profiling the heterogeneous MoE task set (linmoe_*/gattnmoe_* keys,
     packed ctx with int32 routing fields) through the profile_fill hook;
     re-planning on measured costs must not change the math."""
-    pytest.importorskip("fla")
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow_training.model_families.families import resolve_family
     from dataflow_training.lowering.planning import plan_program

@@ -17,7 +17,6 @@ import pytest
 torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
     pytest.skip("no GPU", allow_module_level=True)
-pytest.importorskip("dataflow_sim")
 pytest.importorskip("cuda.bindings")
 
 REPO = repo_root()
@@ -26,7 +25,7 @@ CORPUS = REPO / "datasets" / "fineweb10B"
 needs_corpus = pytest.mark.skipif(
     not CORPUS.exists(), reason="needs the shard corpus")
 
-pytestmark = [pytest.mark.fleet, pytest.mark.sim]
+pytestmark = [pytest.mark.fleet]
 
 
 @pytest.mark.gpu

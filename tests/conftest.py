@@ -17,7 +17,6 @@ Markers (register in pyproject.toml):
                    and cuda-python paths, which are CUDA-only until an AMD
                    backend exists (a GPU is not necessarily CUDA)
   fleet            multi-daemon gates (opt-in lane: pytest -m fleet)
-  sim              the dataflow_sim extra (planner/simulator interop)
   corpus           the shard corpus at datasets/fineweb10B
   topology_remote  a topology.toml declaring at least one remote host
   rdma             an active RDMA port the engine can bring up — RoCE
@@ -54,12 +53,6 @@ def has_cuda() -> bool:
         return torch.cuda.is_available() and torch.version.cuda is not None
     except Exception:
         return False
-
-
-def has_sim() -> bool:
-    import importlib.util
-
-    return importlib.util.find_spec("dataflow_sim") is not None
 
 
 def has_corpus() -> bool:
@@ -132,7 +125,6 @@ def free_vram_gib() -> float:
 PROBES = {
     "gpu": (has_gpu, "no GPU available"),
     "cuda": (has_cuda, "no NVIDIA CUDA runtime (ROCm or CPU-only)"),
-    "sim": (has_sim, "dataflow_sim extra not installed"),
     "corpus": (has_corpus, "shard corpus not present "
                            "(datasets/fineweb10B)"),
     "topology_remote": (has_topology_remote,

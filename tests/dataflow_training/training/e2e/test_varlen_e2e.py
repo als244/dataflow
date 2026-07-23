@@ -56,9 +56,7 @@ def test_flash_ragged_matches_reference_autograd():
     assert rel_l2(dv, av.grad) < 3e-2
 
 
-@pytest.mark.sim
 def test_llama3_model_step_ragged_matches_golden():
-    pytest.importorskip("dataflow_sim")
     pytest.importorskip("cuda.bindings")
     cfg = ShapedLlamaConfig(
         n_layers=2, d_model=256, n_heads=8, n_kv_heads=2, d_ff=512,
@@ -67,11 +65,9 @@ def test_llama3_model_step_ragged_matches_golden():
     check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2).assert_ok()
 
 
-@pytest.mark.sim
 def test_qwen35_model_step_ragged_matches_golden():
     """Hybrid family under ragged packing: DeltaNet state + conv window
     reset via ragged cu_seqlens, gated attention block-diagonal."""
-    pytest.importorskip("dataflow_sim")
     pytest.importorskip("cuda.bindings")
     from dataclasses import replace
 
@@ -143,7 +139,6 @@ _QWEN35_BIAS_ATOL = {"dt_bias": 2.5e-4}
 from dataflow_training.testing.gradcheck import FAMILY_GRAD_GATE as _FAMILY_GRAD_GATE
 
 
-@pytest.mark.sim
 @pytest.mark.parametrize("family", [
     "qwen3", "olmoe", "dsv3", "dsv32", "glm52", "qwen3moe", "qwen35moe",
 ])
@@ -160,7 +155,6 @@ def test_model_step_ragged_matches_golden_all_families(family):
     causal cells for any L%64!=0 — every ragged length). With that fixed the
     selection matches the golden exactly; the only residual is the sub-noise
     bias sign-lottery, enveloped below exactly as the per-family gates do."""
-    pytest.importorskip("dataflow_sim")
     pytest.importorskip("cuda.bindings")
     from dataclasses import replace
     import importlib

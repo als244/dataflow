@@ -25,7 +25,6 @@ from dataflow_training.model_families.llama3 import (
     build_shaped_llama3,
 )
 
-pytestmark = pytest.mark.sim
 
 GIB = 1024**3
 

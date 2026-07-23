@@ -1,7 +1,7 @@
 # Dataflow — A CPU–GPU Dataflow Runtime
 
 A runtime that realizes the execution model of
-[dataflow_sim](https://dataflowsim.sunshein.net/) ([repo link](https://github.com/als244/dataflow_sim)) on real hardware:
+[dataflow_sim](https://dataflowsim.sunshein.net/) (a first-party package in this repo, [src/dataflow_sim/](src/dataflow_sim/README.md)) on real hardware:
 programs are linear chains of tasks over named objects; each task declares
 its inputs / mutations / outputs; annotated directives (release, offload,
 prefetch) move objects between GPU ("fast") and pinned-host ("slow/backing")
@@ -9,18 +9,17 @@ memory.
 
 ## Installation
 
-From your Python environment of choice (3.12+), with a sibling
-`dataflow_sim` checkout next to this repo:
+Python 3.12+, from a clean environment:
 
 ```bash
-uv pip install -e ".[sim,cuda]"
+pip install -e ".[ops,cuda,data,dev]"
 ```
 
-(`uv sync` also works. The `sim` extra resolves the SIBLING
-`dataflow_sim` checkout through `[tool.uv.sources]` — plain pip does
-not read that table, so under pip install the sibling editable first:
-`pip install -e ../dataflow_sim -e ".[sim,cuda]"`. The `cuda` extra
-pulls the real device backend.)
+`ops` = GPU kernel libraries, `cuda` = device backend, `data` =
+tokenizers/datasets, `dev` = the test runner; with these the test suite
+runs or cleanly skips. The planner/simulator (`dataflow_sim`) and its
+webapp are a first-party package (`src/dataflow_sim/`) installed by
+default — no separate checkout or extra.
 
 ### Quickstart: train
 
@@ -237,7 +236,7 @@ see [docs/extending_programs.md](docs/extending_programs.md).
 
 ## Memory Planning: PressureFit
 
-[PressureFit](https://github.com/als244/dataflow_sim/blob/master/docs/policy/pressurefit.md) is the general planning policy: given any bare task chain
+[PressureFit](docs/dataflow_sim/policy/pressurefit.md) is the general planning policy: given any bare task chain
 and a fast-memory budget, it annotates every task's release / offload /
 prefetch directives so the program executes within budget while keeping
 transfers overlapped with compute. It reads only task order, object

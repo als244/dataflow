@@ -76,7 +76,6 @@ def test_spin_wall_accuracy(backend):
         assert measured == pytest.approx(target, rel=0.15, abs=25.0)
 
 
-@pytest.mark.sim
 @pytest.mark.vram(gib=1)
 def test_mini_program_execution_matches_plan():
     """Real execution of a mini shaped program: completes, respects the

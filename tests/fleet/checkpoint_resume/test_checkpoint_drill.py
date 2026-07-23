@@ -25,7 +25,6 @@ import pytest
 torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
     pytest.skip("no GPU", allow_module_level=True)
-pytest.importorskip("dataflow_sim")
 pytest.importorskip("cuda.bindings")
 
 from dataclasses import replace  # noqa: E402
@@ -39,7 +38,7 @@ from dataflow_training.lowering.planning import plan_program  # noqa: E402
 from dataflow_training.register import register_all  # noqa: E402
 from dataflow_training.run.driver import init_model  # noqa: E402
 
-pytestmark = [pytest.mark.fleet, pytest.mark.gpu, pytest.mark.sim]
+pytestmark = [pytest.mark.fleet, pytest.mark.gpu]
 
 register_all()          # in-process Server rigs share this registry
 

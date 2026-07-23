@@ -20,7 +20,6 @@ pytestmark = [
     pytest.mark.skipif(not torch.cuda.is_available(),
                        reason="needs CUDA"),
     pytest.mark.gpu,
-    pytest.mark.sim,
 ]
 
 from dataflow.core.jsonio import program_to_dict

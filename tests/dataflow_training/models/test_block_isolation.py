@@ -22,13 +22,12 @@ torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
     pytest.skip("no GPU", allow_module_level=True)
 pytest.importorskip("cuda.bindings.runtime")  # isolated_block_compare boots CudaBackend
-pytest.importorskip("dataflow_sim")            # ... and plans via plan_program
 
 from dataflow_training.testing.gradcheck import (  # noqa: E402
     isolated_block_compare,
 )
 
-pytestmark = [pytest.mark.gpu, pytest.mark.sim]
+pytestmark = [pytest.mark.gpu]
 
 # (family, blocks to isolate together, max hot rows). Blocks chosen to
 # cover each family's block KINDS: glm52 gml leader (1), the gml+gmf

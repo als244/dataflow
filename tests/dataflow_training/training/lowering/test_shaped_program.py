@@ -134,12 +134,10 @@ def test_interleaved_optimizer_respects_reader_ordering():
                 assert f"dW_{s}_{i}" not in t.inputs, (t.id, "reads consumed grad")
 
 
-@pytest.mark.sim
 def test_tied_embeddings_chain_structure():
     """Config-gated tied embeddings: one W_embed/O_embed pair serves embed
     AND head; head_loss (which runs first in the round) creates the shared
     dW_embed, embed_bwd accumulates; no head objects or optimizer_head."""
-    pytest.importorskip("dataflow_sim")
     from dataclasses import dataclass
     from dataflow_training.lowering.planning import plan_program, simulate_program
 

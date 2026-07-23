@@ -15,7 +15,6 @@ from dataflow.runtime.trace import trace_to_dict
 from dataflow_training.model_families.families import family
 from dataflow_training.model_families.llama3 import ShapedLlamaConfig
 
-pytestmark = pytest.mark.sim
 
 
 def test_trace_to_dict_covers_every_task_interval():

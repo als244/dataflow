@@ -80,7 +80,6 @@ def test_qwen3moe_stage_context_completeness():
     assert names[Qwen3MoeBlockFwd.recompute_stage_count():] == ["moe_experts2_combine"]
 
 
-@pytest.mark.sim
 def test_qwen3moe_lowering_validates_and_plans():
     from dataflow.core import validate_program
     from dataflow_training.model_families.families import resolve_family
@@ -135,7 +134,6 @@ def test_qwen3moe_partial_ownership_lowering_rejected():
 
 
 
-@pytest.mark.sim
 def test_qwen3moe_aux_zero_model_step_vs_golden():
     check_model_step(
         _tiny_cfg(aux_coef=0.0), fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
@@ -143,7 +141,6 @@ def test_qwen3moe_aux_zero_model_step_vs_golden():
     ).assert_ok()
 
 
-@pytest.mark.sim
 def test_qwen3moe_plan_invariance():
     cfg = _tiny_cfg()
     r1 = check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
@@ -159,14 +156,12 @@ def test_qwen3moe_plan_invariance():
         r.assert_ok()
 
 
-@pytest.mark.sim
 def test_qwen3moe_batch2_packed_sequences_vs_golden():
     cfg = _tiny_cfg(batch=2, seq_len=64)
     check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
                      **family_gate_kwargs("qwen3moe")).assert_ok()
 
 
-@pytest.mark.sim
 def test_qwen3moe_grad_accum_two_rounds_matches_reference():
     """Two grad-accum rounds with per-round CE + per-round aux, ONE
     backward on the total — engine == the isolated twin (each round is
@@ -285,7 +280,6 @@ def _assert_same(a: dict, b: dict, tol: float = 1e-3):
         assert err < tol, f"{k}: rel_l2={err}"
 
 
-@pytest.mark.sim
 def test_qwen3moe_fixed_seed_bitwise_deterministic():
     a = _run()
     b = _run()
@@ -295,7 +289,6 @@ def test_qwen3moe_fixed_seed_bitwise_deterministic():
             assert torch.equal(a[k], b[k]), k
 
 
-@pytest.mark.sim
 def test_qwen3moe_measured_costs_replan_still_golden():
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow_training.model_families.families import resolve_family
@@ -318,7 +311,6 @@ def test_qwen3moe_measured_costs_replan_still_golden():
 
 
 
-@pytest.mark.sim
 def test_qwen3moe_poison_on_free_changes_nothing():
     base = _run()
     poisoned = _run(engine_kwargs={"poison_on_free": True})
@@ -326,7 +318,6 @@ def test_qwen3moe_poison_on_free_changes_nothing():
     assert poisoned["loss"] == poisoned["loss"]  # not NaN
 
 
-@pytest.mark.sim
 def test_qwen3moe_interleaving_stress_changes_nothing():
     from dataflow.runtime.device.cuda_spin import SpinKernel
 

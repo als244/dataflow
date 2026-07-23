@@ -42,7 +42,6 @@ def run_both(program):
     return result, log
 
 
-@pytest.mark.sim
 def test_deferred_prefetch_waits_for_offload():
     """Prefetch fired while the same object's offload is in flight must wait
     for the offload, then run — sim's transfer_deferred semantics."""
@@ -72,7 +71,6 @@ def test_deferred_prefetch_waits_for_offload():
     assert by_id[("t2", "compute")].start == 67.0
 
 
-@pytest.mark.sim
 def test_blocked_queue_head_starts_when_bytes_free():
     """A prefetch whose destination doesn't fit must wait (blocking only the
     transfer queue, never compute dispatch) and start exactly when a release
@@ -105,7 +103,6 @@ def test_blocked_queue_head_starts_when_bytes_free():
     assert by_id[("t2", "compute")].start == 34.0
 
 
-@pytest.mark.sim
 def test_mutation_offload_overwrites_backing_in_place():
     """Offloading a mutated object with an existing live backing copy must
     overwrite it (no extra backing bytes) and refresh its version."""
@@ -129,7 +126,6 @@ def test_mutation_offload_overwrites_backing_in_place():
     assert result.final_location_violations == ()
 
 
-@pytest.mark.sim
 def test_re_prefetch_gets_distinct_interval_name():
     program = Program(
         name="re-prefetch",
@@ -157,7 +153,6 @@ def test_re_prefetch_gets_distinct_interval_name():
     assert names == {"from_slow:x", "from_slow:x#1"}
 
 
-@pytest.mark.sim
 def test_capacity_deadlock_raises():
     """A task whose outputs can never fit must produce a clear deadlock error
     (the sim raises its own error on the same chain)."""
@@ -257,7 +252,6 @@ def _inversion_program() -> Program:
     )
 
 
-@pytest.mark.sim
 def test_ledger_inversion_parity_baseline():
     """Under exact (sim) timing the chain completes with no evictions —
     the valve must never fire where parity holds."""

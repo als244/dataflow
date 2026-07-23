@@ -109,12 +109,10 @@ class PrologueResolver:
 
 
 @pytest.mark.gpu
-@pytest.mark.sim
 def test_round_prologue_publishes_round_index_via_run_values_and_object():
     torch = pytest.importorskip("torch")
     if not torch.cuda.is_available():
         pytest.skip("no CUDA")
-    pytest.importorskip("dataflow_sim")
     pytest.importorskip("cuda.bindings")
     from dataflow.runtime import Engine
     from dataflow.runtime.device.cuda import CudaBackend

@@ -14,11 +14,6 @@ import pytest
 from dataflow.core.convert import to_webapp_program
 from dataflow_training.model_families.llama3 import ShapedLlamaConfig, build_shaped_llama3
 
-pytest.importorskip("fastapi")
-pytest.importorskip("dataflow_sim")
-
-pytestmark = pytest.mark.sim
-
 
 @pytest.fixture(scope="module")
 def client():

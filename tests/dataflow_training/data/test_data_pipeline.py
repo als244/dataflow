@@ -273,14 +273,12 @@ def test_legacy_block_configuration_pinned():
 
 @needs_corpus
 @pytest.mark.gpu
-@pytest.mark.sim
 def test_checkpoint_resume_tail_matches_uninterrupted_run(tmp_path):
     """Cursor resume end-to-end on the engine (new-defaults pipeline —
     under-full rounds executing content-only): a checkpointed run's
     resumed tail must reproduce the uninterrupted run bitwise (one
     daemon; init re-seeds, restore overwrites)."""
     pytest.importorskip("cuda.bindings.runtime")  # daemon boots a real CudaBackend
-    pytest.importorskip("dataflow_sim")            # run_engine -> plan_program
     from dataflow_training.data.pipeline import DataPipeline
     from dataflow_training.run.driver import daemon_client, run_engine
     from dataflow_training.run.presets import gpt2_smoke_preset

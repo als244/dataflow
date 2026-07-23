@@ -135,14 +135,12 @@ def test_twin_rejects_overlong_segment():
 BIAS_WALK_PARAM_ATOL = {"bias": 3e-2}
 
 
-@pytest.mark.sim
 def test_model_step_uniform():
     check_model_step(ShapedGpt2Config.tiny(), fast_memory_capacity=FAST_MEM,
                      param_atol=BIAS_WALK_PARAM_ATOL,
                      **family_gate_kwargs("gpt2")).assert_ok()
 
 
-@pytest.mark.sim
 def test_model_step_ragged():
     cfg = replace(ShapedGpt2Config.tiny(), seq_lens=(35, 17, 12))
     check_model_step(cfg, fast_memory_capacity=FAST_MEM,
@@ -150,7 +148,6 @@ def test_model_step_ragged():
                      **family_gate_kwargs("gpt2")).assert_ok()
 
 
-@pytest.mark.sim
 def test_model_step_tied():
     check_model_step(ShapedGpt2Config.tiny_tied(),
                      fast_memory_capacity=FAST_MEM,
@@ -158,7 +155,6 @@ def test_model_step_tied():
                      **family_gate_kwargs("gpt2")).assert_ok()
 
 
-@pytest.mark.sim
 def test_model_step_nobias():
     """The bias-free variant has no b_* fields at all — no envelope."""
     check_model_step(ShapedGpt2Config.tiny_nobias(),
@@ -166,7 +162,6 @@ def test_model_step_nobias():
                      **family_gate_kwargs("gpt2")).assert_ok()
 
 
-@pytest.mark.sim
 def test_qkv_bias_grad_sections():
     """The sharp instrument behind the c_attn.bias envelope: the q/v bias
     grad sections must agree tightly (real signal, tracked at rel ~3e-3),

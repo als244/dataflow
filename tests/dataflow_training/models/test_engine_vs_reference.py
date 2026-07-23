@@ -40,7 +40,7 @@ from dataflow_training.run.driver import (  # noqa: E402
 from dataflow_training.data.pipeline import legacy_block_pipeline  # noqa: E402
 from dataflow_training.run.recipe import Recipe  # noqa: E402
 
-pytestmark = [pytest.mark.gpu, pytest.mark.corpus, pytest.mark.sim]
+pytestmark = [pytest.mark.gpu, pytest.mark.corpus]
 
 STEPS = 6
 CALIBRATE = bool(os.environ.get("DATAFLOW_CALIBRATE"))
@@ -103,8 +103,6 @@ def compare_curves(name: str, mode: str, ref, eng) -> None:
 
 @pytest.mark.parametrize("name", sorted(FAMILY_PRESETS))
 def test_engine_matches_reference_uniform(name):
-    if name in {"qwen35", "qwen35moe"}:
-        pytest.importorskip("fla")
     cfg = getattr(P, FAMILY_PRESETS[name])()
     recipe = smoke_recipe()
     ref = run_reference(cfg, recipe, legacy_block_pipeline(cfg),
@@ -121,8 +119,6 @@ RAGGED_LENGTHS = (37, 256, 128, 91)     # sums to a 512-token round
 
 @pytest.mark.parametrize("name", sorted(FAMILY_PRESETS))
 def test_engine_matches_reference_ragged(name):
-    if name in {"qwen35", "qwen35moe"}:
-        pytest.importorskip("fla")
     from dataclasses import replace
 
     from dataflow.core.jsonio import program_to_dict

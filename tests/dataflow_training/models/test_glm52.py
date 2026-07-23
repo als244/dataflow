@@ -67,7 +67,6 @@ def _tiny_dims(cfg=None):
 # --- lowering ----------------------------------------------------------------------
 
 
-@pytest.mark.sim
 def test_glm52_lowering_validates_and_plans():
     from dataflow.core import validate_program
     from dataflow_training.model_families.families import resolve_family
@@ -133,7 +132,6 @@ _BIAS_ATOL = {
 
 
 
-@pytest.mark.sim
 def test_glm52_aux_zero_model_step_vs_golden():
     check_model_step(
         _tiny_cfg(aux_coef=0.0), fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
@@ -141,7 +139,6 @@ def test_glm52_aux_zero_model_step_vs_golden():
     ).assert_ok()
 
 
-@pytest.mark.sim
 def test_glm52_plan_invariance():
     cfg = _tiny_cfg()
     r1 = check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
@@ -157,7 +154,6 @@ def test_glm52_plan_invariance():
         r.assert_ok()
 
 
-@pytest.mark.sim
 def test_glm52_batch2_packed_sequences_vs_golden():
     cfg = _tiny_cfg(batch=2, seq_len=64)
     check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
@@ -165,7 +161,6 @@ def test_glm52_batch2_packed_sequences_vs_golden():
                      **family_gate_kwargs("glm52")).assert_ok()
 
 
-@pytest.mark.sim
 def test_glm52_grad_accum_two_rounds_matches_reference():
     """Two grad-accum rounds with the LBL composite, the leader-group
     indexer KL and the noaux bias rule: engine == the isolated twin. The
@@ -321,7 +316,6 @@ def _assert_same(a: dict, b: dict, tol: float = 1e-3):
         assert err < tol, f"{k}: rel_l2={err}"
 
 
-@pytest.mark.sim
 def test_glm52_fixed_seed_bitwise_deterministic():
     a = _run()
     b = _run()
@@ -331,7 +325,6 @@ def test_glm52_fixed_seed_bitwise_deterministic():
             assert torch.equal(a[k], b[k]), k
 
 
-@pytest.mark.sim
 def test_glm52_measured_costs_replan_still_golden():
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow_training.model_families.families import resolve_family
@@ -364,7 +357,6 @@ def test_glm52_measured_costs_replan_still_golden():
 # --isolate); see docs/correctness_compare.md.
 
 
-@pytest.mark.sim
 def test_glm52_poison_on_free_changes_nothing():
     base = _run()
     poisoned = _run(engine_kwargs={"poison_on_free": True})
@@ -372,7 +364,6 @@ def test_glm52_poison_on_free_changes_nothing():
     assert poisoned["loss"] == poisoned["loss"]  # not NaN
 
 
-@pytest.mark.sim
 def test_glm52_interleaving_stress_changes_nothing():
     from dataflow.runtime.device.cuda_spin import SpinKernel
 
@@ -396,7 +387,6 @@ def test_glm52_interleaving_stress_changes_nothing():
     _assert_same(jittered, base)
 
 
-@pytest.mark.sim
 def test_glm52_frozen_indexer_ablation():
     """train_indexer=False: model-step matches the frozen golden, the
     leader indexer fields are BIT-FROZEN across the step, and lowering
@@ -415,7 +405,6 @@ def test_glm52_frozen_indexer_ablation():
                      **family_gate_kwargs("glm52")).assert_ok()
 
 
-@pytest.mark.sim
 def test_glm52_dense_warmup_model_step():
     """Dense warm-up gate (sparse_mode=False) — model-step matches golden.
     IndexShare twist over dsv32's warm-up: followers deposit FULL-PREFIX
@@ -431,7 +420,6 @@ def test_glm52_dense_warmup_model_step():
                      **family_gate_kwargs("glm52")).assert_ok()
 
 
-@pytest.mark.sim
 def test_glm52_dense_warmup_freeze_and_movement():
     """Across a REAL engine warm-up step: every non-indexer field —
     embed/head/router-bias included, and EVERY follower field — is

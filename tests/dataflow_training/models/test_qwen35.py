@@ -31,7 +31,6 @@ torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
     pytest.skip("no GPU", allow_module_level=True)
 
-pytest.importorskip("fla")
 
 from dataflow_training.blocks import ops  # noqa: E402
 from dataflow_training.testing.gradcheck import rel_l2  # noqa: E402
@@ -209,7 +208,6 @@ def test_qwen35_stage_context_completeness():
         assert cls.recompute_stage_count() < len(cls.STAGES)
 
 
-@pytest.mark.sim
 def test_qwen35_lowering_validates_and_plans():
     from dataflow.core import validate_program
     from dataflow_training.model_families.families import resolve_family
@@ -238,7 +236,6 @@ def test_qwen35_lowering_validates_and_plans():
 
 
 
-@pytest.mark.sim
 def test_qwen35_tied_model_step_vs_golden():
     """The 2B-style tied variant stays golden-verified E2E (one W_embed
     leaf, head_bwd round-0 creates the shared dW_embed)."""
@@ -256,7 +253,6 @@ def test_qwen35_tied_model_step_vs_golden():
     ).assert_ok()
 
 
-@pytest.mark.sim
 def test_qwen35_plan_invariance():
     """Different budgets + recompute plans must produce identical math.
 
@@ -283,7 +279,6 @@ def test_qwen35_plan_invariance():
         r.assert_ok()
 
 
-@pytest.mark.sim
 def test_qwen35_batch2_packed_sequences_vs_golden():
     """batch=2 packs two sequences into one token axis: cu_seqlens must reset
     the conv window and the DeltaNet recurrence at the boundary (the golden
@@ -381,7 +376,6 @@ def _assert_same35(a: dict, b: dict, tol: float = 1e-3):
         assert err < tol, f"{k}: rel_l2={err}"
 
 
-@pytest.mark.sim
 def test_qwen35_poison_on_free_changes_nothing():
     base = _run35()
     poisoned = _run35(engine_kwargs={"poison_on_free": True})
@@ -389,7 +383,6 @@ def test_qwen35_poison_on_free_changes_nothing():
     assert poisoned["loss"] == poisoned["loss"]  # not NaN
 
 
-@pytest.mark.sim
 def test_qwen35_interleaving_stress_changes_nothing():
     from dataflow.runtime.device.cuda_spin import SpinKernel
 
@@ -413,7 +406,6 @@ def test_qwen35_interleaving_stress_changes_nothing():
     _assert_same35(jittered, base)
 
 
-@pytest.mark.sim
 def test_qwen35_measured_costs_replan_still_golden():
     """Profiling must handle the heterogeneous task set (linattn_*/gattn_*
     keys); re-planning on measured costs must not change the math."""

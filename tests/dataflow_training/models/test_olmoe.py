@@ -80,7 +80,6 @@ def test_olmoe_stage_context_completeness():
     assert names[OlmoeBlockFwd.recompute_stage_count():] == ["moe_experts2_combine"]
 
 
-@pytest.mark.sim
 def test_olmoe_lowering_validates_and_plans():
     from dataflow.core import validate_program
     from dataflow_training.model_families.families import resolve_family
@@ -122,7 +121,6 @@ def test_olmoe_partial_ownership_lowering_rejected():
 
 
 
-@pytest.mark.sim
 def test_olmoe_aux_zero_model_step_vs_golden():
     check_model_step(
         _tiny_cfg(aux_coef=0.0), fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
@@ -130,7 +128,6 @@ def test_olmoe_aux_zero_model_step_vs_golden():
     ).assert_ok()
 
 
-@pytest.mark.sim
 def test_olmoe_plan_invariance():
     cfg = _tiny_cfg()
     r1 = check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
@@ -146,14 +143,12 @@ def test_olmoe_plan_invariance():
         r.assert_ok()
 
 
-@pytest.mark.sim
 def test_olmoe_batch2_packed_sequences_vs_golden():
     cfg = _tiny_cfg(batch=2, seq_len=64)
     check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
                      **family_gate_kwargs("olmoe")).assert_ok()
 
 
-@pytest.mark.sim
 def test_olmoe_grad_accum_two_rounds_matches_reference():
     """Grad accumulation with the aux objective: per-round CE + per-round
     aux summed across rounds, ONE backward on the total — engine == the
@@ -272,7 +267,6 @@ def _assert_same(a: dict, b: dict, tol: float = 1e-3):
         assert err < tol, f"{k}: rel_l2={err}"
 
 
-@pytest.mark.sim
 def test_olmoe_fixed_seed_bitwise_deterministic():
     """Same seed, same plan, twice -> identical LOSS BYTES and weights
     (routing ties, sort, grouped GEMMs, combine: all deterministic)."""
@@ -284,7 +278,6 @@ def test_olmoe_fixed_seed_bitwise_deterministic():
             assert torch.equal(a[k], b[k]), k
 
 
-@pytest.mark.sim
 def test_olmoe_poison_on_free_changes_nothing():
     base = _run()
     poisoned = _run(engine_kwargs={"poison_on_free": True})
@@ -292,7 +285,6 @@ def test_olmoe_poison_on_free_changes_nothing():
     assert poisoned["loss"] == poisoned["loss"]  # not NaN
 
 
-@pytest.mark.sim
 def test_olmoe_interleaving_stress_changes_nothing():
     from dataflow.runtime.device.cuda_spin import SpinKernel
 
@@ -316,7 +308,6 @@ def test_olmoe_interleaving_stress_changes_nothing():
     _assert_same(jittered, base)
 
 
-@pytest.mark.sim
 def test_olmoe_measured_costs_replan_still_golden():
     """The end-to-end profiling gate: every signature (incl. moeattn_bwd,
     whose packed ctx carries int32 routing fields) must profile through the

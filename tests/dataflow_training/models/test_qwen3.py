@@ -50,7 +50,6 @@ def test_qwen3_derived_recompute_excludes_boundary_work():
     assert names.index("swiglu") >= n
 
 
-@pytest.mark.sim
 def test_qwen3_lowering_validates_and_plans():
     from dataflow.core import validate_program
     from dataflow_training.lowering.planning import plan_program, simulate_program
@@ -115,7 +114,6 @@ def test_qwen3_block_backward():
 
 @gpu
 @pytest.mark.gpu
-@pytest.mark.sim
 def test_qwen3_plan_invariance():
     """Different budgets + recompute plans must produce identical math."""
     from dataflow_training.testing.gradcheck import check_model_step

@@ -21,7 +21,6 @@ pytestmark = [
     pytest.mark.skipif(not torch.cuda.is_available(),
                        reason="needs CUDA"),
     pytest.mark.gpu,
-    pytest.mark.sim,
     pytest.mark.corpus,
 ]
 

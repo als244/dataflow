@@ -24,7 +24,7 @@ from dataflow_training.run.profiling import apply_measured_costs, profile_progra
 from dataflow_training.model_families.llama3 import ShapedLlamaConfig  # noqa: E402
 from dataflow_training.testing.gradcheck import rel_l2  # noqa: E402
 
-pytestmark = [pytest.mark.gpu, pytest.mark.sim]
+pytestmark = [pytest.mark.gpu]
 
 CFG = ShapedLlamaConfig(
     n_layers=2, d_model=256, n_heads=8, n_kv_heads=2, d_ff=512,
