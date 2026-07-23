@@ -20,7 +20,7 @@ transfers with compute.
 The first workload is memory-constrained DNN training (single-GPU and
 small fleets), but the engine layers are workload-agnostic.
 
-## The three universes
+## The four universes
 
 ```
 src/dataflow/                ENGINE — executes programs, no model vocabulary
@@ -48,6 +48,16 @@ src/dataflow_training/       WORKLOAD — builds programs, registers resolvers
 ├── distributed/             topology, hosts/daemons, parallelism, sharding
 └── testing/                 gradcheck harnesses
 
+src/dataflow_sim/            SIMULATOR — discrete-event makespan simulator,
+├── core/                    memory-planning policies, and workload/model
+├── engine/                  definitions. The WORKLOAD consumes it (under
+├── planning/                lowering/) and the ENGINE converts to/from its
+├── policies/                schema (dataflow.core.convert). Pure Python +
+├── workloads/               pydantic; imports NEITHER dataflow nor
+├── app/                     dataflow_training. app/ = FastAPI JSON API,
+└── ui/                      ui/ = React frontend — the webapp that
+                             visualizes plans (dataflowsim.sunshein.net)
+
 reference_models/            TRUTH — isolated pure-torch twins (repo root,
                              torch-only, no dataflow imports, no cross-
                              imports; the per-family equivalence bar)
@@ -66,8 +76,11 @@ tests/                       measure_step, verify_family, …);
                              test_program_hashes)
 ```
 
-Tools and tests sit OUTSIDE all three packages and may cross the seam;
-the packages themselves may not.
+Tools and tests sit OUTSIDE all four packages and may cross the seam;
+the engine and workload never import each other (they meet only at the
+resolver registry). dataflow_sim is a standalone leaf — it imports
+neither — and consumers keep their imports of it lazy except under
+lowering/ (rule R4 below).
 
 ## Import rules, as enforced
 
@@ -120,8 +133,8 @@ contract.
 
 ## The dataflow_sim dependency map
 
-`dataflow_sim` (the sibling simulator repo) is consumed, never the
-reverse:
+`dataflow_sim` (the in-tree simulator package, `src/dataflow_sim/`) is
+consumed, never the reverse:
 
 - `dataflow_training/lowering/planning.py` — THE planning boundary:
   `plan_program` (PressureFit + `plan_with_recompute`),
