@@ -166,6 +166,59 @@ def client_aux_counts(client, dims, aux_ids):
     return out
 
 
+def stage_object(client, oid, data):
+    """Stage a host object under ``oid``, replacing whatever is resident even
+    if its size differs.
+
+    ``put_object`` overwrites a same-size slot in place but rejects a size
+    change (BINDING_MISMATCH) — and on a shared daemon a prior test may have
+    left a differently-sized object under the same id (e.g. a batch-of-two
+    packing after a full-length one). Releasing first drops any resident slot
+    (a no-op when the id is absent) so the put always lands cleanly. Leases
+    drop when a run completes, so a run input is free to re-stage by the next
+    test."""
+    client.release_object(oid, force=True)
+    client.put_object(oid, data)
+
+
+def client_step_fetch(client, *, cfg, seed, tokens_bytes, targets_bytes,
+                      planned, resolver_spec, valid_rows, boundaries,
+                      dims, fam, hyper, aux_ids):
+    """One family step on an existing daemon client plus the reads the parity
+    comparison needs.
+
+    Re-seeds the model (init_model) so a shared client presents a pristine
+    model, stages the tokens/targets, runs the single step, and returns the
+    loss together with the engine's post-step params, gradients, and MoE
+    counts — every value a HOST copy via the client. Split out of
+    ``client_model_step`` so the step runs either on a freshly-spawned daemon
+    or on a caller-supplied shared one."""
+    from dataflow.core.jsonio import program_to_dict
+    from dataflow_training.run.driver import init_model
+    from dataflow_training.run.presets import cfg_dict, resolver_family
+
+    init_model(client, resolver_family(cfg), cfg_dict(cfg), seed=seed)
+    stage_object(client, "tokens_0_0", tokens_bytes)
+    stage_object(client, "targets_0_0", targets_bytes)
+    reg = client.register_program(program_to_dict(planned.program),
+                                  resolver=resolver_spec)
+    if reg["bindings"]["missing_inputs"]:
+        raise RuntimeError(f"unbound inputs: {reg['bindings']}")
+    out = client.run(reg["prog_id"],
+                     args={"step": 0, "valid_rows": valid_rows,
+                           "seq_lens": {"0": boundaries}},
+                     fetch=["loss_0_0"])
+    if out.get("state") != "done":
+        raise RuntimeError(f"run state {out.get('state')}: {out}")
+    engine_state = bridges.to_reference_state_dict(cfg,
+                                                   ClientFinalBytes(client))
+    engine_grads = client_grad_state_dict(client, cfg, planned.program,
+                                          fam.build_resolver(dims, hyper))
+    engine_counts = client_aux_counts(client, dims, aux_ids)
+    return (out["fetched"]["loss_0_0"], engine_state, engine_grads,
+            engine_counts)
+
+
 def client_model_step(cfg, *, seed: int = 0, tol: float = 3e-2,
                       field_atol: dict | None = None,
                       param_atol: dict | None = None,
@@ -175,7 +228,7 @@ def client_model_step(cfg, *, seed: int = 0, tol: float = 3e-2,
                       min_cosine: float = 0.995,
                       counts_budget: int | None = 3,
                       grad_tol: float | None = None,
-                      backing_gib: float = 4.0):
+                      backing_gib: float = 4.0, client=None):
     """Client-path analog of ``testing.gradcheck.check_model_step`` at full
     parity.
 
@@ -198,15 +251,18 @@ def client_model_step(cfg, *, seed: int = 0, tol: float = 3e-2,
     The reference twin's INIT weights are generated with a CudaBackend (the
     reference scaffolding); the engine leg — the thing under test — goes
     entirely through the client.
+
+    ``client``: run the engine leg on this already-spawned daemon (re-seeded
+    per call via init_model) instead of spawning a fresh one, so a family's
+    tests can share one warm daemon. Defaults to spawning and tearing down a
+    dedicated daemon.
     """
     from dataclasses import replace as dc_replace
 
-    from dataflow.core.jsonio import program_to_dict
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow_training.blocks.base_blocks import AdamWHyper
     from dataflow_training.lowering.planning import plan_program
     from dataflow_training.model_families.families import resolve_family
-    from dataflow_training.run.driver import init_model
     from dataflow_training.run.presets import cfg_dict, resolver_family
     from dataflow_training.testing.client_daemon import out_of_process_daemon
     from dataflow_training.testing.gradcheck import (
@@ -279,26 +335,17 @@ def client_model_step(cfg, *, seed: int = 0, tol: float = 3e-2,
     for n in lengths:
         boundaries.append(boundaries[-1] + n)
 
-    with out_of_process_daemon(backing_gib=backing_gib) as client:
-        init_model(client, resolver_family(cfg), cfg_dict(cfg), seed=seed)
-        client.put_object("tokens_0_0", tokens_bytes)
-        client.put_object("targets_0_0", targets_bytes)
-        reg = client.register_program(program_to_dict(planned.program),
-                                      resolver=resolver_spec)
-        if reg["bindings"]["missing_inputs"]:
-            raise RuntimeError(f"unbound inputs: {reg['bindings']}")
-        out = client.run(reg["prog_id"],
-                         args={"step": 0, "valid_rows": valid_rows,
-                               "seq_lens": {"0": boundaries}},
-                         fetch=["loss_0_0"])
-        if out.get("state") != "done":
-            raise RuntimeError(f"run state {out.get('state')}: {out}")
-        run_loss = out["fetched"]["loss_0_0"]
-        engine_state = bridges.to_reference_state_dict(
-            cfg, ClientFinalBytes(client))
-        engine_grads = client_grad_state_dict(client, cfg, planned.program,
-                                              fam.build_resolver(dims, hyper))
-        engine_counts = client_aux_counts(client, dims, aux_ids)
+    leg = functools.partial(
+        client_step_fetch, cfg=cfg, seed=seed, tokens_bytes=tokens_bytes,
+        targets_bytes=targets_bytes, planned=planned,
+        resolver_spec=resolver_spec, valid_rows=valid_rows,
+        boundaries=boundaries, dims=dims, fam=fam, hyper=hyper,
+        aux_ids=aux_ids)
+    if client is not None:
+        run_loss, engine_state, engine_grads, engine_counts = leg(client)
+    else:
+        with out_of_process_daemon(backing_gib=backing_gib) as owned:
+            run_loss, engine_state, engine_grads, engine_counts = leg(owned)
 
     errors: dict[str, float] = {}
     cosines: dict[str, float] = {}
