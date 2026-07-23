@@ -18,7 +18,7 @@ dependencies = [
 [project.optional-dependencies]
 # Real device backend (only dataflow.runtime.device.cuda imports it).
 cuda = ["cuda-python"]
-dev = ["pytest>=8", "httpx"]
+dev = ["pytest>=8", "pytest-timeout", "httpx"]
 # Data ingestion: tokenizers + local/hub dataset sources (docs/data_feeds.md).
 data = ["tokenizers", "tiktoken", "datasets", "pyarrow"]
 # GPU kernels for the linear-attention / hybrid families (qwen35, dsv3,
@@ -32,7 +32,7 @@ ops = ["flash-linear-attention", "tilelang"]
 webapp = ["fastapi>=0.110", "uvicorn[standard]>=0.27"]
 
 [dependency-groups]
-dev = ["pytest>=8", "httpx"]
+dev = ["pytest>=8", "pytest-timeout", "httpx"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
