@@ -69,7 +69,7 @@ The steady-state invariant is visible: at every forward/backward boundary the re
 `window_size` (`w`) is the only knob. It directly sets the number of non-head weights resident in steady state and trades stall risk against the capacity floor:
 
 - **`w = 1`:** maximally aggressive. Only one non-head `W` resident at a time; every `f_i` releases `W_i` and prefetches `W_{i+1}` with no overlap. Lowest cap floor but highest stall risk — a slow from-slow link will block the very next compute.
-- **`w = 2`** (default): one weight live, one inbound. Hides a single prefetch behind one compute step. Sweet spot for the synthetic chains used in `experiments/`.
+- **`w = 2`** (default): one weight live, one inbound. Hides a single prefetch behind one compute step. Sweet spot for the synthetic chains used in `tests/dataflow_sim/planning/policies/`.
 - **`w ≥ 3`:** keeps more weights warm, more overlap slack, fewer stalls when from-slow is slow — at the cost of a higher cap floor (each extra `w` adds one weight's worth of resident bytes).
 - **`w ≥ L`:** degenerates — `i + w ≤ L-1` is never satisfied, so no forward slide fires and all weights stay compute-resident for the whole forward pass (effectively "keep everything"). Useful as a sanity baseline on loose caps.
 

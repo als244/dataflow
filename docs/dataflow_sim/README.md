@@ -7,7 +7,5 @@
 - [datatypes.md](datatypes.md) — precise semantics for model-training dtype and compute-precision controls.
 - [deepseek-v3.2-dsa-derivations.md](deepseek-v3.2-dsa-derivations.md) — provisional DSA forward/backward formulas for DeepSeek-V3.2 and GLM-5.2 IndexShare.
 - [workloads/MODEL_TRAINING.md](../../src/dataflow_sim/workloads/MODEL_TRAINING.md) — how model training workloads are authored and lowered.
-- [authoring custom programs](../../docs/extending_programs.md) — build and export your own dataflow programs.
+- [authoring custom programs](../extending_programs.md) — build and export your own dataflow programs.
 - [policy/](policy/) — one doc per built-in scheduling policy + decision table + [principles](policy/principles.md) shared across all policies.
-
-Internal design notes live in `docs/internal/`.

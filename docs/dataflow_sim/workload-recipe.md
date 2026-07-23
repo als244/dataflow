@@ -177,7 +177,7 @@ interesting case is when it doesn't — then you need a policy.
 | `pressurefit`                  | Fast pressure-fit interval planning with deadline-aware from-slow scheduling.|
 
 Each is `apply_<name>_policy(bare, **kwargs) -> TaskChain`. See
-`docs/policy/README.md` for the trade-offs and per-policy knobs.
+`docs/dataflow_sim/policy/README.md` for the trade-offs and per-policy knobs.
 
 ## Running the simulator
 
@@ -288,5 +288,5 @@ output, nothing has to be offloaded.
 ## See also
 
 - `src/dataflow_sim/workloads/MODEL_TRAINING.md` — model-training authoring end-to-end.
-- `docs/policy/README.md` — choosing among the built-in policies.
-- `docs/problem.md` — the underlying memory-traffic problem statement.
+- `docs/dataflow_sim/policy/README.md` — choosing among the built-in policies.
+- `docs/dataflow_sim/problem.md` — the underlying memory-traffic problem statement.

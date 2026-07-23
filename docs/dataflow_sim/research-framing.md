@@ -1,6 +1,6 @@
 # research framing
 
-Academic framing for the auto-policy problem. Pairs with [docs/problem.md](problem.md) (concrete simulator contract) and [docs/policy/README.md](policy/README.md) (policy catalog).
+Academic framing for the auto-policy problem. Pairs with [problem.md](problem.md) (concrete simulator contract) and the [policy catalog](policy/README.md).
 
 ## Problem space
 
@@ -8,7 +8,7 @@ Modern ML training compilers have **complete forward visibility** into the task 
 
 These decisions look like classical paging but classical theory does not capture them. Belady-MIN and online-paging models assume a single uniform cache, fixed miss penalty, and free eviction. The training setting has *two parallel FIFO transfer streams with bandwidth-proportional latency, mandatory write-back of mutated state, output reservation at task start, and a per-intermediate recompute trade-off curve*.
 
-This is an **offline oracle-aware scheduling** problem, not online prediction. See [docs/problem.md](problem.md) for the exact simulator contract the policy must produce annotated chains against.
+This is an **offline oracle-aware scheduling** problem, not online prediction. See [problem.md](problem.md) for the exact simulator contract the policy must produce annotated chains against.
 
 ## Key decision axes
 
@@ -27,7 +27,7 @@ Axes 5–8 are the ones a naive "what to evict / what to load" framing collapses
 
 ## Prior-work pointers
 
-Closest neighbors and where each diverges (see archived original for the full table):
+Closest neighbors and where each diverges:
 
 - **Belady-MIN (1966)** — optimal offline paging; single resource, uniform miss cost, free eviction. Ours: asymmetric per-object transfer time, real eviction cost.
 - **Sleator–Tarjan (1985)** — competitive online paging; we have an oracle, so competitive ratios are wrong framing.
@@ -56,4 +56,4 @@ Online variants (dynamic graphs), joint `k_o` + cache optimization, multi-comput
 
 ---
 
-*Full derivation, mathematical formulation (§6), and six-phase greedy template (§7) are archived verbatim at [docs/internal/research-original.md](internal/research-original.md). This live doc is the framing a reader needs alongside [problem.md](problem.md) and the [policy catalog](policy/README.md).*
+*This live doc is the framing a reader needs alongside [problem.md](problem.md) and the [policy catalog](policy/README.md).*

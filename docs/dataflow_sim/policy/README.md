@@ -17,4 +17,4 @@ See [principles.md](principles.md) for the correctness invariants and resource-c
 
 ## File / function / enum convention
 
-Every policy follows the same convention: `<stem>.py` in policy/, function `apply_<stem>_policy`, server enum `"<stem>"`, UI value `"<stem>"`, doc `docs/policy/<stem-with-dashes>.md`.
+Every policy follows the same convention: `<stem>.py` in policy/, function `apply_<stem>_policy`, server enum `"<stem>"`, UI value `"<stem>"`, docs at `docs/dataflow_sim/policy/pressurefit.md` (pressurefit) or `docs/dataflow_sim/policy/other_policies/<stem-with-dashes>.md` (the others).

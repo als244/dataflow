@@ -212,9 +212,10 @@ candidate is exactly one inbound-schedule variant.
 
 These diagnostics are observational. They do not alter the selected plan.
 
-For repeatable comparisons across configs, run
-`python scripts/canonical_sweep.py --pressurefit-candidates-out <csv>`, which
-writes one row per config and schedule.
+For repeatable comparisons across configs, call
+`plan_pressurefit_policy(bare_chain, ...)`, which returns
+`(TaskChain, PressureFitDiagnostics)`; the returned `PressureFitDiagnostics`
+carries these per-schedule rows for each config you run.
 
 ## Known Limits
 
@@ -251,7 +252,7 @@ an optimizer/grad-accum grid, all candidates evaluated) showed:
 The portfolio machinery (candidate families, portfolio modes, protected
 initial sets) was removed in exchange for that measured regret. If a future
 regime needs the dropped corners back, the better investment is an optimality
-oracle (see docs/problem.md §7) rather than re-growing candidate families.
+oracle (see ../problem.md §7) rather than re-growing candidate families.
 
 ## Relation To Existing Policies
 

@@ -1,10 +1,16 @@
 # Add DeepSeek-V3 and Kimi-K2 Built-In Model Families
 
+> **Status: implemented.** The `deepseek_v3` family — presets `deepseek_v3_671B-37B` and `kimi_k2_1T-32B` — is registered in the simulator's workload catalog (`src/dataflow_sim/workloads/models/registry.py`). This doc records how it was added and serves as a how-to for adding more families.
+>
+> **Scope:** this targets the *simulator's* workload catalog (`src/dataflow_sim/workloads/models/`), which is distinct from `dataflow_training`'s model families (`src/dataflow_training/model_families/`, see [docs/extending.md](../extending.md)) — the same model names (deepseek/qwen35) exist on both layers.
+
 ## Summary
 
-Add a DeepSeekV3-style MLA + coarse MoE workload path, then expose two built-in
-families: `deepseek_v3` and `kimi_k2`. Use presets `deepseek_v3_671B-37B` and
-`kimi_k2_1T-32B`. Do not rename current `dense_attention` yet. Skip DeepSeek
+Add a DeepSeekV3-style MLA + coarse MoE workload path, then expose the built-in
+`deepseek_v3` family with two presets: `deepseek_v3_671B-37B` and
+`kimi_k2_1T-32B` (Kimi-K2 is a preset under the `deepseek_v3` family —
+`KimiK2Config` subclasses `DeepSeekConfig` — not its own family). Do not rename
+current `dense_attention` yet. Skip DeepSeek
 MTP, router internals, and Kimi aux/router loss tasks for v1, but preserve
 those facts in metadata.
 
@@ -44,8 +50,8 @@ Config sources:
 - Compose DeepSeek/Kimi blocks with existing `SwiGLUMLP` for dense prefix
   layers and existing `MoE` for suffix layers. Do not add a DeepSeek-specific
   MoE module for v1. Keep grouped/sigmoid router scoring as metadata.
-- Wire `deepseek_v3` and `kimi_k2` into server presets, UI family/preset
-  dropdowns, CLI export examples, docs, and package exports.
+- Wire the `deepseek_v3` family and its `kimi_k2_1T-32B` preset into server
+  presets, UI family/preset dropdowns, CLI export, docs, and package exports.
 
 ## File Inventory
 
@@ -148,7 +154,7 @@ style unless we explicitly broaden all MoE accounting later.
   backward, and recompute.
 - Assert coarse MoE shared/routed expert sub-op names and dimensions, matching
   the abstraction style used by existing `qwen3_moe`.
-- Add server/UI preset tests and run `npm --prefix ui run build`.
+- Add server/UI preset tests and run `npm --prefix src/dataflow_sim/ui run build`.
 - Run full Python test suite after implementation.
 
 ## Assumptions

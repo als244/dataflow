@@ -44,7 +44,7 @@ Per [problem.md](../../problem.md): given a DAG of compute tasks on a single com
 
 ### 3.1 Input format (min_grow's input)
 
-min_grow's public entry point is `apply_min_grow_policy(bare: TaskChain) -> TaskChain`. The input is a **bare** `TaskChain` as defined in `src/dataflow_sim/core/schema.py` — "bare" meaning the task list contains tasks whose `releases_after`, `offload_after`, `prefetch_after` lists are empty (no policy has been applied yet). The relevant fields, copied verbatim from `src/dataflow_sim/core/schema.py:22-83`:
+min_grow's public entry point is `apply_min_grow_policy(bare: TaskChain) -> TaskChain`. The input is a **bare** `TaskChain` as defined in `src/dataflow_sim/core/schema.py` — "bare" meaning the task list contains tasks whose `releases_after`, `offload_after`, `prefetch_after` lists are empty (no policy has been applied yet). The relevant fields, adapted from `src/dataflow_sim/core/schema.py`:
 
 ```python
 @dataclass(frozen=True)
@@ -145,7 +145,7 @@ class Interval:
     b: int   # exit boundary: object remains resident until boundary b, leaves AT boundary b
 ```
 
-**Boundary semantics** (matching max_reduce's convention from `AUTOmax_reduce.md:45`): boundary `k` is the state snapshot AFTER task `k`'s triggers fire (after task `k` ends and its releases/offload-enqueues/prefetch-enqueues execute). Boundary `-1` is the initial state before any task runs.
+**Boundary semantics** (matching max_reduce's convention from `max-reduce.md`, ~line 47): boundary `k` is the state snapshot AFTER task `k`'s triggers fire (after task `k` ends and its releases/offload-enqueues/prefetch-enqueues execute). Boundary `-1` is the initial state before any task runs.
 
 **An object's residency at boundary k** = `∃ (a, b) ∈ intervals[o]: a ≤ k < b`. (Note: `< b`, so an interval `(a, b)` means resident at boundaries `a, a+1, ..., b-1` but NOT at boundary `b`. The transition to non-residency happens AT boundary `b`.)
 
@@ -425,9 +425,9 @@ min_grow inherits from max_reduce only the **boundary convention** and the **sch
 
 **Files**:
 - `src/dataflow_sim/policies/min_grow.py` — min_grow implementation. Public: `apply_min_grow_policy(bare: TaskChain) -> TaskChain`. Internal: `Plan` dataclass, `Interval`, `MIN_plan`, `enumerate_extensions`, `apply_extension`, `respects_static_cap`, `analytic_bound`, `derive_schedule`, `score`.
-- `docs/policy/other_policies/min-grow.md` — this doc.
-- `tests/policies/test_min_grow.py` — unit tests.
-- `scripts/compare_policies.py` — adds min_grow to policy dict in `run_one()`; min_grow column in output table.
+- `docs/dataflow_sim/policy/other_policies/min-grow.md` — this doc.
+- `tests/dataflow_sim/planning/policies/test_min_grow.py` — unit tests.
+- `dataflow_sim.policies.get_all_policies()` — registers min_grow in the canonical policy list used for cross-policy comparison.
 
 **Primitives reused** (unchanged):
 - `src/dataflow_sim/core/schema.py` — `Task`, `TaskChain`, `Object`, `OutputAlloc`, `TransferTrigger`, boundary convention.
@@ -440,7 +440,7 @@ min_grow inherits from max_reduce only the **boundary convention** and the **sch
 
 ## 12. Verification
 
-### 12.1 Unit tests (`tests/policies/test_min_grow.py`)
+### 12.1 Unit tests (`tests/dataflow_sim/planning/policies/test_min_grow.py`)
 
 - **MIN plan correctness**: 3-task synthetic chain. Verify only forced residency.
 - **Extension enumeration**: on a 5-task chain, verify expected gap-merge candidates surfaced for `W_1` (the only object with a real gap in MIN).
@@ -451,7 +451,7 @@ min_grow inherits from max_reduce only the **boundary convention** and the **sch
 
 ### 12.2 Sweep regression
 
-Run `scripts/compare_policies.py` with min_grow added:
+Compare min_grow against the other policies (`dataflow_sim.policies.get_all_policies()`):
 - Bar: min_grow makespan ≤ best-of-{belady_reactive, roundtrip_planner, max_reduce, sliding} on every (seqlen, num_seqs, cap) cell.
 - Strict improvement: min_grow beats best-of-prior on at least the configs where max_reduce currently regresses (e.g., `sql=2048 M=1 cap=20GB`, currently +36.8% over belady_reactive).
 

@@ -55,7 +55,7 @@ Three layers, deliberately separated:
    seen anywhere wins. Residency policies (PressureFit etc.) are untouched —
    a recompute variant is just another `TaskChain`.
 
-## Measured behavior (scripts/recompute_sweep.py)
+## Measured behavior (`tests/dataflow_sim/planning/test_recompute.py`)
 
 The optimal choice swings across model family, sequence length, hardware, and
 capacity cap. Current sweeps should cover the public preset families

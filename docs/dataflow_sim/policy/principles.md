@@ -84,6 +84,6 @@ These are places where two principles legitimately conflict. A policy must pick 
 
 ## See also
 
-- [docs/problem.md](../problem.md) — the formal scheduling problem these principles operate on.
-- [docs/policy/README.md](README.md) — the decision table for the six built-in policies.
+- [problem.md](../problem.md) — the formal scheduling problem these principles operate on.
+- [README.md](README.md) — the decision table for the six built-in policies.
 - Per-policy docs in this directory — how each policy resolves the tensions in §4.

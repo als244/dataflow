@@ -1,5 +1,9 @@
 # Add Qwen3.5/Qwen3.6 Hybrid Dense and MoE Built-Ins
 
+> **Status: implemented.** The `qwen3_hybrid_dense` and `qwen3_hybrid_moe` families are registered in the simulator's workload catalog (`src/dataflow_sim/workloads/models/registry.py`). This doc records how they were added and serves as a how-to for adding more families.
+>
+> **Scope:** this targets the *simulator's* workload catalog (`src/dataflow_sim/workloads/models/`), which is distinct from `dataflow_training`'s model families (`src/dataflow_training/model_families/`, see [docs/extending.md](../extending.md)) — the same model names (deepseek/qwen35) exist on both layers.
+
 ## Summary
 
 Add one shared Qwen3.5/Qwen3.6 text-backbone implementation with two public
@@ -166,8 +170,8 @@ style unless we explicitly broaden all MoE accounting later.
   attention, dense FFN, coarse MoE shared/routed expert work, LM head
   forward/backward, and optimizer steps.
 - Add server preset tests, UI build validation, CLI export coverage, and
-  docs/examples updates.
-- Run full Python test suite and `npm --prefix ui run build`.
+  docs updates.
+- Run full Python test suite and `npm --prefix src/dataflow_sim/ui run build`.
 
 ## Assumptions
 

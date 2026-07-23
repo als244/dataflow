@@ -2,7 +2,7 @@
 
 The package's public surface is what `dataflow_sim/__init__.py` re-exports plus the workload builders in `dataflow_sim.workloads`, the schema dataclasses in `dataflow_sim.core.schema`, and the policy entry points in `dataflow_sim.policies`. Everything else is internal unless a doc here names it.
 
-This doc covers the **simulator surface** (workload schema, run, validate, core IR). For policies see [docs/policy/](../docs/policy/) and [docs/workload-recipe.md](../docs/workload-recipe.md).
+This doc covers the **simulator surface** (workload schema, run, validate, core IR). For policies see [policy/](policy/) and [workload-recipe.md](workload-recipe.md).
 
 ---
 
@@ -290,7 +290,7 @@ Execute a fully-annotated `TaskChain` and return a complete event log.
 
 **Raises**
 - `ValidationError` — if `validate=True` and the chain fails any static rule.
-- `ValueError` / `RuntimeError` — runtime contract violations the validator can't catch (transit bytes exceeding cap, deadlock, etc.). See [docs/policy/principles.md](../docs/policy/principles.md) §1.
+- `ValueError` / `RuntimeError` — runtime contract violations the validator can't catch (transit bytes exceeding cap, deadlock, etc.). See [policy/principles.md](policy/principles.md) §1.
 
 **Mechanics (brief)**
 With `snapshots=True`, the simulator runs two passes: pass 1 discovers actual stalled start times; pass 2 re-snapshots `reference_stream.next_t` from those actual starts so the UI sees realistic next-use timestamps. With `snapshots=False`, it runs one pass and skips event/snapshot construction. `memory_trace=True` is still one pass in snapshot-free mode and is meant for large UI runs that need a memory plot without object-level browsing. Makespan = `max(iv.end for iv in task_intervals)`.
@@ -322,7 +322,7 @@ points = trace_log.memory_trace
 
 Static validation of a `TaskChain`. Raises `ValidationError` on the first violation found.
 
-Catches every statically-computable invariant from [docs/policy/principles.md](../docs/policy/principles.md) §1, **before the simulator steps**:
+Catches every statically-computable invariant from [policy/principles.md](policy/principles.md) §1, **before the simulator steps**:
 
 - **ID resolution** — every `obj_id` in `inputs` / `releases_after` / `offload_after` / `prefetch_after` / `mutates_inputs` resolves to either `initial_memory` or a prior task's output; output ids are fresh; no `(id, location)` collision with existing pool entries.
 - **Trigger validity** — prefetch only on objects statically not-on-compute; offload only on objects statically on-compute; no duplicate prefetches/offloads on the same anchor; no `prefetch + offload` of the same object on the same task.
@@ -472,8 +472,8 @@ the four inbound schedules was selected.
 
 ## See also
 
-- [docs/problem.md](../docs/problem.md) — the formal scheduling problem.
-- [docs/workload-recipe.md](../docs/workload-recipe.md) — how to build your own bare chain.
+- [problem.md](problem.md) — the formal scheduling problem.
+- [workload-recipe.md](workload-recipe.md) — how to build your own bare chain.
 - [workloads/MODEL_TRAINING.md](../../src/dataflow_sim/workloads/MODEL_TRAINING.md) — model-training workload authoring and lowering.
-- [docs/policy/principles.md](../docs/policy/principles.md) — invariants every chain must satisfy.
-- [docs/policy/README.md](../docs/policy/README.md) — which policy to use when.
+- [policy/principles.md](policy/principles.md) — invariants every chain must satisfy.
+- [policy/README.md](policy/README.md) — which policy to use when.

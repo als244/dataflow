@@ -214,6 +214,6 @@ These keep max_reduce simple and predictable. Layered optimizations (a "Phase 4"
 | Eviction trigger | when pool[k] binds during shadow walk | overflow at any covered boundary in `bps` | overflow at any boundary in `pool` (with prefetch-arrival left edge) |
 | Activation offload timing | reactive eviction, greedy-late | round-trip pack of consecutive-use gaps | residency reduction makes activations production-only intervals → offload trigger fires AT the production task |
 | Production→first-use gap | implicit via reactive eviction | enumerated as a special candidate | implicit — production boundary is `appears_at`, eviction can split anywhere |
-| Cross-phase fallback | roundtrip_planner → belady_reactive in `apply_auto_policy` | falls through to belady_reactive if roundtrip_planner fails | none — each phase succeeds or raises with a precise reason |
+| Cross-phase fallback | roundtrip_planner → belady_reactive (historical: auto/portfolio fallback removed; policies are standalone) | falls through to belady_reactive if roundtrip_planner fails | none — each phase succeeds or raises with a precise reason |
 | Writeback handling | added as post-pass keyed on `type=="gradient"` | added as post-pass keyed on `type=="gradient"` | first-class via `Task.mutates_inputs` — no name-matching, fully general |
 | Lines of code | ~700 | ~700 | ~280 |
