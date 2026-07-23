@@ -56,6 +56,7 @@ markers = [
     "cuda: requires an NVIDIA CUDA runtime (the CUDA backend / cuda-python)",
     "fleet: multi-daemon gates (opt-in lane: pytest -m fleet)",
     "corpus: requires the shard corpus at datasets/fineweb10B",
+    "internet: requires a route to the public internet (a future gate for tests that fetch a remote asset; none use it yet)",
     "topology_remote: requires a topology.toml with a remote host",
     "rdma: requires an active RDMA port the engine can use (RoCE today; IB is a drop-in)",
     "ncclbind: requires a loadable libnccl",

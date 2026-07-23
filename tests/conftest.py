@@ -18,6 +18,9 @@ Markers (register in pyproject.toml):
                    backend exists (a GPU is not necessarily CUDA)
   fleet            multi-daemon gates (opt-in lane: pytest -m fleet)
   corpus           the shard corpus at datasets/fineweb10B
+  internet         a route to the public internet — a ready gate for a
+                   future test that must fetch a remote asset; nothing
+                   uses it yet, so offline nodes have nothing to skip
   topology_remote  a topology.toml declaring at least one remote host
   rdma             an active RDMA port the engine can bring up — RoCE
                    today; InfiniBand is a documented drop-in, so an
@@ -59,6 +62,22 @@ def has_corpus() -> bool:
     from dataflow_training.distributed.topology import repo_root
 
     return (repo_root() / "datasets" / "fineweb10B").exists()
+
+
+def has_internet() -> bool:
+    """A route to the public internet, for a future test that must fetch
+    a remote asset (a tokenizer vocabulary, a hub download). Nothing needs
+    it yet — the gate is wired so the day one does, a compute node with no
+    outbound route skips it cleanly instead of failing. Probes a short TCP
+    connect to a well-known anycast address by raw IP, so a missing or
+    broken DNS resolver can't hang the check."""
+    import socket
+
+    try:
+        with socket.create_connection(("1.1.1.1", 443), timeout=1.5):
+            return True
+    except OSError:
+        return False
 
 
 def has_topology_remote() -> bool:
@@ -127,6 +146,7 @@ PROBES = {
     "cuda": (has_cuda, "no NVIDIA CUDA runtime (ROCm or CPU-only)"),
     "corpus": (has_corpus, "shard corpus not present "
                            "(datasets/fineweb10B)"),
+    "internet": (has_internet, "no route to the public internet"),
     "topology_remote": (has_topology_remote,
                         "no topology.toml with a remote host"),
     "rdma": (has_active_rdma_port,
