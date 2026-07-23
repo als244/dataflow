@@ -106,3 +106,96 @@ def client_grad_state_dict(client, cfg, program, resolver):
             continue                       # gradient-free field (frozen)
         out[name] = tensor
     return out
+
+
+def client_model_step(cfg, *, seed: int = 0, grad_tol: float = 3e-2,
+                      min_cosine: float = 0.99, loss_tol: float = 5e-4,
+                      backing_gib: float = 4.0):
+    """Client-path analog of ``testing.gradcheck.check_model_step``.
+
+    Run one family step through the OUT-OF-PROCESS daemon and compare the loss
+    and one-step gradients against the pure-torch twin, with every engine value
+    read as a HOST copy via the client (no engine device view is ever held).
+    Returns a ``CheckReport`` keyed like check_model_step (``loss`` +
+    ``grad:{name}``) so the verdict gates identically.
+
+    The reference twin's INIT weights are generated with a CudaBackend (the same
+    reference-scaffolding the existing client parity test uses); the engine leg
+    — the thing under test — goes entirely through the client.
+    """
+    from dataclasses import replace as dc_replace
+
+    from dataflow.core.jsonio import program_to_dict
+    from dataflow.runtime.device.cuda import CudaBackend
+    from dataflow_training.lowering.planning import plan_program
+    from dataflow_training.model_families.families import resolve_family
+    from dataflow_training.run.driver import daemon_client, init_model
+    from dataflow_training.run.presets import cfg_dict, resolver_family
+    from dataflow_training.run.recipe import Recipe
+    from dataflow_training.testing.client_daemon import out_of_process_daemon
+    from dataflow_training.testing.gradcheck import (
+        CheckReport, cos_sim, reference_model_step, rel_l2)
+
+    cfg = dc_replace(cfg, grad_accum_rounds=1)
+    fam = resolve_family(cfg)
+    dims = fam.derive_dims(cfg)
+    lengths = tuple([dims.seq_len] * (dims.max_tokens // dims.seq_len))
+
+    # reference twin from seed-S init weights (scaffolding backend)
+    backend = CudaBackend()
+    values = fam.initial_values(fam.lower(cfg), cfg, backend, seed=seed)
+    get_bytes = bridges.get_bytes_from_values(values)
+    tokens_bytes = get_bytes("tokens_0_0").cpu().numpy().tobytes()
+    targets_bytes = get_bytes("targets_0_0").cpu().numpy().tobytes()
+    twin = bridges.build_reference_model(cfg)
+    twin_loss, twin, _states, _init, _counts = reference_model_step(
+        cfg, values, seq_lens=lengths, model=twin)
+    twin_grads = {name: par.grad for name, par in twin.named_parameters()
+                  if par.grad is not None}
+    for buf in values.values():
+        backend.free(buf)
+
+    program = fam.lower(cfg)
+    dw_ids = sorted(o.id for t in program.tasks for o in t.outputs
+                    if o.id.startswith("dW"))
+    program = with_backing_retention(program, dw_ids)
+    planned = plan_program(program,
+                           fast_memory_capacity=int(backing_gib * (1 << 30)))
+
+    targets = torch.frombuffer(bytearray(targets_bytes), dtype=torch.int32)
+    valid_rows = int((targets >= 0).sum())
+    recipe = Recipe(peak_lr=3e-4, min_lr=3e-5, warmup_steps=1, total_steps=1)
+    resolver_spec = {"kind": "model_family", "family": resolver_family(cfg),
+                     "cfg": cfg_dict(cfg), "hyper": recipe.hyper_spec()}
+    boundaries = [0]
+    for n in lengths:
+        boundaries.append(boundaries[-1] + n)
+
+    with out_of_process_daemon(backing_gib=backing_gib) as client:
+        init_model(client, resolver_family(cfg), cfg_dict(cfg), seed=seed)
+        client.put_object("tokens_0_0", tokens_bytes)
+        client.put_object("targets_0_0", targets_bytes)
+        reg = client.register_program(program_to_dict(planned.program),
+                                      resolver=resolver_spec)
+        if reg["bindings"]["missing_inputs"]:
+            raise RuntimeError(f"unbound inputs: {reg['bindings']}")
+        out = client.run(reg["prog_id"],
+                         args={"step": 0, "valid_rows": valid_rows,
+                               "seq_lens": {"0": boundaries}},
+                         fetch=["loss_0_0"])
+        if out.get("state") != "done":
+            raise RuntimeError(f"run state {out.get('state')}: {out}")
+        run_loss = out["fetched"]["loss_0_0"]
+        engine_grads = client_grad_state_dict(client, cfg, planned.program,
+                                              fam.build_resolver(dims))
+
+    errors = {"loss": abs(run_loss - twin_loss) / max(abs(twin_loss), 1e-6)}
+    cosines: dict[str, float] = {}
+    for name, g_twin in twin_grads.items():
+        g_engine = engine_grads.get(name)
+        if g_engine is None or g_engine.shape != g_twin.shape:
+            continue
+        errors["grad:" + name] = rel_l2(g_engine, g_twin)
+        cosines["grad:" + name] = cos_sim(g_engine, g_twin)
+    return CheckReport(errors=errors, tol=loss_tol, cosines=cosines,
+                       min_cosine=min_cosine, tol_by_prefix={"grad:": grad_tol})
