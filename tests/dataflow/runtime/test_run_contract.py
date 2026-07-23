@@ -34,7 +34,7 @@ import pytest
 from dataflow.core import ObjectSpec, OutputSpec, Program, TaskSpec
 from dataflow.runtime import Engine, ExecutionError
 from dataflow.runtime.device.fake import FakeBackend
-from dataflow.runtime.engine import RunOutcome, RunOutcomeKind, Session
+from dataflow.runtime.engine import RunOutcomeKind, Session
 from dataflow.runtime.executable import synthetic_resolver
 from dataflow.runtime.ledger import LedgerError
 
@@ -139,13 +139,18 @@ def test_failed_outcome_carries_full_diagnostics():
 
 
 def test_outcome_serializes_uniformly():
-    # the wire boundary carries exactly what an in-process caller reads: a
-    # to_dict / from_dict roundtrip reconstructs the identical outcome, so the
-    # client and the in-process caller see the same fields and values
+    # the wire carries the outcome as plain JSON data (dataclasses.asdict), so a
+    # client reads exactly the fields an in-process caller sees on result.outcome
+    import dataclasses
+    import json
+
     result = Engine(FakeBackend()).execute(
         one_task_program(), resolver=RaisingResolver("t0", "boom"))
-    restored = RunOutcome.from_dict(result.outcome.to_dict())
-    assert restored == result.outcome
+    wire = json.loads(json.dumps(dataclasses.asdict(result.outcome)))
+    assert wire["kind"] == RunOutcomeKind.FAILED
+    assert wire["task_id"] == "t0"
+    assert "boom" in wire["message"]
+    assert "Traceback" in wire["traceback_text"]
 
 
 def test_engine_invariant_raises_scrubbed():

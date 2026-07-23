@@ -70,7 +70,10 @@ ENGINE_INVARIANT_ERRORS = (
 )
 
 
-class RunOutcomeKind(enum.Enum):
+class RunOutcomeKind(str, enum.Enum):
+    """String-valued so a RunOutcome is plain JSON data: the wire boundary
+    serializes the outcome with ``dataclasses.asdict`` and a client reads the
+    same fields — no custom codec, no reconstruction step."""
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -106,20 +109,6 @@ class RunOutcome:
     @property
     def is_cancelled(self) -> bool:
         return self.kind is RunOutcomeKind.CANCELLED
-
-    def to_dict(self) -> dict:
-        """The canonical serialization. The wire boundary carries THIS so a
-        client sees exactly the fields an in-process caller reads off
-        ``result.outcome`` — the diagnostic never diverges between paths."""
-        return {"kind": self.kind.value, "message": self.message,
-                "task_id": self.task_id, "traceback_text": self.traceback_text}
-
-    @classmethod
-    def from_dict(cls, data: dict) -> "RunOutcome":
-        return cls(kind=RunOutcomeKind(data["kind"]),
-                   message=data.get("message", ""),
-                   task_id=data.get("task_id"),
-                   traceback_text=data.get("traceback_text", ""))
 
 
 SUCCEEDED = RunOutcome(kind=RunOutcomeKind.SUCCEEDED)

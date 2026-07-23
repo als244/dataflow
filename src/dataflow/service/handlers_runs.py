@@ -13,7 +13,7 @@ import json
 import struct
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from .wire import ServiceError
@@ -264,10 +264,10 @@ def install(server) -> None:
         entry.runs += 1
         try:
             if result is None:
-                # the canonical RunOutcome, serialized verbatim — the client
-                # sees exactly the fields an in-process caller reads off
+                # the canonical RunOutcome as plain data — the client sees
+                # exactly the fields an in-process caller reads off
                 # result.outcome (kind + message + task_id + traceback)
-                diag = outcome.to_dict()
+                diag = asdict(outcome)
                 rec.state = ("cancelled" if err_kind == "CANCELLED"
                              else "error")
                 rec.error = {"code": err_kind, "message": diag["message"],
