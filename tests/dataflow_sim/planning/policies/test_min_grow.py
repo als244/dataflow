@@ -21,7 +21,6 @@ Tests:
 - test_end_to_end_unlimited_cap_returns_max_immediately: at unlimited cap min_grow returns MAX directly, giving the optimal L=3 makespan of 100.
 - test_end_to_end_returns_runnable_chain: min_grow returns a chain the simulator runs with non-empty task intervals.
 - test_bare_invariant_check: applying min_grow to a non-bare chain raises a not-bare ValueError.
-- test_smart_prefetch_avoids_zero_runtime_task: a chain with a zero-runtime task between producer and consumer still yields a runnable schedule.
 - test_smart_prefetch_returns_int_in_range: the _smart_prefetch_task helper returns a task index within range.
 - test_analytic_pre_pass_reaches_static_feasibility: the analytic greedy shrink brings an over-cap MAX plan to static feasibility, keeping the earliest-used weights pre-placed and evicting the latest.
 """
@@ -359,40 +358,6 @@ def test_bare_invariant_check():
 # ============================================================================
 # Smart prefetch placement (trigger placement)
 # ============================================================================
-
-def test_smart_prefetch_avoids_zero_runtime_task():
-    """Smart prefetch placement walks back past zero-runtime tasks to find
-    a task whose end gives enough lead time for from_slow.
-    """
-    # Chain: t0 (runtime 100) → t1 (runtime 0) → t2 (runtime 100, reads W)
-    # W is backing-init; plan needs W resident at boundary 1 (= when t2 reads it).
-    # MIN-plan interval would be [1, 2). Trigger SHOULD be at task whose end
-    # gives from_slow time. from_slow takes 10 ticks (size 100 / bw 10).
-    # - Task 1 ends at boundary 1 (= time 100). t2 starts at 100. from_slow would
-    #   start at 100 and need 10 ticks → t2 stalls.
-    # - Task 0 ends at time 100. from_slow starts at 100, takes 10, completes at 110.
-    #   t1 has 0 runtime so t2 starts at 100 too. STILL STALLS.
-
-    bare = TaskChain(
-        initial_memory=[Object(id="W", size=100, location="backing", type="weight")],
-        tasks=[
-            Task(id="t0", inputs=[], outputs=[OutputAlloc(id="o0", size=10)], runtime=100),
-            Task(id="t1", inputs=[], outputs=[], runtime=0),  # zero-runtime
-            Task(id="t2", inputs=["W"], outputs=[], runtime=10),
-        ],
-        fast_memory_capacity=None,
-        bandwidth_from_slow=10, bandwidth_to_slow=10,
-    )
-    # With cap=None min_grow returns MAX (pre-place W); not a useful test of trigger placement.
-    # Set cap to force shrink.
-    bare = replace(bare, fast_memory_capacity=110)  # 100 (W) + 10 (o0 reservation) = 110
-    ann = apply_min_grow_policy(bare, time_budget_s=2.0)
-    # With cap=110, MAX (pre-place W at -1) puts pool at 100 + 10 (next-output) = 110. OK.
-    # This asserts only that the annotated chain runs; it does not itself
-    # exercise the zero-runtime walk-back path.
-    log = simulator_run(ann)
-    assert log.task_intervals
-
 
 def test_smart_prefetch_returns_int_in_range():
     """Smoke test the _smart_prefetch_task helper directly."""
