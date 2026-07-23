@@ -1,9 +1,9 @@
-"""Engine stress gates (GPU): poison-on-free, interleaving stress, measured-cost
+"""Engine stress gates (GPU): poison-on-free, runtime jitter, measured-cost
 replanning — all must leave the math golden.
 
 Tests:
 - test_poison_on_free_changes_nothing: enabling 0xFF poison-on-free yields identical weights and loss under heavy offload/prefetch traffic, with no NaN.
-- test_interleaving_stress_changes_nothing: random device work before each task reshuffles completion order yet leaves weights and loss identical.
+- test_result_invariant_to_runtime_jitter: a random per-task spin delay makes actual runtimes diverge from the plan's cost estimates, yet weights and loss are identical — the result is event-driven, not estimate-driven.
 - test_measured_costs_replan_still_golden: profiling, writing measured runtimes and workspace back, and re-planning changes the plan but not the loss.
 """
 import pytest
@@ -83,9 +83,11 @@ def test_poison_on_free_changes_nothing():
     assert all(v == v for v in [poisoned["loss"]])  # not NaN
 
 
-def test_interleaving_stress_changes_nothing():
-    """Random extra device work before each task shifts every completion
-    ordering; results must be identical (event-ordering correctness)."""
+def test_result_invariant_to_runtime_jitter():
+    """A random spin delay before each task makes actual runtimes diverge from
+    the plan's cost estimates (which drive memory scheduling); the engine
+    sequences on completion events, so weights and loss come out identical —
+    correctness is estimate-independent, not a property of any ordering."""
     from dataflow.runtime.device.cuda_spin import SpinKernel
 
     def wrapper(resolver, backend):

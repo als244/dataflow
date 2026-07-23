@@ -258,7 +258,8 @@ def install(server) -> None:
             prog_id=entry.prog_id, store=store,
             placement=entry.placement, pool_demand=entry.pool_demand,
             run_args=run_args, cancel_event=active_cancel,
-            groups=group_handles)
+            groups=group_handles,
+            poison_on_free=st.config.poison_on_free)
 
         rec.finished = time.time()
         entry.runs += 1

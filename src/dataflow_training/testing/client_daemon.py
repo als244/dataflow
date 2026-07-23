@@ -25,19 +25,23 @@ from dataflow_training.register import register_all
 register_all()
 Server(EngineConfig(socket_path=sys.argv[1],
                     slab_backing_gib=float(sys.argv[2]),
-                    device=int(sys.argv[3]), fake=False)).serve_forever()
+                    device=int(sys.argv[3]),
+                    poison_on_free=sys.argv[4] == "1",
+                    fake=False)).serve_forever()
 """
 
 
 @contextlib.contextmanager
 def out_of_process_daemon(*, backing_gib: float = 4.0, device: int = 0,
+                          poison_on_free: bool = False,
                           boot_timeout: float = 90.0):
     """Yield a client connected to a freshly-spawned out-of-process daemon;
-    terminate the daemon and remove its socket on exit."""
+    terminate the daemon and remove its socket on exit. ``poison_on_free``
+    boots the engine with the 0xFF free-poison debug option on."""
     sock = f"/tmp/dataflow-test-{os.getpid()}-{uuid.uuid4().hex[:8]}.sock"
     proc = subprocess.Popen(
         [sys.executable, "-c", LAUNCH_SOURCE, sock, str(backing_gib),
-         str(device)])
+         str(device), "1" if poison_on_free else "0"])
     try:
         wait_for_socket(proc, sock, boot_timeout)
         with daemon_client(attach=True, socket=sock) as client:

@@ -171,7 +171,7 @@ def prepare_placement(program, values):
 
 def execute_run(program, resolver, values, *, prog_id, store=None,
                 placement, pool_demand, run_args, cancel_event,
-                groups=None):
+                groups=None, poison_on_free=False):
     """One engine run over store-backed buffers. Returns (result,
     error_kind, outcome); the caller owns result.close().
 
@@ -196,7 +196,8 @@ def execute_run(program, resolver, values, *, prog_id, store=None,
 
     try:
         result = Engine(get_backend(store),
-                        session=get_session(prog_id, store=store)).execute(
+                        session=get_session(prog_id, store=store),
+                        poison_on_free=poison_on_free).execute(
             program, resolver=resolver, initial_buffers=values,
             pool_prewarm=pool_demand, placement=placement,
             run_args=run_args, cancel_event=cancel_event, groups=groups,

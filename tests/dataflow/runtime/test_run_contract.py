@@ -14,6 +14,8 @@ Tests:
   returned FAILED RunResult with copied kind/message/task_id/traceback text and
   no propagated exception.
 - test_success_outcome_is_succeeded: a normal run returns a SUCCEEDED outcome.
+- test_failed_outcome_carries_full_diagnostics: a FAILED outcome carries kind + message + task_id + the full formatted traceback, and raise_if_failed surfaces all of it.
+- test_outcome_serializes_uniformly: a RunOutcome roundtrips through plain JSON (dataclasses.asdict), so the wire and in-process paths carry the same fields.
 - test_engine_invariant_raises_scrubbed: an engine-invariant violation (ledger
   over-commit) raises its own type with no __context__/__cause__ chain.
 - test_cancel_returns_cancelled_outcome: a set cancel_event yields a CANCELLED

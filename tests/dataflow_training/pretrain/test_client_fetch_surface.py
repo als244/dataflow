@@ -11,6 +11,10 @@ Scaffolding note: the twin's init weights are generated with a CudaBackend
 here (the same pattern the existing ragged parity test uses); the fully
 client-only variant fetches the daemon-seeded weights through the client
 instead, and is folded into the client parity helper.
+
+Tests:
+- test_client_fetch_surface_dense: llama3 loss, all gradients, and an intermediate block output are fetched via the client and match the pure-torch twin.
+- test_client_fetch_surface_moe_aux: an olmoe expert-count object is fetched via the client as a host copy with non-negative, non-empty counts.
 """
 from dataclasses import replace as dc_replace
 

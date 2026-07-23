@@ -52,6 +52,10 @@ class EngineConfig:
     device: int = 0
     kernel_set: str | None = None
     fake: bool = False                       # CPU-only boot (tests)
+    # debug: overwrite freed fast buffers with 0xFF so a use-after-free reads
+    # obvious garbage instead of plausible stale bytes (memory-safety stress;
+    # off in production, threaded into the per-run Engine)
+    poison_on_free: bool = False
     # peer plane (dataflow-peer/s2): enabled when peer_name is set;
     # peer_listen = "host:port" for the NM's OWN listener
     peer_name: str | None = None

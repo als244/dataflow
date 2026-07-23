@@ -37,9 +37,60 @@ def registered_kinds() -> list[str]:
     return sorted(_BUILDS)
 
 
+class JitterExecutable:
+    """Fire a random spin-kernel delay before the wrapped task launches, so
+    tasks finish in scrambled relative orders."""
+
+    def __init__(self, inner, kernel, low_us, high_us, rng):
+        self.inner = inner
+        self.kernel = kernel
+        self.low_us = low_us
+        self.high_us = high_us
+        self.rng = rng
+
+    def launch(self, ctx):
+        self.kernel.launch_us(ctx.stream, self.rng.uniform(self.low_us,
+                                                           self.high_us))
+        self.inner.launch(ctx)
+
+
+class JitterResolver:
+    """Wrap ANY resolver so every task's launch is preceded by a random spin
+    delay — a general resolver DEBUG option.
+
+    The point is to make ACTUAL task runtimes diverge wildly from the plan's
+    cost ESTIMATES (which drive the engine's memory scheduling — offload /
+    prefetch / evict). The engine sequences real execution on completion
+    EVENTS, so its results must be invariant to that divergence: correctness
+    never depends on the estimates being accurate (they only affect
+    performance). A test turns this on and asserts identical output — proving
+    the run is estimate-independent, not that any particular ordering holds.
+
+    Kind-agnostic: enabled by a top-level ``debug_jitter`` key on the resolver
+    spec ({"min_us", "max_us", "seed"}), so any workload or test turns it on
+    with no engine or program change."""
+
+    def __init__(self, inner, min_us, max_us, seed):
+        import random
+
+        from dataflow.runtime.device.cuda_spin import SpinKernel
+
+        self.inner = inner
+        self.kernel = SpinKernel()
+        self.low_us = float(min_us)
+        self.high_us = float(max_us)
+        self.rng = random.Random(seed)
+
+    def __call__(self, task):
+        return JitterExecutable(self.inner(task), self.kernel, self.low_us,
+                                self.high_us, self.rng)
+
+
 def lookup_resolver(spec: dict):
     """Resolve a registered kind's build over ``spec`` (cached by the
-    spec's canonical JSON — builds are pure functions of their spec)."""
+    spec's canonical JSON — builds are pure functions of their spec). A
+    top-level ``debug_jitter`` key wraps the result in a JitterResolver,
+    kind-agnostically (the build never sees it)."""
     kind = spec.get("kind")
     if kind is None:
         raise ServiceError(
@@ -57,5 +108,10 @@ def lookup_resolver(spec: dict):
     hit = _CACHE.get(key)
     if hit is None:
         hit = build(spec)
+        jitter = spec.get("debug_jitter")
+        if jitter:
+            hit = JitterResolver(hit, jitter.get("min_us", 20),
+                                 jitter.get("max_us", 400),
+                                 jitter.get("seed", 0))
         _CACHE[key] = hit
     return hit
