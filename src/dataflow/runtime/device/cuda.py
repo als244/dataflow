@@ -199,6 +199,11 @@ class CudaBackend:
     def free(self, buffer: Buffer) -> None:
         if self._live.pop(buffer.id, None) is None:
             return                      # already freed (drain idempotence)
+        # evict any torch views over this memory and mark it freed BEFORE the
+        # unmap, so no cached/fresh view can read the released range
+        from ..interop import invalidate_views
+
+        invalidate_views(buffer.ptr, buffer.size_bytes)
         if buffer.location == "fast":
             _check(cudart.cudaFree(buffer.ptr))
         else:

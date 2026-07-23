@@ -278,10 +278,12 @@ class RunScope:
         return True
 
     def invalidate(self) -> None:
-        """Mark every non-owning view into this run's buffers dead. The
-        boundary's copied-diagnostic + no-raise contract already stops any view
-        from escaping into a propagated error; the view-cache/generation/poison
-        hardening arrives in a dedicated pass."""
+        """Non-owning views are invalidated where memory is really freed: the
+        backend evicts the view cache and marks the range on every free/unmap
+        (runtime.interop.invalidate_views). A pool-reclaimed buffer keeps its
+        memory mapped and may back the same object next step, so its views stay
+        valid — nothing to do here. The boundary's copied-diagnostic + no-raise
+        contract is what stops a view from escaping into a propagated error."""
         return None
 
     def reclaim(self) -> None:

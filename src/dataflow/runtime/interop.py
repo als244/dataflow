@@ -99,6 +99,25 @@ def clear_view_cache() -> None:
     _STREAM_CACHE.clear()
 
 
+def invalidate_views(ptr: int, size_bytes: int) -> None:
+    """Evict every cached view over [ptr, ptr+size). Call when the backing
+    memory is really freed/unmapped (cudaFree/cudaFreeHost) so no later lookup
+    returns a view of memory that no longer belongs to the buffer — the exact
+    cross-session hazard when a re-registered program hashes to the same prog_id
+    and the pool hands its address to a different buffer. Evicting is always
+    safe: a miss simply rebuilds a fresh view over whatever the address now
+    holds, so this cannot false-positive across allocators.
+
+    A view a caller still HOLDS across a real free is the ownership rule's
+    domain, not this cache's: the run boundary stops it escaping into an error,
+    the client-only workload-test rule removes the workload cases, and pool
+    reclaim keeps memory mapped so reclaimed-buffer views stay valid."""
+    lo, hi = int(ptr), int(ptr) + int(size_bytes)
+    dead = [key for key in _VIEW_CACHE if lo <= key[0] < hi]
+    for key in dead:
+        _VIEW_CACHE.pop(key, None)
+
+
 def torch_view(
     src: Union[Buffer, int],
     shape: tuple[int, ...],
