@@ -253,7 +253,7 @@ def install(server) -> None:
         run_args = args
         nm = getattr(server, "nm", None)
         group_handles = nm.group_handles() if nm is not None else None
-        result, err_kind, err_msg = execution.execute_run(
+        result, err_kind, outcome = execution.execute_run(
             program, resolver, values,
             prog_id=entry.prog_id, store=store,
             placement=entry.placement, pool_demand=entry.pool_demand,
@@ -264,22 +264,28 @@ def install(server) -> None:
         entry.runs += 1
         try:
             if result is None:
+                # the canonical RunOutcome, serialized verbatim — the client
+                # sees exactly the fields an in-process caller reads off
+                # result.outcome (kind + message + task_id + traceback)
+                diag = outcome.to_dict()
                 rec.state = ("cancelled" if err_kind == "CANCELLED"
                              else "error")
-                rec.error = {"code": err_kind, "message": err_msg}
+                rec.error = {"code": err_kind, "message": diag["message"],
+                             "detail": diag}
                 with st.lock:
                     st.current_run = None
                     if err_kind != "CANCELLED":
                         st.counters["runs_failed"] += 1
                 st.emit("run_error" if err_kind != "CANCELLED"
                         else "run_done", run_id=run_id, error=rec.error)
-                raise ServiceError(
-                    err_kind, err_msg or err_kind,
-                    {"prog_id": entry.prog_id,
-                     "placement_cached": entry.placement is not None,
-                     "initial_sizes_sample": {
-                         s.id: s.size_bytes
-                         for s in list(program.initial_objects)[:4]}})
+                detail = {**diag,
+                          "prog_id": entry.prog_id,
+                          "placement_cached": entry.placement is not None,
+                          "initial_sizes_sample": {
+                              s.id: s.size_bytes
+                              for s in list(program.initial_objects)[:4]}}
+                raise ServiceError(err_kind, diag["message"] or err_kind,
+                                   detail)
 
             rec.makespan_us = result.makespan_us
             rec.peak_fast_bytes = result.peak_fast_bytes

@@ -34,7 +34,7 @@ import pytest
 from dataflow.core import ObjectSpec, OutputSpec, Program, TaskSpec
 from dataflow.runtime import Engine, ExecutionError
 from dataflow.runtime.device.fake import FakeBackend
-from dataflow.runtime.engine import RunOutcomeKind, Session
+from dataflow.runtime.engine import RunOutcome, RunOutcomeKind, Session
 from dataflow.runtime.executable import synthetic_resolver
 from dataflow.runtime.ledger import LedgerError
 
@@ -117,6 +117,35 @@ def test_success_outcome_is_succeeded():
     result = Engine(FakeBackend()).execute(one_task_program())
     assert result.outcome.is_success
     assert result.outcome.kind is RunOutcomeKind.SUCCEEDED
+
+
+def test_failed_outcome_carries_full_diagnostics():
+    # the caller must learn WHY, not merely that it failed: kind + message +
+    # task_id + the full formatted (view-free) traceback
+    result = Engine(FakeBackend()).execute(
+        one_task_program(), resolver=RaisingResolver("t0", "why it broke"))
+    assert result.outcome.is_failed
+    assert result.outcome.task_id == "t0"
+    assert "why it broke" in result.outcome.message
+    assert "Traceback" in result.outcome.traceback_text
+    assert "why it broke" in result.outcome.traceback_text
+    # raise_if_failed surfaces all of it (for the in-process parity helpers)
+    with pytest.raises(RuntimeError) as excinfo:
+        result.raise_if_failed()
+    text = str(excinfo.value)
+    assert "why it broke" in text
+    assert "t0" in text
+    assert "Traceback" in text
+
+
+def test_outcome_serializes_uniformly():
+    # the wire boundary carries exactly what an in-process caller reads: a
+    # to_dict / from_dict roundtrip reconstructs the identical outcome, so the
+    # client and the in-process caller see the same fields and values
+    result = Engine(FakeBackend()).execute(
+        one_task_program(), resolver=RaisingResolver("t0", "boom"))
+    restored = RunOutcome.from_dict(result.outcome.to_dict())
+    assert restored == result.outcome
 
 
 def test_engine_invariant_raises_scrubbed():

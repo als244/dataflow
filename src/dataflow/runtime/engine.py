@@ -107,6 +107,20 @@ class RunOutcome:
     def is_cancelled(self) -> bool:
         return self.kind is RunOutcomeKind.CANCELLED
 
+    def to_dict(self) -> dict:
+        """The canonical serialization. The wire boundary carries THIS so a
+        client sees exactly the fields an in-process caller reads off
+        ``result.outcome`` — the diagnostic never diverges between paths."""
+        return {"kind": self.kind.value, "message": self.message,
+                "task_id": self.task_id, "traceback_text": self.traceback_text}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "RunOutcome":
+        return cls(kind=RunOutcomeKind(data["kind"]),
+                   message=data.get("message", ""),
+                   task_id=data.get("task_id"),
+                   traceback_text=data.get("traceback_text", ""))
+
 
 SUCCEEDED = RunOutcome(kind=RunOutcomeKind.SUCCEEDED)
 
@@ -152,15 +166,20 @@ class RunResult:
 
     def raise_if_failed(self) -> "RunResult":
         """Surface a run-level failure as a view-free exception, for callers
-        that only handle success (the isolated reference-parity helpers). No
-        device view is referenced, so this stays memory-safe; on success it
-        returns self for chaining."""
+        that only handle success (the isolated reference-parity helpers). The
+        message carries the copied-out diagnostics — task id and the full
+        formatted traceback — so the caller learns WHY the run failed; no device
+        view is referenced, so this stays memory-safe. On success it returns
+        self for chaining."""
         if self.outcome.is_success:
             return self
-        detail = (f" (task {self.outcome.task_id})"
-                  if self.outcome.task_id else "")
+        where = (f" (task {self.outcome.task_id})"
+                 if self.outcome.task_id else "")
+        trace = (f"\n{self.outcome.traceback_text}"
+                 if self.outcome.traceback_text else "")
         raise RuntimeError(
-            f"run {self.outcome.kind.value}: {self.outcome.message}{detail}")
+            f"run {self.outcome.kind.value}: "
+            f"{self.outcome.message}{where}{trace}")
 
 
 @dataclass

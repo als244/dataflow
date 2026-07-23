@@ -173,16 +173,26 @@ def execute_run(program, resolver, values, *, prog_id, store=None,
                 placement, pool_demand, run_args, cancel_event,
                 groups=None):
     """One engine run over store-backed buffers. Returns (result,
-    error_kind, error_msg); the caller owns result.close().
+    error_kind, outcome); the caller owns result.close().
 
     The engine boundary owns the failure contract: a run-level failure or a
-    cancel comes back as a RunResult carrying a FAILED/CANCELLED outcome (the
-    drain already ran inside execute()), so there is no post-hoc abort_drain
-    and no raw exception carrying a live view. Only the engine's OWN invariant
+    cancel comes back as a RunResult carrying a FAILED/CANCELLED RunOutcome (the
+    drain already ran inside execute()), so there is no post-hoc abort_drain and
+    no raw exception carrying a live view. Only the engine's OWN invariant
     violations still raise (scrubbed) — those are bugs; the daemon logs them
-    loud and survives."""
+    loud and survives, and we synthesize the SAME-shaped RunOutcome for them.
+
+    On failure the returned ``outcome`` is THE canonical diagnostic — the very
+    object an in-process caller reads off ``result.outcome`` (kind + message +
+    task_id + traceback). The handler serializes it verbatim; it does not
+    re-pick fields, and the client sees exactly what an in-process caller does.
+    ``error_kind`` is only the wire code (RUN_FAILED / CANCELLED) the outcome
+    kind maps to."""
+    import traceback as tb_mod
+
     from dataflow.runtime import Engine
-    from dataflow.runtime.engine import DeadlockError, ExecutionError
+    from dataflow.runtime.engine import (
+        DeadlockError, ExecutionError, RunOutcome, RunOutcomeKind)
 
     try:
         result = Engine(get_backend(store),
@@ -193,19 +203,21 @@ def execute_run(program, resolver, values, *, prog_id, store=None,
         )
     except (ExecutionError, DeadlockError) as e:
         # engine-invariant violation (a bug): INV-2 already ran inside
-        # execute() and the raise is scrubbed of frames. Log loud; the daemon
-        # survives and the client gets a structured error.
-        print(f"[engine-invariant] {type(e).__name__}: {e}", flush=True)
-        return None, "RUN_FAILED", f"{type(e).__name__}: {e}"
+        # execute() and the raise is scrubbed of frames. Present it as the same
+        # RunOutcome shape as any other failure so the client path is uniform.
+        outcome = RunOutcome(kind=RunOutcomeKind.FAILED,
+                             message=f"{type(e).__name__}: {e}",
+                             traceback_text=tb_mod.format_exc())
+        print(f"[engine-invariant] {outcome.message}", flush=True)
+        return None, "RUN_FAILED", outcome
     if result.outcome.is_success:
         return result, None, None
-    if result.outcome.is_cancelled:
-        return None, "CANCELLED", result.outcome.message
-    # FAILED: the copied traceback is view-free text — safe to log
-    print(f"[run-failed] {result.outcome.message}", flush=True)
-    if result.outcome.traceback_text:
-        print(result.outcome.traceback_text, flush=True)
-    return None, "RUN_FAILED", result.outcome.message
+    outcome = result.outcome
+    print(f"[run-failed] {outcome.message}", flush=True)
+    if outcome.traceback_text:
+        print(outcome.traceback_text, flush=True)
+    kind = "CANCELLED" if outcome.is_cancelled else "RUN_FAILED"
+    return None, kind, outcome
 
 
 def abort_drain(store=None):
