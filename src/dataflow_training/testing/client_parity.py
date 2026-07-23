@@ -108,38 +108,136 @@ def client_grad_state_dict(client, cfg, program, resolver):
     return out
 
 
-def client_model_step(cfg, *, seed: int = 0, grad_tol: float = 3e-2,
-                      min_cosine: float = 0.99, loss_tol: float = 5e-4,
+def adamw_hyper_spec(hyper) -> dict:
+    """JSON-able wire hyper encoding an ``AdamWHyper``'s optimizer step
+    EXACTLY, so the daemon's optimizer applies the same update the
+    in-process reference hyper does.
+
+    The daemon rebuilds ``AdamWHyper(**spec)`` (``register.build_hyper``),
+    so every field is a constructor kwarg; the ``schedule`` key is
+    deliberately omitted, leaving the rebuilt schedule ``None`` (constant
+    lr, scale 1.0 at every step). A scheduled hyper would scale lr by the
+    step index and diverge from the reference's single fixed step — hence
+    the guard."""
+    if hyper.schedule is not None:
+        raise ValueError(
+            "adamw_hyper_spec requires schedule=None: a scheduled hyper "
+            "scales lr per step, so the daemon's optimizer step would not "
+            "match the reference optimizer's fixed step")
+    return {"lr": hyper.lr, "beta1": hyper.beta1, "beta2": hyper.beta2,
+            "eps": hyper.eps, "weight_decay": hyper.weight_decay,
+            "momentum": hyper.momentum, "muon_lr": hyper.muon_lr}
+
+
+class ClientFinalBytes:
+    """get_bytes over a client run's post-step objects — the client-path
+    twin of ``testing.gradcheck.EngineFinalBytes``.
+
+    Feeds the family bridge's ``to_reference_state_dict`` for twin-space
+    parameter comparison. W/O objects are persistent (backing-resident)
+    initial objects the run mutates in place, so ``get_object`` returns
+    their post-step bytes as a plain HOST copy; the bridge reads packed
+    layouts on the device, so the copy is moved to cuda."""
+
+    def __init__(self, client):
+        self.client = client
+
+    def __call__(self, object_id: str) -> torch.Tensor:
+        return fetch_host_tensor(self.client, object_id, torch.uint8).cuda()
+
+
+def client_aux_counts(client, dims, aux_ids):
+    """Per-layer current-step expert counts, sourced via the client.
+
+    Each ``Aux_{i}`` is a persistent (backing-resident) initial object the
+    run mutates in place, so ``get_object`` returns its post-step bytes;
+    the MoE aux layout unpacks the assignment histogram. Returns a list of
+    cpu int64 count tensors aligned to ``aux_ids`` (layer order)."""
+    if not aux_ids:
+        return []
+    from dataflow_training.blocks.modules.moe.spec import moe_aux_layout
+
+    layout = moe_aux_layout(dims, dims.moe)
+    out = []
+    for oid in aux_ids:
+        raw = fetch_host_tensor(client, oid, torch.uint8).cuda()
+        counts = layout.unpack_tensor(raw)["expert_counts_current_step"]
+        out.append(counts.long().cpu())
+    return out
+
+
+def client_model_step(cfg, *, seed: int = 0, tol: float = 3e-2,
+                      field_atol: dict | None = None,
+                      param_atol: dict | None = None,
+                      reference_seq_lens: tuple | None = None,
+                      reference_train_only: tuple | None = None,
+                      optimizer: str = "adamw",
+                      min_cosine: float = 0.995,
+                      counts_budget: int | None = 3,
+                      grad_tol: float | None = None,
                       backing_gib: float = 4.0):
-    """Client-path analog of ``testing.gradcheck.check_model_step``.
+    """Client-path analog of ``testing.gradcheck.check_model_step`` at full
+    parity.
 
-    Run one family step through the OUT-OF-PROCESS daemon and compare the loss
-    and one-step gradients against the pure-torch twin, with every engine value
-    read as a HOST copy via the client (no engine device view is ever held).
-    Returns a ``CheckReport`` keyed like check_model_step (``loss`` +
-    ``grad:{name}``) so the verdict gates identically.
+    Run one family step through the OUT-OF-PROCESS daemon and compare
+    against the pure-torch twin, with every engine value read as a HOST
+    copy via the client (no engine device view is ever held). The report
+    is keyed EXACTLY like ``check_model_step`` — loss, final params
+    (twin-name space, ``field_atol``/``param_atol`` raw-gap gated), one-step
+    gradients (``grad:{name}``), and MoE assignment counts
+    (``counts:{name}``) — so the verdict gates identically.
 
-    The reference twin's INIT weights are generated with a CudaBackend (the same
-    reference-scaffolding the existing client parity test uses); the engine leg
-    — the thing under test — goes entirely through the client.
+    The optimizer step is made to match ``check_model_step``'s engine leg
+    (default ``AdamWHyper()``): the resolver spec carries a constant-lr
+    hyper (no schedule) so the daemon applies ``lr`` unscaled at the single
+    step, exactly as the reference twin does. Every persistent object
+    (W/O/Aux) is read post-step through ``get_object`` (they are
+    backing-resident and mutated in place); gradients (dW) are retained on
+    the backing tier for the read.
+
+    The reference twin's INIT weights are generated with a CudaBackend (the
+    reference scaffolding); the engine leg — the thing under test — goes
+    entirely through the client.
     """
     from dataclasses import replace as dc_replace
 
     from dataflow.core.jsonio import program_to_dict
     from dataflow.runtime.device.cuda import CudaBackend
+    from dataflow_training.blocks.base_blocks import AdamWHyper
     from dataflow_training.lowering.planning import plan_program
     from dataflow_training.model_families.families import resolve_family
-    from dataflow_training.run.driver import daemon_client, init_model
+    from dataflow_training.run.driver import init_model
     from dataflow_training.run.presets import cfg_dict, resolver_family
-    from dataflow_training.run.recipe import Recipe
     from dataflow_training.testing.client_daemon import out_of_process_daemon
     from dataflow_training.testing.gradcheck import (
-        CheckReport, cos_sim, reference_model_step, rel_l2)
+        GRAD_TIER_LR, CheckReport, cos_sim, match_field_atol,
+        reference_model_step, rel_l2)
 
     cfg = dc_replace(cfg, grad_accum_rounds=1)
+    hyper = AdamWHyper()
+    if optimizer == "sgd":
+        cfg = dc_replace(cfg, opt_policy="sgd")
+        hyper = AdamWHyper(lr=GRAD_TIER_LR)
+
+    # the twin: DSA dense warm-up maps to a fully-selected sparse twin
+    # (the engine leg keeps the true warm-up cfg); an MoE family whose
+    # twin declares no load-balance form has the LBL channel zeroed on
+    # both legs (symmetric) — mirror of check_model_step's twin build.
+    twin_cfg = cfg
+    if getattr(cfg, "sparse_mode", True) is False:
+        twin_cfg = dc_replace(cfg, sparse_mode=True, index_topk=1 << 30)
+    twin = bridges.build_reference_model(twin_cfg)
+    if (float(getattr(cfg, "aux_coef", 0.0) or 0.0) > 0.0
+            and getattr(twin, "AUX_FORM", None) is None):
+        cfg = dc_replace(cfg, aux_coef=0.0)
+
     fam = resolve_family(cfg)
     dims = fam.derive_dims(cfg)
-    lengths = tuple([dims.seq_len] * (dims.max_tokens // dims.seq_len))
+    if reference_seq_lens is None:
+        reference_seq_lens = getattr(dims, "seq_lens", None)
+    lengths = (tuple(int(x) for x in reference_seq_lens)
+               if reference_seq_lens is not None
+               else tuple([dims.seq_len] * (dims.max_tokens // dims.seq_len)))
 
     # reference twin from seed-S init weights (scaffolding backend)
     backend = CudaBackend()
@@ -147,26 +245,36 @@ def client_model_step(cfg, *, seed: int = 0, grad_tol: float = 3e-2,
     get_bytes = bridges.get_bytes_from_values(values)
     tokens_bytes = get_bytes("tokens_0_0").cpu().numpy().tobytes()
     targets_bytes = get_bytes("targets_0_0").cpu().numpy().tobytes()
-    twin = bridges.build_reference_model(cfg)
-    twin_loss, twin, _states, _init, _counts = reference_model_step(
-        cfg, values, seq_lens=lengths, model=twin)
+    twin_loss, twin, _twin_states, _init, twin_counts = reference_model_step(
+        twin_cfg, values, seq_lens=reference_seq_lens,
+        train_only=reference_train_only, optimizer=optimizer,
+        model=twin, hyper=hyper)
+    if getattr(cfg, "sparse_mode", True) is False:
+        twin_loss = float(twin.indexer_loss().detach())
+    twin_state = dict(twin.state_dict())
     twin_grads = {name: par.grad for name, par in twin.named_parameters()
                   if par.grad is not None}
     for buf in values.values():
         backend.free(buf)
 
+    # retain the gradient backing: dW ids survive pool recycling after the
+    # optimizer consumes them (W/O/Aux are already persistent → backing)
     program = fam.lower(cfg)
-    dw_ids = sorted(o.id for t in program.tasks for o in t.outputs
-                    if o.id.startswith("dW"))
-    program = with_backing_retention(program, dw_ids)
+    dw_ids = {o.id for t in program.tasks for o in t.outputs
+              if o.id.startswith("dW")}
+    dw_ids.update(o.id for o in program.initial_objects
+                  if o.id.startswith("dW"))
+    program = with_backing_retention(program, sorted(dw_ids))
     planned = plan_program(program,
                            fast_memory_capacity=int(backing_gib * (1 << 30)))
+    aux_ids = sorted((o.id for o in program.initial_objects
+                      if o.id.startswith("Aux_")),
+                     key=lambda oid: int(oid.split("_")[1]))
 
     targets = torch.frombuffer(bytearray(targets_bytes), dtype=torch.int32)
     valid_rows = int((targets >= 0).sum())
-    recipe = Recipe(peak_lr=3e-4, min_lr=3e-5, warmup_steps=1, total_steps=1)
     resolver_spec = {"kind": "model_family", "family": resolver_family(cfg),
-                     "cfg": cfg_dict(cfg), "hyper": recipe.hyper_spec()}
+                     "cfg": cfg_dict(cfg), "hyper": adamw_hyper_spec(hyper)}
     boundaries = [0]
     for n in lengths:
         boundaries.append(boundaries[-1] + n)
@@ -186,16 +294,61 @@ def client_model_step(cfg, *, seed: int = 0, grad_tol: float = 3e-2,
         if out.get("state") != "done":
             raise RuntimeError(f"run state {out.get('state')}: {out}")
         run_loss = out["fetched"]["loss_0_0"]
+        engine_state = bridges.to_reference_state_dict(
+            cfg, ClientFinalBytes(client))
         engine_grads = client_grad_state_dict(client, cfg, planned.program,
-                                              fam.build_resolver(dims))
+                                              fam.build_resolver(dims, hyper))
+        engine_counts = client_aux_counts(client, dims, aux_ids)
 
-    errors = {"loss": abs(run_loss - twin_loss) / max(abs(twin_loss), 1e-6)}
+    errors: dict[str, float] = {}
     cosines: dict[str, float] = {}
-    for name, g_twin in twin_grads.items():
-        g_engine = engine_grads.get(name)
-        if g_engine is None or g_engine.shape != g_twin.shape:
+    errors["loss"] = abs(run_loss - twin_loss) / max(abs(twin_loss), 1e-6)
+
+    # final params in twin-name space: field_atol/param_atol raw-gap gate
+    # the zero-init entries (one step is a per-element sign lottery where
+    # the true gradient is near zero); everything else via rel_l2 + cosine
+    for name, engine_tensor in engine_state.items():
+        twin_tensor = twin_state.get(name)
+        if twin_tensor is None:
+            errors[name] = float("inf")
             continue
+        atol = match_field_atol(name, field_atol)
+        if atol is None:
+            atol = match_field_atol(name, param_atol)
+        if atol is not None:
+            gap = float((engine_tensor.float().cpu()
+                         - twin_tensor.float().cpu()).abs().max())
+            errors[name] = 0.0 if gap <= atol else gap / atol
+            continue
+        errors[name] = rel_l2(engine_tensor, twin_tensor)
+        cosines[name] = cos_sim(engine_tensor, twin_tensor)
+
+    for name, g_engine in engine_grads.items():
+        g_twin = twin_grads.get(name)
+        if g_twin is None or g_twin.shape != g_engine.shape:
+            continue        # frozen/train_only params carry no twin grad
+        if match_field_atol(name, field_atol) is not None:
+            continue        # enveloped fields: raw-gap gate on the param
         errors["grad:" + name] = rel_l2(g_engine, g_twin)
         cosines["grad:" + name] = cos_sim(g_engine, g_twin)
-    return CheckReport(errors=errors, tol=loss_tol, cosines=cosines,
-                       min_cosine=min_cosine, tol_by_prefix={"grad:": grad_tol})
+
+    if counts_budget is not None and aux_ids and twin_counts \
+            and len(aux_ids) == len(twin_counts):
+        # MoE counts parity: totals must equal tokens*top_k EXACTLY on both
+        # sides; per-expert deltas bound the near-tie flipped tokens, gated
+        # by the flip budget (sum|delta|/2 <= budget -> 0.0, else the flip
+        # count itself, which no float tol admits)
+        for (tname, tc), ec in zip(sorted(twin_counts.items()),
+                                   engine_counts):
+            tc = tc.long().cpu()
+            if int(ec.sum()) != int(tc.sum()):
+                errors["counts:" + tname] = float("inf")
+                continue
+            flips = int((ec - tc).abs().sum()) // 2
+            errors["counts:" + tname] = (0.0 if flips <= counts_budget
+                                         else float(flips))
+
+    return CheckReport(errors=errors, tol=tol, cosines=cosines,
+                       min_cosine=min_cosine,
+                       tol_by_prefix=({"grad:": grad_tol}
+                                      if grad_tol is not None else None))
