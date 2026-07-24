@@ -127,6 +127,11 @@ def run_predict(args, measured):
                 # this operating point rather than an assumed level.
                 if back:
                     row["binding"] = bool(row["backing_gib"] >= back * 0.999)
+                if back and not row["binding"]:
+                    # the ceiling never bound, so a plan given more room is the
+                    # same plan — the gain is zero without planning to find out
+                    row["host_marginal_gain"] = 0.0
+                elif back:
                     try:
                         more = PS.combo_row(fam, cfg, hw, bud, measured=measured,
                                             recompute=True,

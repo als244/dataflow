@@ -229,8 +229,16 @@ def profile_program(
     soak_seconds: float = 1.0,
     contend_pcie: bool = True,
     int32_fill: int = 0,
+    have: dict[tuple, TaskProfile] | None = None,
 ) -> dict[tuple, TaskProfile]:
-    """Measure every unique task signature on the real device."""
+    """Measure every unique task signature on the real device.
+
+    ``have`` carries signatures already measured under this same environment;
+    they are returned untouched and never re-run. A signature IS the
+    cost-equivalence key, so reusing one across programs is the reuse this
+    already does within a program — it just stops two programs that share most
+    of their work (the same model under a different optimizer, say) from paying
+    for the shared part twice."""
     import torch
 
     from cuda.bindings import runtime as cudart
@@ -245,6 +253,10 @@ def profile_program(
         for o in t.outputs:
             metas[o.id] = o.tensor
 
+    profiles: dict[tuple, TaskProfile] = dict(have or {})
+    if all(_signature(t, sizes, resolver) in profiles for t in program.tasks):
+        return profiles          # nothing new: no soak, no device work at all
+
     thermal_soak(soak_seconds)
     # one seeded generator for every payload fill: costs must be reproducible
     # across cache refreshes (a re-profile that shifts task costs re-plans)
@@ -252,7 +264,6 @@ def profile_program(
     fill_gen.manual_seed(PROFILE_FILL_SEED)
     stream = backend.create_stream("compute")
     contender = _PcieContender(backend) if contend_pcie else None
-    profiles: dict[tuple, TaskProfile] = {}
 
     # attention blocks resolve the round's Segments workload-side
     # (resolve_segments); the profiler drives executables directly, so build
@@ -448,16 +459,21 @@ def load_or_profile(
     """
     import hashlib
     import json
+    import os
     from pathlib import Path
 
     import torch
 
     sizes = program.object_sizes()
-    signatures = sorted({repr(_signature(t, sizes, resolver)) for t in program.tasks})
     if kernel_set is None and hasattr(resolver, "kernel_set"):
         kernel_set = resolver.kernel_set.describe()
+    # The key describes the MEASUREMENT ENVIRONMENT, not this program. Costs
+    # are stored per signature, so two programs that share work share its
+    # measurements instead of each paying in full: the same model under a
+    # second optimizer differs only in its optimizer tasks, yet keying the file
+    # by the whole signature SET made it re-measure every block and head task
+    # as well.
     env = {
-        "signatures": signatures,
         "kernel_set": kernel_set or {},
         "device": torch.cuda.get_device_name() if torch.cuda.is_available() else "cpu",
         "soak_seconds": kwargs.get("soak_seconds", 1.0),
@@ -471,17 +487,23 @@ def load_or_profile(
     cache_dir.mkdir(parents=True, exist_ok=True)
     path = cache_dir / f"profiles-{key}.json"
 
+    store: dict[tuple, TaskProfile] = {}
     if path.exists() and not refresh:
         raw = json.loads(path.read_text())
-        print(f"profile cache HIT {path.name} ({len(raw['profiles'])} signatures)")
-        return {eval(k): TaskProfile(**v) for k, v in raw["profiles"].items()}
-
-    profiles = profile_program(program, resolver, backend, **kwargs)
-    path.write_text(json.dumps({
-        "env": env,
-        "profiles": {repr(k): vars(v) for k, v in profiles.items()},
-    }, indent=2) + "\n")
-    print(f"profile cache MISS -> wrote {path.name}")
+        store = {eval(k): TaskProfile(**v) for k, v in raw["profiles"].items()}
+    wanted = {_signature(t, sizes, resolver) for t in program.tasks}
+    missing = wanted - set(store)
+    if missing:
+        print(f"profile cache {path.name}: {len(wanted) - len(missing)}/{len(wanted)} "
+              f"known, measuring {len(missing)}")
+    profiles = profile_program(program, resolver, backend, have=store, **kwargs)
+    if len(profiles) > len(store):
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps({
+            "env": env,
+            "profiles": {repr(k): vars(v) for k, v in profiles.items()},
+        }, indent=2) + "\n")
+        os.replace(tmp, path)      # atomic: a killed run cannot leave a torn store
     return profiles
 
 
