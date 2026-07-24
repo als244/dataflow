@@ -83,6 +83,12 @@ def plan_with_recompute(
     # that no annotation fits under the cap — common for large batch/grad-
     # accum programs). It must not be fatal: fall back to the seed family and
     # only raise if EVERY variant is infeasible.
+    #
+    # ValueError, and nothing wider, is what "infeasible" means here: the
+    # policy and the simulator both refuse that way. Catching anything else
+    # would let a fault in how variants are BUILT — a cost table that cannot
+    # price a variant, say — be recorded as a variant that does not fit, and
+    # the caller would then be told a feasible plan is impossible.
     levels: dict[str, int] = {rw.object_id: 0 for rw in rewrites}
     history: list[RecomputeStep] = []
     baseline_error: Exception | None = None
@@ -91,7 +97,7 @@ def plan_with_recompute(
         chain, report = evaluate(levels)
         baseline = report.makespan_us
         best = (dict(levels), chain, report)
-    except Exception as err:
+    except ValueError as err:
         baseline_error = err
         baseline = float("inf")
         history.append(RecomputeStep(
@@ -109,7 +115,7 @@ def plan_with_recompute(
     for name, seed_levels in seeds.items():
         try:
             seed_chain, seed_report = evaluate(seed_levels)
-        except Exception:
+        except ValueError:
             continue
         accepted = best is None or seed_report.makespan_us < best[2].makespan_us
         history.append(RecomputeStep(
@@ -147,7 +153,7 @@ def plan_with_recompute(
                 trial_levels[obj_id] = _next_level(rewrites_by_obj[obj_id], trial_levels[obj_id])
             try:
                 trial_chain, trial_report = evaluate(trial_levels)
-            except Exception:
+            except ValueError:
                 batch //= 2  # infeasible trial: shrink the batch and retry
                 continue
             step = RecomputeStep(

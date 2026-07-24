@@ -369,12 +369,28 @@ def profile_program(
     return profiles
 
 
+class MissingProfileError(LookupError):
+    """A task was priced against a profile table that never measured it.
+
+    Distinct from the planner's own ValueError refusals, which mean "this
+    program does not fit" and are a legitimate result. This means the profile
+    table is incomplete — a fault in what was measured, not in the plan — and
+    callers that treat refusals as data must not absorb it as one.
+    """
+
+
 def apply_measured_costs(program: Program, profiles: dict[tuple, TaskProfile],
                          resolver=None) -> Program:
     sizes = program.object_sizes()
     new_tasks = []
     for task in program.tasks:
-        p = profiles[_signature(task, sizes, resolver)]
+        sig = _signature(task, sizes, resolver)
+        if sig not in profiles:
+            raise MissingProfileError(
+                f"task {task.id!r} has no measured cost: no entry matches "
+                f"{sig}. The profile table was built from a different program "
+                f"-- every variant that gets priced has to be profiled.")
+        p = profiles[sig]
         new_tasks.append(replace(
             task,
             runtime_us=p.runtime_us,
