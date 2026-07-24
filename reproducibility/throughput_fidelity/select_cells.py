@@ -7,8 +7,18 @@ identically: at 8B most geometries land in the same regime, and a second cell
 with the same recompute pressure, transfer duty and idle fraction teaches
 nothing the first did not.
 
+Tokens-per-round is not really an axis to report: it is a FREE knob the
+operator picks. Nobody runs a 64K-token round on a 16 GiB budget — that plan
+asks for 220 GiB of host memory and runs slower than a smaller round on the
+same hardware. So for each (sequence, tokens/step, budget, allowance) only the
+best round size is on the FRONTIER, and the rest are choices no one would make.
+Real runs go to the frontier, plus a few dominated cells kept as controls so
+the ranking itself is checked rather than trusted.
+
 So the subset is chosen in BEHAVIOUR space, not by hand:
 
+  0. reduce over tokens-per-round: keep the best-throughput round per
+     (sequence, tokens/step, budget, allowance); the rest are dominated
   1. keep cells predicted feasible in every optimizer being swept
   2. describe each by what the plan actually does — recompute share, transfer
      duty each way, idle share, and normalised throughput
@@ -86,6 +96,24 @@ def main():
     if not keys:
         raise SystemExit("nothing feasible — check the prediction pass")
 
+    # tokens-per-round is a free knob: reduce over it and keep the winner
+    best, dominated = {}, []
+    for key in keys:
+        s_, tr, ts, b, k = key
+        slot = (s_, ts, b, k)
+        cur = best.get(slot)
+        if cur is None or rows[key]["tok_s"] > rows[cur]["tok_s"]:
+            if cur is not None:
+                dominated.append(cur)
+            best[slot] = key
+        else:
+            dominated.append(key)
+    frontier = sorted(best.values())
+    print(f"frontier: {len(frontier)} cells (best tokens/round per "
+          f"sequence x tokens-step x budget x allowance); "
+          f"{len(dominated)} dominated choices set aside")
+    keys = frontier
+
     # budget spine: the geometry whose budget axis is best covered
     by_geo = {}
     for (s, tr, ts, b, k) in keys:
@@ -116,14 +144,23 @@ def main():
             picks.append(rest[int(idx[d.argmin()])])
         print(f"clustered {len(rest)} remaining cells into {k} regimes")
 
-    spine_set = set(spine)
+    # a couple of dominated cells ride along as controls: if the engine ranks
+    # them differently from the simulator, the reduction above is unsafe
+    controls = []
+    if dominated:
+        dominated.sort(key=lambda k: -rows[k]["tok_s"])
+        controls = [dominated[0], dominated[len(dominated) // 2]]
+        picks.extend(controls)
+
+    spine_set, control_set = set(spine), set(controls)
     out = []
     for key in sorted(set(picks)):
         s_, tr, ts, b, k = key
         r = rows[key]
         out.append(dict(seq=s_, t_round=tr, t_step=ts, budget=b, backing=k,
                         spines=(["budget_spine"] if key in spine_set
-                                else ["regime"]),
+                                else ["dominated_control"] if key in control_set
+                                else ["frontier"]),
                         predicted_s=round(r.get("step_s", 0.0), 2)))
     with open(args.out, "w") as fh:
         json.dump(out, fh, indent=2)

@@ -114,6 +114,74 @@ def facet(pred, meas, metric, ylabel, title, fname, *, pct=False):
           f"{len(real_backs)} allowances, {len(rows)} cells)")
 
 
+def frontier(pred, meas, fname, opt):
+    """Throughput vs GPU memory with tokens-per-round OPTIMISED.
+
+    Tokens-per-round is a knob the operator sets, not a property of the
+    hardware, so the useful question is not "how fast is a 64K round at 8 GiB"
+    (nobody would choose that) but "how fast can this budget go, and which round
+    size gets there". Each point is the best round size for that budget, and the
+    label says which one won."""
+    rows = [r for r in pred if "tok_s" in r]
+    if not rows:
+        return
+    seqs = sorted({r["seq"] for r in rows})
+    tss = sorted({r["t_step"] for r in rows})
+    backs = sorted({r.get("backing") for r in rows}, key=lambda b: (b is None, b))
+    fig, axes = plt.subplots(1, len(tss), squeeze=False, sharey=True,
+                            figsize=(4.2 * len(tss) + 1, 4.4))
+    cmap = plt.get_cmap("viridis")
+    for j, ts in enumerate(tss):
+        ax = axes[0][j]
+        for si, sq in enumerate(seqs):
+            colour = cmap(si / max(1, len(seqs) - 1))
+            for bi, bk in enumerate(backs):
+                best = {}
+                for r in rows:
+                    if r["seq"] != sq or r["t_step"] != ts or r.get("backing") != bk:
+                        continue
+                    cur = best.get(r["budget"])
+                    if cur is None or r["tok_s"] > cur["tok_s"]:
+                        best[r["budget"]] = r
+                if not best:
+                    continue
+                pts = [best[b] for b in sorted(best)]
+                ax.plot([p["budget"] for p in pts], [p["tok_s"] for p in pts],
+                        STYLES[bi % len(STYLES)], marker="o", ms=4, lw=1.6,
+                        color=colour,
+                        label=(f"seq {sq}" if bi == 0 and j == 0 else None))
+                if bi == len(backs) - 1:
+                    for p in pts:
+                        ax.annotate(f"{p['t_round'] // 1024}K",
+                                    (p["budget"], p["tok_s"]), fontsize=6,
+                                    textcoords="offset points", xytext=(0, 5),
+                                    ha="center", color=colour)
+        for m in [m for m in meas if m.get("t_step") == ts and "tok_s" in m]:
+            si = seqs.index(m["seq"]) if m["seq"] in seqs else 0
+            ax.plot(m["budget"], m["tok_s"], "*", ms=14,
+                    color=cmap(si / max(1, len(seqs) - 1)),
+                    markeredgecolor="k", markeredgewidth=0.6, zorder=6)
+        ax.set_xscale("log", base=2)
+        ticks = sorted({r["budget"] for r in rows})
+        ax.set_xticks(ticks)
+        ax.set_xticklabels([f"{t:g}" for t in ticks], fontsize=7)
+        ax.set_title(f"{ts // 1024}K tokens/step", fontsize=10)
+        ax.set_xlabel("GPU memory budget (GiB)")
+        ax.grid(alpha=0.3)
+        if j == 0:
+            ax.set_ylabel("tok/s  (best tokens/round)")
+    axes[0][0].legend(fontsize=8, loc="best")
+    fig.suptitle(f"Achievable throughput vs GPU memory — {opt}\n{env_note()}"
+                 f"  ·  labels = winning tokens/round"
+                 + ("  ·  ★ measured" if meas else ""), fontsize=11)
+    fig.tight_layout(rect=(0, 0, 1, 0.90))
+    os.makedirs(FIGS, exist_ok=True)
+    out = os.path.join(FIGS, fname)
+    fig.savefig(out, dpi=120)
+    plt.close(fig)
+    print(f"wrote {out}   (frontier over tokens/round)")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("opt", nargs="?", default="adamw")
@@ -139,6 +207,8 @@ def main():
     facet(feasible, [m for m in meas if "tok_s" in m], "tok_s", "tok/s",
           f"Predicted throughput vs GPU memory — {a.opt} ({layer})",
           f"throughput_{a.opt}.png")
+    frontier(feasible, [m for m in meas if "tok_s" in m],
+             f"frontier_{a.opt}.png", a.opt)
     facet(feasible, [m for m in meas if "eff_tfs" in m], "eff_tfs",
           "effective TFLOP/s",
           f"Predicted effective TFLOP/s vs GPU memory — {a.opt}",
