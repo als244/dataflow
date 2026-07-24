@@ -12,7 +12,9 @@ under a batch scheduler, else physical RAM) — then picks:
   * budgets      a fast-memory ladder from a floor that can hold one task up to
                  most of the device, which is the axis the study is about
   * backing_gib  the host ceiling handed to the planner
-  * seqs / t_rounds / t_steps   geometry axes, scaled to the device class
+  * seqs / t_rounds / t_steps   geometry axes; rounds start at one sequence
+                 each and double, so a small card's feasible region is inside
+                 the ladder rather than below it
 
 Cell-level feasibility is NOT decided here: the prediction pass plans every
 candidate and records the ones the planner cannot fit as INFEASIBLE rows, and
@@ -61,6 +63,7 @@ PERSISTENT_HEADROOM = 1.15   # staging/copies alongside the persistent floor
 HOST_SHARE = 0.8             # of the applicable host limit
 BUDGET_STEP = 2 ** 0.5       # ratio between budget rungs
 DEVICE_SHARE = 0.85          # of device memory the largest budget may use
+ROUND_RUNGS = 7              # doublings of tokens-per-round to offer
 
 # The top of the backing ladder is what the host can spare, not a multiple of
 # the persistent floor. An unconstrained plan of this shape wants roughly twice
@@ -172,6 +175,23 @@ def budget_ladder(device_bytes, floor_gib, step=None):
     return sorted(set(out))
 
 
+def round_ladder(seqs, rungs=ROUND_RUNGS):
+    """Powers of two from ONE SEQUENCE PER ROUND upwards.
+
+    A round's saved activations scale with the tokens in it, so the largest
+    round a box can plan falls as the card gets smaller: an 8B model plans a
+    64K-token round on an 80 GiB card and nothing above 4K on a 24 GiB one.
+    A ladder that starts above a small card's ceiling reports that card as
+    unable to train the model at all, which is false.
+
+    Anchoring at the smallest sequence length is the one bound that holds
+    everywhere: a round cannot be shorter than a single sequence, and it must
+    be a whole number of them. Which rungs a given box can actually plan is
+    left to the prediction pass, whose job is exactly that."""
+    base = min(seqs)
+    return [base * 2 ** k for k in range(rungs)]
+
+
 def main():
     import torch
 
@@ -243,6 +263,8 @@ def main():
 
     big = device_bytes / GIB >= 40
     base = 131072 if big else 65536
+    seqs = (numbers(args.seqs) if args.seqs else
+            [s for s in (1024, 2048, 4096, 8192) if s <= cfg.seq_len * 2])
     env = {
         "host": os.uname().nodename,
         "device": props.name,
@@ -257,10 +279,9 @@ def main():
         "task_floor_gib": round(floor / GIB, 2),
         "budgets": (numbers(args.budgets) if args.budgets else
                     budget_ladder(device_bytes, floor_gib, args.budget_step)),
-        "seqs": (numbers(args.seqs) if args.seqs else
-                 [s for s in (1024, 2048, 4096, 8192) if s <= cfg.seq_len * 2]),
+        "seqs": seqs,
         "t_rounds": (numbers(args.t_rounds) if args.t_rounds
-                     else [8192, 16384, 32768, 65536]),
+                     else round_ladder(seqs)),
         "t_steps": (numbers(args.t_steps) if args.t_steps
                     else [base // 2, base, base * 2]),
         "steps_per_cell": args.steps,
