@@ -1,7 +1,7 @@
 """Client-path parity reads.
 
 Fetch engine-produced objects (gradients, block outputs, losses, MoE counts)
-as HOST copies through the daemon client and map them into twin-named
+as HOST copies through the client and map them into twin-named
 comparison tensors — the same math the in-process ``gradcheck`` reads perform,
 but sourced via ``client.get_object`` against objects retained on the backing
 (host) tier. Because the backing tier IS host memory, the fetch is a plain host
@@ -110,10 +110,10 @@ def client_grad_state_dict(client, cfg, program, resolver):
 
 def adamw_hyper_spec(hyper) -> dict:
     """JSON-able wire hyper encoding an ``AdamWHyper``'s optimizer step
-    EXACTLY, so the daemon's optimizer applies the same update the
+    EXACTLY, so the server's optimizer applies the same update the
     in-process reference hyper does.
 
-    The daemon rebuilds ``AdamWHyper(**spec)`` (``register.build_hyper``),
+    The server rebuilds ``AdamWHyper(**spec)`` (``register.build_hyper``),
     so every field is a constructor kwarg; the ``schedule`` key is
     deliberately omitted, leaving the rebuilt schedule ``None`` (constant
     lr, scale 1.0 at every step). A scheduled hyper would scale lr by the
@@ -122,7 +122,7 @@ def adamw_hyper_spec(hyper) -> dict:
     if hyper.schedule is not None:
         raise ValueError(
             "adamw_hyper_spec requires schedule=None: a scheduled hyper "
-            "scales lr per step, so the daemon's optimizer step would not "
+            "scales lr per step, so the server's optimizer step would not "
             "match the reference optimizer's fixed step")
     return {"lr": hyper.lr, "beta1": hyper.beta1, "beta2": hyper.beta2,
             "eps": hyper.eps, "weight_decay": hyper.weight_decay,
@@ -166,40 +166,25 @@ def client_aux_counts(client, dims, aux_ids):
     return out
 
 
-def stage_object(client, oid, data):
-    """Stage a host object under ``oid``, replacing whatever is resident even
-    if its size differs.
-
-    ``put_object`` overwrites a same-size slot in place but rejects a size
-    change (BINDING_MISMATCH) — and on a shared daemon a prior test may have
-    left a differently-sized object under the same id (e.g. a batch-of-two
-    packing after a full-length one). Releasing first drops any resident slot
-    (a no-op when the id is absent) so the put always lands cleanly. Leases
-    drop when a run completes, so a run input is free to re-stage by the next
-    test."""
-    client.release_object(oid, force=True)
-    client.put_object(oid, data)
-
-
 def client_step_fetch(client, *, cfg, seed, tokens_bytes, targets_bytes,
                       planned, resolver_spec, valid_rows, boundaries,
                       dims, fam, hyper, aux_ids):
-    """One family step on an existing daemon client plus the reads the parity
+    """One family step on an existing server client plus the reads the parity
     comparison needs.
 
     Re-seeds the model (init_model) so a shared client presents a pristine
     model, stages the tokens/targets, runs the single step, and returns the
     loss together with the engine's post-step params, gradients, and MoE
     counts — every value a HOST copy via the client. Split out of
-    ``client_model_step`` so the step runs either on a freshly-spawned daemon
+    ``client_model_step`` so the step runs either on a freshly-spawned server
     or on a caller-supplied shared one."""
     from dataflow.core.jsonio import program_to_dict
     from dataflow_training.run.driver import init_model
     from dataflow_training.run.presets import cfg_dict, resolver_family
 
     init_model(client, resolver_family(cfg), cfg_dict(cfg), seed=seed)
-    stage_object(client, "tokens_0_0", tokens_bytes)
-    stage_object(client, "targets_0_0", targets_bytes)
+    client.put_object("tokens_0_0", tokens_bytes)
+    client.put_object("targets_0_0", targets_bytes)
     reg = client.register_program(program_to_dict(planned.program),
                                   resolver=resolver_spec)
     if reg["bindings"]["missing_inputs"]:
@@ -232,7 +217,7 @@ def client_model_step(cfg, *, seed: int = 0, tol: float = 3e-2,
     """Client-path analog of ``testing.gradcheck.check_model_step`` at full
     parity.
 
-    Run one family step through the OUT-OF-PROCESS daemon and compare
+    Run one family step through the OUT-OF-PROCESS server and compare
     against the pure-torch twin, with every engine value read as a HOST
     copy via the client (no engine device view is ever held). The report
     is keyed EXACTLY like ``check_model_step`` — loss, final params
@@ -242,7 +227,7 @@ def client_model_step(cfg, *, seed: int = 0, tol: float = 3e-2,
 
     The optimizer step is made to match ``check_model_step``'s engine leg
     (default ``AdamWHyper()``): the resolver spec carries a constant-lr
-    hyper (no schedule) so the daemon applies ``lr`` unscaled at the single
+    hyper (no schedule) so the server applies ``lr`` unscaled at the single
     step, exactly as the reference twin does. Every persistent object
     (W/O/Aux) is read post-step through ``get_object`` (they are
     backing-resident and mutated in place); gradients (dW) are retained on
@@ -252,10 +237,10 @@ def client_model_step(cfg, *, seed: int = 0, tol: float = 3e-2,
     reference scaffolding); the engine leg — the thing under test — goes
     entirely through the client.
 
-    ``client``: run the engine leg on this already-spawned daemon (re-seeded
+    ``client``: run the engine leg on this already-spawned server (re-seeded
     per call via init_model) instead of spawning a fresh one, so a family's
-    tests can share one warm daemon. Defaults to spawning and tearing down a
-    dedicated daemon.
+    tests can share one warm server. Defaults to spawning and tearing down a
+    dedicated server.
     """
     from dataclasses import replace as dc_replace
 
@@ -264,7 +249,7 @@ def client_model_step(cfg, *, seed: int = 0, tol: float = 3e-2,
     from dataflow_training.lowering.planning import plan_program
     from dataflow_training.model_families.families import resolve_family
     from dataflow_training.run.presets import cfg_dict, resolver_family
-    from dataflow_training.testing.client_daemon import out_of_process_daemon
+    from dataflow_training.testing.server_process import out_of_process_server
     from dataflow_training.testing.gradcheck import (
         GRAD_TIER_LR, CheckReport, cos_sim, match_field_atol,
         reference_model_step, rel_l2)
@@ -344,7 +329,7 @@ def client_model_step(cfg, *, seed: int = 0, tol: float = 3e-2,
     if client is not None:
         run_loss, engine_state, engine_grads, engine_counts = leg(client)
     else:
-        with out_of_process_daemon(backing_gib=backing_gib) as owned:
+        with out_of_process_server(backing_gib=backing_gib) as owned:
             run_loss, engine_state, engine_grads, engine_counts = leg(owned)
 
     errors: dict[str, float] = {}

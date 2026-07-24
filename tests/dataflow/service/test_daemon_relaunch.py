@@ -30,7 +30,7 @@ def quiet_log(*args, **kwargs):
 
 
 def one_daemon_run(steps: int) -> list[float]:
-    from dataflow_training.run.driver import daemon_client, run_engine
+    from dataflow_training.run.driver import engine_client, run_engine
     from dataflow_training.data.pipeline import legacy_block_pipeline
     from dataflow_training.run.presets import qwen3_smoke_preset
     from dataflow_training.run.recipe import Recipe
@@ -39,7 +39,7 @@ def one_daemon_run(steps: int) -> list[float]:
     recipe = Recipe(peak_lr=3e-4, min_lr=3e-5, warmup_steps=2,
                     total_steps=steps)
     feed = legacy_block_pipeline(cfg)
-    with daemon_client(backing_gib=6.0, log=quiet_log) as client:
+    with engine_client(backing_gib=6.0, log=quiet_log) as client:
         res = run_engine(client, cfg, recipe, feed, steps,
                          budget_gib=4.0, seed=11, log=quiet_log)
     return res.losses

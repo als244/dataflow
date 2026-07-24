@@ -48,14 +48,14 @@ def tiny_cfg():
 @pytest.mark.gpu
 @pytest.mark.corpus
 def test_world1_fleet_matches_solo_engine():
-    from dataflow_training.run.driver import daemon_client, run_engine
+    from dataflow_training.run.driver import engine_client, run_engine
 
     cfg = tiny_cfg()
     recipe = Recipe(peak_lr=3e-4, min_lr=3e-5, warmup_steps=2,
                     total_steps=STEPS)
 
     solo = None
-    with daemon_client(backing_gib=4.0, log=quiet) as client:
+    with engine_client(backing_gib=4.0, log=quiet) as client:
         solo = run_engine(client, cfg, recipe,
                           legacy_block_pipeline(cfg), STEPS,
                           budget_gib=4.0, seed=SEED, log=quiet)

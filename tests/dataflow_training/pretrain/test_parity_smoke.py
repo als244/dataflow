@@ -21,7 +21,7 @@ def test_reference_vs_service_parity_smoke():
     if not torch.cuda.is_available():
         pytest.skip("no CUDA")
     from dataflow_training.run import parity, presets as P
-    from dataflow_training.run.driver import daemon_client, run_engine, run_reference
+    from dataflow_training.run.driver import engine_client, run_engine, run_reference
     from dataflow_training.data.pipeline import legacy_block_pipeline
     from dataflow_training.run.recipe import Recipe
 
@@ -32,7 +32,7 @@ def test_reference_vs_service_parity_smoke():
     quiet = lambda *_a, **_k: None
 
     ref = run_reference(cfg, recipe, feed, steps, seed=11, log=quiet)
-    with daemon_client(backing_gib=4.0, log=quiet) as client:
+    with engine_client(backing_gib=4.0, log=quiet) as client:
         eng = run_engine(client, cfg, recipe, feed, steps, budget_gib=4.0,
                          seed=11, log=quiet)
 

@@ -94,6 +94,38 @@ def get_session(prog_id: str, store=None):
     return _SESSIONS[key]
 
 
+def engine_unrecoverable() -> bool:
+    """True if a prior run left this process's device context corrupted (a kernel
+    illegal-access): every later run then refuses to start, so the process must
+    be replaced. The context is process-wide, so one corrupted execution
+    context dooms the whole process; health() surfaces this so a client can
+    spawn a fresh process instead of reusing a dead one."""
+    return any(s.unrecoverable for s in _SESSIONS.values())
+
+
+def active_pools(store=None) -> list:
+    """The engine device pools currently resident — one entry per registered
+    program that has RUN (get_session creates a pool lazily on first run;
+    close_session / unregister_program frees it). An observability aid for pool
+    leaks: this list should stay small (the running program, plus any not yet
+    unregistered). A steadily GROWING list is programs that ran but were never
+    unregistered — each still pinning its fast device residency (the placement
+    base). Pass a ``store`` to report only that daemon's pools. Snapshots
+    _SESSIONS (the dispatcher may add/remove during a run on another thread)."""
+    rows = []
+    for key, s in list(_SESSIONS.items()):
+        if store is not None and key[0] != id(store):
+            continue
+        base = getattr(s.pool, "_placement_base", None) if s.pool is not None else None
+        rows.append({
+            "prog_id": key[1],
+            "has_pool": s.pool is not None,
+            "fast_extent_bytes": getattr(base, "size_bytes", 0) if base is not None else 0,
+            "unrecoverable": s.unrecoverable,
+        })
+    return rows
+
+
 def close_session(prog_id: str, store=None) -> bool:
     s = _SESSIONS.pop(session_key(prog_id, store), None)
     if s is not None:
@@ -203,9 +235,10 @@ def execute_run(program, resolver, values, *, prog_id, store=None,
             run_args=run_args, cancel_event=cancel_event, groups=groups,
         )
     except (ExecutionError, DeadlockError) as e:
-        # engine-invariant violation (a bug): INV-2 already ran inside
-        # execute() and the raise is scrubbed of frames. Present it as the same
-        # RunOutcome shape as any other failure so the client path is uniform.
+        # engine-invariant violation (a bug): the ordered abort-cleanup already
+        # ran inside execute() and the raise is scrubbed of frames. Present it
+        # as the same RunOutcome shape as any other failure so the client path
+        # is uniform.
         outcome = RunOutcome(kind=RunOutcomeKind.FAILED,
                              message=f"{type(e).__name__}: {e}",
                              traceback_text=tb_mod.format_exc())

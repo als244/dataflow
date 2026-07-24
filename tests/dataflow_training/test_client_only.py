@@ -1,7 +1,7 @@
 """THE workload-test client contract, enforced.
 
 Every test under tests/dataflow_training MUST drive the engine ONLY through the
-client/daemon interface (daemon_client / out_of_process_daemon -> client.run ->
+client/daemon interface (engine_client / out_of_process_server -> client.run ->
 client.get_object). It must NOT construct an in-process Engine, use a
 CudaBackend, wrap engine memory with torch_view, or reach an engine result's
 object table (.objects). The client boundary hands back host copies, so no

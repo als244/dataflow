@@ -30,7 +30,7 @@ from dataflow_training.lowering.planning import plan_program         # noqa: E40
 from dataflow_training.model_families import bridges                 # noqa: E402
 from dataflow_training.model_families.families import resolve_family  # noqa: E402
 from dataflow_training.run import presets as P                       # noqa: E402
-from dataflow_training.run.driver import daemon_client, init_model   # noqa: E402
+from dataflow_training.run.driver import engine_client, init_model   # noqa: E402
 from dataflow_training.run.presets import cfg_dict, resolver_family  # noqa: E402
 from dataflow_training.run.recipe import Recipe                      # noqa: E402
 from dataflow_training.testing.client_parity import (                # noqa: E402
@@ -94,7 +94,7 @@ def test_client_fetch_surface_dense():
     targets = torch.frombuffer(bytearray(targets_bytes), dtype=torch.int32)
     valid_rows = int((targets >= 0).sum())
 
-    with daemon_client(backing_gib=4.0) as client:
+    with engine_client(backing_gib=4.0) as client:
         init_model(client, resolver_family(cfg), cfg_dict(cfg), seed=SEED)
         client.put_object("tokens_0_0", tokens_bytes)
         client.put_object("targets_0_0", targets_bytes)
@@ -166,7 +166,7 @@ def test_client_fetch_surface_moe_aux():
     valid_rows = int((targets >= 0).sum())
     expected_bytes = planned.program.object_sizes()[aux_ids[0]]
 
-    with daemon_client(backing_gib=4.0) as client:
+    with engine_client(backing_gib=4.0) as client:
         init_model(client, resolver_family(cfg), cfg_dict(cfg), seed=SEED)
         client.put_object("tokens_0_0", tokens_bytes)
         client.put_object("targets_0_0", targets_bytes)

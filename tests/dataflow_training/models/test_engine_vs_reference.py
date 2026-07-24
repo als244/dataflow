@@ -32,7 +32,7 @@ if not torch.cuda.is_available():
 
 from dataflow_training.run import presets as P  # noqa: E402
 from dataflow_training.run.driver import (  # noqa: E402
-    daemon_client,
+    engine_client,
     init_model,
     run_engine,
     run_reference,
@@ -107,7 +107,7 @@ def test_engine_matches_reference_uniform(name):
     recipe = smoke_recipe()
     ref = run_reference(cfg, recipe, legacy_block_pipeline(cfg),
                         STEPS, log=quiet_log)
-    with daemon_client(backing_gib=4.0, log=quiet_log) as client:
+    with engine_client(backing_gib=4.0, log=quiet_log) as client:
         eng = run_engine(client, cfg, recipe,
                          legacy_block_pipeline(cfg), STEPS,
                          budget_gib=4.0, log=quiet_log)
@@ -181,7 +181,7 @@ def test_engine_matches_reference_ragged(name):
     boundaries = [0]
     for ln in RAGGED_LENGTHS:
         boundaries.append(boundaries[-1] + ln)
-    with daemon_client(backing_gib=4.0, log=quiet_log) as client:
+    with engine_client(backing_gib=4.0, log=quiet_log) as client:
         planned = plan_program(fam.lower(cfg),
                                fast_memory_capacity=4 << 30)
         cd = cfg_dict(cfg)

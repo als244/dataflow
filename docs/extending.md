@@ -357,7 +357,7 @@ before the clock starts).
 Execution is the ENGINE SERVICE ([engine_service.md](engine_service.md)):
 register the planned program with the family's resolver spec, seed
 W/O via init-as-program, then `run()` per step —
-`dataflow_training/run/driver.py` (`daemon_client`, `init_model`,
+`dataflow_training/run/driver.py` (`engine_client`, `init_model`,
 `run_engine`) is the reference driver, and `tools/train/train.py`
 wraps it.
 

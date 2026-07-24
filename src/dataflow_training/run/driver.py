@@ -442,7 +442,7 @@ def init_model(client, family_name: str, cfg_dict: dict, *,
 
 
 @contextmanager
-def daemon_client(backing_gib: float = 100.0, *, socket: str | None = None,
+def engine_client(backing_gib: float = 100.0, *, socket: str | None = None,
                   device: int = 0, attach: bool = False, log=print,
                   peer_name: str | None = None,
                   peer_listen: str | None = None):

@@ -280,7 +280,7 @@ def test_checkpoint_resume_tail_matches_uninterrupted_run(tmp_path):
     daemon; init re-seeds, restore overwrites)."""
     pytest.importorskip("cuda.bindings.runtime")  # daemon boots a real CudaBackend
     from dataflow_training.data.pipeline import DataPipeline
-    from dataflow_training.run.driver import daemon_client, run_engine
+    from dataflow_training.run.driver import engine_client, run_engine
     from dataflow_training.run.presets import gpt2_smoke_preset
     from dataflow_training.run.recipe import Recipe
 
@@ -296,7 +296,7 @@ def test_checkpoint_resume_tail_matches_uninterrupted_run(tmp_path):
         pass
 
     ck = tmp_path / "drill"
-    with daemon_client(backing_gib=4.0, log=quiet) as client:
+    with engine_client(backing_gib=4.0, log=quiet) as client:
         full = run_engine(client, cfg, recipe, pipe, 6, budget_gib=4.0,
                           seed=11, log=quiet, checkpoint_every=2,
                           checkpoint_dir=ck)
@@ -309,7 +309,7 @@ def test_checkpoint_resume_tail_matches_uninterrupted_run(tmp_path):
     import shutil
 
     shutil.rmtree(ck / "step_000006")
-    with daemon_client(backing_gib=4.0, log=quiet) as client:
+    with engine_client(backing_gib=4.0, log=quiet) as client:
         tail = run_engine(client, cfg, recipe, pipe, 6, budget_gib=4.0,
                           seed=11, log=quiet, checkpoint_every=2,
                           checkpoint_dir=ck, resume=True)

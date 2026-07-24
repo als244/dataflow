@@ -377,10 +377,13 @@ class Server:
         st = self.state
 
         def health(conn, args):
+            from dataflow.service.execution import engine_unrecoverable
             return {"ok": True, "time": time.time(),
-                    "uptime_s": time.time() - st.boot_t}
+                    "uptime_s": time.time() - st.boot_t,
+                    "unrecoverable": engine_unrecoverable()}
 
         def engine_status(conn, args):
+            from dataflow.service.execution import active_pools
             with st.lock:
                 return {
                     "uptime_s": time.time() - st.boot_t,
@@ -391,6 +394,11 @@ class Server:
                         "backing": self.server_pools_backing(),
                         "fast": None,          # fast residency: S2
                     },
+                    # live engine pools, one per program that ran and has not
+                    # been unregistered — a growing list is a pool leak (each
+                    # entry pins a placement base). Distinct from "sessions"
+                    # below, which are client CONNECTIONS.
+                    "program_pools": active_pools(getattr(self, "store", None)),
                     "counters": dict(st.counters),
                     "host_bw_gbs": dict(self.host_bw),
                     "current_run": st.current_run,

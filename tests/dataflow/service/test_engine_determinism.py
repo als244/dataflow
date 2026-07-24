@@ -26,7 +26,7 @@ from dataflow_training.run.presets import (  # noqa: E402
     resolver_family,
     smoke_preset,
 )
-from dataflow_training.run.driver import daemon_client, init_model  # noqa: E402
+from dataflow_training.run.driver import engine_client, init_model  # noqa: E402
 from dataflow_training.data.pipeline import legacy_block_pipeline  # noqa: E402
 from dataflow_training.run.recipe import Recipe  # noqa: E402
 from dataflow_training.model_families.families import resolve_family  # noqa: E402
@@ -71,7 +71,7 @@ def test_same_daemon_rerun_bitwise(tmp_path):
                            fast_memory_capacity=4 << 30)
     cd = cfg_dict(cfg)
     fam_name = resolver_family(cfg)
-    with daemon_client(backing_gib=4.0, log=print) as client:
+    with engine_client(backing_gib=4.0, log=print) as client:
         init_model(client, fam_name, cd, seed=11)
         stepper0 = legacy_block_pipeline(cfg)(None)
         packed0 = stepper0.next_step()

@@ -27,7 +27,7 @@ if not torch.cuda.is_available():
     pytest.skip("no GPU", allow_module_level=True)
 
 from dataflow_training.run import presets as P                          # noqa: E402
-from dataflow_training.testing.client_daemon import out_of_process_daemon  # noqa: E402
+from dataflow_training.testing.server_process import out_of_process_server  # noqa: E402
 from dataflow_training.testing.client_parity import client_model_step   # noqa: E402
 from dataflow_training.testing.gradcheck import (                       # noqa: E402
     check_model_step, family_gate_kwargs)
@@ -63,7 +63,7 @@ def assert_reproduces(client_report, inproc_report):
 
 
 def test_out_of_process_daemon_boots_and_reaps():
-    with out_of_process_daemon(backing_gib=2.0) as client:
+    with out_of_process_server(backing_gib=2.0) as client:
         client.put_object("k", b"payload")
         assert bytes(client.get_object("k")) == b"payload"
 

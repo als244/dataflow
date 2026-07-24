@@ -1,5 +1,5 @@
 """Generic, family-parametrized correctness battery driven entirely
-through the out-of-process daemon client.
+through a client to the shared out-of-process server.
 
 Each registered family's smoke-scale preset is exercised through the same
 checks that were previously copy-pasted per family: the program lowers,
@@ -11,29 +11,20 @@ bitwise-reproducible, the free-poisoning debug option changes nothing,
 per-task runtime jitter changes nothing, and the result is identical
 across two planning memory budgets and across a recompute re-plan.
 
-Most of a family's battery shares ONE warm daemon. ``family`` is a per-family
-shared handle — module-scoped and parametrized over the family names — so
-pytest groups a family's tests together, spawns a single daemon for them,
-and tears it down before the next family starts; at most one family's daemon
-is alive at a time. Every test re-seeds that daemon (init_model) before use,
-so the shared client presents a pristine model each time; two guards prove
-nothing leaks across the tests that share it — re-seeding restores the
-pristine weights (engine) and a freshly-built twin carries no process-global
-state (reference).
-
-The free-poison test is the one exception: poison-on-free is a boot flag, so
-it boots its own poison-flagged daemon inline for the one moment it runs.
-Everything else shares the family daemon — including the batch-of-two packing
-test, whose shorter sequences change the token geometry but not the weight
-geometry (gpt2's learned-position table is sized by a fixed max_seq_len, not
-the per-program sequence length). So a family boots two daemons, not the
-thirteen a fresh-daemon-per-test battery would pay.
+Every server-using test takes the ``client`` fixture (conftest): ONE
+out-of-process server is shared by the whole tests/dataflow_training run, and
+the fixture wipes it to a blank store before each test, so each test sees a
+fresh server without paying a boot. The free-poison test is the one exception
+— poison-on-free is a boot flag, so it spawns its own poison-booted server
+inline. Two guards prove the reset is clean: wiping and re-seeding restores the
+pristine weights (engine), and a freshly-built twin is bitwise-reproducible
+(reference).
 
 Every engine value is read back as a host copy via the client
 (``get_object`` / run ``fetch``); no in-process engine, device view, or
 backend is constructed here. Tokens are generated deterministically
 in-process and staged with ``put_object``; the grad-accumulation twin is
-built from the daemon's own seeded init weights, fetched through the
+built from the server's own seeded init weights, fetched through the
 client. This keeps the whole module on the memory-safe workload-test
 transport.
 
@@ -47,14 +38,14 @@ Tests:
 - test_golden_model_step_batch2_packed: the same golden comparison on a batch-of-two short-sequence packing.
 - test_grad_accum_two_rounds: two gradient-accumulation rounds through the client leave final parameters matching the twin's accumulated update.
 - test_fixed_seed_bitwise_deterministic: two same-seed client runs produce identical loss and weight bytes.
-- test_poison_on_free_changes_nothing: booting the daemon with free-poisoning leaves loss and weights unchanged and non-NaN.
+- test_poison_on_free_changes_nothing: booting the server with free-poisoning leaves loss and weights unchanged and non-NaN.
 - test_result_invariant_to_runtime_jitter: injecting a per-task random launch delay leaves loss and weights unchanged.
 - test_plan_invariance: planning the same step at two fast-memory budgets yields identical loss and weights.
 - test_measured_costs_replan_still_golden: re-planning the step onto a recompute schedule yields identical loss and weights.
-- test_reseed_restores_pristine_init: re-seeding an already-trained shared daemon restores the pristine weight bytes and a follow-on run reproduces an earlier run, so no trained engine state (weights, optimizer moments, aux counts) leaks across the tests that share the daemon.
+- test_reseed_restores_pristine_init: wiping the store and re-seeding restores the pristine weight bytes and a follow-on run reproduces an earlier run, so no trained engine state (weights, optimizer moments, aux counts) survives the per-test reset.
 - test_reference_twin_build_is_stateless: two freshly-built twins, seeded and stepped identically, agree bit-for-bit, so the per-test reference twin carries no process-global state to leak into the next test.
 """
-from dataclasses import dataclass, replace
+from dataclasses import replace
 
 import pytest
 
@@ -74,12 +65,11 @@ from dataflow_training.model_families.families import resolve_family  # noqa: E4
 from dataflow_training.run import presets as P  # noqa: E402
 from dataflow_training.run.driver import adamw_field_step, init_model  # noqa: E402
 from dataflow_training.run.presets import cfg_dict, resolver_family  # noqa: E402
-from dataflow_training.testing.client_daemon import out_of_process_daemon  # noqa: E402
+from dataflow_training.testing.server_process import out_of_process_server  # noqa: E402
 from dataflow_training.testing.client_parity import (  # noqa: E402
     ClientFinalBytes,
     adamw_hyper_spec,
     client_model_step,
-    stage_object,
 )
 from dataflow_training.testing.gradcheck import (  # noqa: E402
     family_gate_kwargs,
@@ -89,9 +79,8 @@ from dataflow_training.testing.gradcheck import (  # noqa: E402
 
 pytestmark = pytest.mark.gpu
 
-# The one slab size these tests ever pin, per daemon. The daemon subprocess
-# allocates exactly this on the backing (host) tier; the client that connects
-# to it pins nothing. Every smoke program's peak residency sits far under it.
+# The backing slab the free-poison test's own server pins (the shared server's
+# is set in the conftest). Every smoke program's peak residency sits far under.
 BACKING_GIB = 4.0
 
 # family -> zero-arg smoke preset builder on ``run.presets`` (the same
@@ -213,18 +202,18 @@ def weight_ids(program):
 
 def run_family(client, cfg, *, seed=SEED, jitter=None,
                capacity=PLAN_BUDGET, recompute=None):
-    """One family training step on an existing daemon ``client``; returns
-    ``{"loss": float, W_id: bytes, ...}`` with each weight object read back
-    post-step as raw host bytes.
+    """One family training step on ``client``; returns ``{"loss": float,
+    W_id: bytes, ...}`` with each weight object read back post-step as raw
+    host bytes.
 
-    The client is re-seeded (init_model) at entry, so a shared daemon
-    presents a pristine model to every call. Grad accumulation is forced to
-    a single round so one token/target pair fully feeds the program.
-    ``jitter`` rides the resolver spec as the engine's per-task launch-delay
-    knob; ``capacity`` is the planner's fast-memory budget and ``recompute``
-    a per-activation recompute map — the last two change the PLAN without
-    changing the math. Free-poisoning is a boot flag, so it is exercised by
-    passing a poison-booted client, not a kwarg here."""
+    The store is blank at the start of a test (the conftest wiped it) and
+    init_model re-seeds the model, so a plain put stages the tokens/targets.
+    Grad accumulation is forced to a single round so one token/target pair
+    fully feeds the program. ``jitter`` rides the resolver spec as the
+    engine's per-task launch-delay knob; ``capacity`` is the planner's
+    fast-memory budget and ``recompute`` a per-activation recompute map —
+    the last two change the PLAN without changing the math. Free-poisoning is
+    a boot flag, so it is exercised by passing a poison-booted client."""
     cfg = replace(cfg, grad_accum_rounds=1)
     fam = resolve_family(cfg)
     dims = fam.derive_dims(cfg)
@@ -239,8 +228,8 @@ def run_family(client, cfg, *, seed=SEED, jitter=None,
         spec["debug_jitter"] = jitter
 
     init_model(client, resolver_family(cfg), cfg_dict(cfg), seed=seed)
-    stage_object(client, "tokens_0_0", tok)
-    stage_object(client, "targets_0_0", tgt)
+    client.put_object("tokens_0_0", tok)
+    client.put_object("targets_0_0", tgt)
     reg = client.register_program(program_to_dict(planned.program),
                                   resolver=spec)
     assert not reg["bindings"]["missing_inputs"], reg
@@ -275,36 +264,14 @@ def assert_same_result(a, b, tol=1e-3):
         assert rel_l2(va, vb) < tol, f"{k}: rel_l2={rel_l2(va, vb)}"
 
 
-@dataclass
-class FamilyRun:
-    """The family name plus its shared daemon client. Every test re-seeds
-    the client (init_model) before use, so the one warm daemon presents a
-    pristine model to each test in the family."""
-    name: str
-    client: object
-
-
-@pytest.fixture(scope="module", params=sorted(FAMILY_PRESETS))
-def family(request):
-    """One warm daemon shared by all of a family's tests.
-
-    Module-scoped and parametrized over the family names, so pytest groups
-    a family's tests together: a single daemon is spawned for them and torn
-    down before the next family starts, keeping at most one family's daemon
-    alive at a time. The daemon pins exactly BACKING_GIB on its own (host)
-    backing tier; the client here connects and pins nothing. The free-poison
-    test spawns its own boot-flagged daemon inline."""
-    with out_of_process_daemon(backing_gib=BACKING_GIB) as client:
-        yield FamilyRun(request.param, client)
-
-
 # --- lowering ----------------------------------------------------------------
 
 
-def test_lowering_validates_and_plans(family):
-    cfg = preset(family.name)
+@pytest.mark.parametrize("name", sorted(FAMILY_PRESETS))
+def test_lowering_validates_and_plans(name):
+    cfg = preset(name)
     fam = resolve_family(cfg)
-    assert fam.name == family.name
+    assert fam.name == name
     program = fam.lower(cfg)
     validate_program(program)
     planned = plan_program(program, fast_memory_capacity=PLAN_BUDGET)
@@ -315,18 +282,18 @@ def test_lowering_validates_and_plans(family):
 # --- golden model step (client vs pure-torch twin) ---------------------------
 
 
-def test_golden_model_step(family):
-    name = family.name
-    client_model_step(preset(name), seed=SEED, client=family.client,
+@pytest.mark.parametrize("name", sorted(FAMILY_PRESETS))
+def test_golden_model_step(name, client):
+    client_model_step(preset(name), seed=SEED, client=client,
                       field_atol=FIELD_ATOL.get(name),
                       param_atol=PARAM_ATOL.get(name),
                       **gate_kwargs(name)).assert_ok()
 
 
-def test_golden_model_step_batch2_packed(family):
-    name = family.name
+@pytest.mark.parametrize("name", sorted(FAMILY_PRESETS))
+def test_golden_model_step_batch2_packed(name, client):
     cfg = replace(preset(name), batch=2, seq_len=64)
-    client_model_step(cfg, seed=SEED, client=family.client,
+    client_model_step(cfg, seed=SEED, client=client,
                       field_atol=FIELD_ATOL.get(name),
                       param_atol=PARAM_ATOL.get(name),
                       **gate_kwargs(name)).assert_ok()
@@ -335,7 +302,8 @@ def test_golden_model_step_batch2_packed(family):
 # --- gradient accumulation (client vs twin, two rounds) ----------------------
 
 
-def test_grad_accum_two_rounds(family):
+@pytest.mark.parametrize("name", sorted(FAMILY_PRESETS))
+def test_grad_accum_two_rounds(name, client):
     """Two accumulation rounds through the client leave final parameters
     matching the twin's accumulated update. ``client_model_step`` forces a
     single round, so the two-round leg is driven here directly: the same
@@ -343,11 +311,9 @@ def test_grad_accum_two_rounds(family):
     per-round ``seq_lens`` map and the global valid-token denominator) and
     the twin (two forwards, each scaled to the global denominator, summed
     into one backward, then one AdamW step). The twin is initialized from
-    the daemon's own seeded weights, fetched through the client, so both
+    the server's own seeded weights, fetched through the client, so both
     legs share an exact init."""
-    name = family.name
     cfg = replace(preset(name), grad_accum_rounds=2)
-    client = family.client
     fam = resolve_family(cfg)
     dims = fam.derive_dims(cfg)
     rounds = cfg.grad_accum_rounds
@@ -362,14 +328,14 @@ def test_grad_accum_two_rounds(family):
 
     init_model(client, resolver_family(cfg), cfg_dict(cfg), seed=SEED)
 
-    # twin from the daemon's seeded init weights (read pre-run)
+    # twin from the server's seeded init weights (read pre-run)
     twin = bridges.build_reference_model(cfg)
     bridges.load_reference_init(twin, cfg, dims, ClientFinalBytes(client))
     twin.train()
 
     for r, (tok, tgt) in enumerate(payloads):
-        stage_object(client, f"tokens_0_{r}", tok)
-        stage_object(client, f"targets_0_{r}", tgt)
+        client.put_object(f"tokens_0_{r}", tok)
+        client.put_object(f"targets_0_{r}", tgt)
 
     loss_total = None
     for tok, tgt in payloads:
@@ -422,99 +388,102 @@ def test_grad_accum_two_rounds(family):
 # --- engine-invariance battery (run A vs run B) ------------------------------
 
 
-def test_fixed_seed_bitwise_deterministic(family):
-    cfg = preset(family.name)
-    a = run_family(family.client, cfg, seed=SEED)
-    b = run_family(family.client, cfg, seed=SEED)
+@pytest.mark.parametrize("name", sorted(FAMILY_PRESETS))
+def test_fixed_seed_bitwise_deterministic(name, client):
+    cfg = preset(name)
+    a = run_family(client, cfg, seed=SEED)
+    b = run_family(client, cfg, seed=SEED)
     assert a["loss"] == b["loss"]
     for k in a:
         if k != "loss":
             assert a[k] == b[k], k
 
 
-def test_poison_on_free_changes_nothing(family):
-    cfg = preset(family.name)
-    base = run_family(family.client, cfg, seed=SEED)
-    with out_of_process_daemon(backing_gib=BACKING_GIB,
+@pytest.mark.parametrize("name", sorted(FAMILY_PRESETS))
+def test_poison_on_free_changes_nothing(name, client):
+    cfg = preset(name)
+    base = run_family(client, cfg, seed=SEED)
+    with out_of_process_server(backing_gib=BACKING_GIB,
                                poison_on_free=True) as poison_client:
         poisoned = run_family(poison_client, cfg, seed=SEED)
     assert_same_result(poisoned, base)
     assert poisoned["loss"] == poisoned["loss"]        # not NaN
 
 
-def test_result_invariant_to_runtime_jitter(family):
+@pytest.mark.parametrize("name", sorted(FAMILY_PRESETS))
+def test_result_invariant_to_runtime_jitter(name, client):
     """A per-task random launch delay makes the tasks' ACTUAL runtimes
     diverge from the plan's cost estimates. The engine sequences work on
     completion events, not on the estimates, so the result is invariant:
     correctness does not depend on the cost model being accurate."""
-    cfg = preset(family.name)
-    base = run_family(family.client, cfg, seed=SEED)
-    jittered = run_family(family.client, cfg, seed=SEED,
+    cfg = preset(name)
+    base = run_family(client, cfg, seed=SEED)
+    jittered = run_family(client, cfg, seed=SEED,
                           jitter={"min_us": 20, "max_us": 400, "seed": 123})
     assert_same_result(jittered, base)
 
 
-def test_plan_invariance(family):
-    cfg = preset(family.name)
-    generous = run_family(family.client, cfg, seed=SEED, capacity=PLAN_BUDGET)
-    tight = run_family(family.client, cfg, seed=SEED, capacity=TIGHT_BUDGET)
+@pytest.mark.parametrize("name", sorted(FAMILY_PRESETS))
+def test_plan_invariance(name, client):
+    cfg = preset(name)
+    generous = run_family(client, cfg, seed=SEED, capacity=PLAN_BUDGET)
+    tight = run_family(client, cfg, seed=SEED, capacity=TIGHT_BUDGET)
     assert_same_result(generous, tight, tol=CROSS_PLAN_TOL)
 
 
-def test_measured_costs_replan_still_golden(family):
+@pytest.mark.parametrize("name", sorted(FAMILY_PRESETS))
+def test_measured_costs_replan_still_golden(name, client):
     """Re-planning the step so the schedule changes must not change the
     math. Real measured-cost profiling of the backward signatures needs a
     device backend (forbidden on this client-only path) and is covered
     family-agnostically by tests/dataflow/runtime/test_engine_stress.py;
     here the plan is changed by forcing a full recompute schedule, which
     is the same invariance claim without the profiler."""
-    cfg = preset(family.name)
-    base = run_family(family.client, cfg, seed=SEED)
+    cfg = preset(name)
+    base = run_family(client, cfg, seed=SEED)
     levels = {f"A_0_0_{i}": 1 for i in range(cfg.n_layers)}
-    replanned = run_family(family.client, cfg, seed=SEED, recompute=levels)
+    replanned = run_family(client, cfg, seed=SEED, recompute=levels)
     assert_same_result(replanned, base, tol=CROSS_PLAN_TOL)
 
 
-# --- state-leak guards (shared daemon + per-test twin) -----------------------
+# --- state-leak guards (the per-test reset + per-test twin) -------------------
 
 
-def test_reseed_restores_pristine_init(family):
-    """Re-seeding an already-trained daemon (init_model) restores every
-    persistent weight to its pristine seeded bytes, and a follow-on run then
-    reproduces an earlier run's loss and weights bit-for-bit. This is the
-    reset that makes one shared daemon safe across a family's tests: no
-    trained weight, optimizer moment, or aux count survives the re-seed to
-    leak into the next test."""
-    name = family.name
+@pytest.mark.parametrize("name", sorted(FAMILY_PRESETS))
+def test_reseed_restores_pristine_init(name, client):
+    """The reset the shared server relies on: wiping the store and re-seeding
+    (init_model) restores every persistent weight to its pristine seeded
+    bytes, and a follow-on run reproduces an earlier run's loss and weights
+    bit-for-bit. So no trained weight, optimizer moment, or aux count survives
+    the per-test reset to leak into the next test."""
     cfg = replace(preset(name), grad_accum_rounds=1)
-    client = family.client
     wids = weight_ids(resolve_family(cfg).lower(cfg))
 
     init_model(client, resolver_family(cfg), cfg_dict(cfg), seed=SEED)
     pristine = {w: bytes(client.get_object(w)) for w in wids}
 
-    first = run_family(client, cfg, seed=SEED)      # trains W in place
+    first = run_family(client, cfg, seed=SEED)          # trains W in place
 
+    client.wipe("all")                                  # the per-test reset
     init_model(client, resolver_family(cfg), cfg_dict(cfg), seed=SEED)
     reset = {w: bytes(client.get_object(w)) for w in wids}
-    assert reset == pristine, name                  # weights fully reset
+    assert reset == pristine, name                      # weights fully reset
 
-    second = run_family(client, cfg, seed=SEED)     # moments + aux reset too
+    second = run_family(client, cfg, seed=SEED)         # moments + aux reset
     assert second["loss"] == first["loss"], name
     for k in first:
         if k != "loss":
             assert second[k] == first[k], k
 
 
-def test_reference_twin_build_is_stateless(family):
-    """Two freshly-built reference twins, seeded from the same daemon init
+@pytest.mark.parametrize("name", sorted(FAMILY_PRESETS))
+def test_reference_twin_build_is_stateless(name, client):
+    """Two freshly-built reference twins, seeded from the same server init
     and stepped on the same tokens, agree bit-for-bit. The pure-torch twin
     is rebuilt per test (never shared), so the only way it could leak across
     tests is process-global state — an MoE step counter or balance bias that
     outlives a build; this proves there is none."""
-    name = family.name
     cfg = replace(preset(name), grad_accum_rounds=1)
-    client = family.client
     fam = resolve_family(cfg)
     dims = fam.derive_dims(cfg)
     b_rows = dims.max_tokens // dims.seq_len
@@ -528,7 +497,7 @@ def test_reference_twin_build_is_stateless(family):
 
     losses, states = [], []
     for _ in range(2):
-        torch.manual_seed(SEED)                     # isolate any RNG order
+        torch.manual_seed(SEED)                         # isolate any RNG order
         twin = bridges.build_reference_model(cfg)
         bridges.load_reference_init(twin, cfg, dims, ClientFinalBytes(client))
         twin.train()
