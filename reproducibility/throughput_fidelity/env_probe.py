@@ -53,7 +53,7 @@ PRESET_LADDER = ["llama3_8b", "l3_1b", "l3_760m", "l3_350m", "l3_125m"]
 # same model: it recomputes its way into the space it has, which is exactly the
 # regime this runtime exists for.
 PERSISTENT_HEADROOM = 1.15   # staging/copies alongside the persistent floor
-HOST_SHARE = 0.72            # of the applicable host limit, taken as the ceiling
+HOST_SHARE = 0.8             # of the applicable host limit
 
 # The top of the backing ladder is what the host can spare, not a multiple of
 # the persistent floor. An unconstrained plan of this shape wants roughly twice
@@ -112,18 +112,6 @@ def persistent_bytes(preset, opt):
     return sum(sizes[o.id] for o in program.initial_objects), cfg
 
 
-def backing_ladder(persist_bytes, ceiling_bytes):
-    """Host allowances to sweep. The floor is the persistent state plus staging
-    (below it nothing can run); the ceiling is what this host can spare. Between
-    them the recompute planner trades saved contexts for recomputation, which is
-    the tradeoff this axis exists to expose."""
-    lo = persist_bytes * PERSISTENT_HEADROOM
-    if ceiling_bytes <= lo * 1.05:
-        return [round(ceiling_bytes / GIB, 1)]
-    mid = (lo + ceiling_bytes) / 2
-    return sorted({round(v / GIB, 1) for v in (lo, mid, ceiling_bytes)})
-
-
 def budget_ladder(device_bytes, floor_gib):
     """HALF-OCTAVE steps from a floor that can hold one task up to most of the
     device. Doubling is too coarse where it matters: on a large card the whole
@@ -168,7 +156,7 @@ def main():
     if chosen is None:
         raise SystemExit("no preset fits this host")
     preset, persist, cfg = chosen
-    # everything the host can spare; the planner takes less when it wants less
+    # what this host can spare; the planner takes less when it wants less
     backing = HOST_SHARE * host_bytes
 
     # a task needs its own inputs+outputs resident; that bounds the useful floor
@@ -193,7 +181,6 @@ def main():
         "opt_default": args.opt,
         "persistent_gib": round(persist / GIB, 1),
         "backing_gib": round(backing / GIB, 1),
-        "backings": backing_ladder(persist, backing),
         "task_floor_gib": round(floor / GIB, 2),
         "budgets": budget_ladder(device_bytes, floor_gib),
         "seqs": [s for s in (1024, 2048, 4096, 8192) if s <= cfg.seq_len * 2],

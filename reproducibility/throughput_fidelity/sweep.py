@@ -93,7 +93,7 @@ def run_predict(args, measured):
     tss = [int(x) for x in args.t_step.split(",")]
     buds = [float(x) for x in args.budget.split(",")]
     # "unlimited" plans with no host ceiling, so each row reports what the plan
-    # actually WANTS in peak backing — that demand is what sets the real ladder
+    # actually WANTS in peak backing — the demand the allowance policy scales
     backs = [None if x.strip().lower() in ("unlimited", "none", "")
              else float(x) for x in str(args.backing_gib).split(",")]
     mode = "predict-measured" if measured else "predict"
@@ -224,7 +224,8 @@ def main():
     ap.add_argument("--bw", type=float, default=None, help="roofline mem bw GB/s override")
     ap.add_argument("--pcie", type=float, default=None, help="roofline host link GB/s override")
     ap.add_argument("--backing-gib", dest="backing_gib", default="130",
-                    help="host allowance in GiB; comma-separated to sweep")
+                    help="host allowance in GiB; comma-separated to sweep, or "
+                         "'unlimited' to let each plan report what it wants")
     ap.add_argument("--cells", default=None, help="measure: JSON list of cells")
     ap.add_argument("--steps", type=int, default=6)
     ap.add_argument("--data", default=None)

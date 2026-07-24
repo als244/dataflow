@@ -30,30 +30,14 @@ say "host $(hostname)  repo $(git -C "$REPO" rev-parse --short HEAD 2>/dev/null 
 say "P0 environment probe"
 "$PY" "$SUB/env_probe.py" ${PRESET:+--preset "$PRESET"} 2>&1 | tee "$LOG/env_probe.log" | tail -20 || exit 1
 PRESET_USED=$(jget preset); STEPS="${STEPS:-$(jget steps_per_cell)}"
-BACKING=$(jlist backings | tr ' ' ',')
+BACKING=$(jget backing_gib)
 BUDGETS=$(jlist budgets | tr ' ' ','); SEQS=$(jlist seqs)
 TROUNDS=$(jlist t_rounds | tr ' ' ','); TSTEPS=$(jlist t_steps | tr ' ' ',')
-say "preset=$PRESET_USED budgets=$BUDGETS backings=$BACKING steps/cell=$STEPS"
+say "preset=$PRESET_USED budgets=$BUDGETS host-cap=${BACKING}GiB steps/cell=$STEPS"
 
 # --- P1: host<->device bandwidth on record ---
 say "P1 pcie calibration"
 "$PY" "$SUB/pcie_calib.py" > "$LOG/pcie_calib.log" 2>&1 && tail -3 "$LOG/pcie_calib.log" || say "  (skipped)"
-
-# --- P1b: what does an UNCONSTRAINED plan want? one pass with no host ceiling,
-#          whose per-cell peak backing sets the allowance ladder for P2 ---
-say "P1b host-allowance demand probe (no ceiling)"
-: > "$D/predict_unlimited_${OPTS%%,*}.jsonl"
-for seq in $SEQS; do
-  "$PY" "$SUB/sweep.py" --mode predict-measured --preset "$PRESET_USED" \
-    --opt "${OPTS%%,*}" --seq "$seq" --t-round "$TROUNDS" --t-step "$TSTEPS" \
-    --budget "$BUDGETS" --backing-gib unlimited \
-    --out "$D/predict_unlimited_${OPTS%%,*}.jsonl" \
-    >> "$LOG/predict_unlimited.log" 2>&1 \
-    && say "  seq$seq ok" || say "  seq$seq FAILED (see $LOG/predict_unlimited.log)"
-done
-"$PY" "$SUB/backing_range.py" 2>&1 | tee "$LOG/backing_range.log"
-BACKING=$(jlist backings | tr ' ' ',')
-say "host-allowance ladder from measured demand: $BACKING"
 
 # --- P2: measured-cost predictions = the feasibility pass, per-seq chunks ---
 for opt in ${OPTS//,/ }; do
@@ -94,11 +78,11 @@ read -r SQ TR TS BD <<<"$SPINE"
 {
   echo "########## predict_step.py --measured ##########"
   "$PY" tools/bench/predict_step.py --preset "$PRESET_USED" --measured \
-    --t-round "$TR" --tokens-step "$TS" --budget "$BD" --seq-len "$SQ" --backing "${BACKING%%,*}"
+    --t-round "$TR" --tokens-step "$TS" --budget "$BD" --seq-len "$SQ" --backing "$BACKING"
   echo; echo "########## measure_step.py --measured-plan ##########"
   "$PY" tools/bench/measure_step.py --preset "$PRESET_USED" --measured-plan \
     --t-round "$TR" --tokens-step "$TS" --budget "$BD" --seq-len "$SQ" \
-    --backing-gib "${BACKING%%,*}" --steps "$STEPS"
+    --backing-gib "$BACKING" --steps "$STEPS"
 } > "$LOG/shipped_bench.log" 2>&1 && say "P4 ok" || say "P4 had errors (see $LOG/shipped_bench.log)"
 
 say "DONE — data in $D, logs in $LOG"
