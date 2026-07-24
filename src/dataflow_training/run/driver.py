@@ -514,9 +514,16 @@ def measured_variant(fam, cfg, profiles, resolver, pcie, levels):
 
 
 def plan_at_budget(cfg, budget_gib: float, *, recompute: bool = True,
-                   measured: bool = False):
+                   measured: bool = False, backing_gib: float | None = None):
     """Plan the single-step program at a device budget (GiB). Returns the
     PlannedProgram; its placement is baked in -> a budget-specific prog_id.
+
+    ``backing_gib`` is the HOST allowance the plan must also live within — the
+    slab the run will actually have. Left None the planner assumes host memory
+    is unbounded, which silently produces plans that keep more saved
+    activations than the slab can hold and fail at run time; passing it makes
+    the recompute planner trade contexts for recomputation until the plan fits,
+    the same knob a smaller box needs.
     With recompute, the planner re-lowers the program at candidate recompute
     levels (``build_variant``). ``measured`` swaps the roofline cost seeds
     for PROFILED task costs (load_or_profile, disk-cached) AND the
@@ -535,10 +542,12 @@ def plan_at_budget(cfg, budget_gib: float, *, recompute: bool = True,
     from dataflow_training.lowering.planning import plan_program
 
     fam = resolve_family(cfg)
+    backing_cap = int(backing_gib * 1024 ** 3) if backing_gib else None
     if not measured:
         variant = (lambda levels: fam.lower(cfg, recompute_levels=levels)) if recompute else None
         return plan_program(fam.lower(cfg),
                             fast_memory_capacity=int(budget_gib * 1024 ** 3),
+                            backing_capacity=backing_cap,
                             recompute=recompute, build_variant=variant)
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow_training.run.profiling import (apply_measured_costs,
@@ -558,6 +567,7 @@ def plan_at_budget(cfg, budget_gib: float, *, recompute: bool = True,
                       bandwidth_to_slow=pcie.bidi_d2h)
     return plan_program(base,
                         fast_memory_capacity=int(budget_gib * 1024 ** 3),
+                        backing_capacity=backing_cap,
                         recompute=recompute, build_variant=variant)
 
 
@@ -573,7 +583,7 @@ def latest_engine_checkpoint(ckpt_dir) -> Path | None:
 
 def run_engine(client, cfg, recipe: Recipe, pipeline, steps: int, *,
                budget_gib: float, seed: int = 11, recompute: bool = True,
-               measured: bool = False,
+               measured: bool = False, backing_gib: float | None = None,
                profile: dict | None = None,
                log=print, log_every: int = 10,
                checkpoint_every: int | None = None,
@@ -609,7 +619,8 @@ def run_engine(client, cfg, recipe: Recipe, pipeline, steps: int, *,
     # slot-0-only feeding silently trains junk — the solo-vs-DP
     # divergence root cause; same fix as the fleet loop)
     step_cfg = replace(cfg, num_steps=1)
-    planned = plan_at_budget(step_cfg, budget_gib, recompute=recompute,
+    planned = plan_at_budget(step_cfg, budget_gib, backing_gib=backing_gib,
+                             recompute=recompute,
                              measured=measured)
     n_rc = sum(1 for v in (planned.recompute_levels or {}).values() if v)
     ts = planned.transfer_stats or {}

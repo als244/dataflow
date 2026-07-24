@@ -1,0 +1,6 @@
+# results are regenerated per box; keep the code in git, not the artifacts
+env.json
+cells.json
+logs/
+traces/
+figs/
