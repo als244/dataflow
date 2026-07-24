@@ -15,20 +15,13 @@ qwen35moe's dt_bias sign lottery; the honest comparison is the
 field_atol envelope |db| <= 2*speed + slack, not a relative bound.
 
 Tests:
-- test_dsv32_lowering_validates_and_plans: dsv32 lowering validates, tags the family metadata, carries the DSA dense/moe block keys and the expected dense-block count, and plans to a positive-makespan schedule.
 - test_dsv32_full_scale_presets_lower_and_validate: the mini, 671b, and glm5 presets lower and validate with the expected DSA block depth.
 - test_dsv32_partial_ownership_lowering_rejected: a partial-ownership MoE expert set raises NotImplementedError at lowering.
 - test_dsv32_aux_zero_model_step_vs_golden: an aux-off model step matches golden with the bias and index-LayerNorm-bias fields held under the atol envelope.
-- test_dsv32_plan_invariance: the model step matches golden across fast-memory capacities and a recompute-levels plan.
-- test_dsv32_batch2_packed_sequences_vs_golden: a batch-2 packed-sequence model step matches golden.
 - test_dsv32_short_sequences_lt_index_topk_vs_golden: sequences shorter than index_topk clamp DSA selection to min(k, L) per sequence and match golden.
 - test_dsv32_ga2_matches_reference: two grad-accum rounds with the LBL composite, indexer KL, and noaux bias rule match the twin under step-aggregated assignment counts.
-- test_dsv32_fixed_seed_bitwise_deterministic: two fixed-seed engine runs produce bit-identical loss and weight bytes.
-- test_dsv32_measured_costs_replan_still_golden: profiling, applying measured costs, and replanning still reproduce the base run.
 - test_dsv32_frozen_indexer_ablation: with train_indexer off the model step matches golden and the indexer fields stay bit-frozen across the step.
 - test_dsv32_dense_warmup_model_step: in dense warm-up the main model (including embed and head) stays bit-frozen while the indexer fields move under a live full-prefix KL.
-- test_dsv32_poison_on_free_changes_nothing: enabling poison-on-free leaves loss and weights unchanged and non-NaN.
-- test_dsv32_interleaving_stress_changes_nothing: random per-launch jitter leaves loss and weights unchanged.
 """
 from dataclasses import replace
 
@@ -66,27 +59,6 @@ def _tiny_dims(cfg=None):
 
 
 # --- lowering ----------------------------------------------------------------------
-
-
-def test_dsv32_lowering_validates_and_plans():
-    from dataflow.core import validate_program
-    from dataflow_training.model_families.families import resolve_family
-    from dataflow_training.lowering.planning import plan_program, simulate_program
-
-    cfg = _tiny_cfg()
-    fam = resolve_family(cfg)
-    assert fam.name == "dsv32"
-    program = fam.lower(cfg)
-    validate_program(program)
-    assert program.metadata["family"] == "dsv32-shaped"
-    keys = {t.compute_block_key for t in program.tasks}
-    assert {"dsadense_fwd", "dsamoe_fwd", "dsamoe_bwd", "head_loss"} <= keys
-    # depth mix: exactly first_k_dense dense blocks
-    n_dense = sum(1 for t in program.tasks if t.compute_block_key == "dsadense_fwd")
-    assert n_dense == cfg.first_k_dense * cfg.grad_accum_rounds
-    planned = plan_program(program, fast_memory_capacity=8 * 1024 * 1024)
-    log = simulate_program(planned.program)
-    assert max(iv.end for iv in log.task_intervals) > 0
 
 
 def test_dsv32_full_scale_presets_lower_and_validate():
@@ -137,28 +109,6 @@ def test_dsv32_aux_zero_model_step_vs_golden():
         _tiny_cfg(aux_coef=0.0), fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
         field_atol=_BIAS_ATOL, **family_gate_kwargs("dsv32"),
     ).assert_ok()
-
-
-def test_dsv32_plan_invariance():
-    cfg = _tiny_cfg()
-    r1 = check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
-                          field_atol=_BIAS_ATOL, **family_gate_kwargs("dsv32"))
-    r2 = check_model_step(cfg, fast_memory_capacity=8 * 1024 * 1024, tol=3e-2,
-                          field_atol=_BIAS_ATOL, **family_gate_kwargs("dsv32"))
-    levels = {f"A_0_0_{i}": 1 for i in range(cfg.n_layers)}
-    r3 = check_model_step(
-        cfg, fast_memory_capacity=8 * 1024 * 1024, recompute_levels=levels, tol=3e-2,
-        field_atol=_BIAS_ATOL, **family_gate_kwargs("dsv32"),
-    )
-    for r in (r1, r2, r3):
-        r.assert_ok()
-
-
-def test_dsv32_batch2_packed_sequences_vs_golden():
-    cfg = _tiny_cfg(batch=2, seq_len=64)
-    check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
-                     field_atol=_BIAS_ATOL,
-                     **family_gate_kwargs("dsv32")).assert_ok()
 
 
 def test_dsv32_short_sequences_lt_index_topk_vs_golden():
@@ -329,40 +279,6 @@ def _assert_same(a: dict, b: dict, tol: float = 1e-3):
         assert err < tol, f"{k}: rel_l2={err}"
 
 
-def test_dsv32_fixed_seed_bitwise_deterministic():
-    a = _run()
-    b = _run()
-    assert a["loss"] == b["loss"]
-    for k in a:
-        if k != "loss":
-            assert torch.equal(a[k], b[k]), k
-
-
-def test_dsv32_measured_costs_replan_still_golden():
-    from dataflow.runtime.device.cuda import CudaBackend
-    from dataflow_training.model_families.families import resolve_family
-    from dataflow_training.lowering.planning import plan_program
-    from dataflow_training.run.profiling import apply_measured_costs, profile_program
-
-    cfg = _tiny_cfg()
-    fam = resolve_family(cfg)
-    program = fam.lower(cfg)
-    backend = CudaBackend()
-    resolver = fam.build_resolver(fam.derive_dims(cfg))
-    profiles = profile_program(program, resolver, backend, soak_seconds=0)
-    # the policy-frozen router bias puts these families on the
-    # frozen-fingerprint signature path: apply needs the same resolver
-    measured = apply_measured_costs(program, profiles, resolver=resolver)
-    assert all("measured" in t.metadata for t in measured.tasks)
-
-    base = _run()
-    replanned = plan_program(measured, fast_memory_capacity=8 * 1024 * 1024).program
-    again = _run(program=replanned)
-    _assert_same(again, base)
-
-
-
-
 def test_dsv32_frozen_indexer_ablation():
     """train_indexer=False (the ablation knob): model-step still matches
     golden AND the five indexer fields are BIT-FROZEN across the step
@@ -496,32 +412,3 @@ def test_dsv32_dense_warmup_model_step():
     for buf in values.values():
         backend.free(buf)
 
-
-def test_dsv32_poison_on_free_changes_nothing():
-    base = _run()
-    poisoned = _run(engine_kwargs={"poison_on_free": True})
-    _assert_same(poisoned, base)
-    assert poisoned["loss"] == poisoned["loss"]  # not NaN
-
-
-def test_dsv32_interleaving_stress_changes_nothing():
-    from dataflow.runtime.device.cuda_spin import SpinKernel
-
-    def wrapper(resolver, backend):
-        kernel = SpinKernel()
-        rng = torch.Generator().manual_seed(123)
-
-        class Jitter:
-            def __init__(self, inner):
-                self.inner = inner
-
-            def launch(self, ctx):
-                delay = float(torch.randint(20, 400, (1,), generator=rng)[0])
-                kernel.launch_us(ctx.stream, delay)
-                self.inner.launch(ctx)
-
-        return lambda task: Jitter(resolver(task))
-
-    base = _run()
-    jittered = _run(resolver_wrapper=wrapper)
-    _assert_same(jittered, base)

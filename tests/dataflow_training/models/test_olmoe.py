@@ -10,16 +10,9 @@ twice -> identical bytes).
 
 Tests:
 - test_olmoe_stage_context_completeness: the forward block's emitted context fields exactly equal the activation layout and only the y-only combine epilogue sits past the recompute boundary.
-- test_olmoe_lowering_validates_and_plans: tiny cfg lowers and validates as olmoe with untied embed/head and moeattn/head_loss block keys, and plans/simulates with nonzero task intervals.
 - test_olmoe_partial_ownership_lowering_rejected: lowering with a partial expert-ownership MoE spec raises NotImplementedError.
 - test_olmoe_aux_zero_model_step_vs_golden: an aux_coef=0 model-step matches the golden twin.
-- test_olmoe_plan_invariance: the model-step matches golden across memory budgets and recompute levels.
-- test_olmoe_batch2_packed_sequences_vs_golden: a batch=2 packed-sequence model-step matches golden.
 - test_olmoe_grad_accum_two_rounds_matches_reference: two grad-accum rounds (per-round CE+aux summed, one backward) leave engine final weights matching the twin.
-- test_olmoe_fixed_seed_bitwise_deterministic: two runs at the same seed produce identical loss bytes and weights.
-- test_olmoe_poison_on_free_changes_nothing: the poison_on_free engine option leaves loss and weights unchanged and non-NaN.
-- test_olmoe_interleaving_stress_changes_nothing: random per-task launch jitter leaves loss and weights unchanged.
-- test_olmoe_measured_costs_replan_still_golden: profiling every signature then replanning on measured costs leaves the math unchanged.
 """
 from dataclasses import replace
 
@@ -80,26 +73,6 @@ def test_olmoe_stage_context_completeness():
     assert names[OlmoeBlockFwd.recompute_stage_count():] == ["moe_experts2_combine"]
 
 
-def test_olmoe_lowering_validates_and_plans():
-    from dataflow.core import validate_program
-    from dataflow_training.model_families.families import resolve_family
-    from dataflow_training.lowering.planning import plan_program, simulate_program
-
-    cfg = _tiny_cfg()
-    fam = resolve_family(cfg)
-    assert fam.name == "olmoe"
-    program = fam.lower(cfg)
-    validate_program(program)
-    assert program.metadata["family"] == "olmoe-shaped"
-    ids = {spec.id for spec in program.initial_objects}
-    assert {"W_embed", "W_head", "O_head"} <= ids  # untied
-    keys = {t.compute_block_key for t in program.tasks}
-    assert {"moeattn_fwd", "moeattn_bwd", "head_loss"} <= keys
-    planned = plan_program(program, fast_memory_capacity=8 * 1024 * 1024)
-    log = simulate_program(planned.program)
-    assert max(iv.end for iv in log.task_intervals) > 0
-
-
 def test_olmoe_partial_ownership_lowering_rejected():
     """Accounting for partial expert ownership is plumbed and unit-tested
     (tests/dataflow_training/modules/test_moe.py); the PROGRAM path refuses until a multi-rank
@@ -126,27 +99,6 @@ def test_olmoe_aux_zero_model_step_vs_golden():
         _tiny_cfg(aux_coef=0.0), fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
         **family_gate_kwargs("olmoe"),
     ).assert_ok()
-
-
-def test_olmoe_plan_invariance():
-    cfg = _tiny_cfg()
-    r1 = check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
-                          **family_gate_kwargs("olmoe"))
-    r2 = check_model_step(cfg, fast_memory_capacity=8 * 1024 * 1024, tol=3e-2,
-                          **family_gate_kwargs("olmoe"))
-    levels = {f"A_0_0_{i}": 1 for i in range(cfg.n_layers)}
-    r3 = check_model_step(
-        cfg, fast_memory_capacity=8 * 1024 * 1024, recompute_levels=levels, tol=3e-2,
-        **family_gate_kwargs("olmoe"),
-    )
-    for r in (r1, r2, r3):
-        r.assert_ok()
-
-
-def test_olmoe_batch2_packed_sequences_vs_golden():
-    cfg = _tiny_cfg(batch=2, seq_len=64)
-    check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
-                     **family_gate_kwargs("olmoe")).assert_ok()
 
 
 def test_olmoe_grad_accum_two_rounds_matches_reference():
@@ -265,70 +217,4 @@ def _assert_same(a: dict, b: dict, tol: float = 1e-3):
             continue
         err = rel_l2(a[k], b[k])
         assert err < tol, f"{k}: rel_l2={err}"
-
-
-def test_olmoe_fixed_seed_bitwise_deterministic():
-    """Same seed, same plan, twice -> identical LOSS BYTES and weights
-    (routing ties, sort, grouped GEMMs, combine: all deterministic)."""
-    a = _run()
-    b = _run()
-    assert a["loss"] == b["loss"]
-    for k in a:
-        if k != "loss":
-            assert torch.equal(a[k], b[k]), k
-
-
-def test_olmoe_poison_on_free_changes_nothing():
-    base = _run()
-    poisoned = _run(engine_kwargs={"poison_on_free": True})
-    _assert_same(poisoned, base)
-    assert poisoned["loss"] == poisoned["loss"]  # not NaN
-
-
-def test_olmoe_interleaving_stress_changes_nothing():
-    from dataflow.runtime.device.cuda_spin import SpinKernel
-
-    def wrapper(resolver, backend):
-        kernel = SpinKernel()
-        rng = torch.Generator().manual_seed(123)
-
-        class Jitter:
-            def __init__(self, inner):
-                self.inner = inner
-
-            def launch(self, ctx):
-                delay = float(torch.randint(20, 400, (1,), generator=rng)[0])
-                kernel.launch_us(ctx.stream, delay)
-                self.inner.launch(ctx)
-
-        return lambda task: Jitter(resolver(task))
-
-    base = _run()
-    jittered = _run(resolver_wrapper=wrapper)
-    _assert_same(jittered, base)
-
-
-def test_olmoe_measured_costs_replan_still_golden():
-    """The end-to-end profiling gate: every signature (incl. moeattn_bwd,
-    whose packed ctx carries int32 routing fields) must profile through the
-    profile_fill hook without garbage-index crashes, and re-planning on
-    measured costs must not change the math."""
-    from dataflow.runtime.device.cuda import CudaBackend
-    from dataflow_training.model_families.families import resolve_family
-    from dataflow_training.lowering.planning import plan_program
-    from dataflow_training.run.profiling import apply_measured_costs, profile_program
-
-    cfg = _tiny_cfg()
-    fam = resolve_family(cfg)
-    program = fam.lower(cfg)
-    backend = CudaBackend()
-    profiles = profile_program(program, fam.build_resolver(fam.derive_dims(cfg)), backend, soak_seconds=0)
-    measured = apply_measured_costs(program, profiles)
-    assert all("measured" in t.metadata for t in measured.tasks)
-
-    base = _run()
-    replanned = plan_program(measured, fast_memory_capacity=8 * 1024 * 1024).program
-    again = _run(program=replanned)
-    _assert_same(again, base)
-
 

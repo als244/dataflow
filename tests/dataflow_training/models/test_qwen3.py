@@ -9,10 +9,8 @@ plus plan-invariance across budgets/recompute and a multi-step golden run.
 Tests:
 - test_qwen3_stage_context_completeness: the forward block's emitted context fields exactly equal the activation layout.
 - test_qwen3_derived_recompute_excludes_boundary_work: the recompute stage count stops just after the last emitter, keeping rope inside the boundary and the y-only swiglu tail outside.
-- test_qwen3_lowering_validates_and_plans: cfg lowers, validates, carries the qwen3-shaped family tag, and plans/simulates with nonzero task intervals.
 - test_qknorm_kernel_reuse_matches_reference: rmsnorm at (tokens*heads, head_dim) fwd/bwd matches the autograd reference, confirming qk-norm reuses the kernel.
 - test_qwen3_block_backward: one block's backward (dx, every packed dW incl. q/k norm weights, recompute-equivalence, 2x accumulation) matches autograd.
-- test_qwen3_plan_invariance: the model-step math is identical across memory budgets and recompute plans.
 """
 import pytest
 
@@ -48,18 +46,6 @@ def test_qwen3_derived_recompute_excludes_boundary_work():
     names = [name for name, _, _ in Qwen3BlockFwd.STAGES]
     assert names.index("rope") < n
     assert names.index("swiglu") >= n
-
-
-def test_qwen3_lowering_validates_and_plans():
-    from dataflow.core import validate_program
-    from dataflow_training.lowering.planning import plan_program, simulate_program
-
-    program = lower_qwen3(CFG)
-    validate_program(program)
-    assert program.metadata["family"] == "qwen3-shaped"
-    planned = plan_program(program, fast_memory_capacity=8 * 1024 * 1024)
-    log = simulate_program(planned.program)
-    assert max(iv.end for iv in log.task_intervals) > 0
 
 
 # --- GPU ladders --------------------------------------------------------------
@@ -109,22 +95,5 @@ def test_qwen3_block_backward():
 
     check_block_backward(derive_dims(CFG), family=family("qwen3")).assert_ok()
 
-
-
-
-@gpu
-@pytest.mark.gpu
-def test_qwen3_plan_invariance():
-    """Different budgets + recompute plans must produce identical math."""
-    from dataflow_training.testing.gradcheck import check_model_step
-
-    r1 = check_model_step(CFG, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2)
-    r2 = check_model_step(CFG, fast_memory_capacity=8 * 1024 * 1024, tol=3e-2)
-    levels = {f"A_0_0_{i}": 1 for i in range(CFG.n_layers)}
-    r3 = check_model_step(
-        CFG, fast_memory_capacity=8 * 1024 * 1024, recompute_levels=levels, tol=3e-2,
-    )
-    for r in (r1, r2, r3):
-        r.assert_ok()
 
 

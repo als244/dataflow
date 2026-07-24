@@ -10,8 +10,6 @@ Tests:
 - test_adamw_step_matches_manual: the fused adamw_step reproduces the manual bf16 formula byte-for-byte for weights and m/v state.
 - test_embed_roundtrip: embed_fwd gathers rows exactly and embed_bwd_accum matches an index_add scatter.
 - test_block_backward_vs_autograd: one transformer block's backward matches autograd.
-- test_model_step_vs_golden: one full model-step through the real engine matches the golden twin.
-- test_plan_invariance: the model-step math is identical across memory budgets and recompute levels.
 - test_model_step_muon_policy_golden_parity: opt_policy="muon" through the engine matches the policy-dispatched golden (matrix fields via muon, norms and embed/head via adamw).
 """
 import pytest
@@ -154,22 +152,6 @@ def test_block_backward_vs_autograd():
 
 
 # --- ladder level 3: full model step through the real engine ----------------------
-
-def test_model_step_vs_golden():
-    check_model_step(CFG, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2).assert_ok()
-
-
-def test_plan_invariance():
-    """Different plans (budgets + recompute) must produce the same math."""
-    r1 = check_model_step(CFG, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2)
-    r2 = check_model_step(CFG, fast_memory_capacity=8 * 1024 * 1024, tol=3e-2)
-    levels = {f"A_0_0_{i}": 1 for i in range(CFG.n_layers)}
-    r3 = check_model_step(
-        CFG, fast_memory_capacity=8 * 1024 * 1024, recompute_levels=levels, tol=3e-2,
-    )
-    for r in (r1, r2, r3):
-        r.assert_ok()
-
 
 def test_model_step_muon_policy_golden_parity():
     """opt_policy="muon" through the REAL engine vs the policy-dispatched

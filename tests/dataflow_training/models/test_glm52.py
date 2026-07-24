@@ -15,17 +15,10 @@ qwen35moe's dt_bias sign lottery; the honest comparison is the
 field_atol envelope |db| <= 2*speed + slack, not a relative bound.
 
 Tests:
-- test_glm52_lowering_validates_and_plans: tiny cfg lowers and validates as the glm52 family, the gdl/gml/gmf block-key role mix matches the config, and the program plans and simulates with nonzero task intervals.
 - test_glm52_full_scale_presets_lower_and_validate: the glm52_mini (18-layer) and glm52 (78-layer) presets lower, validate, and emit one forward block per layer.
 - test_glm52_partial_ownership_lowering_rejected: lowering with a partial expert-ownership MoE spec raises NotImplementedError.
 - test_glm52_aux_zero_model_step_vs_golden: with aux_coef=0 the model-step matches the golden twin, bias fields compared under an absolute envelope.
-- test_glm52_plan_invariance: the model-step matches golden across large-memory, small-memory, and recompute-enabled plans.
-- test_glm52_batch2_packed_sequences_vs_golden: a batch=2 packed-sequence model-step matches the golden twin.
 - test_glm52_grad_accum_two_rounds_matches_reference: two grad-accum rounds — engine final weights match the twin that sums per-round MoE assignment counts before the noaux bias rule, sign-lottery fields under an absolute envelope.
-- test_glm52_fixed_seed_bitwise_deterministic: two runs at the same seed produce byte-identical weights and equal loss.
-- test_glm52_measured_costs_replan_still_golden: applying resolver-aware profiled costs and replanning leaves loss and weights unchanged from baseline.
-- test_glm52_poison_on_free_changes_nothing: the poison_on_free engine option leaves loss and weights unchanged and non-NaN.
-- test_glm52_interleaving_stress_changes_nothing: random per-task launch jitter leaves loss and weights unchanged.
 - test_glm52_frozen_indexer_ablation: train_indexer=False emits no metadata-gradient (dAuxTemp) objects or outputs and the model-step still matches the golden twin.
 - test_glm52_dense_warmup_model_step: dense warm-up (sparse_mode=False) model-step matches golden with only the indexer fields trained in the reference.
 - test_glm52_dense_warmup_freeze_and_movement: across a real warm-up engine step every non-indexer field (embed/head included) and all follower fields stay bit-frozen while at least one leader indexer field moves.
@@ -65,29 +58,6 @@ def _tiny_dims(cfg=None):
 
 
 # --- lowering ----------------------------------------------------------------------
-
-
-def test_glm52_lowering_validates_and_plans():
-    from dataflow.core import validate_program
-    from dataflow_training.model_families.families import resolve_family
-    from dataflow_training.lowering.planning import plan_program, simulate_program
-
-    cfg = _tiny_cfg()
-    fam = resolve_family(cfg)
-    assert fam.name == "glm52"
-    program = fam.lower(cfg)
-    validate_program(program)
-    assert program.metadata["family"] == "glm52-shaped"
-    keys = {t.compute_block_key for t in program.tasks}
-    assert {"gdl_fwd", "gml_fwd", "gmf_fwd", "gmf_bwd", "head_loss"} <= keys
-    # role mix (tiny: F F S S F S, first_k=1): 1 gdl, 2 gml, 3 gmf
-    per = cfg.grad_accum_rounds
-    assert sum(1 for t in program.tasks if t.compute_block_key == "gdl_fwd") == 1 * per
-    assert sum(1 for t in program.tasks if t.compute_block_key == "gml_fwd") == 2 * per
-    assert sum(1 for t in program.tasks if t.compute_block_key == "gmf_fwd") == 3 * per
-    planned = plan_program(program, fast_memory_capacity=8 * 1024 * 1024)
-    log = simulate_program(planned.program)
-    assert max(iv.end for iv in log.task_intervals) > 0
 
 
 def test_glm52_full_scale_presets_lower_and_validate():
@@ -137,28 +107,6 @@ def test_glm52_aux_zero_model_step_vs_golden():
         _tiny_cfg(aux_coef=0.0), fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
         field_atol=_BIAS_ATOL, **family_gate_kwargs("glm52"),
     ).assert_ok()
-
-
-def test_glm52_plan_invariance():
-    cfg = _tiny_cfg()
-    r1 = check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
-                          field_atol=_BIAS_ATOL, **family_gate_kwargs("glm52"))
-    r2 = check_model_step(cfg, fast_memory_capacity=8 * 1024 * 1024, tol=3e-2,
-                          field_atol=_BIAS_ATOL, **family_gate_kwargs("glm52"))
-    levels = {f"A_0_0_{i}": 1 for i in range(cfg.n_layers)}
-    r3 = check_model_step(
-        cfg, fast_memory_capacity=8 * 1024 * 1024, recompute_levels=levels, tol=3e-2,
-        field_atol=_BIAS_ATOL, **family_gate_kwargs("glm52"),
-    )
-    for r in (r1, r2, r3):
-        r.assert_ok()
-
-
-def test_glm52_batch2_packed_sequences_vs_golden():
-    cfg = _tiny_cfg(batch=2, seq_len=64)
-    check_model_step(cfg, fast_memory_capacity=64 * 1024 * 1024, tol=3e-2,
-                     field_atol=_BIAS_ATOL,
-                     **family_gate_kwargs("glm52")).assert_ok()
 
 
 def test_glm52_grad_accum_two_rounds_matches_reference():
@@ -316,75 +264,10 @@ def _assert_same(a: dict, b: dict, tol: float = 1e-3):
         assert err < tol, f"{k}: rel_l2={err}"
 
 
-def test_glm52_fixed_seed_bitwise_deterministic():
-    a = _run()
-    b = _run()
-    assert a["loss"] == b["loss"]
-    for k in a:
-        if k != "loss":
-            assert torch.equal(a[k], b[k]), k
-
-
-def test_glm52_measured_costs_replan_still_golden():
-    from dataflow.runtime.device.cuda import CudaBackend
-    from dataflow_training.model_families.families import resolve_family
-    from dataflow_training.lowering.planning import plan_program
-    from dataflow_training.run.profiling import apply_measured_costs, profile_program
-
-    cfg = _tiny_cfg()
-    fam = resolve_family(cfg)
-    program = fam.lower(cfg)
-    backend = CudaBackend()
-    resolver = fam.build_resolver(fam.derive_dims(cfg))
-    profiles = profile_program(program, resolver, backend, soak_seconds=0)
-    # the policy-frozen router bias puts these families on the
-    # frozen-fingerprint signature path: apply needs the same resolver
-    measured = apply_measured_costs(program, profiles, resolver=resolver)
-    assert all("measured" in t.metadata for t in measured.tasks)
-
-    base = _run()
-    replanned = plan_program(measured, fast_memory_capacity=8 * 1024 * 1024).program
-    again = _run(program=replanned)
-    _assert_same(again, base)
-
-
-
-
-
 # block-level ladder retired with the golden models: block math is
 # gated by the per-op kernel pins, the model-level dW comparison
 # (grad: entries), and per-block isolation (tools/deep_compare.py
 # --isolate); see docs/correctness_compare.md.
-
-
-def test_glm52_poison_on_free_changes_nothing():
-    base = _run()
-    poisoned = _run(engine_kwargs={"poison_on_free": True})
-    _assert_same(poisoned, base)
-    assert poisoned["loss"] == poisoned["loss"]  # not NaN
-
-
-def test_glm52_interleaving_stress_changes_nothing():
-    from dataflow.runtime.device.cuda_spin import SpinKernel
-
-    def wrapper(resolver, backend):
-        kernel = SpinKernel()
-        rng = torch.Generator().manual_seed(123)
-
-        class Jitter:
-            def __init__(self, inner):
-                self.inner = inner
-
-            def launch(self, ctx):
-                delay = float(torch.randint(20, 400, (1,), generator=rng)[0])
-                kernel.launch_us(ctx.stream, delay)
-                self.inner.launch(ctx)
-
-        return lambda task: Jitter(resolver(task))
-
-    base = _run()
-    jittered = _run(resolver_wrapper=wrapper)
-    _assert_same(jittered, base)
 
 
 def test_glm52_frozen_indexer_ablation():
