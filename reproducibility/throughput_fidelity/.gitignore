@@ -5,3 +5,6 @@ logs/
 traces/
 figs/
 data/
+# the written report names the machines it ran on; publishing one is a
+# deliberate act (git add -f), not a side effect of running the sweep
+REPORT.md

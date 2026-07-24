@@ -1,8 +1,11 @@
 #!/usr/bin/env python
 """Turn one or more sweep runs into a written report.
 
-    python report.py                                   # this box
-    python report.py --runs della=. chicago=../chi --out REPORT.md
+    python report.py                       # this machine's run
+    python report.py --runs "80GB card"=. "24GB card"=../other --out REPORT.md
+
+Runs are labelled by their device unless a name is given, so a report describes
+hardware rather than whoever's machines produced it.
 
 Everything quantitative in the report comes from the JSONL the sweep wrote, so
 the numbers cannot drift from the run that produced them. Prose that interprets
@@ -243,8 +246,9 @@ def main() -> int:
         runs = [Run(*spec.split("=", 1)) for spec in a.runs]
         runs = [Run(r.name, Path(r.root)) for r in runs]
     else:
-        runs = [Run(json.loads((here / "env.json").read_text()).get("host", "this box")
-                    if (here / "env.json").exists() else "this box", here)]
+        env_path = here / "env.json"
+        env = json.loads(env_path.read_text()) if env_path.exists() else {}
+        runs = [Run(env.get("device", "this machine"), here)]
 
     parts = ["# Training throughput under a GPU memory ceiling\n",
              "*Generated from the sweep's own output; every number below comes "

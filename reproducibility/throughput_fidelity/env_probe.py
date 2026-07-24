@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 """Decide what THIS machine can sweep, and write it to env.json.
 
-The same study runs on very different boxes (an 80 GiB datacentre card with a
-140 GiB allocation, a 32 GiB desktop card with 188 GiB of host RAM, a 24 GiB
-card with 126 GiB), so the grid cannot be hard-coded. This probe reads the real
+The same study has to mean something on a datacentre card under a scheduler's
+memory grant and on a desktop card with whatever RAM the workstation has, so
+the grid cannot be hard-coded. This probe reads the real
 limits — device memory, and the HOST limit that actually applies (a cgroup cap
 under a batch scheduler, else physical RAM) — then picks:
 

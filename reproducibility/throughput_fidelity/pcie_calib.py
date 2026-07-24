@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Measure real pinned host<->device bandwidth on this GPU, so the sim's
-slow<->fast (pcie_gbs) seed reflects della's actual link instead of the
-generic 55 GB/s default. Prints `PCIE_GBS=<n>` (min of sustained H2D/D2H at
+slow<->fast seed reflects the link this machine actually has instead of a
+generic default. Prints `PCIE_GBS=<n>` (min of sustained H2D/D2H at
 the largest size — the conservative seed for transfer-bound cells).
 """
 import time
