@@ -97,11 +97,43 @@ def host_limit_bytes():
                     return val, f"cgroup ({os.path.basename(path)})"
         except (OSError, ValueError):
             pass
+    # MemAvailable, not MemTotal: the allowance becomes a PINNED slab, and
+    # memory already spoken for by other tenants cannot be pinned no matter
+    # what the machine's nameplate says.
+    fields = {}
     with open("/proc/meminfo") as fh:
         for line in fh:
-            if line.startswith("MemTotal:"):
-                return int(line.split()[1]) * 1024, "MemTotal"
+            name, _, rest = line.partition(":")
+            fields[name] = int(rest.split()[0]) * 1024
+    if "MemAvailable" in fields:
+        return fields["MemAvailable"], "MemAvailable"
+    if "MemTotal" in fields:
+        return fields["MemTotal"], "MemTotal"
     raise SystemExit("cannot determine host memory")
+
+
+def largest_pinnable(want_bytes, floor_bytes):
+    """The biggest pinned allocation this host will actually give us, at or
+    below ``want_bytes``.
+
+    Sizing the allowance by arithmetic on a memory total is wishful: pinned
+    pages must be resident and non-swappable, so the ceiling is set by what is
+    free right now and by whatever else has already pinned memory. Asking and
+    halving on refusal costs a few seconds at startup and turns a run-time
+    CUDA allocation failure -- which surfaces deep inside the first measured
+    cell, after the whole prediction pass has been paid for -- into a number
+    chosen before any work begins."""
+    import torch
+
+    size = int(want_bytes)
+    while size > floor_bytes:
+        try:
+            buf = torch.empty(size, dtype=torch.uint8, pin_memory=True)
+            del buf
+            return size
+        except Exception:
+            size = int(size * 0.8)     # ease down; halving throws away half
+    return int(floor_bytes)
 
 
 def persistent_bytes(preset, opt):
@@ -194,9 +226,10 @@ def main():
     if chosen is None:
         raise SystemExit("no preset fits this host")
     preset, persist, cfg = chosen
-    # what this host can spare; the planner takes less when it wants less
+    # what this host can spare, then what it will actually pin
     backing = (args.backing_gib * GIB if args.backing_gib
                else (args.host_share or HOST_SHARE) * host_bytes)
+    backing = largest_pinnable(backing, persist * PERSISTENT_HEADROOM)
 
     # a task needs its own inputs+outputs resident; that bounds the useful floor
     from dataflow_training.model_families.families import resolve_family
