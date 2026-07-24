@@ -64,8 +64,20 @@ HOST_SHARE = 0.72            # of the applicable host limit, taken as the ceilin
 
 
 def host_limit_bytes():
-    """The host memory that actually applies: a cgroup cap when a scheduler
-    imposes one (SLURM --mem), otherwise physical RAM."""
+    """The host memory that actually applies: what a batch scheduler granted
+    this job, else a cgroup cap, else physical RAM. The scheduler's own
+    variable is checked FIRST because a compute node reports its full physical
+    RAM through both /proc/meminfo and (often) the cgroup, while the job may
+    only own a slice of it — sizing a pinned slab from the node total gets the
+    job killed."""
+    for var, unit in (("SLURM_MEM_PER_NODE", 1024 ** 2),
+                      ("SLURM_MEM_PER_CPU", 1024 ** 2)):
+        raw = os.environ.get(var)
+        if raw and raw.isdigit():
+            total = int(raw) * unit
+            if var == "SLURM_MEM_PER_CPU":
+                total *= int(os.environ.get("SLURM_CPUS_ON_NODE", "1"))
+            return total, var
     for path in ("/sys/fs/cgroup/memory.max",
                  "/sys/fs/cgroup/memory/memory.limit_in_bytes"):
         try:
@@ -113,16 +125,23 @@ def backing_ladder(persist_bytes, ceiling_bytes):
 
 
 def budget_ladder(device_bytes, floor_gib):
-    """Powers of two from a floor that can hold one task, up to most of the
-    device, plus the cap itself when the last power of two leaves a big gap
-    (a 32 GiB card should still get an ample-budget point, not stop at 16)."""
+    """HALF-OCTAVE steps from a floor that can hold one task up to most of the
+    device. Doubling is too coarse where it matters: on a large card the whole
+    interesting transition (offload-bound to compute-bound) can hide between
+    16 and 64 GiB, and three points cannot show a knee. sqrt(2) spacing keeps
+    the ladder short while resolving that region, and the device cap is always
+    included so the ample end is a real measurement rather than an
+    extrapolation."""
     cap = 0.85 * device_bytes / GIB
-    out = [b for b in (2, 4, 8, 16, 32, 64, 128) if floor_gib <= b <= cap]
+    out, b = [], float(floor_gib)
+    while b <= cap * 1.001:
+        out.append(round(b, 1) if b < 10 else round(b))
+        b *= 2 ** 0.5
     if not out:
-        out = [round(cap, 1)]
-    elif cap > out[-1] * 1.25:
+        return [round(cap, 1)]
+    if cap > out[-1] * 1.1:
         out.append(round(cap, 1))
-    return out
+    return sorted(set(out))
 
 
 def main():

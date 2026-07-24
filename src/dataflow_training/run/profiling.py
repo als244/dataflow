@@ -60,7 +60,15 @@ def _signature(task: TaskSpec, sizes: dict[str, int],
     from the executable's own policy-filtered grad layout — separates
     them. It is EMPTY (and the signature byte-identical to the
     historical form) whenever nothing in the task's weight layout is
-    frozen, so default-policy profile caches never invalidate."""
+    frozen, so default-policy profile caches never invalidate.
+
+    Sizes also under-discriminate SEQUENCE LENGTH, for the same reason in a
+    different direction: a round of T tokens occupies the same buffers whether
+    it is one long sequence or many short ones, so batch x seq_len combinations
+    with equal token counts collide — while attention costs scale with the
+    sequence, not the token total (8x the attention work at seq 8192 vs 1024 for
+    the same T). Every task that reads or writes an attention context therefore
+    carries its sequence length."""
     fp: tuple = ()
     if resolver is not None and task.group == "backward" \
             and task.compute_block_key.endswith("_bwd"):
@@ -72,13 +80,22 @@ def _signature(task: TaskSpec, sizes: dict[str, int],
                 fp = tuple(f.name for f in gl.fields)
         except Exception:
             fp = ()
+    seq: tuple = ()
+    if resolver is not None and task.group in ("forward", "backward", "recompute"):
+        try:
+            dims = getattr(resolver(task), "dims", None)
+            length = getattr(dims, "seq_len", None)
+            if length:
+                seq = (int(length),)
+        except Exception:
+            seq = ()
     base = (
         task.compute_block_key,
         tuple(sorted(sizes[i] for i in task.inputs)),
         tuple(sorted(o.size_bytes for o in task.outputs)),
         bool(task.mutates),
     )
-    return base + ((fp,) if fp else ())
+    return base + ((fp,) if fp else ()) + (("seq", seq[0]) if seq else ())
 
 
 PROFILE_FILL_SEED = 20260724
@@ -398,12 +415,14 @@ def host_backing_cap_bytes(*, reserve_gib: float = 10.0) -> int:
     return int(max(0, avail - reserve_gib * 1024 ** 3))
 
 
-PROFILE_CACHE_REV = "4"  # bump whenever kernel/task costs change (invalidates all cached profiles)
+PROFILE_CACHE_REV = "5"  # bump whenever kernel/task costs change (invalidates all cached profiles)
 #   "3": float inputs seeded with real-scale values (fill_realistic) — every
 #        earlier profile timed zero-valued operands and ran ~1.25x optimistic
 #   "4": that seeding extended to COMPOSITE operands (saved-activation contexts,
 #        packed weights carry no element type); rev 3 left them zero, which is
 #        most of the bytes a block reads
+#   "5": attention-bearing tasks carry their sequence length, so batch x seq
+#        combinations with equal token counts stop sharing one timing
 
 
 def load_or_profile(
