@@ -369,6 +369,26 @@ def profile_program(
     return profiles
 
 
+def recompute_level_pins(program) -> list[dict[str, int]]:
+    """One level assignment per distinct recompute level in the rewrite table.
+
+    The recompute search prices programs the base lowering never contains. A
+    block that recomputes emits a task the base program has no equivalent of,
+    and its forward stops emitting the saved-activation object — which changes
+    that forward's cost signature too. Costs are looked up BY signature, so a
+    variant built from levels nobody profiled cannot be priced at all, and the
+    search loses it.
+
+    Pinning every rewrite to each level in turn produces the programs whose
+    signatures the search can encounter: a mixed assignment only ever combines
+    tasks one of these pins already contains. Nothing here reads what a level
+    means — the rewrite table is the whole input."""
+    levels = sorted({o.level for rw in program.recompute_rewrites for o in rw.options})
+    return [{rw.object_id: min(level, rw.options[-1].level)
+             for rw in program.recompute_rewrites}
+            for level in levels]
+
+
 class MissingProfileError(LookupError):
     """A task was priced against a profile table that never measured it.
 

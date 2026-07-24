@@ -8,12 +8,20 @@ Tests:
 - test_recompute_fires_under_starved_interconnect: slow PCIe drives the planner to pick recompute and beat the save-all plan while staying under cap.
 - test_capacity_sweep_monotone_tiny: looser memory budgets never yield a larger makespan.
 - test_backing_capacity_drives_recompute: a backing cap between the save-all and recompute-all peaks forces more recomputation than the unbounded plan and still simulates green.
+- test_level_pins_cover_every_variant_the_search_prices: the programs the profiler is told to measure carry every cost signature the recompute search can encounter, including the seeds it starts from.
+- test_incomplete_cost_table_is_not_reported_as_infeasible: pricing a program against a table that never measured it raises MissingProfileError rather than being absorbed as a plan that does not fit.
+- test_recompute_never_plans_slower_than_saving_everything: offering recompute never yields a slower plan than the save-everything baseline it starts from, at any budget.
 """
 from functools import partial
+
+import pytest
 
 from dataflow.core import validate_program
 from dataflow_training.lowering.planning import plan_program, simulate_program
 from dataflow_training.model_families.llama3 import ShapedLlamaConfig, build_shaped_llama3
+from dataflow_training.run.profiling import (MissingProfileError, _signature,
+                                             apply_measured_costs,
+                                             recompute_level_pins)
 
 TINY_CAP = 600_000  # bytes; tight enough to force movement on the tiny config
 
@@ -157,3 +165,75 @@ def test_backing_capacity_drives_recompute():
     # the tight plan must actually simulate green under the cap
     log = simulate_program(tight.program)
     assert max(iv.end for iv in log.task_intervals) == tight.makespan_us
+
+
+def test_level_pins_cover_every_variant_the_search_prices():
+    """Measured costs are looked up by signature, and the recompute search
+    prices programs the base lowering does not contain: a block that recomputes
+    emits a task with no counterpart there, and its forward stops emitting the
+    saved-activation object, which changes that forward's signature too. When a
+    signature is missing the variant cannot be priced at all — which is
+    indistinguishable, to the search, from a variant that does not fit. The
+    pins the profiler is handed have to close that gap."""
+    cfg = ShapedLlamaConfig.tiny()
+    program = build_shaped_llama3(cfg)
+
+    covered = set()
+    for pins in recompute_level_pins(program):
+        variant = build_shaped_llama3(cfg, recompute_levels=pins)
+        sizes = variant.object_sizes()
+        covered |= {_signature(t, sizes, None) for t in variant.tasks}
+
+    top = {rw.object_id: rw.options[-1].level for rw in program.recompute_rewrites}
+    # the seeds the search evaluates before its greedy loop, plus the mixed
+    # assignment the loop walks through
+    for levels in (dict.fromkeys(top, 0),
+                   top,
+                   {obj: (lvl if n % 2 == 0 else 0)
+                    for n, (obj, lvl) in enumerate(top.items())}):
+        variant = build_shaped_llama3(cfg, recompute_levels=levels)
+        sizes = variant.object_sizes()
+        missing = {_signature(t, sizes, None) for t in variant.tasks} - covered
+        assert not missing, f"unpriceable tasks in variant: {sorted(missing)}"
+
+
+def test_incomplete_cost_table_is_not_reported_as_infeasible():
+    """A table that cannot price a program is a fault in what was measured, not
+    a plan that does not fit. It has to raise as itself: the recompute search
+    treats the planner's ValueError as "this variant is infeasible", so a cost
+    lookup that failed the same way would be recorded as a variant to discard,
+    and a feasible plan would be reported as impossible."""
+    cfg = ShapedLlamaConfig.tiny()
+    program = build_shaped_llama3(cfg)
+
+    with pytest.raises(MissingProfileError) as excinfo:
+        apply_measured_costs(program, {}, None)
+    assert not isinstance(excinfo.value, ValueError)
+    assert program.tasks[0].id in str(excinfo.value)
+
+
+def test_recompute_never_plans_slower_than_saving_everything():
+    """Offering recompute can only help: the save-everything plan is the
+    search's own starting point, and it keeps the best plan it has seen. So a
+    budget where recompute is available must never plan slower than the same
+    budget without it — if it does, the search has lost a variant it was
+    holding, which is how a whole sweep once came back reporting feasible
+    cells as impossible."""
+    cfg = ShapedLlamaConfig.tiny()
+    program = build_shaped_llama3(cfg)
+
+    for cap in (500_000, 800_000, 2_000_000):
+        saved = plan_program(program, fast_memory_capacity=cap)
+        offered = plan_program(
+            program,
+            fast_memory_capacity=cap,
+            recompute=True,
+            build_variant=partial(build_variant_at, cfg),
+        )
+        assert offered.makespan_us <= saved.makespan_us, (
+            f"at cap {cap}: recompute planned {offered.makespan_us} us, "
+            f"slower than saving everything at {saved.makespan_us} us")
+
+
+def build_variant_at(cfg, levels):
+    return build_shaped_llama3(cfg, recompute_levels=levels)

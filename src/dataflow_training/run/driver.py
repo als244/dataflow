@@ -498,26 +498,6 @@ def engine_client(backing_gib: float = 100.0, *, socket: str | None = None,
             log(f"[daemon] teardown warning: {e}")
 
 
-def recompute_level_pins(program) -> list[dict[str, int]]:
-    """One level assignment per distinct recompute level in the rewrite table.
-
-    The recompute search prices programs the base lowering never contains. A
-    block that recomputes emits a task the base program has no equivalent of,
-    and its forward stops emitting the saved-activation object — which changes
-    that forward's cost signature too. Measured costs are looked up BY
-    signature, so a variant built from levels nobody profiled cannot be priced
-    at all, and the search loses it.
-
-    Pinning every rewrite to each level in turn produces the programs whose
-    signatures the search can encounter: a mixed assignment only ever combines
-    tasks that one of these pins already contains. Nothing here reads what the
-    levels mean — the rewrite table is the whole input."""
-    levels = sorted({o.level for rw in program.recompute_rewrites for o in rw.options})
-    return [{rw.object_id: min(level, rw.options[-1].level)
-             for rw in program.recompute_rewrites}
-            for level in levels]
-
-
 def measured_variant(fam, cfg, profiles, resolver, pcie, levels):
     """One re-lowered recompute variant with profiled task costs AND
     the executing box's measured PCIe bandwidths installed — the same
@@ -572,7 +552,8 @@ def plan_at_budget(cfg, budget_gib: float, *, recompute: bool = True,
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow_training.run.profiling import (apply_measured_costs,
                                                  cached_pcie,
-                                                 load_or_profile)
+                                                 load_or_profile,
+                                                 recompute_level_pins)
 
     backend = CudaBackend()
     dims = fam.derive_dims(cfg)
