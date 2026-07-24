@@ -26,6 +26,8 @@ import resource
 import sys
 import threading
 import time
+
+import torch
 from dataclasses import replace
 from itertools import product
 
@@ -218,11 +220,12 @@ def run_cell_backed(client, cfg, budget, backing, steps, data_mode, recipe):
     # What the device actually gave this program, so the plan's memory model can
     # be checked rather than trusted: a run is only "within budget" if the
     # engine's own reserved extent says so.
-    try:
-        pools = client.engine_status().get("program_pools", [])
-        reserved = max((p.get("fast_extent_bytes", 0) for p in pools), default=0)
-    except Exception:
-        reserved = 0
+    pools = client.engine_status().get("program_pools", [])
+    reserved = max((p.get("fast_extent_bytes", 0) for p in pools), default=0)
+    # what torch's caching allocator held for this cell: kernel workspaces and
+    # scratch the engine never sees, and the bulk of the gap between its extent
+    # and the device's own peak
+    torch_reserved = torch.cuda.max_memory_reserved()
     tail = res.step_wall_s[MS.WARMUP_STEPS:] or res.step_wall_s
     meas_s = sum(tail) / len(tail)
     tokens_step = cfg.max_tokens * cfg.grad_accum_rounds
@@ -243,6 +246,7 @@ def run_cell_backed(client, cfg, budget, backing, steps, data_mode, recipe):
             "device_peak_gib": devmem.peak / 1024 ** 3,
             "device_baseline_gib": devmem.baseline / 1024 ** 3,
             "device_peak_delta_gib": (devmem.peak - devmem.baseline) / 1024 ** 3,
+            "torch_reserved_gib": torch_reserved / 1024 ** 3,
             "within_budget": bool(reserved <= budget * 1024 ** 3)}
 
 
@@ -298,6 +302,13 @@ def run_measure(args):
                     for entry in client.list_programs():
                         client.unregister_program(entry["prog_id"])
                     client.wipe("all", force=True)
+                    # the engine runs in this process, so its kernel workspaces
+                    # sit in torch's caching allocator and outlive the cell that
+                    # created them. Returning them to the driver keeps each
+                    # cell's measured peak its own, and keeps a long sweep from
+                    # accumulating scratch it will never reuse.
+                    torch.cuda.empty_cache()
+                    torch.cuda.reset_peak_memory_stats()
                     n += 1
     print(f"DONE measure {args.opt}: {n} cells -> {args.out}", flush=True)
 
