@@ -28,6 +28,13 @@ import time
 from dataclasses import replace
 from itertools import product
 
+# how much extra host memory the counterfactual plan is offered when pricing
+# what more RAM would be worth. Deliberately NOT capped at what this box has:
+# the question is whether a bigger machine would help, and capping it at the
+# current size can only ever answer "no".
+HOST_PROBE = 1.25
+
+
 def _find_root(start):
     """Walk up until the repo root (has src/dataflow_training + tools/bench),
     so this script runs unchanged wherever it lives under the repo."""
@@ -130,9 +137,17 @@ def run_predict(args, measured):
                     except (ValueError, KeyError):
                         row["host_marginal_gain"] = None
                 emit(fh, {**meta, **row, "wall_s": round(time.time() - t0, 3)})
-            except Exception as exc:  # infeasible / plan failure = a result
+            except ValueError as exc:
+                # the planner cannot fit this cell — that is a result
                 emit(fh, {**meta, "infeasible": str(exc).splitlines()[0][:120],
                           "wall_s": round(time.time() - t0, 3)})
+            except Exception as exc:
+                # anything else is a fault in this harness, not a property of
+                # the cell; record it as an error so it cannot be read as a
+                # feasibility boundary
+                emit(fh, {**meta, "error": f"{type(exc).__name__}: {exc}"[:160],
+                          "wall_s": round(time.time() - t0, 3)})
+                print(f"  ERROR {type(exc).__name__}: {exc}", flush=True)
             n += 1
             rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // 1024
             print(f"[{mode} {args.opt}] {n} seq{seq} tr{tr} ts{ts} b{bud:g} "
