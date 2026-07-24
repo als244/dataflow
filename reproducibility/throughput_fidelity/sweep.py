@@ -24,6 +24,7 @@ import json
 import os
 import resource
 import sys
+import threading
 import time
 from dataclasses import replace
 from itertools import product
@@ -161,6 +162,46 @@ def run_predict(args, measured):
     print(f"DONE {mode} {args.opt}: {n} cells -> {args.out}", flush=True)
 
 
+class DevicePeak:
+    """True peak device memory while a run is in flight.
+
+    The engine's placed extent only covers what the planner reserved. A step
+    also costs a CUDA context, cuBLAS and triton workspaces held by torch's
+    caching allocator, and whatever else the process allocates along the way --
+    none of which the engine sees. The driver's own free/total accounting sees
+    all of it, so sample that instead and keep the high-water mark.
+
+    Reports the absolute peak and the rise above the pre-run baseline; on a
+    shared device the absolute figure includes other tenants, and the delta is
+    the honest attribution."""
+
+    def __init__(self, hz: float = 20.0):
+        import torch
+        self.torch = torch
+        self.interval = 1.0 / hz
+        self.baseline = self.used()
+        self.peak = self.baseline
+        self.stop = threading.Event()
+        self.thread = threading.Thread(target=self.watch, daemon=True)
+
+    def used(self) -> int:
+        free, total = self.torch.cuda.mem_get_info()
+        return total - free
+
+    def watch(self) -> None:
+        while not self.stop.wait(self.interval):
+            self.peak = max(self.peak, self.used())
+
+    def __enter__(self):
+        self.thread.start()
+        return self
+
+    def __exit__(self, *exc):
+        self.stop.set()
+        self.thread.join(timeout=2)
+        self.peak = max(self.peak, self.used())
+
+
 def run_cell_backed(client, cfg, budget, backing, steps, data_mode, recipe):
     """One measured cell. Unlike the shipped helper this plans WITH the host
     allowance the run will actually have, so predicted and executed plans agree
@@ -170,9 +211,18 @@ def run_cell_backed(client, cfg, budget, backing, steps, data_mode, recipe):
 
     planned = plan_at_budget(cfg, budget, measured=True, backing_gib=backing)
     eff, hwf = flop_report(cfg, planned.program).per_step()
-    res = run_engine(client, cfg, recipe, MS.cell_pipeline(cfg, data_mode), steps,
-                     budget_gib=budget, backing_gib=backing, seed=11,
-                     log=MS.quiet_log)
+    with DevicePeak() as devmem:
+        res = run_engine(client, cfg, recipe, MS.cell_pipeline(cfg, data_mode),
+                         steps, budget_gib=budget, backing_gib=backing, seed=11,
+                         log=MS.quiet_log)
+    # What the device actually gave this program, so the plan's memory model can
+    # be checked rather than trusted: a run is only "within budget" if the
+    # engine's own reserved extent says so.
+    try:
+        pools = client.engine_status().get("program_pools", [])
+        reserved = max((p.get("fast_extent_bytes", 0) for p in pools), default=0)
+    except Exception:
+        reserved = 0
     tail = res.step_wall_s[MS.WARMUP_STEPS:] or res.step_wall_s
     meas_s = sum(tail) / len(tail)
     tokens_step = cfg.max_tokens * cfg.grad_accum_rounds
@@ -187,7 +237,13 @@ def run_cell_backed(client, cfg, budget, backing, steps, data_mode, recipe):
             "eff_tfs": eff / meas_s / 1e12, "hw_tfs": hwf / meas_s / 1e12,
             "recompute": sum(1 for v in levels.values() if v),
             "rewritable": len(levels),
-            "peak_backing_gib": planned.peak_backing_bytes / 1024 ** 3}
+            "peak_backing_gib": planned.peak_backing_bytes / 1024 ** 3,
+            "planned_fast_gib": planned.peak_fast_bytes / 1024 ** 3,
+            "engine_extent_gib": reserved / 1024 ** 3,
+            "device_peak_gib": devmem.peak / 1024 ** 3,
+            "device_baseline_gib": devmem.baseline / 1024 ** 3,
+            "device_peak_delta_gib": (devmem.peak - devmem.baseline) / 1024 ** 3,
+            "within_budget": bool(reserved <= budget * 1024 ** 3)}
 
 
 def run_measure(args):
