@@ -304,6 +304,8 @@ def test_mixed_policy_model_step_vs_hand_replica():
             if r > worst[0]:
                 worst = (r, f"W_{i}.{f.name}")
     assert worst[0] <= 3e-2, worst
+    result.close()
+    dry.close()
 
 
 @pytest.mark.gpu
@@ -392,6 +394,8 @@ def test_muon_recipe_string_model_step_vs_hand_replica():
             if r > worst[0]:
                 worst = (r, f"W_{i}.{f.name}")
     assert worst[0] <= 3e-2, worst
+    result.close()
+    dry.close()
 
 
 @pytest.mark.gpu
@@ -479,6 +483,8 @@ def test_layer_indexed_policy_sizes_and_model_step():
             if r > worst[0]:
                 worst = (r, f"W_{i}.{f.name}")
     assert worst[0] <= 3e-2, worst
+    result.close()
+    dry.close()
 
 
 def test_lr_schedules_shapes():
@@ -588,3 +594,5 @@ def test_hyper_overrides_and_schedule_model_step():
             if r > worst[0]:
                 worst = (r, key)
     assert worst[0] <= 3e-2, worst
+    result.close()
+    dry.close()

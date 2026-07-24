@@ -192,7 +192,7 @@ class Session:
     # allocator keys cached blocks per-stream, so per-execute stream churn
     # multiplies the scratch cache by the number of steps
     streams: tuple | None = None
-    # set when a run's abort-drain hit a sticky/corrupted CUDA context (e.g. a
+    # set when a run's abort-drain hit a sticky/corrupted device context (e.g. a
     # kernel illegal-access): the context can no longer be trusted, so every
     # later run on this session refuses to start — a fresh session/daemon is
     # required. A healthy failed run leaves this False (the session is reusable).
@@ -224,7 +224,12 @@ class Session:
                 for location, cap in caps.items():
                     self.pool.add_slab(
                         location, cap,
-                        overflow_bytes=(3 * 1024**3 if location == "fast" else 0),
+                        # fragmentation headroom scaled to the slab: a tiny
+                        # (test / one-shot) budget no longer reserves 3 GiB it
+                        # can never fragment into. Non-placed path only — placed
+                        # production runs use the placement base, not this slab.
+                        overflow_bytes=(min(3 * 1024**3, cap)
+                                        if location == "fast" else 0),
                     )
                 if vmm:
                     if program.fast_memory_capacity is None:
@@ -347,7 +352,7 @@ class Engine:
         """
         if self.session is not None and self.session.unrecoverable:
             raise ExecutionError(
-                "session is unrecoverable — a prior run left the CUDA context "
+                "session is unrecoverable — a prior run left the device context "
                 "corrupted; a fresh session/daemon is required")
         holder: dict = {}
         invariant = None
@@ -474,7 +479,12 @@ class Engine:
                 ):
                     pool.add_slab(
                         "fast", program.fast_memory_capacity,
-                        overflow_bytes=3 * 1024**3,
+                        # fragmentation headroom scaled to the budget (see
+                        # ensure_pool): a 96 MiB one-shot run reserves 96 MiB,
+                        # not 3 GiB — bounds the cost when a caller forgets to
+                        # close its RunResult (tests) and shrinks per-run peak.
+                        overflow_bytes=min(3 * 1024**3,
+                                           program.fast_memory_capacity),
                     )
                 if vmm:
                     if program.fast_memory_capacity is None:

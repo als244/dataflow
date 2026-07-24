@@ -222,3 +222,5 @@ def test_task_raise_no_crash_on_cuda():
     again = Engine(CudaBackend()).execute(
         one_task_program(), resolver=RaisingResolver("t0", "boom again"))
     assert again.outcome.is_failed
+    failed.close()      # release the client-owned pool (slab + overflow arena);
+    again.close()       # a failed run's RunResult still owns it until closed
