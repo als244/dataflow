@@ -38,6 +38,23 @@ card and on a desktop one:
    headline result is throughput vs budget and a curve needs its points to share
    a geometry.
 
+## The host allowance is a constraint, not a measurement
+
+How much host memory a plan "wants" is only defined when host memory is free —
+put a ceiling in place and the planner picks a different plan, so the number
+that justified the ceiling stops describing what happens under it. Rather than
+chase that loop, the allowance is set from the machine (0.8 of what this host
+can offer) and its effect is then MEASURED at that operating point:
+
+  * `binding` — did the plan actually hit the ceiling, or did it want less?
+  * `host_marginal_gain` — the same cell re-planned with 25% more room, giving
+    the local slope of throughput against host memory. A shadow price rather
+    than an assumed level: near zero means the allowance is irrelevant here, and
+    a large value means this box is genuinely host-starved and says by how much.
+
+The counterfactual is deliberately not capped at the machine's own RAM, since
+the question it answers is whether a bigger machine would help.
+
 ## Costs are measured, never roofline
 
 Every plan, prediction and estimate is seeded from task costs **profiled on the

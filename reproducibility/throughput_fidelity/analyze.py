@@ -13,11 +13,31 @@ def load(name):
     return [json.loads(l) for l in open(p)] if os.path.exists(p) else []
 
 
+def host_pressure(rows):
+    """Is the host allowance actually constraining anything, and what would
+    relief be worth? Reported as a distribution because it varies by cell: a
+    single "peak demand" number is only defined when host memory is free, and
+    stops meaning anything once a ceiling is in place."""
+    feas = [r for r in rows if "tok_s" in r]
+    if not feas:
+        return
+    bind = [r for r in feas if r.get("binding")]
+    gains = sorted(r["host_marginal_gain"] for r in feas
+                   if r.get("host_marginal_gain") is not None)
+    print(f"  host allowance binds on {len(bind)}/{len(feas)} cells")
+    if gains:
+        top = gains[-1]
+        print(f"  value of 25% more host: median {gains[len(gains) // 2] * 100:+.1f}%"
+              f"  best {top * 100:+.1f}%  "
+              f"({sum(1 for g in gains if g > 0.02)} cells would gain >2%)")
+
+
 for opt in ("adamw", "muon"):
     pm = load(f"predict_measured_{opt}.jsonl")
     feas = [r for r in pm if "eff_tfs" in r]
     print(f"predict_measured {opt}: {len(pm)} rows | {len(feas)} feasible | "
           f"{len(pm) - len(feas)} infeasible")
+    host_pressure(pm)
     key = {(r["seq"], r["t_round"], r["t_step"], r["budget"],
             r.get("backing")): r for r in pm}
     ms = load(f"measure_{opt}.jsonl")

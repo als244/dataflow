@@ -112,6 +112,23 @@ def run_predict(args, measured):
                 row = PS.combo_row(fam, cfg, hw, bud, measured=measured,
                                    recompute=True, profile_cache=profile_cache,
                                    backing_gib=back)
+                # The allowance is set by policy, so what matters is not how
+                # much the plan "wanted" (that is only defined when host memory
+                # is free) but whether the ceiling BINDS here, and what relief
+                # would buy. Re-planning once with more room gives the local
+                # slope of throughput against host memory — a shadow price at
+                # this operating point rather than an assumed level.
+                if back:
+                    row["binding"] = bool(row["backing_gib"] >= back * 0.999)
+                    try:
+                        more = PS.combo_row(fam, cfg, hw, bud, measured=measured,
+                                            recompute=True,
+                                            profile_cache=profile_cache,
+                                            backing_gib=back * HOST_PROBE)
+                        row["host_marginal_gain"] = round(
+                            (more["tok_s"] - row["tok_s"]) / row["tok_s"], 4)
+                    except (ValueError, KeyError):
+                        row["host_marginal_gain"] = None
                 emit(fh, {**meta, **row, "wall_s": round(time.time() - t0, 3)})
             except Exception as exc:  # infeasible / plan failure = a result
                 emit(fh, {**meta, "infeasible": str(exc).splitlines()[0][:120],
