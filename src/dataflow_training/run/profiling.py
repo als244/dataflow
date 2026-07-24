@@ -80,15 +80,16 @@ def _signature(task: TaskSpec, sizes: dict[str, int],
                 fp = tuple(f.name for f in gl.fields)
         except Exception:
             fp = ()
-    seq: tuple = ()
-    if resolver is not None and task.group in ("forward", "backward", "recompute"):
-        try:
-            dims = getattr(resolver(task), "dims", None)
-            length = getattr(dims, "seq_len", None)
-            if length:
-                seq = (int(length),)
-        except Exception:
-            seq = ()
+    # read from the TASK, never from the resolver: a signature has to be a pure
+    # function of the task and its sizes, or the same task keys differently
+    # depending on who is asking. Profiling passes a resolver and
+    # apply_measured_costs does not, so a resolver-derived component silently
+    # turns every lookup into a miss.
+    seq = ()
+    if task.group in ("forward", "backward", "recompute"):
+        length = task.metadata.get("seq_len") if task.metadata else None
+        if length:
+            seq = (int(length),)
     base = (
         task.compute_block_key,
         tuple(sorted(sizes[i] for i in task.inputs)),

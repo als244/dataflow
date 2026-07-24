@@ -426,7 +426,12 @@ def build_shaped_program(
             compute_block_key=block,
             block_params=params or {},
             comm_groups=comm or {},
-            metadata={"cost_subops": loose.subops[block] if subops is None else subops},
+            metadata={"cost_subops": loose.subops[block] if subops is None else subops,
+                      # geometry the cost of this task depends on but its buffer
+                      # sizes do not reveal: a round of T tokens occupies the
+                      # same bytes whether it is one long sequence or many short
+                      # ones, while attention cost scales with the sequence
+                      "seq_len": cfg.seq_len},
         ))
 
     if cfg.optimizer_placement not in ("interleaved", "tail"):
