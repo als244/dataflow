@@ -23,15 +23,20 @@ from dataflow_training.model_families.llama3 import (
 TINY = dc_replace(ShapedLlamaConfig.tiny(), grad_accum_rounds=2)
 GROUP = "dp"
 
-# Digests of the CERTIFIED grouped lowerings, pinned BEFORE
-# lower_with_group was rewired through the annotation pass — the
-# anti-tautology anchor: both code paths now share the pipeline, so
-# these constants are what prove the rewire changed nothing.
+# Digests of the CERTIFIED grouped lowerings — the anti-tautology anchor: both
+# code paths share the pipeline, so these constants are what prove a rewire
+# changed nothing.
+#
+# Re-pinned DELIBERATELY when tasks gained a cost_key (the geometry two tasks
+# can differ in while their buffers look identical). The move was proved
+# additive rather than semantic: stripping cost_key from the new program
+# reproduces the previous digest exactly (dp: 63b7dd11deb8839b), and both code
+# paths still agree at every rank.
 PINNED = {
-    "dp": "63b7dd11deb8839b",
-    "zero1rs": "edf0098dccee45b8",
-    "tp_r0": "8546b7a04d9b0989",
-    "tp_r1": "19035d28f015bb47",
+    "dp": "ecf68f9b0a05792e",
+    "zero1rs": "25a3f4029fcea871",
+    "tp_r0": "28559715f557430f",
+    "tp_r1": "0a89ebb312e31990",
 }
 
 
