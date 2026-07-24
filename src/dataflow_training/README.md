@@ -49,7 +49,7 @@ What each subpackage exposes and what tools/tests actually import:
   (deterministic token streams), `feed.py` + `packer.py` (the
   pipeline + packing), `pipeline.py`.
 - **`run`** — drivers and study plumbing: `driver.py`
-  (`daemon_client`, `init_model`, `run_engine`, `run_reference`,
+  (`engine_client`, `init_model`, `run_engine`, `run_reference`,
   `plan_at_budget`), `presets.py` (locked training config +
   cross-family preset re-exports, `resolve_preset`, `cfg_dict`,
   `resolver_family`), `bench_presets.py` (`register_bench_config`),

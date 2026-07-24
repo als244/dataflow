@@ -77,7 +77,7 @@ def run_cell(client, cfg, budget: float, steps: int, data_mode: str,
 
 def main() -> int:
     from dataflow_training.run import presets as P
-    from dataflow_training.run.driver import daemon_client
+    from dataflow_training.run.driver import engine_client
     from dataflow_training.run.recipe import Recipe
 
     ap = argparse.ArgumentParser()
@@ -129,7 +129,7 @@ def main() -> int:
            f"{'budget':>6} {'pred_s':>7} {'meas_s':>7} {'ratio':>6} "
            f"{'tok/s':>8} {'effTF/s':>8} {'hwTF/s':>7} {'recomp':>6}")
     print(hdr)
-    with daemon_client(backing_gib=args.backing_gib, log=quiet_log) as client:
+    with engine_client(backing_gib=args.backing_gib, log=quiet_log) as client:
         for seq in seqs:
             for tr in t_rounds:
                 if tr % seq or tokens_step % tr:

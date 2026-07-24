@@ -152,7 +152,7 @@ def main() -> int:
     from dataflow.core.convert import to_webapp_program
     from dataflow.core.jsonio import program_to_dict
     from dataflow_training.run import presets as P
-    from dataflow_training.run.driver import daemon_client
+    from dataflow_training.run.driver import engine_client
     from dataflow_training.data.pipeline import legacy_block_pipeline
     from dataflow_training.run.recipe import Recipe
 
@@ -169,7 +169,7 @@ def main() -> int:
            else P.resolve_preset(args.preset))
     recipe = Recipe(peak_lr=3e-4, min_lr=3e-5, warmup_steps=1,
                     total_steps=args.steps)
-    with daemon_client(backing_gib=args.backing_gib, log=print) as client:
+    with engine_client(backing_gib=args.backing_gib, log=print) as client:
         cap = capture_run(client, cfg, recipe, legacy_block_pipeline(cfg),
                           args.steps, budget_gib=args.budget)
 

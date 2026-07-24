@@ -44,7 +44,7 @@ from dataflow_training.data.pipeline import (  # noqa: E402
 )
 from dataflow_training.run import parity, presets as P  # noqa: E402
 from dataflow_training.run.driver import (  # noqa: E402
-    daemon_client,
+    engine_client,
     init_model,
     run_engine,
     run_reference,
@@ -227,7 +227,7 @@ def cmd_smoke(args) -> int:
              f"vocab{cfg.vocab_size} steps{args.steps} ln(V)={lnV:.3f}")
     ref = run_reference(cfg, recipe, feed, args.steps, seed=11,
                         log=log_line)
-    with daemon_client(backing_gib=float(args.backing_budget),
+    with engine_client(backing_gib=float(args.backing_budget),
                        log=log_line) as client:
         init_model(client, "llama3", P.cfg_dict(cfg), seed=11)
         identical = init_bytes_identical(cfg, client, seed=11)
@@ -273,7 +273,7 @@ def cmd_parity(args) -> int:
     gc.collect()
     torch.cuda.empty_cache()
     engs = {}
-    with daemon_client(backing_gib=float(args.backing_budget),
+    with engine_client(backing_gib=float(args.backing_budget),
                        log=log_line) as client:
         for b in budgets:
             eng = run_engine(client, cfg, recipe, feed, args.steps,
@@ -315,7 +315,7 @@ def cmd_scaling(args) -> int:
             r.meta["params"] = P.param_counts(cfg)
             r.save(RESULTS / f"scaling_{name}_reference.json")
     else:
-        with daemon_client(backing_gib=float(args.backing_budget),
+        with engine_client(backing_gib=float(args.backing_budget),
                            log=log_line) as client:
             for name in names:
                 cfg = P.preset(name)
