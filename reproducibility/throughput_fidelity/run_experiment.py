@@ -74,8 +74,16 @@ def say(message: str) -> None:
 
 
 def run(cmd: list[str], *, log: Path | None = None, cwd: Path = REPO) -> bool:
-    """One stage process. Output is teed to `log` so a failure can be read
-    afterwards without re-running the stage that produced it."""
+    """One stage process. Output goes to `log` so a failure can be read
+    afterwards without re-running the stage that produced it.
+
+    Stage children run UNBUFFERED. Their stdout is a file rather than a
+    terminal, so Python would block-buffer it and a run killed part way --
+    by a scheduler reclaiming the node, say -- would lose whatever progress
+    had not reached 4 KB. The results themselves are flushed per record as
+    they are produced; this is so the narration matches them."""
+    if len(cmd) > 1 and cmd[1].endswith(".py"):
+        cmd = [cmd[0], "-u", *cmd[1:]]
     if log is None:
         return subprocess.run(cmd, cwd=cwd).returncode == 0
     with open(log, "a") as fh:

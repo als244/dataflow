@@ -9,6 +9,7 @@ Tests:
 - test_rdma_small_object_round_trip: a tiny object round-trips and lands byte-identical.
 - test_rdma_allreduce_zero_copy_from_registered_slab: the rdma-lane collective scratch lives inside the registered slab MR, the rdma QP is up, and the native-dtype allreduce matches the fp32 reference bitwise with identical replicas at world 2.
 """
+import socket
 import threading
 import time
 
@@ -34,7 +35,16 @@ if DEV is None:
 if roce_v2_ipv4_gid(DEV) is None:
     pytest.skip(f"no RoCE v2 GID on {DEV}", allow_module_level=True)
 
-PA, PB = 29481, 29482
+def free_port():
+    """An unused loopback port, claimed at fixture time.
+
+    Fixed ports made this rig hostage to anything still holding them — a
+    daemon leaked by an earlier run, or a second copy of the suite. The
+    symptom was the peer never reaching RTS ten seconds later, reported as
+    an empty-list assertion with nothing to act on."""
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
 
 
 def boot(tmp, name, peer_port):
@@ -56,17 +66,24 @@ def boot(tmp, name, peer_port):
 @pytest.fixture(scope="module")
 def rig(tmp_path_factory):
     tmp = tmp_path_factory.mktemp("p2rdma")
-    sa, ca = boot(tmp, "rd-alpha", PA)
-    sb, cb = boot(tmp, "rd-beta", PB)
-    ca.peer_connect("rd-beta", f"127.0.0.1:{PB}")
+    pa, pb = free_port(), free_port()
+    sa, ca = boot(tmp, "rd-alpha", pa)
+    sb, cb = boot(tmp, "rd-beta", pb)
+    ca.peer_connect("rd-beta", f"127.0.0.1:{pb}")
     deadline = time.time() + 10
+    rdma_up = []
     while time.time() < deadline:
         rdma_up = [e for e in sa.state.events
                    if e.get("event") == "peer_rdma_up"]
         if rdma_up:
             break
         time.sleep(0.05)
-    assert rdma_up, "RC QPs never reached RTS"
+    assert rdma_up, (
+        f"RC QPs never reached RTS within 10s on {DEV} "
+        f"(127.0.0.1:{pa} <-> :{pb}). Peer events seen: "
+        f"{sorted({e.get('event') for e in sa.state.events})}. "
+        f"A DOWN port or a daemon left over from an earlier run holding the "
+        f"device are the usual causes; `ibv_devinfo` shows port state.")
     yield {"sa": sa, "ca": ca, "sb": sb, "cb": cb}
     for c in (ca, cb):
         try:

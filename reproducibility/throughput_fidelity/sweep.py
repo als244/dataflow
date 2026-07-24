@@ -153,7 +153,7 @@ def run_predict(args, measured):
             print(f"[{mode} {args.opt}] {n} seq{seq} tr{tr} ts{ts} b{bud:g} "
                   f"k{'inf' if back is None else format(back, 'g')}"
                   f"  peakRSS={rss}MB", flush=True)
-    print(f"DONE {mode} {args.opt}: {n} cells -> {args.out}")
+    print(f"DONE {mode} {args.opt}: {n} cells -> {args.out}", flush=True)
 
 
 def run_cell_backed(client, cfg, budget, backing, steps, data_mode, recipe):
@@ -238,7 +238,7 @@ def run_measure(args):
                         client.unregister_program(entry["prog_id"])
                     client.wipe("all", force=True)
                     n += 1
-    print(f"DONE measure {args.opt}: {n} cells -> {args.out}")
+    print(f"DONE measure {args.opt}: {n} cells -> {args.out}", flush=True)
 
 
 def main():
