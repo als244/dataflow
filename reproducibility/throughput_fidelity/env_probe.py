@@ -42,17 +42,9 @@ for p in (os.path.join(ROOT, "src"), ROOT):
 GIB = 1024 ** 3
 
 
-def env_nums(name, default):
-    """Optional override list from the environment, e.g. SEQS=1024,4096."""
-    raw = os.environ.get(name, "").strip()
-    if not raw:
-        return default
-    return [float(x) if "." in x else int(x) for x in raw.split(",")]
-
-
-def env_float(name, default):
-    raw = os.environ.get(name, "").strip()
-    return float(raw) if raw else default
+def numbers(text):
+    """"1024,4096" -> [1024, 4096]; "4,5.7" -> [4, 5.7]."""
+    return [float(x) if "." in x else int(x) for x in text.split(",")]
 
 # largest first: the biggest model a box can hold is the most informative, since
 # the whole point is training that does NOT fit in fast memory
@@ -66,8 +58,8 @@ PRESET_LADDER = ["llama3_8b", "l3_1b", "l3_760m", "l3_350m", "l3_125m"]
 # same model: it recomputes its way into the space it has, which is exactly the
 # regime this runtime exists for.
 PERSISTENT_HEADROOM = 1.15   # staging/copies alongside the persistent floor
-HOST_SHARE = 0.8             # of the applicable host limit (env: HOST_SHARE)
-BUDGET_STEP = 2 ** 0.5       # ratio between budget rungs (env: BUDGET_STEP)
+HOST_SHARE = 0.8             # of the applicable host limit
+BUDGET_STEP = 2 ** 0.5       # ratio between budget rungs
 DEVICE_SHARE = 0.85          # of device memory the largest budget may use
 
 # The top of the backing ladder is what the host can spare, not a multiple of
@@ -136,7 +128,7 @@ def budget_ladder(device_bytes, floor_gib, step=None):
     included so the ample end is a real measurement rather than an
     extrapolation."""
     cap = DEVICE_SHARE * device_bytes / GIB
-    step = step or env_float("BUDGET_STEP", BUDGET_STEP)
+    step = step or BUDGET_STEP
     out, b = [], float(floor_gib)
     while b <= cap * 1.001:
         out.append(round(b, 1) if b < 10 else round(b))
@@ -153,7 +145,22 @@ def main():
 
     ap = argparse.ArgumentParser()
     ap.add_argument("--preset", default=None, help="override preset selection")
-    ap.add_argument("--opt", default="adamw")
+    ap.add_argument("--opt", default="adamw", help="optimizer the sizing assumes")
+    ap.add_argument("--seqs", default=None, help="sequence lengths, comma separated")
+    ap.add_argument("--t-rounds", dest="t_rounds", default=None,
+                    help="tokens per round, comma separated")
+    ap.add_argument("--t-steps", dest="t_steps", default=None,
+                    help="tokens per optimizer step, comma separated")
+    ap.add_argument("--budgets", default=None,
+                    help="GPU memory budgets in GiB, comma separated")
+    ap.add_argument("--budget-step", dest="budget_step", type=float, default=None,
+                    help="ratio between budget rungs (default sqrt(2))")
+    ap.add_argument("--host-share", dest="host_share", type=float, default=None,
+                    help="fraction of the host limit offered (default 0.8)")
+    ap.add_argument("--backing-gib", dest="backing_gib", type=float, default=None,
+                    help="host allowance outright, ignoring --host-share")
+    ap.add_argument("--steps", type=int, default=6,
+                    help="steps per measured cell, recorded for downstream use")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
@@ -162,6 +169,21 @@ def main():
     props = torch.cuda.get_device_properties(0)
     device_bytes = props.total_memory
     host_bytes, host_src = host_limit_bytes()
+
+    # The link rate the planner actually prices transfers at. The engine
+    # measures this itself, with BOTH directions in flight, and caches it —
+    # which is the number plans consume, and lower than either direction
+    # benchmarked alone. Re-benchmarking it here would report a different,
+    # prettier figure that nothing uses.
+    try:
+        from dataflow.runtime.device.cuda import CudaBackend
+        from dataflow_training.run.profiling import cached_pcie
+        pcie = cached_pcie(CudaBackend())
+        # the engine carries these as bytes per microsecond
+        link = {"bidi_h2d_gbs": round(pcie.bidi_h2d / 1000, 1),
+                "bidi_d2h_gbs": round(pcie.bidi_d2h / 1000, 1)}
+    except Exception as exc:
+        link = {"error": str(exc)[:80]}
 
     chosen = None
     for preset in ([args.preset] if args.preset else PRESET_LADDER):
@@ -173,8 +195,8 @@ def main():
         raise SystemExit("no preset fits this host")
     preset, persist, cfg = chosen
     # what this host can spare; the planner takes less when it wants less
-    backing = env_float("BACKING_GIB", 0) * GIB or \
-        env_float("HOST_SHARE", HOST_SHARE) * host_bytes
+    backing = (args.backing_gib * GIB if args.backing_gib
+               else (args.host_share or HOST_SHARE) * host_bytes)
 
     # a task needs its own inputs+outputs resident; that bounds the useful floor
     from dataflow_training.model_families.families import resolve_family
@@ -192,6 +214,7 @@ def main():
         "host": os.uname().nodename,
         "device": props.name,
         "device_gib": round(device_bytes / GIB, 1),
+        "link": link,
         "host_limit_gib": round(host_bytes / GIB, 1),
         "host_limit_source": host_src,
         "preset": preset,
@@ -199,12 +222,15 @@ def main():
         "persistent_gib": round(persist / GIB, 1),
         "backing_gib": round(backing / GIB, 1),
         "task_floor_gib": round(floor / GIB, 2),
-        "budgets": env_nums("BUDGETS", budget_ladder(device_bytes, floor_gib)),
-        "seqs": env_nums("SEQS", [s for s in (1024, 2048, 4096, 8192)
-                                  if s <= cfg.seq_len * 2]),
-        "t_rounds": env_nums("T_ROUNDS", [8192, 16384, 32768, 65536]),
-        "t_steps": env_nums("T_STEPS", [base // 2, base, base * 2]),
-        "steps_per_cell": int(env_float("STEPS", 6)),
+        "budgets": (numbers(args.budgets) if args.budgets else
+                    budget_ladder(device_bytes, floor_gib, args.budget_step)),
+        "seqs": (numbers(args.seqs) if args.seqs else
+                 [s for s in (1024, 2048, 4096, 8192) if s <= cfg.seq_len * 2]),
+        "t_rounds": (numbers(args.t_rounds) if args.t_rounds
+                     else [8192, 16384, 32768, 65536]),
+        "t_steps": (numbers(args.t_steps) if args.t_steps
+                    else [base // 2, base, base * 2]),
+        "steps_per_cell": args.steps,
     }
     dst = args.out or os.path.join(os.path.dirname(os.path.abspath(__file__)), "env.json")
     with open(dst, "w") as fh:

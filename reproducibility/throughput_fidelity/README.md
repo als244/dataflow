@@ -11,7 +11,7 @@ Two questions, on whatever GPU this is run on:
 ## Quickstart
 
 ```bash
-bash reproducibility/throughput_fidelity/run_experiment.sh
+python reproducibility/throughput_fidelity/run_experiment.py
 ```
 
 That is the whole thing. It picks the model, the budgets and the geometry from
@@ -22,8 +22,8 @@ one to three hours depending on the card. Results land in `data/`, figures in
 A quick look first, on a smaller model with a coarse grid:
 
 ```bash
-PRESET=l3_1b SEQS=1024,4096 BUDGET_STEP=2 TARGET_CELLS=6 STEPS=4 \
-  bash reproducibility/throughput_fidelity/run_experiment.sh
+python reproducibility/throughput_fidelity/run_experiment.py \
+    --preset l3_1b --seqs 1024,4096 --budget-step 2 --target-cells 6 --steps 4
 ```
 
 Then draw the figures (any time, including mid-run):
@@ -35,24 +35,25 @@ python reproducibility/throughput_fidelity/analyze.py
 
 ## Configuration
 
-Everything is an environment variable, and every default is derived from the
-machine rather than written down. Set none of them and the run is still
-meaningful; set one and only that dimension changes.
+`--help` is the reference: every knob is a flag, and every default is derived
+from the machine rather than written down. Set none and the run is still
+meaningful; set one and only that dimension moves.
 
-| variable | default | what it changes |
+| flag | default | what it changes |
 |---|---|---|
-| `PYTHON` | `python` | interpreter to run everything with |
-| `PRESET` | largest model whose persistent state fits the host | the model. Skips selection entirely, e.g. `l3_1b` |
-| `OPTS` | `adamw,muon` | optimizers swept. `OPTS=adamw` roughly halves the run |
-| `SEQS` | `1024,2048,4096,8192` (capped by the preset) | sequence lengths |
-| `T_ROUNDS` | `8192,16384,32768,65536` | tokens per round — the grad-accumulation granularity |
-| `T_STEPS` | scaled to the device class | tokens per optimizer step |
-| `BUDGETS` | √2 ladder from a one-task floor to 0.85 × device | GPU memory budgets, explicitly |
-| `BUDGET_STEP` | `1.414` | granularity of that ladder instead of replacing it. `2` for octaves, `1.2` for fine |
-| `HOST_SHARE` | `0.8` | fraction of host memory offered as the allowance |
-| `BACKING_GIB` | — | the allowance outright, ignoring `HOST_SHARE` |
-| `TARGET_CELLS` | `18` | how many cells get real GPU runs |
-| `STEPS` | `6` | steps per measured cell; the first 3 are warmup, so keep ≥ 4 |
+| `--preset` | largest model whose persistent state fits the host | the model, e.g. `l3_1b` |
+| `--opts` | `adamw,muon` | optimizers swept; one of them roughly halves the run |
+| `--seqs` | `1024,2048,4096,8192` (capped by the preset) | sequence lengths |
+| `--t-rounds` | `8192,16384,32768,65536` | tokens per round — grad-accumulation granularity |
+| `--t-steps` | scaled to the device class | tokens per optimizer step |
+| `--budgets` | ladder from a one-task floor to 0.85 × device | GPU memory budgets, explicitly |
+| `--budget-step` | `1.414` | granularity of that ladder instead of replacing it: `2` for octaves, `1.2` for fine |
+| `--host-share` | `0.8` | fraction of host memory offered as the allowance |
+| `--backing-gib` | — | the allowance outright, ignoring `--host-share` |
+| `--target-cells` | `18` | how many cells get real GPU runs |
+| `--steps` | `6` | steps per measured cell; the first 3 are warmup, so keep ≥ 4 |
+| `--stages` | all | resume or repeat part of a run, e.g. `--stages predict,select,measure` |
+| `--python` | this interpreter | interpreter for the stage processes |
 
 The grid is the cross product of `SEQS × T_ROUNDS × T_STEPS × BUDGETS`, so
 prediction cost grows with all four — but only `TARGET_CELLS` and `STEPS`
@@ -91,17 +92,13 @@ total gets the job killed. From those it derives:
   *The host allowance* below).
 - **geometry axes** — sequence lengths, tokens per round, tokens per step,
   scaled to the device class.
+- **link rate** — read from the engine's own cached measurement, taken with
+  both directions in flight. That is the number plans price transfers at, and
+  it is lower than either direction benchmarked alone, so re-benchmarking it
+  here would report a prettier figure that nothing uses.
 
-### P1 · link calibration — *what is host↔device actually worth here?*
-`pcie_calib.py` → `logs/pcie_calib.log`  ·  seconds, needs the device
-
-Sustained pinned H2D and D2H bandwidth. Recorded for the write-up rather than
-fed to the planner — the engine keeps its own cached bidirectional measurement,
-taken with both directions in flight, which is the number plans should use.
-This is the sanity check that the link is what the machine claims.
-
-### P2 · predictions — *the whole grid, and where it becomes infeasible*
-`sweep.py --mode predict-measured` → `data/predict_measured_{opt}.jsonl`
+### P1 · predictions — *the whole grid, and where it becomes infeasible*
+`run_experiment.py` stage `predict` → `data/predict_measured_{opt}.jsonl`
 ·  the long pole for prediction; needs the device
 
 For each optimizer, for each sequence length, over every (tokens/round ×
@@ -120,7 +117,7 @@ planner's reason**, never skipped, so the feasibility boundary is data rather
 than a gap. Each cell also re-plans once with 25% more host memory to price the
 allowance (`binding`, `host_marginal_gain`).
 
-### P2b · cell selection — *which cells deserve real GPU time?*
+### P1b · cell selection — *which cells deserve real GPU time?*
 `select_cells.py` → `cells.json`  ·  seconds, CPU only
 
 Measuring every survivor would spend hours re-measuring identical behaviour.
@@ -142,8 +139,8 @@ In order:
    them differently from the simulator, the reduction is unsafe and the data
    will say so rather than the assumption going unchecked.
 
-### P3 · measurement — *what the engine actually does*
-`sweep.py --mode measure` → `data/measure_{opt}.jsonl`  ·  the long pole
+### P2 · measurement — *what the engine actually does*
+`run_experiment.py` stage `measure` → `data/measure_{opt}.jsonl`  ·  the long pole
 overall; needs the device
 
 Runs each selected cell on the real engine, per optimizer, for `STEPS` steps
@@ -155,7 +152,7 @@ predicted and measured describe one plan rather than two. Per cell: `pred_s`,
 TFLOP/s, recompute levels, peak backing. A cell that fails to plan or run is
 recorded as a row with its error, not a crash.
 
-### P4 · shipped-command validation — *do the documented commands still work?*
+### P3 · shipped-command validation — *do the documented commands still work?*
 → `logs/shipped_bench.log`  ·  minutes, needs the device
 
 Runs the repository's own `tools/bench/predict_step.py --measured` and
@@ -168,12 +165,31 @@ reader would actually type still work at this scale.
 summary, and the per-cell fidelity table. `make_plots.py <opt>` draws the
 figures.
 
-## Costs are measured, never roofline
+## Two ways to price a task, and why this uses one
 
-Every plan, prediction and estimate is seeded from task costs **profiled on the
-GPU running the study**. The analytic roofline is not used anywhere here: it
-exists for CPU-only what-ifs and its efficiency constants are calibrated to a
-different device class.
+The simulator's structure is the same either way: it schedules tasks and
+transfers over a chain and reports a makespan. Only the per-task cost SEED
+differs, and the difference is large.
+
+**Roofline** (`predict_step.py` with no `--measured`) estimates each task
+analytically — FLOPs against peak compute times an efficiency factor, bytes
+against memory bandwidth, whichever binds. It needs no GPU and answers
+instantly, which makes it the right tool for asking what a machine you do not
+have would do. But its efficiency constants (`matmul_eff`, `attn_eff`,
+`mem_eff`) are calibrated per device class, so on an unfamiliar card it gives
+you a shape, not a number.
+
+**Profiled** (`--measured`, and `--measured-plan` on the measure side) executes
+every unique task signature on the actual GPU, times it with CUDA events after
+a thermal soak, and caches the result to disk keyed by geometry, kernel set,
+device and sequence length. It costs minutes on first sight of a geometry and
+requires the device, and it is what makes a prediction a number rather than a
+shape.
+
+**This study is profiled everywhere** — predictions, plans, and the prediction
+column of every measurement. The roofline appears nowhere, because comparing a
+measured run against an analytic estimate would confound two different
+questions: whether the machine model is right, and whether the scheduler is.
 
 Profiles are keyed by geometry **and metadata including sequence length**. A
 round of T tokens occupies the same buffers whether it is one long sequence or
@@ -248,6 +264,9 @@ degrades gracefully: on a workload that never approaches the ceiling it reports
 | `figs/` | `frontier_{opt}.png` (throughput vs GPU memory, round size optimised and labelled), `throughput_`, `eff_tflops_`, `recompute_pct_`, `idle_pct_` |
 | `logs/`, `traces/` | raw stdout per stage; webapp real-vs-sim bundles and nsys captures |
 
+`env.json` also records the link rate plans were priced at, so a run can be
+read back without the machine present.
+
 Every record carries its full identity (host, device, preset, optimizer,
 geometry, budget, allowance, timestamp), so files from different boxes can be
 concatenated and compared without a side channel.
@@ -263,4 +282,5 @@ concatenated and compared without a side channel.
 | `throttle_probe.py` | one task, sustained or back-to-back, `--fill uninit\|zeros\|randn`, `--sets` to defeat buffer reuse |
 | `nsys_gap_analysis.py` | kernel busy vs inter-kernel gaps — is time lost inside kernels or between them |
 | `nsys_kernel_vs_dma.py` | kernel duration against overlapping DMA, and against wall time |
-| `pcie_calib.py`, `matmul_burst.py` | link bandwidth; a full-power reference load |
+| `pcie_calib.py` | one-direction-at-a-time link bandwidth — useful only against the engine's concurrent number, which is what plans use |
+| `matmul_burst.py` | a full-power reference load, for comparing power and clock behaviour |
