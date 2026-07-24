@@ -16,7 +16,7 @@ from cuda.bindings import runtime as cudart
 
 from dataflow.core import TaskSpec
 from .base import Stream
-from .cuda import CudaBackend, CudaError, _check
+from .cuda import CudaBackend, CudaError, KernelCompileError, _check
 
 # Spin on %globaltimer (nanosecond wall clock) rather than clock64 cycles:
 # SM clocks ramp with load (idle ~0.4GHz -> boost ~2.9GHz), so cycle-counted
@@ -46,7 +46,7 @@ def _check_drv(result: tuple) -> tuple:
 def _check_nvrtc(result: tuple) -> tuple:
     err = result[0]
     if err != nvrtc.nvrtcResult.NVRTC_SUCCESS:
-        raise CudaError(f"NVRTC call failed: {err}")
+        raise KernelCompileError(f"NVRTC call failed: {err}")
     return result[1:]
 
 
@@ -62,7 +62,7 @@ class SpinKernel:
             (log_size,) = _check_nvrtc(nvrtc.nvrtcGetProgramLogSize(prog))
             log = b" " * log_size
             nvrtc.nvrtcGetProgramLog(prog, log)
-            raise CudaError(f"spin kernel compile failed:\n{log.decode()}")
+            raise KernelCompileError(f"spin kernel compile failed:\n{log.decode()}")
         (ptx_size,) = _check_nvrtc(nvrtc.nvrtcGetPTXSize(prog))
         ptx = b" " * ptx_size
         _check_nvrtc(nvrtc.nvrtcGetPTX(prog, ptx))

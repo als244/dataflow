@@ -35,7 +35,35 @@ from .base import Buffer, Event, Location, Stream, StreamKind
 
 
 class CudaError(RuntimeError):
-    pass
+    """A CUDA API call that returned an error."""
+
+
+class KernelCompileError(RuntimeError):
+    """A kernel that would not compile. The device is fine and the API call
+    succeeded; the source did not build, so the compiler log is the payload."""
+
+
+class DeviceMemoryError(MemoryError):
+    """The device would not grant an allocation."""
+
+
+class HostMemoryError(MemoryError):
+    """The host would not PIN an allocation.
+
+    Separate from CudaError because nothing is wrong with the device and the
+    remedy is different: ask for a smaller slab, or free host memory. The
+    driver reports both refusals with the same code, cudaErrorMemoryAllocation,
+    since pinned host memory is allocated through CUDA — so a caller told only
+    that code goes looking at the GPU, which is where this was going wrong."""
+
+
+def host_available_bytes() -> int:
+    """Host memory that could still be pinned, as the kernel accounts for it."""
+    with open("/proc/meminfo") as fh:
+        for line in fh:
+            if line.startswith("MemAvailable:"):
+                return int(line.split()[1]) * 1024
+    return 0
 
 
 import weakref
@@ -59,7 +87,9 @@ def _check(result: tuple) -> tuple:
     err = result[0]
     if err != cudart.cudaError_t.cudaSuccess:
         name = cudart.cudaGetErrorName(err)[1] if isinstance(err, cudart.cudaError_t) else err
-        raise CudaError(f"CUDA call failed: {err} ({name})")
+        if isinstance(name, bytes):
+            name = name.decode()
+        raise CudaError(f"CUDA call failed: {name}")
     return result[1:]
 
 
@@ -169,7 +199,13 @@ class CudaBackend:
 
     def alloc(self, location: Location, size_bytes: int) -> Buffer:
         if location == "fast":
-            (ptr,) = _check(cudart.cudaMalloc(size_bytes))
+            err, ptr = cudart.cudaMalloc(size_bytes)
+            if err != cudart.cudaError_t.cudaSuccess:
+                free, total = _check(cudart.cudaMemGetInfo())
+                raise DeviceMemoryError(
+                    f"could not allocate {size_bytes / 1024 ** 3:.1f} GiB of "
+                    f"device memory (free {free / 1024 ** 3:.1f} GiB of "
+                    f"{total / 1024 ** 3:.1f} GiB)")
             raw = None
         else:
             ptr, raw = self._alloc_pinned(size_bytes)
@@ -191,7 +227,13 @@ class CudaBackend:
         regardless of backing page size) and 10x slower for small buffers, so
         the simpler call stays. Revisit if a driver ever honors huge-page
         registration."""
-        (ptr,) = _check(cudart.cudaHostAlloc(size_bytes, cudart.cudaHostAllocDefault))
+        err, ptr = cudart.cudaHostAlloc(size_bytes, cudart.cudaHostAllocDefault)
+        if err != cudart.cudaError_t.cudaSuccess:
+            raise HostMemoryError(
+                f"could not pin {size_bytes / 1024 ** 3:.1f} GiB of host memory "
+                f"(MemAvailable {host_available_bytes() / 1024 ** 3:.1f} GiB; "
+                f"this process has already pinned "
+                f"{self.pinned_bytes / 1024 ** 3:.1f} GiB)")
         self.pinned_bytes += size_bytes
         self.pinned_peak = max(self.pinned_peak, self.pinned_bytes)
         return int(ptr), ("hostalloc", size_bytes)

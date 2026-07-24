@@ -44,6 +44,19 @@ path and gets the rdma lane first.
 """
 from __future__ import annotations
 
+
+from dataflow.runtime.device.cuda import HostMemoryError
+
+
+class PeerError(RuntimeError):
+    """A failure of the peer plane: a peer that stopped answering, a group that
+    died, a collective that timed out or that does not fit the negotiated
+    topology. Nothing to do with the local device -- these are conditions of
+    the link and the participants, and they are worth telling apart from a
+    device fault because the response differs: retry, re-form the group, or
+    look at the fabric."""
+
+
 import queue
 import threading
 import time
@@ -130,7 +143,7 @@ class HostmemComm:
     def __init__(self, nm, group_name: str, rank: int, world: int,
                  peer_name: str, scratch_bytes: int = 512 << 20):
         if world != 2:
-            raise RuntimeError(
+            raise PeerError(
                 f"hostmem v1 is pairwise (world 2); group "
                 f"{group_name!r} has world {world} — ring topologies "
                 f"arrive with a real >2 fleet")
@@ -210,7 +223,8 @@ class HostmemComm:
         err, host_ptr = cudart.cudaHostAlloc(
             4, cudart.cudaHostAllocMapped)
         if int(err) != 0:
-            raise RuntimeError(f"cudaHostAlloc(flag) failed: {err}")
+            raise HostMemoryError(
+                f"could not pin the peer flag page: {err}")
         self.flag_host_ptr = int(host_ptr)
         raw = (ctypes.c_int32 * 1).from_address(self.flag_host_ptr)
         self.flag = np.frombuffer(raw, dtype=np.int32)
@@ -257,7 +271,7 @@ class HostmemComm:
     def link(self):
         link = self.nm.links.get(self.peer_name)
         if link is None or not link.alive:
-            raise RuntimeError(f"peer {self.peer_name} down")
+            raise PeerError(f"peer {self.peer_name} down")
         return link
 
     def rdma_qp(self):
@@ -281,7 +295,7 @@ class HostmemComm:
             ok = self.inbox_cv.wait_for(
                 notify_check(self.inbox, key), timeout)
             if not ok:
-                raise RuntimeError(
+                raise PeerError(
                     f"collective seq {seq}: peer {op} timeout")
             return self.inbox.pop(key)
 
@@ -313,7 +327,7 @@ class HostmemComm:
 
     def ensure_scratch(self, nbytes: int) -> None:
         if self.out.nbytes < nbytes:
-            raise RuntimeError(
+            raise PeerError(
                 f"collective op of {nbytes} B exceeds the group's slab "
                 f"scratch ({self.out.nbytes} B) — raise "
                 f"EngineConfig.peer_coll_scratch_mib (and slab size: "
@@ -324,7 +338,7 @@ class HostmemComm:
                 out=None):
         """The shared enqueue-only choreography. Returns the op seq."""
         if self.dead:
-            raise RuntimeError(f"group {self.group} dead: {self.dead}")
+            raise PeerError(f"group {self.group} dead: {self.dead}")
         self.seq += 1
         seq = self.seq
         nbytes = tensor.numel() * tensor.element_size()
@@ -454,7 +468,7 @@ class HostmemComm:
             if job.lane == "rdma":
                 qp = self.rdma_qp()
                 if qp is None:
-                    raise RuntimeError("rdma lane vanished mid-op")
+                    raise PeerError("rdma lane vanished mid-op")
                 self.exchange(job.seq, nbytes)   # bytes land; the
                 return                           # parked stream does
                                                  # the DEVICE reduce
@@ -526,7 +540,7 @@ class HostmemComm:
 
     def enqueue_scatter(self, full, out, action: str):
         if self.dead:
-            raise RuntimeError(f"group {self.group} dead: {self.dead}")
+            raise PeerError(f"group {self.group} dead: {self.dead}")
         self.seq += 1
         seq = self.seq
         nbytes = full.numel() * full.element_size()
@@ -557,7 +571,7 @@ class HostmemComm:
 
     def enqueue_gather(self, own_slice, full):
         if self.dead:
-            raise RuntimeError(f"group {self.group} dead: {self.dead}")
+            raise PeerError(f"group {self.group} dead: {self.dead}")
         self.seq += 1
         seq = self.seq
         nbytes = full.numel() * full.element_size()
@@ -604,9 +618,9 @@ def spin_until(flag, target: int, dead_check, timeout: float = 300.0):
     t0 = time.monotonic()
     while int(flag[0]) < target:
         if dead_check():
-            raise RuntimeError("group died during collective")
+            raise PeerError("group died during collective")
         if time.monotonic() - t0 > timeout:
-            raise RuntimeError("collective flag timeout")
+            raise PeerError("collective flag timeout")
         time.sleep(0.0005)
 
 
@@ -631,8 +645,8 @@ def build_handle(nm, rec) -> GroupHandle:
             # missing here means the join-time bring-up failed
             comm = rec.comm_obj
             if comm is None:
-                raise RuntimeError("nccl comm missing — group "
-                                   "bootstrap did not complete")
+                raise PeerError("nccl comm missing — group "
+                                "bootstrap did not complete")
             stream = comm.stream
         elif backend == "hostmem":
             comm = build_comm(nm, rec)
