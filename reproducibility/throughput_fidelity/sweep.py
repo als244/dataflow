@@ -92,7 +92,10 @@ def run_predict(args, measured):
     trs = [int(x) for x in args.t_round.split(",")]
     tss = [int(x) for x in args.t_step.split(",")]
     buds = [float(x) for x in args.budget.split(",")]
-    backs = [float(x) for x in str(args.backing_gib).split(",")]
+    # "unlimited" plans with no host ceiling, so each row reports what the plan
+    # actually WANTS in peak backing — that demand is what sets the real ladder
+    backs = [None if x.strip().lower() in ("unlimited", "none", "")
+             else float(x) for x in str(args.backing_gib).split(",")]
     mode = "predict-measured" if measured else "predict"
     n = 0
     with open(args.out, "a") as fh:
@@ -115,7 +118,8 @@ def run_predict(args, measured):
                           "wall_s": round(time.time() - t0, 3)})
             n += 1
             rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // 1024
-            print(f"[{mode} {args.opt}] {n} seq{seq} tr{tr} ts{ts} b{bud:g} k{back:g}"
+            print(f"[{mode} {args.opt}] {n} seq{seq} tr{tr} ts{ts} b{bud:g} "
+                  f"k{'inf' if back is None else format(back, 'g')}"
                   f"  peakRSS={rss}MB", flush=True)
     print(f"DONE {mode} {args.opt}: {n} cells -> {args.out}")
 

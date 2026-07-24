@@ -39,6 +39,22 @@ say "preset=$PRESET_USED budgets=$BUDGETS backings=$BACKING steps/cell=$STEPS"
 say "P1 pcie calibration"
 "$PY" "$SUB/pcie_calib.py" > "$LOG/pcie_calib.log" 2>&1 && tail -3 "$LOG/pcie_calib.log" || say "  (skipped)"
 
+# --- P1b: what does an UNCONSTRAINED plan want? one pass with no host ceiling,
+#          whose per-cell peak backing sets the allowance ladder for P2 ---
+say "P1b host-allowance demand probe (no ceiling)"
+: > "$D/predict_unlimited_${OPTS%%,*}.jsonl"
+for seq in $SEQS; do
+  "$PY" "$SUB/sweep.py" --mode predict-measured --preset "$PRESET_USED" \
+    --opt "${OPTS%%,*}" --seq "$seq" --t-round "$TROUNDS" --t-step "$TSTEPS" \
+    --budget "$BUDGETS" --backing-gib unlimited \
+    --out "$D/predict_unlimited_${OPTS%%,*}.jsonl" \
+    >> "$LOG/predict_unlimited.log" 2>&1 \
+    && say "  seq$seq ok" || say "  seq$seq FAILED (see $LOG/predict_unlimited.log)"
+done
+"$PY" "$SUB/backing_range.py" 2>&1 | tee "$LOG/backing_range.log"
+BACKING=$(jlist backings | tr ' ' ',')
+say "host-allowance ladder from measured demand: $BACKING"
+
 # --- P2: measured-cost predictions = the feasibility pass, per-seq chunks ---
 for opt in ${OPTS//,/ }; do
   say "P2 predictions ($opt) — every cost profiled on this GPU"
