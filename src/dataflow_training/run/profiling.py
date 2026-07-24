@@ -62,13 +62,21 @@ def _signature(task: TaskSpec, sizes: dict[str, int],
     historical form) whenever nothing in the task's weight layout is
     frozen, so default-policy profile caches never invalidate.
 
-    Sizes also under-discriminate SEQUENCE LENGTH, for the same reason in a
-    different direction: a round of T tokens occupies the same buffers whether
-    it is one long sequence or many short ones, so batch x seq_len combinations
-    with equal token counts collide — while attention costs scale with the
-    sequence, not the token total (8x the attention work at seq 8192 vs 1024 for
-    the same T). Every task that reads or writes an attention context therefore
-    carries its sequence length."""
+    Sizes also under-discriminate GEOMETRY that leaves buffer bytes unchanged.
+    A round of T tokens occupies the same buffers whether it is one long
+    sequence or many short ones, so batch x seq_len combinations with equal
+    token counts collide — while attention costs scale with the sequence, not
+    the token total (8x the attention work at seq 8192 vs 1024 for the same T).
+    The lowering declares such geometry in the task's ``cost_key`` and this
+    reads whatever is there, so a new kind of cost-relevant geometry starts
+    separating profiles without this function learning about it. Tasks whose
+    cost does not depend on any leave it absent.
+
+    Both extra components are read from the TASK, never from the resolver: a
+    signature has to be a pure function of the task and its sizes, or the same
+    task keys differently depending on who is asking. ``profile_program`` passes
+    a resolver and ``apply_measured_costs`` does not, so a resolver-derived
+    component turns every later lookup into a miss."""
     fp: tuple = ()
     if resolver is not None and task.group == "backward" \
             and task.compute_block_key.endswith("_bwd"):
@@ -80,23 +88,15 @@ def _signature(task: TaskSpec, sizes: dict[str, int],
                 fp = tuple(f.name for f in gl.fields)
         except Exception:
             fp = ()
-    # read from the TASK, never from the resolver: a signature has to be a pure
-    # function of the task and its sizes, or the same task keys differently
-    # depending on who is asking. Profiling passes a resolver and
-    # apply_measured_costs does not, so a resolver-derived component silently
-    # turns every lookup into a miss.
-    seq = ()
-    if task.group in ("forward", "backward", "recompute"):
-        length = task.metadata.get("seq_len") if task.metadata else None
-        if length:
-            seq = (int(length),)
+    cost_key = (task.metadata or {}).get("cost_key") or {}
+    geometry = tuple(sorted(cost_key.items()))
     base = (
         task.compute_block_key,
         tuple(sorted(sizes[i] for i in task.inputs)),
         tuple(sorted(o.size_bytes for o in task.outputs)),
         bool(task.mutates),
     )
-    return base + ((fp,) if fp else ()) + (("seq", seq[0]) if seq else ())
+    return base + ((fp,) if fp else ()) + (geometry if geometry else ())
 
 
 PROFILE_FILL_SEED = 20260724
@@ -416,7 +416,7 @@ def host_backing_cap_bytes(*, reserve_gib: float = 10.0) -> int:
     return int(max(0, avail - reserve_gib * 1024 ** 3))
 
 
-PROFILE_CACHE_REV = "5"  # bump whenever kernel/task costs change (invalidates all cached profiles)
+PROFILE_CACHE_REV = "6"  # bump whenever kernel/task costs change (invalidates all cached profiles)
 #   "3": float inputs seeded with real-scale values (fill_realistic) — every
 #        earlier profile timed zero-valued operands and ran ~1.25x optimistic
 #   "4": that seeding extended to COMPOSITE operands (saved-activation contexts,
@@ -424,6 +424,8 @@ PROFILE_CACHE_REV = "5"  # bump whenever kernel/task costs change (invalidates a
 #        most of the bytes a block reads
 #   "5": attention-bearing tasks carry their sequence length, so batch x seq
 #        combinations with equal token counts stop sharing one timing
+#   "6": that geometry moved into the task's cost_key, read from the task
+#        rather than through a resolver
 
 
 def load_or_profile(

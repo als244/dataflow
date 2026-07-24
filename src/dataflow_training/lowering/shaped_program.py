@@ -426,12 +426,18 @@ def build_shaped_program(
             compute_block_key=block,
             block_params=params or {},
             comm_groups=comm or {},
-            metadata={"cost_subops": loose.subops[block] if subops is None else subops,
-                      # geometry the cost of this task depends on but its buffer
-                      # sizes do not reveal: a round of T tokens occupies the
-                      # same bytes whether it is one long sequence or many short
-                      # ones, while attention cost scales with the sequence
-                      "seq_len": cfg.seq_len},
+            metadata={
+                "cost_subops": loose.subops[block] if subops is None else subops,
+                # Geometry two tasks can differ in while their buffers look
+                # identical, and which therefore has to separate their measured
+                # costs. A round of T tokens occupies the same bytes whether it
+                # is one long sequence or many short ones, but attention scales
+                # with the sequence. Anything else with that property belongs
+                # here too: the profiler keys on whatever this declares, so a
+                # new entry starts discriminating costs without the profiler
+                # needing to learn about it.
+                "cost_key": {"seq_len": cfg.seq_len},
+            },
         ))
 
     if cfg.optimizer_placement not in ("interleaved", "tail"):
