@@ -260,6 +260,19 @@ register("dsa_pack_bits", "eager", deterministic=True,
 
 if triton is not None:
 
+    def _value_tile_width(dv):
+        """Padded N of the value/output matmul tile (kernel ``DVP``).
+
+        Hopper (sm_90) wgmma miscompiles ``tl.dot`` when N < 64 — silent wrong
+        values, plus OOB reads that only fault once the tile lands against
+        unmapped memory in a packed allocation — so the value matmul is padded
+        to 64 there. Other architectures use the natural power of two (measured
+        correct down to N=16)."""
+        width = triton.next_power_of_2(dv)
+        if torch.cuda.get_device_capability()[0] == 9:
+            return max(64, width)
+        return width
+
     @triton.jit
     def _mf_fwd_kernel(q_ptr, k_ptr, v_ptr, bits_ptr, o_ptr, lse_ptr,
                        L, n_words, scale,
@@ -453,7 +466,7 @@ if triton is not None:
                 vp.stride(0), dv, out.stride(0), dv,
                 lse_out.stride(0), 1,
                 H=n_heads, D=head_dim, DP=triton.next_power_of_2(head_dim),
-                DV=dv, DVP=triton.next_power_of_2(dv),
+                DV=dv, DVP=_value_tile_width(dv),
                 BM=BM, BN=BN,
                 num_warps=4, num_stages=3,
             )
@@ -515,7 +528,7 @@ if triton is not None:
                 vp.stride(0), dv, d_attn.stride(0), dv,
                 lse.stride(0), 1,
                 H=n_heads, D=head_dim, DP=triton.next_power_of_2(head_dim),
-                DV=dv, DVP=triton.next_power_of_2(dv),
+                DV=dv, DVP=_value_tile_width(dv),
                 BM=32, BN=BN,
                 num_warps=4, num_stages=3,
             )
@@ -529,7 +542,7 @@ if triton is not None:
                 vp.stride(0), dv, d_attn.stride(0), dv,
                 lse.stride(0), 1,
                 H=n_heads, D=head_dim, DP=triton.next_power_of_2(head_dim),
-                DV=dv, DVP=triton.next_power_of_2(dv),
+                DV=dv, DVP=_value_tile_width(dv),
                 BM=128, BN=BN,
                 num_warps=8, num_stages=2,
             )
