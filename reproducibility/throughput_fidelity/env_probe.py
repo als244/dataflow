@@ -53,8 +53,14 @@ PRESET_LADDER = ["llama3_8b", "l3_1b", "l3_760m", "l3_350m", "l3_125m"]
 # same model: it recomputes its way into the space it has, which is exactly the
 # regime this runtime exists for.
 PERSISTENT_HEADROOM = 1.15   # staging/copies alongside the persistent floor
-ACTIVATION_ALLOWANCE = 1.6   # ceiling offered when the host can afford it
-HOST_SHARE = 0.72            # of the applicable host limit
+HOST_SHARE = 0.72            # of the applicable host limit, taken as the ceiling
+
+# The top of the backing ladder is what the host can spare, not a multiple of
+# the persistent floor. An unconstrained plan of this shape wants roughly twice
+# that floor in saved contexts, so a tighter ceiling would silently force
+# recompute and hide the cells that get FASTER with more host memory. Whether
+# the top rung is still improving is itself a result: it says the box is
+# host-limited rather than device-limited.
 
 
 def host_limit_bytes():
@@ -143,9 +149,8 @@ def main():
     if chosen is None:
         raise SystemExit("no preset fits this host")
     preset, persist, cfg = chosen
-    # offer room for saved activations when the host can afford it; when it
-    # cannot, the lower ceiling is passed to the planner and it recomputes more
-    backing = min(persist * ACTIVATION_ALLOWANCE, HOST_SHARE * host_bytes)
+    # everything the host can spare; the planner takes less when it wants less
+    backing = HOST_SHARE * host_bytes
 
     # a task needs its own inputs+outputs resident; that bounds the useful floor
     from dataflow_training.model_families.families import resolve_family
@@ -170,7 +175,6 @@ def main():
         "persistent_gib": round(persist / GIB, 1),
         "backing_gib": round(backing / GIB, 1),
         "backings": backing_ladder(persist, backing),
-        "backing_is_capped_by_host": bool(backing < persist * ACTIVATION_ALLOWANCE),
         "task_floor_gib": round(floor / GIB, 2),
         "budgets": budget_ladder(device_bytes, floor_gib),
         "seqs": [s for s in (1024, 2048, 4096, 8192) if s <= cfg.seq_len * 2],
