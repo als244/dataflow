@@ -8,14 +8,59 @@ Two questions, on whatever GPU this is run on:
 2. **Does the simulator tell the truth?** Predicted vs measured seconds/step
    for the same plan, cell by cell.
 
+## Quickstart
+
 ```bash
 bash reproducibility/throughput_fidelity/run_experiment.sh
 ```
 
-That is the whole interface. Overrides: `PYTHON=` (interpreter), `PRESET=`
-(skip model selection), `OPTS=adamw,muon` (optimizers), `TARGET_CELLS=18` (how
-many cells get real runs), `STEPS=6` (steps per measured cell, first 3 are
-warmup).
+That is the whole thing. It picks the model, the budgets and the geometry from
+the machine it finds itself on, runs the sweep, and prints the tables. Expect
+one to three hours depending on the card. Results land in `data/`, figures in
+`figs/`, and a summary is printed at the end.
+
+A quick look first, on a smaller model with a coarse grid:
+
+```bash
+PRESET=l3_1b SEQS=1024,4096 BUDGET_STEP=2 TARGET_CELLS=6 STEPS=4 \
+  bash reproducibility/throughput_fidelity/run_experiment.sh
+```
+
+Then draw the figures (any time, including mid-run):
+
+```bash
+python reproducibility/throughput_fidelity/make_plots.py adamw
+python reproducibility/throughput_fidelity/analyze.py
+```
+
+## Configuration
+
+Everything is an environment variable, and every default is derived from the
+machine rather than written down. Set none of them and the run is still
+meaningful; set one and only that dimension changes.
+
+| variable | default | what it changes |
+|---|---|---|
+| `PYTHON` | `python` | interpreter to run everything with |
+| `PRESET` | largest model whose persistent state fits the host | the model. Skips selection entirely, e.g. `l3_1b` |
+| `OPTS` | `adamw,muon` | optimizers swept. `OPTS=adamw` roughly halves the run |
+| `SEQS` | `1024,2048,4096,8192` (capped by the preset) | sequence lengths |
+| `T_ROUNDS` | `8192,16384,32768,65536` | tokens per round — the grad-accumulation granularity |
+| `T_STEPS` | scaled to the device class | tokens per optimizer step |
+| `BUDGETS` | √2 ladder from a one-task floor to 0.85 × device | GPU memory budgets, explicitly |
+| `BUDGET_STEP` | `1.414` | granularity of that ladder instead of replacing it. `2` for octaves, `1.2` for fine |
+| `HOST_SHARE` | `0.8` | fraction of host memory offered as the allowance |
+| `BACKING_GIB` | — | the allowance outright, ignoring `HOST_SHARE` |
+| `TARGET_CELLS` | `18` | how many cells get real GPU runs |
+| `STEPS` | `6` | steps per measured cell; the first 3 are warmup, so keep ≥ 4 |
+
+The grid is the cross product of `SEQS × T_ROUNDS × T_STEPS × BUDGETS`, so
+prediction cost grows with all four — but only `TARGET_CELLS` and `STEPS`
+drive GPU time in the measurement pass, which is the expensive one.
+
+Geometry has one contract: `T_ROUNDS` must divide by the sequence length and
+into `T_STEPS`. Combinations that do not are recorded as skips rather than
+silently dropped.
 
 ## Order of operations
 
