@@ -222,6 +222,12 @@ class Session:
                 self.pool.external_alloc["backing"] = self.external_backing
             if getattr(self.backend, "physical", False):
                 for location, cap in caps.items():
+                    if location in self.pool.external_alloc:
+                        # the server already owns this tier's memory. A slab
+                        # here would pin the same bytes a second time, and --
+                        # because a slab takes precedence over the external
+                        # allocator -- the server's own would then go unused.
+                        continue
                     self.pool.add_slab(
                         location, cap,
                         # fragmentation headroom scaled to the slab: a tiny
