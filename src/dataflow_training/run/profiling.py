@@ -9,6 +9,18 @@ The plan's measurement-over-estimation principle, mechanized:
   them ~5-10% vs a training run at steady-state clocks (observed on the
   bs4/ga4 gap analysis before the soak existed). Mean/stdev/min/max ride
   along in the profile metadata for distribution visibility.
+- **Payload realism**: inputs are seeded with real-scale random values
+  (`fill_realistic`), because a task's runtime depends on operand VALUES and
+  not only on shapes — near-zero operands barely switch the datapath, so the
+  device draws far less power and holds a much higher clock than it ever can
+  under real activations. This is the same failure mode as an unsoaked GPU
+  and it is larger: measured on H100/llama3_8b, timing on zero-valued buffers
+  under-priced the attention backward by 1.27x (9.11 ms vs 11.62 ms) and the
+  whole compute-bound regime by ~1.25x. Composite operands (saved-activation
+  contexts, packed weight layouts) carry NO element type and are the biggest
+  buffers a block reads, so they are seeded as bf16; integer payloads stay
+  deterministic and any discrete field is restored by the executable's own
+  `profile_fill` hook.
 - **Workspace**: the torch caching-allocator peak delta around one launch —
   exactly the scratch-lane bytes the executable used beyond runtime-owned
   buffers (runtime buffers come from our pool, invisible to torch's
@@ -67,6 +79,57 @@ def _signature(task: TaskSpec, sizes: dict[str, int],
         bool(task.mutates),
     )
     return base + ((fp,) if fp else ())
+
+
+PROFILE_FILL_SEED = 20260724
+
+
+def fill_realistic(buffer, size_bytes: int, dtype_name: str, generator) -> bool:
+    """Seed one float input with real-scale random values. Returns whether it filled.
+
+    Kernel time depends on operand VALUES, not only on shapes. Near-zero operands
+    barely switch the datapath, so the device draws far less power and holds a much
+    higher sustained clock than it can under real activations — profiling on
+    uninitialized (effectively zero) buffers therefore under-prices every compute
+    task. Measured on H100 / llama3_8b, flash attention backward: 9.11 ms on zeros
+    vs 11.62 ms on N(0,1) — 484 W @ 1811 MHz vs 681 W @ 1448 MHz — and the N(0,1)
+    figure matches the same kernel inside a real training step to 0.1%. Without
+    this the whole cost model runs ~1.25x optimistic wherever compute is the
+    critical path.
+
+    INTEGER payloads are left to the caller's deterministic fill: they are indices
+    (routing slots, positions, segment bounds) and garbage there is an illegal
+    memory access, not a slower kernel.
+    """
+    import torch
+
+    from dataflow.runtime.interop import TORCH_DTYPE_BY_NAME, torch_view
+
+    if dtype_name is None:
+        # COMPOSITE payloads (saved-activation contexts, packed weight layouts)
+        # declare no single element type — they are the largest operands a block
+        # reads, so leaving them zero is exactly what mispriced the model. Seed
+        # them as bf16, the element type of every float field in those layouts.
+        # Any discrete field inside (MoE routing slots, sparse-attention indices)
+        # is restored right after by the executable's own ``profile_fill`` hook,
+        # which every family that makes discrete choices implements.
+        dtype = torch.bfloat16
+    else:
+        dtype = TORCH_DTYPE_BY_NAME.get(dtype_name)
+        if dtype is None or not dtype.is_floating_point:
+            return False
+    elem = torch.finfo(dtype).bits // 8
+    n = size_bytes // elem
+    if n == 0:
+        return False
+    view = torch_view(buffer, (n,), dtype)
+    try:
+        view.normal_(0.0, 1.0, generator=generator)
+    except (RuntimeError, TypeError):
+        # narrow float types (fp8) have no RNG kernel of their own — stage bf16
+        stage = torch.empty(n, device=view.device, dtype=torch.bfloat16)
+        view.copy_(stage.normal_(0.0, 1.0, generator=generator))
+    return True
 
 
 def thermal_soak(seconds: float = 1.0) -> None:
@@ -165,6 +228,10 @@ def profile_program(
             metas[o.id] = o.tensor
 
     thermal_soak(soak_seconds)
+    # one seeded generator for every payload fill: costs must be reproducible
+    # across cache refreshes (a re-profile that shifts task costs re-plans)
+    fill_gen = torch.Generator(device="cuda")
+    fill_gen.manual_seed(PROFILE_FILL_SEED)
     stream = backend.create_stream("compute")
     contender = _PcieContender(backend) if contend_pcie else None
     profiles: dict[tuple, TaskProfile] = {}
@@ -208,6 +275,15 @@ def profile_program(
                 meta = metas.get(obj)
                 if meta is not None and meta.dtype == "int32":
                     torch_view(b, (sizes[obj] // 4,), torch.int32).fill_(int32_fill)
+                else:
+                    # every other payload carries REAL-SCALE values: operand
+                    # content drives switching activity -> power -> sustained
+                    # clock, so zero-valued inputs time a machine that never
+                    # exists in a real step (see fill_realistic). Objects with
+                    # no TensorMeta at all are the composite ones (A contexts,
+                    # packed weights) and are the BIGGEST operands a block reads.
+                    fill_realistic(b, sizes[obj], getattr(meta, "dtype", None),
+                                   fill_gen)
                 in_buffers[obj] = b
             out_buffers = {o.id: buf(o.size_bytes) for o in task.outputs}
             mut_buffers = {m: in_buffers[m] for m in task.mutates}
@@ -322,7 +398,12 @@ def host_backing_cap_bytes(*, reserve_gib: float = 10.0) -> int:
     return int(max(0, avail - reserve_gib * 1024 ** 3))
 
 
-PROFILE_CACHE_REV = "2"  # bump whenever kernel/task costs change (invalidates all cached profiles)
+PROFILE_CACHE_REV = "4"  # bump whenever kernel/task costs change (invalidates all cached profiles)
+#   "3": float inputs seeded with real-scale values (fill_realistic) — every
+#        earlier profile timed zero-valued operands and ran ~1.25x optimistic
+#   "4": that seeding extended to COMPOSITE operands (saved-activation contexts,
+#        packed weights carry no element type); rev 3 left them zero, which is
+#        most of the bytes a block reads
 
 
 def load_or_profile(
