@@ -552,21 +552,13 @@ def plan_at_budget(cfg, budget_gib: float, *, recompute: bool = True,
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow_training.run.profiling import (apply_measured_costs,
                                                  cached_pcie,
-                                                 load_or_profile,
-                                                 recompute_level_pins)
+                                                 measured_profile_table)
 
     backend = CudaBackend()
     dims = fam.derive_dims(cfg)
     resolver = fam.build_resolver(dims)
-    bare = fam.lower(cfg)
-    profiles = load_or_profile(bare, resolver, backend)
-    if recompute:
-        # Profile the recompute variants too, or the search cannot price any
-        # of them: it would silently keep the save-everything plan and report
-        # cells as impossible that recomputing fits comfortably.
-        for pins in recompute_level_pins(bare):
-            profiles = load_or_profile(fam.lower(cfg, recompute_levels=pins),
-                                       resolver, backend)
+    profiles = measured_profile_table(fam, cfg, resolver, backend,
+                                      recompute=recompute)
     pcie = cached_pcie(backend)
     variant = (functools.partial(measured_variant, fam, cfg, profiles,
                                  resolver, pcie)

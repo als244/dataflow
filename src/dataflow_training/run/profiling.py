@@ -389,6 +389,25 @@ def recompute_level_pins(program) -> list[dict[str, int]]:
             for level in levels]
 
 
+def measured_profile_table(fam, cfg, resolver, backend, *, recompute: bool = True,
+                           **kwargs) -> dict[tuple, TaskProfile]:
+    """The cost table for ``cfg``, covering every variant that will be priced.
+
+    Profiling only the base lowering leaves the recompute search unable to
+    price any variant it evaluates, which it cannot distinguish from a variant
+    that does not fit — so it quietly keeps the save-everything plan and calls
+    the rest infeasible. Every caller that plans with measured costs needs the
+    same coverage, so they share this rather than each assembling a table:
+    two copies of that assembly is how the gap survived being fixed once."""
+    bare = fam.lower(cfg)
+    profiles = load_or_profile(bare, resolver, backend, **kwargs)
+    if recompute:
+        for pins in recompute_level_pins(bare):
+            profiles = load_or_profile(fam.lower(cfg, recompute_levels=pins),
+                                       resolver, backend, **kwargs)
+    return profiles
+
+
 class MissingProfileError(LookupError):
     """A task was priced against a profile table that never measured it.
 

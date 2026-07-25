@@ -76,15 +76,20 @@ def plan_combo(fam, cfg, hw, budget_gib: float, *, measured: bool,
             build_variant=(partial(lower_variant, fam, cfg, hw)
                            if recompute else None))
     from dataflow.runtime.device.cuda import CudaBackend
-    from dataflow_training.run.profiling import apply_measured_costs, load_or_profile
+    from dataflow_training.run.profiling import (apply_measured_costs,
+                                                 measured_profile_table)
 
-    key = (cfg.grad_accum_rounds, cfg.batch, cfg.seq_len)
+    # `recompute` belongs in the key: the table for a recompute-enabled plan
+    # covers variants the save-everything one never contains, so a cache hit
+    # from the narrower build would leave the search unable to price them.
+    key = (cfg.grad_accum_rounds, cfg.batch, cfg.seq_len, recompute)
     if key not in profile_cache:
         backend = profile_cache.setdefault("_backend", CudaBackend())
         dims = fam.derive_dims(cfg)
         resolver = fam.build_resolver(dims)
-        profile_cache[key] = (load_or_profile(fam.lower(cfg), resolver,
-                                              backend), resolver)
+        profile_cache[key] = (measured_profile_table(fam, cfg, resolver, backend,
+                                                     recompute=recompute),
+                              resolver)
     profiles, resolver = profile_cache[key]
     return plan_program(
         apply_measured_costs(fam.lower(cfg), profiles, resolver),
