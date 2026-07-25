@@ -408,6 +408,24 @@ def measured_profile_table(fam, cfg, resolver, backend, *, recompute: bool = Tru
     return profiles
 
 
+def measured_program(fam, cfg, profiles, resolver, pcie, levels=None) -> Program:
+    """One program priced entirely by measurement.
+
+    Measurement covers two things, and using one without the other silently
+    biases the plan: profiled task costs say how long compute takes, and the
+    box's own link bandwidths say how long the transfers feeding it take. A
+    program given measured compute but the lowering's default bandwidths
+    prices its offloads against a link the machine does not have, and every
+    plan built from it comes out optimistic by however far that default sits
+    from the truth. Both callers take their programs from here so neither can
+    apply half the measurement."""
+    program = (fam.lower(cfg) if levels is None
+               else fam.lower(cfg, recompute_levels=levels))
+    return replace(apply_measured_costs(program, profiles, resolver),
+                   bandwidth_from_slow=pcie.bidi_h2d,
+                   bandwidth_to_slow=pcie.bidi_d2h)
+
+
 class MissingProfileError(LookupError):
     """A task was priced against a profile table that never measured it.
 

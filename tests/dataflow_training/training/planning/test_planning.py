@@ -11,6 +11,7 @@ Tests:
 - test_level_pins_cover_every_variant_the_search_prices: the programs the profiler is told to measure carry every cost signature the recompute search can encounter, including the seeds it starts from.
 - test_incomplete_cost_table_is_not_reported_as_infeasible: pricing a program against a table that never measured it raises MissingProfileError rather than being absorbed as a plan that does not fit.
 - test_recompute_never_plans_slower_than_saving_everything: offering recompute never yields a slower plan than the save-everything baseline it starts from, at any budget.
+- test_measured_programs_are_built_in_one_place: nothing outside the profiling module assembles a measured program itself, so profiled costs and measured bandwidths cannot be applied by halves.
 """
 from functools import partial
 
@@ -237,3 +238,37 @@ def test_recompute_never_plans_slower_than_saving_everything():
 
 def build_variant_at(cfg, levels):
     return build_shaped_llama3(cfg, recompute_levels=levels)
+
+
+def test_measured_programs_are_built_in_one_place():
+    """Assembling a measured program means two things -- profiled task costs
+    and the box's own link bandwidths -- and applying one without the other
+    biases every plan built from it. That gap existed twice: a second copy of
+    the assembly profiled only the base lowering, so the recompute search could
+    price nothing, and the same copy never installed measured bandwidths, so
+    its plans came out ~10% optimistic against the identical cell the driver
+    planned honestly. Both were invisible because the copies looked right in
+    isolation. Only the module that owns the cost table may reach for these."""
+    import ast
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve()
+    while not (root / "src" / "dataflow_training").is_dir():
+        root = root.parent
+    owner = root / "src" / "dataflow_training" / "run" / "profiling.py"
+    guarded = {"apply_measured_costs", "load_or_profile"}
+
+    offenders = []
+    for path in list((root / "src").rglob("*.py")) + list((root / "tools").rglob("*.py")):
+        if path == owner:
+            continue
+        tree = ast.parse(path.read_text())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                if node.func.id in guarded:
+                    offenders.append(f"{path.relative_to(root)}:{node.lineno} "
+                                     f"calls {node.func.id}")
+    assert not offenders, (
+        "measured programs must come from profiling.measured_program / "
+        "measured_profile_table so both halves of the measurement travel "
+        "together:\n  " + "\n  ".join(offenders))

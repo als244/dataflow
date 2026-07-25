@@ -499,18 +499,11 @@ def engine_client(backing_gib: float = 100.0, *, socket: str | None = None,
 
 
 def measured_variant(fam, cfg, profiles, resolver, pcie, levels):
-    """One re-lowered recompute variant with profiled task costs AND
-    the executing box's measured PCIe bandwidths installed — the same
-    treatment the base program gets, so the recompute search prices
-    transfers honestly."""
-    from dataclasses import replace as dc_replace
+    """One re-lowered recompute variant, priced the same way the base program
+    is, so the recompute search compares like with like."""
+    from dataflow_training.run.profiling import measured_program
 
-    from dataflow_training.run.profiling import apply_measured_costs
-
-    prog = apply_measured_costs(fam.lower(cfg, recompute_levels=levels),
-                                profiles, resolver)
-    return dc_replace(prog, bandwidth_from_slow=pcie.bidi_h2d,
-                      bandwidth_to_slow=pcie.bidi_d2h)
+    return measured_program(fam, cfg, profiles, resolver, pcie, levels=levels)
 
 
 def plan_at_budget(cfg, budget_gib: float, *, recompute: bool = True,
@@ -550,9 +543,9 @@ def plan_at_budget(cfg, budget_gib: float, *, recompute: bool = True,
                             backing_capacity=backing_cap,
                             recompute=recompute, build_variant=variant)
     from dataflow.runtime.device.cuda import CudaBackend
-    from dataflow_training.run.profiling import (apply_measured_costs,
-                                                 cached_pcie,
-                                                 measured_profile_table)
+    from dataflow_training.run.profiling import (cached_pcie,
+                                                 measured_profile_table,
+                                                 measured_program)
 
     backend = CudaBackend()
     dims = fam.derive_dims(cfg)
@@ -563,9 +556,7 @@ def plan_at_budget(cfg, budget_gib: float, *, recompute: bool = True,
     variant = (functools.partial(measured_variant, fam, cfg, profiles,
                                  resolver, pcie)
                if recompute else None)
-    base = dc_replace(apply_measured_costs(fam.lower(cfg), profiles, resolver),
-                      bandwidth_from_slow=pcie.bidi_h2d,
-                      bandwidth_to_slow=pcie.bidi_d2h)
+    base = measured_program(fam, cfg, profiles, resolver, pcie)
     return plan_program(base,
                         fast_memory_capacity=int(budget_gib * 1024 ** 3),
                         backing_capacity=backing_cap,
