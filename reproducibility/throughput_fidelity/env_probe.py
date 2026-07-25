@@ -116,28 +116,61 @@ def host_limit_bytes():
     raise SystemExit("cannot determine host memory")
 
 
-def largest_pinnable(want_bytes, floor_bytes):
+def pins_ok(size_bytes):
+    """Whether the host will hand out a pinned buffer of this size, right now.
+
+    The refusal arrives as an exception from the allocator and is the answer
+    being asked for, not a fault: the whole point is to find where the ceiling
+    is, and the only way to know is to ask."""
+    import torch
+
+    try:
+        buf = torch.empty(int(size_bytes), dtype=torch.uint8, pin_memory=True)
+    except Exception:
+        return False
+    del buf
+    return True
+
+
+def largest_pinnable(want_bytes, floor_bytes, tolerance_bytes=GIB):
     """The biggest pinned allocation this host will actually give us, at or
     below ``want_bytes``.
 
     Sizing the allowance by arithmetic on a memory total is wishful: pinned
     pages must be resident and non-swappable, so the ceiling is set by what is
-    free right now and by whatever else has already pinned memory. Asking and
-    halving on refusal costs a few seconds at startup and turns a run-time
-    CUDA allocation failure -- which surfaces deep inside the first measured
-    cell, after the whole prediction pass has been paid for -- into a number
-    chosen before any work begins."""
-    import torch
+    free right now, by whatever else has already pinned memory, and by the
+    kernel's commit limit -- which defaults to half of RAM and has nothing to
+    do with what MemAvailable reports. Asking costs a few seconds at startup
+    and turns a run-time allocation failure -- which surfaces deep inside the
+    first measured cell, after the whole prediction pass has been paid for --
+    into a number chosen before any work begins.
 
+    Stepping down alone answers the wrong question, though. A 0.8 step that
+    overshoots reports the last size that happened to fit rather than the
+    largest that does: on a 125 GiB box whose commit limit was 64.8 GiB, the
+    steps landed 90.7 -> 72.6 -> 58.1 and stopped, giving up 6 GiB of host
+    allowance to nothing but the size of the step. So the step only brackets
+    the ceiling, and a bisect finds it."""
     size = int(want_bytes)
+    if pins_ok(size):
+        return size
+    refused = size
+    accepted = None
     while size > floor_bytes:
-        try:
-            buf = torch.empty(size, dtype=torch.uint8, pin_memory=True)
-            del buf
-            return size
-        except Exception:
-            size = int(size * 0.8)     # ease down; halving throws away half
-    return int(floor_bytes)
+        size = int(size * 0.8)
+        if pins_ok(size):
+            accepted = size
+            break
+        refused = size
+    if accepted is None:
+        return int(floor_bytes)
+    while refused - accepted > tolerance_bytes:
+        mid = (accepted + refused) // 2
+        if pins_ok(mid):
+            accepted = mid
+        else:
+            refused = mid
+    return accepted
 
 
 def persistent_bytes(preset, opt):
