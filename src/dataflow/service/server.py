@@ -339,14 +339,11 @@ class Server:
     """Boot, accept loop, handler registration."""
 
     def __init__(self, config: EngineConfig):
-        import os as _os
-
-        # match the bench tooling's allocator policy (reserved tracks
-        # allocated; segment slack was the twin study's phantom
-        # +1.7 GiB device offset). Must be set before torch's first
-        # CUDA allocation in this process.
-        _os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF",
-                               "expandable_segments:True")
+        # The allocator policy (expandable segments, against the ~1.7 GiB of
+        # segment slack that was the twin study's phantom device offset) is set
+        # at dataflow package import: every path that reaches here has passed
+        # through it, and so has every in-process caller that never builds a
+        # Server, which this placement used to leave out.
         self.config = config
         self.state = EngineState(config)
         self.dispatcher = Dispatcher(self.state)
