@@ -263,6 +263,20 @@ def run_measure(args):
         groups.setdefault(float(c.get("backing", default_back)), []).append(c)
     recipe = Recipe(peak_lr=args.peak_lr, min_lr=args.peak_lr / 10,
                     warmup_steps=max(1, args.steps // 3), total_steps=args.steps)
+    # RESUME: rows are appended and flushed per cell, so a run that was killed
+    # part way has kept everything it finished. Without this the restart
+    # re-measures those cells and appends a SECOND row for each, which reads as
+    # data rather than as a repeat -- expensive on a frontier pass that takes
+    # hours, and silently wrong afterwards.
+    done = set()
+    if os.path.exists(args.out):
+        for line in open(args.out):
+            r = json.loads(line)
+            if "meas_s" in r or "failed" in r:
+                done.add((r["seq"], r["t_round"], r["t_step"], r["budget"]))
+    if done:
+        print(f"[measure {args.opt}] resuming: {len(done)} cells already "
+              f"recorded, skipping them", flush=True)
     n = 0
     with open(args.out, "a") as fh:
         for backing in sorted(groups):
@@ -272,6 +286,8 @@ def run_measure(args):
                 for c in groups[backing]:
                     seq, tr, ts = c["seq"], c["t_round"], c["t_step"]
                     bud = float(c["budget"])
+                    if (seq, tr, ts, bud) in done:
+                        continue
                     meta = dict(mode="measure", opt=args.opt, preset=args.preset,
                                 seq=seq, t_round=tr, t_step=ts, budget=bud,
                                 backing=backing, steps=args.steps,
