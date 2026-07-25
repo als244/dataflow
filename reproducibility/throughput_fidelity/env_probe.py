@@ -9,8 +9,9 @@ under a batch scheduler, else physical RAM) — then picks:
 
   * preset       the largest model whose offloaded state fits the host limit,
                  so every box runs the same experiment at the scale it can hold
-  * budgets      a fast-memory ladder from a floor that can hold one task up to
-                 most of the device, which is the axis the study is about
+  * budgets      a fast-memory ladder from the smallest budget that actually
+                 plans up to most of the device, which is the axis the study is
+                 about -- holding one task is the floor, not the entry price
   * backing_gib  the host ceiling handed to the planner
   * seqs / t_rounds / t_steps   geometry axes; rounds start at one sequence
                  each and double, so a small card's feasible region is inside
@@ -154,8 +155,55 @@ def persistent_bytes(preset, opt):
     return sum(sizes[o.id] for o in program.initial_objects), cfg
 
 
-def budget_ladder(device_bytes, floor_gib, step=None):
-    """HALF-OCTAVE steps from a floor that can hold one task up to most of the
+def smallest_plannable_gib(cfg, floor_gib, backing_bytes, seq, t_step):
+    """Bisect for the smallest budget that actually produces a plan.
+
+    Holding one task is necessary but nowhere near sufficient: the planner also
+    overlaps that task with the traffic feeding the next one, and measured on
+    an 8B model it needs about twice the largest task's working set before it
+    can make progress at all. A ladder starting at the floor therefore opens
+    with rungs that cannot plan for any geometry -- they are not a finding
+    about the machine, just wasted cells that read as "this box cannot do it".
+
+    Bisected against the cheapest variant (everything recomputed, so no saved
+    activation can be what fails) at the grid's most permissive REAL cell: one
+    round per step, which is the smallest step run whole. Accumulating a step
+    over many rounds costs memory even when nothing is saved, so a probe at a
+    round size the grid never pairs with that step would report a lower entry
+    price than any cell can actually pay. Analytic costs: this only has to
+    bound where the ladder starts, and the prediction pass re-decides every
+    cell for real."""
+    from dataclasses import replace
+
+    from dataflow_training.lowering.planning import plan_program
+    from dataflow_training.model_families.families import resolve_family
+
+    probe = replace(cfg, seq_len=seq, batch=max(1, t_step // seq),
+                    grad_accum_rounds=1)
+    fam = resolve_family(probe)
+    program = fam.lower(probe)
+    pins = {rw.object_id: rw.options[-1].level for rw in program.recompute_rewrites}
+    cheapest = fam.lower(probe, recompute_levels=pins)
+
+    lo, hi = float(floor_gib), float(floor_gib) * 8
+    try:
+        plan_program(cheapest, fast_memory_capacity=int(hi * GIB),
+                     backing_capacity=backing_bytes, recompute=False)
+    except ValueError:
+        return round(hi, 1)          # even 8x the floor will not plan; say so
+    for _ in range(6):
+        mid = (lo + hi) / 2
+        try:
+            plan_program(cheapest, fast_memory_capacity=int(mid * GIB),
+                         backing_capacity=backing_bytes, recompute=False)
+            hi = mid
+        except ValueError:
+            lo = mid
+    return round(hi, 1)
+
+
+def budget_ladder(device_bytes, start_gib, step=None):
+    """HALF-OCTAVE steps from the smallest plannable budget up to most of the
     device. Doubling is too coarse where it matters: on a large card the whole
     interesting transition (offload-bound to compute-bound) can hide between
     16 and 64 GiB, and three points cannot show a knee. sqrt(2) spacing keeps
@@ -164,7 +212,7 @@ def budget_ladder(device_bytes, floor_gib, step=None):
     extrapolation."""
     cap = DEVICE_SHARE * device_bytes / GIB
     step = step or BUDGET_STEP
-    out, b = [], float(floor_gib)
+    out, b = [], float(start_gib)
     while b <= cap * 1.001:
         out.append(round(b, 1) if b < 10 else round(b))
         b *= step
@@ -265,6 +313,11 @@ def main():
     base = 131072 if big else 65536
     seqs = (numbers(args.seqs) if args.seqs else
             [s for s in (1024, 2048, 4096, 8192) if s <= cfg.seq_len * 2])
+    t_rounds = (numbers(args.t_rounds) if args.t_rounds else round_ladder(seqs))
+    t_steps = (numbers(args.t_steps) if args.t_steps
+               else [base // 2, base, base * 2])
+    start_gib = smallest_plannable_gib(cfg, floor_gib, backing,
+                                       min(seqs), min(t_steps))
     env = {
         "host": os.uname().nodename,
         "device": props.name,
@@ -277,13 +330,12 @@ def main():
         "persistent_gib": round(persist / GIB, 1),
         "backing_gib": round(backing / GIB, 1),
         "task_floor_gib": round(floor / GIB, 2),
+        "smallest_plannable_gib": start_gib,
         "budgets": (numbers(args.budgets) if args.budgets else
-                    budget_ladder(device_bytes, floor_gib, args.budget_step)),
+                    budget_ladder(device_bytes, start_gib, args.budget_step)),
         "seqs": seqs,
-        "t_rounds": (numbers(args.t_rounds) if args.t_rounds
-                     else round_ladder(seqs)),
-        "t_steps": (numbers(args.t_steps) if args.t_steps
-                    else [base // 2, base, base * 2]),
+        "t_rounds": t_rounds,
+        "t_steps": t_steps,
         "steps_per_cell": args.steps,
     }
     dst = args.out or os.path.join(os.path.dirname(os.path.abspath(__file__)), "env.json")
