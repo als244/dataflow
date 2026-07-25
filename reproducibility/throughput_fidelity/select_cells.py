@@ -87,6 +87,10 @@ def main():
     ap.add_argument("--opts", default="adamw,muon")
     ap.add_argument("--target", type=int, default=18,
                     help="how many cells to measure in total")
+    ap.add_argument("--all-frontier", dest="all_frontier", action="store_true",
+                    help="measure EVERY frontier cell instead of a sample of "
+                         "them; hours rather than minutes, and the measured "
+                         "frontier can then be laid over the simulated one")
     ap.add_argument("--out", default=os.path.join(here, "cells.json"))
     args = ap.parse_args()
 
@@ -126,7 +130,14 @@ def main():
 
     rest = [k for k in keys if k not in set(spine)]
     picks = list(spine)
-    if rest and len(picks) < args.target:
+    if args.all_frontier:
+        # The whole frontier, not a sample of it. A reduced subset answers
+        # "is the simulator right about these cells"; the whole frontier
+        # answers "is the simulated frontier the real frontier", which is the
+        # curve every figure in the report is drawn from, and there is nothing
+        # left to interpolate afterwards.
+        picks, rest = list(keys), []
+    elif rest and len(picks) < args.target:
         raw = np.array([[rows[k].get(f, 0.0) for f in FEATURES] for k in rest],
                        dtype=float)
         # throughput spans orders of magnitude; percentages already share a scale
@@ -147,7 +158,7 @@ def main():
     # a couple of dominated cells ride along as controls: if the engine ranks
     # them differently from the simulator, the reduction above is unsafe
     controls = []
-    if dominated:
+    if dominated and not args.all_frontier:
         dominated.sort(key=lambda k: -rows[k]["tok_s"])
         controls = [dominated[0], dominated[len(dominated) // 2]]
         picks.extend(controls)

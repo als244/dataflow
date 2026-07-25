@@ -55,6 +55,7 @@ class Config:
     host_share: float | None = None    # fraction of host RAM; None -> 0.8
     backing_gib: float | None = None   # explicit allowance, overrides the share
     target_cells: int = 18
+    all_frontier: bool = False
     steps: int = 6
     stages: tuple[str, ...] = ALL_STAGES
     data: Path = field(default_factory=lambda: HERE / "data")
@@ -155,7 +156,8 @@ def stage_select(cfg: Config) -> None:
     spine, and add dominated controls that test the reduction."""
     say("select — which cells deserve real GPU time?")
     run([cfg.python, str(HERE / "select_cells.py"),
-         "--opts", ",".join(cfg.opts), "--target", str(cfg.target_cells)],
+         "--opts", ",".join(cfg.opts), "--target", str(cfg.target_cells)]
+        + (["--all-frontier"] if cfg.all_frontier else []),
         log=cfg.logs / "select.log")
     if cfg.cells_json.exists():
         cells = json.loads(cfg.cells_json.read_text())
@@ -249,6 +251,8 @@ def parse_args(argv=None) -> Config:
                         "(default 0.8)")
     p.add_argument("--backing-gib", type=float, default=None,
                    help="host allowance outright, ignoring --host-share")
+    p.add_argument("--all-frontier", dest="all_frontier", action="store_true",
+                   help="measure every frontier cell, not a sample (hours)")
     p.add_argument("--target-cells", type=int, default=18,
                    help="how many cells get real GPU runs (default: 18)")
     p.add_argument("--steps", type=int, default=6,
@@ -272,6 +276,7 @@ def parse_args(argv=None) -> Config:
         budgets=numbers(a.budgets, float) if a.budgets else None,
         budget_step=a.budget_step, host_share=a.host_share,
         backing_gib=a.backing_gib, target_cells=a.target_cells,
+        all_frontier=a.all_frontier,
         steps=a.steps, stages=stages)
 
 

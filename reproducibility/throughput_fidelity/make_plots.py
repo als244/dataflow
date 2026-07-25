@@ -197,6 +197,10 @@ def main():
         pred = load(f"predict_unlimited_{a.opt}.jsonl")
         layer = "host allowance unconstrained"
     meas = load(f"measure_{a.opt}.jsonl")
+    # dominated controls are deliberately off the frontier -- they exist to
+    # check the RANKING, not the curve. Drawn against a frontier envelope they
+    # read as fidelity misses, which is the opposite of what they show.
+    meas = [m for m in meas if "dominated_control" not in m.get("spines", [])]
     feasible = [r for r in pred if "tok_s" in r]
     print(f"{a.opt}: {len(pred)} predicted rows "
           f"({len(feasible)} feasible, {len(pred) - len(feasible)} infeasible), "
