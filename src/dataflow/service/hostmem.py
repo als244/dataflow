@@ -3,16 +3,48 @@
 Self-contained on purpose: the service package does not import
 the runtime's device layer. The two facts it needs are small and
 copied here:
-- cudaHostAlloc is page-granular and pins at ~5 GiB/s on this class of
-  box regardless of chunking (measured; design note) — one boot-time
-  slab, suballocated by the store;
+- pinning goes through mmap + cudaHostRegister, NOT cudaHostAlloc, which
+  rounds the request up to a power of two — one boot-time slab,
+  suballocated by the store;
 - the safe backing budget is host MemAvailable minus a leeway.
+
+The runtime's device layer pins the same way for the same reason; the two
+implementations are separate because of the layering above, and a test
+asserts neither drifts back to cudaHostAlloc.
 
 Fake mode never touches this module.
 """
 from __future__ import annotations
 
+import ctypes
+
 GIB = 1024**3
+
+# Linux x86-64 ABI. mmap gives back exactly the pages asked for, where
+# cudaHostAlloc rounds up to a power of two: measured on a 125.7 GiB host, a
+# 33 GiB request consumed 65 GiB and anything above 64 GiB was refused
+# outright with 113 GiB free, because 128 GiB does not fit. A slab must cost
+# what it says, and on a host whose RAM is not near a power of two the
+# rounding is the difference between fitting and not.
+_PROT_READ, _PROT_WRITE = 0x1, 0x2
+_MAP_PRIVATE, _MAP_ANONYMOUS = 0x02, 0x20
+_MAP_FAILED = ctypes.c_void_p(-1).value
+_LIBC = None
+
+
+def libc():
+    """ctypes libc with mmap/munmap typed for 64-bit pointers — without the
+    restype the address is truncated to a C int, turning a valid high address
+    into a negative number and a good mapping into a phantom failure."""
+    global _LIBC
+    if _LIBC is None:
+        _LIBC = ctypes.CDLL("libc.so.6", use_errno=True)
+        _LIBC.mmap.restype = ctypes.c_void_p
+        _LIBC.mmap.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int,
+                               ctypes.c_int, ctypes.c_int, ctypes.c_long]
+        _LIBC.munmap.restype = ctypes.c_int
+        _LIBC.munmap.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
+    return _LIBC
 
 
 def _check(res):
@@ -23,7 +55,7 @@ def _check(res):
 
 
 class PinnedSlab:
-    """One cudaHostAlloc'd region; freed explicitly (daemon shutdown)."""
+    """One mapped-and-registered region; freed explicitly (daemon shutdown)."""
 
     # pinned memory is UNRECLAIMABLE and UNSWAPPABLE: exhausting the
     # host with it starves the page cache and the GPU driver long
@@ -49,8 +81,22 @@ class PinnedSlab:
         self._cudart = cudart
         self._free_lock = threading.Lock()
         _check(cudart.cudaSetDevice(device))
-        (ptr,) = _check(cudart.cudaHostAlloc(
-            capacity_bytes, cudart.cudaHostAllocDefault))
+        ptr = libc().mmap(None, capacity_bytes, _PROT_READ | _PROT_WRITE,
+                          _MAP_PRIVATE | _MAP_ANONYMOUS, -1, 0)
+        if not ptr or ptr == _MAP_FAILED:
+            raise RuntimeError(
+                f"could not map {capacity_bytes / GIB:.1f} GiB for the backing "
+                f"slab ({avail / GIB:.1f} GiB available)")
+        err = cudart.cudaHostRegister(ptr, capacity_bytes,
+                                      cudart.cudaHostRegisterDefault)
+        if isinstance(err, tuple):
+            err = err[0]
+        if int(err) != 0:
+            libc().munmap(ctypes.c_void_p(ptr), capacity_bytes)
+            raise RuntimeError(
+                f"could not pin {capacity_bytes / GIB:.1f} GiB for the backing "
+                f"slab: cudaHostRegister returned {int(err)} "
+                f"({avail / GIB:.1f} GiB available)")
         self.ptr = int(ptr)
         self.capacity = capacity_bytes
 
@@ -63,7 +109,11 @@ class PinnedSlab:
         with self._free_lock:
             ptr, self.ptr = self.ptr, 0
         if ptr:
-            _check(self._cudart.cudaFreeHost(ptr))
+            # unregister BEFORE unmapping: handing the mapping back while the
+            # driver still holds the pages pinned leaves it pinning memory
+            # this process no longer owns
+            _check(self._cudart.cudaHostUnregister(ptr))
+            libc().munmap(ctypes.c_void_p(ptr), self.capacity)
 
 
 def meminfo_available_bytes() -> int:
