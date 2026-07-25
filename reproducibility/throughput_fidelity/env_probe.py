@@ -327,9 +327,18 @@ def main():
     if chosen is None:
         raise SystemExit("no preset fits this host")
     preset, persist, cfg = chosen
-    # what this host can spare, then what it will actually pin
+    # what this host can spare, then what the ENGINE will accept, then what the
+    # host will actually pin. The engine's own reserve has to bound this: the
+    # daemon refuses a slab that would pin into the last SYSTEM_RESERVE_GiB,
+    # and it refuses it at boot -- which is after the whole prediction pass has
+    # been paid for. Asking for more than it will grant turns every measured
+    # cell into a failure at the end of the run.
+    from dataflow.service.hostmem import PinnedSlab, meminfo_available_bytes
+
     backing = (args.backing_gib * GIB if args.backing_gib
                else (args.host_share or HOST_SHARE) * host_bytes)
+    engine_max = meminfo_available_bytes() - int(PinnedSlab.SYSTEM_RESERVE_GIB * GIB)
+    backing = min(backing, engine_max)
     backing = largest_pinnable(backing, persist * PERSISTENT_HEADROOM)
 
     # a task needs its own inputs+outputs resident; that bounds the useful floor
