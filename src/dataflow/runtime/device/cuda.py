@@ -66,6 +66,45 @@ def host_available_bytes() -> int:
     return 0
 
 
+# Host allocations go through mmap rather than cudaHostAlloc so a slab costs
+# the bytes it asks for; see CudaBackend._alloc_pinned for what the rounding
+# did. Flag values are the Linux x86-64 ABI's.
+_PROT_READ, _PROT_WRITE = 0x1, 0x2
+_MAP_PRIVATE, _MAP_ANONYMOUS = 0x02, 0x20
+_MAP_FAILED = ctypes.c_void_p(-1).value
+_LIBC = None
+
+
+def libc():
+    """ctypes handle on libc, with mmap/munmap typed for 64-bit pointers.
+
+    Without the restype the return value is truncated to a C int, which turns
+    a valid high address into a negative number and a working mapping into a
+    phantom failure."""
+    global _LIBC
+    if _LIBC is None:
+        _LIBC = ctypes.CDLL("libc.so.6", use_errno=True)
+        _LIBC.mmap.restype = ctypes.c_void_p
+        _LIBC.mmap.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int,
+                               ctypes.c_int, ctypes.c_int, ctypes.c_long]
+        _LIBC.munmap.restype = ctypes.c_int
+        _LIBC.munmap.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
+    return _LIBC
+
+
+def mmap_anon(size_bytes: int):
+    """A private anonymous mapping of exactly ``size_bytes``, or None."""
+    ptr = libc().mmap(None, size_bytes, _PROT_READ | _PROT_WRITE,
+                      _MAP_PRIVATE | _MAP_ANONYMOUS, -1, 0)
+    if not ptr or ptr == _MAP_FAILED:
+        return None
+    return ptr
+
+
+def munmap(ptr: int, size_bytes: int) -> None:
+    libc().munmap(ctypes.c_void_p(ptr), size_bytes)
+
+
 import weakref
 
 # every constructed backend, for test-teardown drains (weak: a backend
@@ -218,25 +257,45 @@ class CudaBackend:
         return buf
 
     def _alloc_pinned(self, size_bytes: int):
-        """cudaHostAlloc, page-granular (no power-of-2 rounding — that lore is
-        torch's pinned CACHING allocator, which this path bypasses entirely).
+        """Anonymous mapping, then cudaHostRegister to pin it.
 
-        malloc + madvise(HUGEPAGE) + cudaHostRegister was measured as the
-        alternative on this system (THP=madvise honored): pin throughput was
-        IDENTICAL at 8 GB (~4.5 GB/s — the driver pins at its own granularity
-        regardless of backing page size) and 10x slower for small buffers, so
-        the simpler call stays. Revisit if a driver ever honors huge-page
-        registration."""
-        err, ptr = cudart.cudaHostAlloc(size_bytes, cudart.cudaHostAllocDefault)
-        if err != cudart.cudaError_t.cudaSuccess:
+        NOT cudaHostAlloc, which rounds the request up to a power of two. That
+        is invisible as waste until the request crosses a boundary, where it
+        stops being waste and becomes a hard ceiling: measured on a 125.7 GiB
+        host, requests of 33, 40 and 63 GiB each consumed 65 GiB of free
+        memory, and anything above 64 GiB tried to reserve 128 GiB and was
+        refused outright -- with 113 GiB free. The largest slab such a host
+        could hold was the largest power of two beneath its RAM, and the error
+        it raised named device memory rather than the rounding.
+
+        mmap hands back exactly the pages asked for, so a slab costs what it
+        says. The driver pins at its own granularity either way, so throughput
+        is unchanged for the large allocations this path exists to serve."""
+        ptr = mmap_anon(size_bytes)
+        if ptr is None:
             raise HostMemoryError(
-                f"could not pin {size_bytes / 1024 ** 3:.1f} GiB of host memory "
+                f"could not map {size_bytes / 1024 ** 3:.1f} GiB of host memory "
+                f"(MemAvailable {host_available_bytes() / 1024 ** 3:.1f} GiB; "
+                f"this process has already pinned "
+                f"{self.pinned_bytes / 1024 ** 3:.1f} GiB)")
+        err = cudart.cudaHostRegister(ptr, size_bytes,
+                                      cudart.cudaHostRegisterDefault)
+        if isinstance(err, tuple):
+            err = err[0]
+        if err != cudart.cudaError_t.cudaSuccess:
+            munmap(ptr, size_bytes)
+            name = cudart.cudaGetErrorName(err)[1]
+            if isinstance(name, bytes):
+                name = name.decode()
+            raise HostMemoryError(
+                f"could not pin {size_bytes / 1024 ** 3:.1f} GiB of host memory: "
+                f"cudaHostRegister returned {name} "
                 f"(MemAvailable {host_available_bytes() / 1024 ** 3:.1f} GiB; "
                 f"this process has already pinned "
                 f"{self.pinned_bytes / 1024 ** 3:.1f} GiB)")
         self.pinned_bytes += size_bytes
         self.pinned_peak = max(self.pinned_peak, self.pinned_bytes)
-        return int(ptr), ("hostalloc", size_bytes)
+        return int(ptr), ("hostregister", size_bytes)
 
     def free(self, buffer: Buffer) -> None:
         if self._live.pop(buffer.id, None) is None:
@@ -248,10 +307,15 @@ class CudaBackend:
         invalidate_views(buffer.ptr, buffer.size_bytes)
         if buffer.location == "fast":
             _check(cudart.cudaFree(buffer.ptr))
+        elif isinstance(buffer.raw, tuple) and buffer.raw[0] == "hostregister":
+            # unregister before unmapping: the driver holds the pages pinned,
+            # and returning the mapping underneath it leaves it pinning memory
+            # the process no longer owns
+            _check(cudart.cudaHostUnregister(buffer.ptr))
+            munmap(buffer.ptr, buffer.raw[1])
+            self.pinned_bytes -= buffer.raw[1]
         else:
             _check(cudart.cudaFreeHost(buffer.ptr))
-            if isinstance(buffer.raw, tuple) and buffer.raw[0] == "hostalloc":
-                self.pinned_bytes -= buffer.raw[1]
 
     def drain(self) -> int:
         """Free every allocation still outstanding on this backend;
