@@ -3,7 +3,7 @@
 Tests:
 - test_slab_costs_what_it_asks_for: a pinned slab consumes close to its requested size rather than the next power of two above it.
 - test_slab_frees_what_it_pinned: freeing a slab returns the host memory, so a daemon restart does not leak it.
-- test_slab_paths_do_not_use_cudahostalloc: neither pinning path reaches for cudaHostAlloc, whose rounding is invisible until it becomes a ceiling.
+- test_host_memory_is_pinned_in_exactly_one_place: only the runtime device layer pins host memory, so a copy cannot be fixed in one place and left wrong in the other.
 """
 import ast
 import pathlib
@@ -53,28 +53,32 @@ def test_slab_frees_what_it_pinned():
         f"{(before - after) / GIB:.2f} GiB still held after free")
 
 
-def test_slab_paths_do_not_use_cudahostalloc():
-    """Pinned memory is allocated in two places -- the service's slab and the
-    runtime's device backend -- because the service does not import the
-    runtime's device layer. Both must avoid cudaHostAlloc for the same reason,
-    and a comment saying so is not enforcement.
+def test_host_memory_is_pinned_in_exactly_one_place():
+    """Host memory used to be pinned in two modules with copied logic. The
+    rounding fix landed in one of them, and the slab every daemon actually
+    boots with went on paying for it -- the bug survived being fixed. So the
+    gate is not "avoid cudaHostAlloc" but "there is one implementation":
+    a second copy is free to be correct today and wrong after the next edit.
 
     The 4-byte mapped flag word in the peer transport is exempt: rounding is
     meaningless at that size and it needs device-mappable semantics."""
     root = repo_root()
-    guarded = [root / "src" / "dataflow" / "service" / "hostmem.py",
-               root / "src" / "dataflow" / "runtime" / "device" / "cuda.py"]
+    owner = root / "src" / "dataflow" / "runtime" / "device" / "cuda.py"
+    exempt = {root / "src" / "dataflow" / "service" / "peer" / "comm.py"}
+
     offenders = []
-    for path in guarded:
+    for path in (root / "src").rglob("*.py"):
+        if path == owner or path in exempt:
+            continue
         tree = ast.parse(path.read_text())
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
             func = node.func
             name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
-            if name == "cudaHostAlloc":
-                offenders.append(f"{path.relative_to(root)}:{node.lineno}")
+            if name in {"cudaHostAlloc", "cudaHostRegister", "cudaHostUnregister"}:
+                offenders.append(f"{path.relative_to(root)}:{node.lineno} {name}")
     assert not offenders, (
-        "cudaHostAlloc rounds the request up to a power of two, which is a "
-        "hard ceiling on any host whose RAM is not just above one; use mmap "
-        "+ cudaHostRegister:\n  " + "\n  ".join(offenders))
+        "host memory must be pinned through runtime.device.cuda.pin_region / "
+        "unpin_region, which is the only place that gets to know how:\n  "
+        + "\n  ".join(offenders))

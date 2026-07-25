@@ -105,6 +105,43 @@ def munmap(ptr: int, size_bytes: int) -> None:
     libc().munmap(ctypes.c_void_p(ptr), size_bytes)
 
 
+def pin_region(size_bytes: int) -> int:
+    """Map and pin exactly ``size_bytes`` of host memory; returns the address.
+
+    The one place host memory gets pinned. Both the runtime's buffer backend
+    and the service's boot slab come through here, because when they each had
+    their own copy the fix for the rounding landed in one of them and a real
+    run went on paying for the other.
+
+    Raises HostMemoryError on either half's refusal, naming which half."""
+    ptr = mmap_anon(size_bytes)
+    if ptr is None:
+        raise HostMemoryError(
+            f"could not map {size_bytes / 1024 ** 3:.1f} GiB of host memory "
+            f"(MemAvailable {host_available_bytes() / 1024 ** 3:.1f} GiB)")
+    err = cudart.cudaHostRegister(ptr, size_bytes, cudart.cudaHostRegisterDefault)
+    if isinstance(err, tuple):
+        err = err[0]
+    if int(err) != 0:
+        munmap(ptr, size_bytes)
+        name = cudart.cudaGetErrorName(err)[1]
+        if isinstance(name, bytes):
+            name = name.decode()
+        raise HostMemoryError(
+            f"could not pin {size_bytes / 1024 ** 3:.1f} GiB of host memory: "
+            f"cudaHostRegister returned {name} (MemAvailable "
+            f"{host_available_bytes() / 1024 ** 3:.1f} GiB)")
+    return int(ptr)
+
+
+def unpin_region(ptr: int, size_bytes: int) -> None:
+    """Unregister then unmap. In that order: handing the mapping back while
+    the driver still holds the pages pinned leaves it pinning memory this
+    process no longer owns."""
+    _check(cudart.cudaHostUnregister(ptr))
+    munmap(ptr, size_bytes)
+
+
 import weakref
 
 # every constructed backend, for test-teardown drains (weak: a backend
@@ -271,28 +308,7 @@ class CudaBackend:
         mmap hands back exactly the pages asked for, so a slab costs what it
         says. The driver pins at its own granularity either way, so throughput
         is unchanged for the large allocations this path exists to serve."""
-        ptr = mmap_anon(size_bytes)
-        if ptr is None:
-            raise HostMemoryError(
-                f"could not map {size_bytes / 1024 ** 3:.1f} GiB of host memory "
-                f"(MemAvailable {host_available_bytes() / 1024 ** 3:.1f} GiB; "
-                f"this process has already pinned "
-                f"{self.pinned_bytes / 1024 ** 3:.1f} GiB)")
-        err = cudart.cudaHostRegister(ptr, size_bytes,
-                                      cudart.cudaHostRegisterDefault)
-        if isinstance(err, tuple):
-            err = err[0]
-        if err != cudart.cudaError_t.cudaSuccess:
-            munmap(ptr, size_bytes)
-            name = cudart.cudaGetErrorName(err)[1]
-            if isinstance(name, bytes):
-                name = name.decode()
-            raise HostMemoryError(
-                f"could not pin {size_bytes / 1024 ** 3:.1f} GiB of host memory: "
-                f"cudaHostRegister returned {name} "
-                f"(MemAvailable {host_available_bytes() / 1024 ** 3:.1f} GiB; "
-                f"this process has already pinned "
-                f"{self.pinned_bytes / 1024 ** 3:.1f} GiB)")
+        ptr = pin_region(size_bytes)
         self.pinned_bytes += size_bytes
         self.pinned_peak = max(self.pinned_peak, self.pinned_bytes)
         return int(ptr), ("hostregister", size_bytes)
@@ -308,11 +324,7 @@ class CudaBackend:
         if buffer.location == "fast":
             _check(cudart.cudaFree(buffer.ptr))
         elif isinstance(buffer.raw, tuple) and buffer.raw[0] == "hostregister":
-            # unregister before unmapping: the driver holds the pages pinned,
-            # and returning the mapping underneath it leaves it pinning memory
-            # the process no longer owns
-            _check(cudart.cudaHostUnregister(buffer.ptr))
-            munmap(buffer.ptr, buffer.raw[1])
+            unpin_region(buffer.ptr, buffer.raw[1])
             self.pinned_bytes -= buffer.raw[1]
         else:
             _check(cudart.cudaFreeHost(buffer.ptr))
