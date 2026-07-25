@@ -119,16 +119,22 @@ def host_limit_bytes():
 def pins_ok(size_bytes):
     """Whether the host will hand out a pinned buffer of this size, right now.
 
-    The refusal arrives as an exception from the allocator and is the answer
-    being asked for, not a fault: the whole point is to find where the ceiling
-    is, and the only way to know is to ask."""
-    import torch
+    Asks the same way the ENGINE asks. torch's pin_memory goes through
+    cudaHostAlloc, which rounds the request up to a power of two, so a probe
+    built on it reports the largest power of two the host can hold rather than
+    the largest slab -- 63.8 GiB on a box that grants 82. The number this
+    returns becomes the allowance the daemon is then asked to pin, so it has to
+    be measured with the daemon's own allocator.
+
+    The refusal arrives as an exception and is the answer being asked for, not
+    a fault: the only way to find the ceiling is to ask."""
+    from dataflow.runtime.device.cuda import pin_region, unpin_region
 
     try:
-        buf = torch.empty(int(size_bytes), dtype=torch.uint8, pin_memory=True)
+        ptr = pin_region(int(size_bytes))
     except Exception:
         return False
-    del buf
+    unpin_region(ptr, int(size_bytes))
     return True
 
 
