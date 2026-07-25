@@ -117,6 +117,9 @@ def facet(pred, meas, metric, ylabel, title, fname, *, pct=False):
 def frontier(pred, meas, fname, opt):
     """Throughput vs GPU memory with tokens-per-round OPTIMISED.
 
+    Solid line + circles: simulated frontier. Dashed line + stars: the same
+    cells measured on the hardware. The two curves are the report's claim.
+
     Tokens-per-round is a knob the operator sets, not a property of the
     hardware, so the useful question is not "how fast is a 64K round at 8 GiB"
     (nobody would choose that) but "how fast can this budget go, and which round
@@ -156,11 +159,26 @@ def frontier(pred, meas, fname, opt):
                                     (p["budget"], p["tok_s"]), fontsize=6,
                                     textcoords="offset points", xytext=(0, 5),
                                     ha="center", color=colour)
-        for m in [m for m in meas if m.get("t_step") == ts and "tok_s" in m]:
-            si = seqs.index(m["seq"]) if m["seq"] in seqs else 0
-            ax.plot(m["budget"], m["tok_s"], "*", ms=14,
-                    color=cmap(si / max(1, len(seqs) - 1)),
-                    markeredgecolor="k", markeredgewidth=0.6, zorder=6)
+        # Measured cells, joined into a MEASURED FRONTIER wherever there is
+        # more than one budget for a sequence. Every measured cell is now the
+        # frontier pick for its (seq, tokens/step, budget), so the points form
+        # the real curve and can be read against the simulated one directly --
+        # a scatter of stars leaves the eye to guess whether the shapes agree.
+        by_seq = {}
+        for m in meas:
+            if m.get("t_step") == ts and "tok_s" in m:
+                by_seq.setdefault(m["seq"], []).append(m)
+        for sq, cells in by_seq.items():
+            si = seqs.index(sq) if sq in seqs else 0
+            colour = cmap(si / max(1, len(seqs) - 1))
+            cells.sort(key=lambda m: m["budget"])
+            if len(cells) > 1:
+                ax.plot([m["budget"] for m in cells], [m["tok_s"] for m in cells],
+                        "--", lw=1.6, color=colour, zorder=5,
+                        label="measured" if (si == 0 and j == 0) else None)
+            ax.plot([m["budget"] for m in cells], [m["tok_s"] for m in cells],
+                    "*", ms=13, color=colour, markeredgecolor="k",
+                    markeredgewidth=0.6, zorder=6, linestyle="none")
         ax.set_xscale("log", base=2)
         ticks = sorted({r["budget"] for r in rows})
         ax.set_xticks(ticks)
