@@ -134,27 +134,36 @@ def capture_run(client, cfg, recipe, feed, steps: int, *,
         raise RuntimeError(f"unbound inputs: {missing}")
     last_trace = None
     losses = []
+    # Wall clock around the run call, timed the way the sweep times it (the
+    # feed is outside t0). Comparing a makespan from one process against a
+    # wall time from another is not a measurement of overhead -- do both here.
+    import time as _time
+
+    wall = []
     fetch = [f"loss_0_{r}" for r in range(R)]
     for step in range(steps):
         if step == 0:
             valid, lens = valid0, lens0
         else:
             valid, lens = put_packed_step(client, stepper, cfg.max_tokens)
+        _t0 = _time.perf_counter()
         out = client.run(reg["prog_id"],
                          args={"step": step, "valid_rows": valid,
                                "seq_lens": lens},
                          fetch=fetch, trace=(step == steps - 1))
+        wall.append(_time.perf_counter() - _t0)
         if out.get("state") != "done":
             raise RuntimeError(f"step {step}: {out}")
         losses.append(sum(out["fetched"][k] for k in fetch))
         if "trace" in out:
             last_trace = out["trace"]
-        log(f"[trace_real_run] step {step}: loss {losses[-1]:.4f}")
+        log(f"[trace_real_run] step {step}: loss {losses[-1]:.4f}  "
+            f"wall {wall[-1]:.3f}s")
     if last_trace is None:
         raise RuntimeError("no trace returned — daemon predates the "
                            "trace run option?")
     return {"program": bare, "annotated": planned.program,
-            "trace": last_trace, "losses": losses}
+            "trace": last_trace, "losses": losses, "step_wall_s": wall}
 
 
 def main() -> int:
@@ -214,6 +223,7 @@ def main() -> int:
             "meta": {"preset": args.preset, "steps": args.steps,
                      "budget_gib": args.budget,
                      "losses": cap["losses"],
+                     "step_wall_s": cap["step_wall_s"],
                      "traced_step": args.steps - 1},
             "log": measured,
             "sim_log": sim,
@@ -223,6 +233,11 @@ def main() -> int:
         (args.out / fname).write_text(json.dumps(payload, indent=2) + "\n")
     print(f"wrote {args.out}/{stem}.{{program,annotated,webapp,measured}}.json")
     print(f"[parity] {parity_line(measured, sim)}")
+    w = cap["step_wall_s"][-1]
+    span = max((e["end"] for e in measured.get("task_intervals", [])), default=0) \
+        - min((e["start"] for e in measured.get("task_intervals", [])), default=0)
+    print(f"[wall] traced step: wall {w:.3f}s, engine task span {span / 1e6:.3f}s, "
+          f"outside the graph {w - span / 1e6:+.3f}s")
     return 0
 
 

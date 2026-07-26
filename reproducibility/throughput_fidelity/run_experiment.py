@@ -214,12 +214,17 @@ def stage_shipped(cfg: Config, env: dict) -> None:
 
 
 def stage_report(cfg: Config) -> None:
-    """Tables to stdout, figures to figs/."""
+    """Tables to stdout, figures to figs/, and the report itself.
+
+    REPORT.md was NOT written here, so a run that finished its measurements
+    left the report showing whatever the previous run produced -- stale
+    numbers under a fresh set of figures, which is worse than no report."""
     say("report")
     run([cfg.python, str(HERE / "analyze.py")])
     for opt in cfg.opts:
         run([cfg.python, str(HERE / "make_plots.py"), opt],
             log=cfg.logs / "plots.log")
+    run([cfg.python, str(HERE / "report.py")], log=cfg.logs / "report.log")
 
 
 # ------------------------------------------------------------------- main ---
