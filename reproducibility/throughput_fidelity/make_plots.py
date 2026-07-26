@@ -252,6 +252,70 @@ def frontier_by_peak(meas, fname, opt):
     print(f"wrote {out}   (throughput vs measured device peak)")
 
 
+
+def time_budget(pred, fname, opt):
+    """Where the step's time goes, on ONE pair of axes per geometry.
+
+    Recompute share and idle share were separate figures, which is the wrong
+    split: they are two slices of the same makespan and the question is how
+    they TRADE. A tight budget buys back memory by recomputing, and the plan
+    is only worth it if the recompute it adds costs less than the idle it
+    removes -- which you cannot see with the two curves on different pages.
+    Plotted at the frontier round for each budget, since that is the round an
+    operator would actually run."""
+    rows = [r for r in pred if "tok_s" in r and "rc_pct" in r and "idle_pct" in r]
+    if not rows:
+        print(f"skip {fname}: no rows carry rc_pct/idle_pct")
+        return
+    seqs = sorted({r["seq"] for r in rows})
+    tss = sorted({r["t_step"] for r in rows})
+    fig, axes = plt.subplots(len(seqs), len(tss), squeeze=False, sharex=True,
+                             sharey=True,
+                             figsize=(3.5 * len(tss) + 1.5, 2.5 * len(seqs) + 1.4))
+    for i, sq in enumerate(seqs):
+        for j, ts in enumerate(tss):
+            ax = axes[i][j]
+            best = {}
+            for r in rows:
+                if r["seq"] != sq or r["t_step"] != ts:
+                    continue
+                b = r["budget"]
+                if b not in best or r["tok_s"] > best[b]["tok_s"]:
+                    best[b] = r
+            pts = [best[b] for b in sorted(best)]
+            if not pts:
+                continue
+            xs = [p["budget"] for p in pts]
+            ax.plot(xs, [p["rc_pct"] for p in pts], "-o", ms=3.5, lw=1.6,
+                    color="#d1495b",
+                    label="recompute" if (i == 0 and j == 0) else None)
+            ax.plot(xs, [p["idle_pct"] for p in pts], "--s", ms=3.5, lw=1.6,
+                    color="#00798c",
+                    label="idle" if (i == 0 and j == 0) else None)
+            ax.plot(xs, [p["rc_pct"] + p["idle_pct"] for p in pts], ":", lw=1.2,
+                    color="0.35",
+                    label="both" if (i == 0 and j == 0) else None)
+            ax.set_xscale("log", base=2)
+            ax.set_xticks(xs)
+            ax.set_xticklabels([f"{x:g}" for x in xs], fontsize=7)
+            ax.grid(alpha=0.3)
+            if i == 0:
+                ax.set_title(f"{ts // 1024}K tokens/step", fontsize=10)
+            if j == 0:
+                ax.set_ylabel(f"seq {sq}\n% of makespan", fontsize=9)
+            if i == len(seqs) - 1:
+                ax.set_xlabel("GPU memory budget (GiB)")
+    axes[0][0].legend(fontsize=8, loc="best")
+    fig.suptitle(f"Where the step's time goes — {opt}\n{env_note()}"
+                 f"  ·  frontier round at each budget", fontsize=11)
+    fig.tight_layout(rect=(0, 0, 1, 0.93))
+    os.makedirs(FIGS, exist_ok=True)
+    out = os.path.join(FIGS, fname)
+    fig.savefig(out, dpi=120)
+    plt.close(fig)
+    print(f"wrote {out}   (recompute + idle on one axis)")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("opt", nargs="?", default="adamw")
@@ -285,6 +349,7 @@ def main():
              f"frontier_{a.opt}.png", a.opt)
     frontier_by_peak([m for m in meas if "tok_s" in m],
                      f"frontier_by_peak_{a.opt}.png", a.opt)
+    time_budget(feasible, f"time_budget_{a.opt}.png", a.opt)
     facet(feasible, [m for m in meas if "eff_tfs" in m], "eff_tfs",
           "effective TFLOP/s",
           f"Predicted effective TFLOP/s vs GPU memory — {a.opt}",
