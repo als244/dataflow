@@ -200,6 +200,58 @@ def frontier(pred, meas, fname, opt):
     print(f"wrote {out}   (frontier over tokens/round)")
 
 
+
+def frontier_by_peak(meas, fname, opt):
+    """Measured throughput against the device memory the run ACTUALLY used.
+
+    The budget axis is what the planner was given; this is what the card had
+    to have. They differ by a consistent margin -- the engine's placement
+    extent above the plan's peak, torch's kernel workspace, and the CUDA
+    context, none of which the budget covers -- so a reader sizing hardware
+    from the budget plot would under-provision by several GiB. Measured cells
+    only: nothing predicts device peak, it is observed."""
+    rows = [m for m in meas if "tok_s" in m and m.get("device_peak_gib")]
+    if not rows:
+        return
+    seqs = sorted({r["seq"] for r in rows})
+    tss = sorted({r["t_step"] for r in rows})
+    fig, axes = plt.subplots(1, len(tss), squeeze=False, sharey=True,
+                             figsize=(4.2 * len(tss) + 1, 4.4))
+    cmap = plt.get_cmap("viridis")
+    for j, ts in enumerate(tss):
+        ax = axes[0][j]
+        for si, sq in enumerate(seqs):
+            cells = sorted((r for r in rows if r["seq"] == sq and r["t_step"] == ts),
+                           key=lambda r: r["device_peak_gib"])
+            if not cells:
+                continue
+            colour = cmap(si / max(1, len(seqs) - 1))
+            ax.plot([c["device_peak_gib"] for c in cells],
+                    [c["tok_s"] for c in cells], "-", marker="*", ms=13,
+                    lw=1.6, color=colour, markeredgecolor="k",
+                    markeredgewidth=0.6,
+                    label=(f"seq {sq}" if j == 0 else None))
+            for c in cells:      # what the planner was told, for reference
+                ax.annotate(f"{c['budget']:g}", (c["device_peak_gib"], c["tok_s"]),
+                            fontsize=6, textcoords="offset points",
+                            xytext=(0, 6), ha="center", color=colour)
+        ax.set_title(f"{ts // 1024}K tokens/step", fontsize=10)
+        ax.set_xlabel("peak device memory actually used (GiB)")
+        ax.grid(alpha=0.3)
+        if j == 0:
+            ax.set_ylabel("tok/s  (measured)")
+    axes[0][0].legend(fontsize=8, loc="best")
+    fig.suptitle(f"Measured throughput vs DEVICE MEMORY USED — {opt}\n{env_note()}"
+                 f"  ·  small labels = the budget the planner was given",
+                 fontsize=11)
+    fig.tight_layout(rect=(0, 0, 1, 0.90))
+    os.makedirs(FIGS, exist_ok=True)
+    out = os.path.join(FIGS, fname)
+    fig.savefig(out, dpi=120)
+    plt.close(fig)
+    print(f"wrote {out}   (throughput vs measured device peak)")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("opt", nargs="?", default="adamw")
@@ -231,6 +283,8 @@ def main():
           f"throughput_{a.opt}.png")
     frontier(feasible, [m for m in meas if "tok_s" in m],
              f"frontier_{a.opt}.png", a.opt)
+    frontier_by_peak([m for m in meas if "tok_s" in m],
+                     f"frontier_by_peak_{a.opt}.png", a.opt)
     facet(feasible, [m for m in meas if "eff_tfs" in m], "eff_tfs",
           "effective TFLOP/s",
           f"Predicted effective TFLOP/s vs GPU memory — {a.opt}",
