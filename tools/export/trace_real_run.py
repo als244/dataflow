@@ -97,19 +97,28 @@ def put_packed_step(client, stepper, tokens_per_round: int, *,
 
 
 def capture_run(client, cfg, recipe, feed, steps: int, *,
-                budget_gib: float, seed: int = 11, log=print) -> dict:
+                budget_gib: float, backing_gib: float | None = None,
+                measured: bool = True, seed: int = 11, log=print) -> dict:
     """K real steps with trace capture; returns {program, annotated,
-    trace (last step), losses}."""
+    trace (last step), losses}.
+
+    The plan is built the way a real run builds it -- profiled costs, the
+    recompute search, and the host allowance the daemon actually has. Planning
+    it any other way traces a program nothing would run: without the allowance
+    the planner assumes host memory is unbounded and keeps every context (the
+    plan then fails at run time on the slab it was never told about), and
+    without recompute it is the save-everything variant, which is not the plan
+    whose behaviour anyone is trying to explain."""
     from dataflow.core.jsonio import program_to_dict
     from dataflow_training.run.presets import cfg_dict, resolver_family
     from dataflow_training.run.driver import init_model
     from dataflow_training.model_families.families import resolve_family
-    from dataflow_training.lowering.planning import plan_program
+    from dataflow_training.run.driver import plan_at_budget
 
     fam = resolve_family(cfg)
-    bare = fam.lower(cfg)
-    planned = plan_program(bare,
-                           fast_memory_capacity=int(budget_gib * 1024 ** 3))
+    bare = fam.lower(cfg)                    # core IR, for the program export
+    planned = plan_at_budget(cfg, budget_gib, measured=measured,
+                             backing_gib=backing_gib)
     cd = cfg_dict(cfg)
     init_model(client, resolver_family(cfg), cd, seed=seed)
     R = cfg.grad_accum_rounds
@@ -163,15 +172,34 @@ def main() -> int:
     ap.add_argument("--backing-gib", type=float, default=8.0)
     ap.add_argument("--out", type=Path, default=Path("examples"))
     ap.add_argument("--name", default=None)
+    # geometry overrides: without these the tool can only trace a preset's
+    # default shape, which is never the cell you are trying to explain
+    ap.add_argument("--seq", type=int, default=None,
+                    help="sequence length (default: the preset's)")
+    ap.add_argument("--t-round", dest="t_round", type=int, default=None,
+                    help="tokens per round")
+    ap.add_argument("--t-step", dest="t_step", type=int, default=None,
+                    help="tokens per optimizer step")
     args = ap.parse_args()
 
     cfg = (P.smoke_preset() if args.preset == "smoke"
            else P.resolve_preset(args.preset))
+    if args.seq or args.t_round or args.t_step:
+        from dataclasses import replace as _replace
+
+        seq = args.seq or cfg.seq_len
+        tr = args.t_round or seq * cfg.batch
+        ts = args.t_step or tr * cfg.grad_accum_rounds
+        cfg = _replace(cfg, seq_len=seq, batch=max(1, tr // seq),
+                       grad_accum_rounds=max(1, ts // tr))
+        print(f"[geometry] seq {seq}  round {tr}  step {ts}  "
+              f"(batch {cfg.batch} x ga {cfg.grad_accum_rounds})")
     recipe = Recipe(peak_lr=3e-4, min_lr=3e-5, warmup_steps=1,
                     total_steps=args.steps)
     with engine_client(backing_gib=args.backing_gib, log=print) as client:
         cap = capture_run(client, cfg, recipe, legacy_block_pipeline(cfg),
-                          args.steps, budget_gib=args.budget)
+                          args.steps, budget_gib=args.budget,
+                          backing_gib=args.backing_gib)
 
     measured = measured_log_from_trace(cap["trace"])
     sim = sim_log_for(cap["annotated"])
