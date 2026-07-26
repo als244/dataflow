@@ -56,6 +56,7 @@ class Config:
     backing_gib: float | None = None   # explicit allowance, overrides the share
     target_cells: int = 18
     all_frontier: bool = False
+    resume: bool = False
     steps: int = 6
     stages: tuple[str, ...] = ALL_STAGES
     data: Path = field(default_factory=lambda: HERE / "data")
@@ -170,7 +171,16 @@ def stage_measure(cfg: Config, env: dict) -> None:
     for opt in cfg.opts:
         say(f"measure ({opt})")
         out = cfg.data / f"measure_{opt}.jsonl"
-        out.write_text("")
+        # Truncating here defeats the resume inside sweep.py, which reads this
+        # file to learn what is already done: the rows are written and flushed
+        # per cell precisely so a killed run keeps them, and wiping the file
+        # from the layer above throws away exactly what that was protecting.
+        # Fresh runs still want a clean file, so the choice is explicit.
+        if cfg.resume:
+            done = sum(1 for _ in out.open()) if out.exists() else 0
+            say(f"  resuming: {done} rows already recorded")
+        else:
+            out.write_text("")
         ok = run([cfg.python, str(HERE / "sweep.py"), "--mode", "measure",
                   "--preset", env["preset"], "--opt", opt,
                   "--steps", str(cfg.steps), "--cells", str(cfg.cells_json),
@@ -253,6 +263,9 @@ def parse_args(argv=None) -> Config:
                    help="host allowance outright, ignoring --host-share")
     p.add_argument("--all-frontier", dest="all_frontier", action="store_true",
                    help="measure every frontier cell, not a sample (hours)")
+    p.add_argument("--resume", action="store_true",
+                   help="keep measure rows already on disk and only run the "
+                        "cells missing from them")
     p.add_argument("--target-cells", type=int, default=18,
                    help="how many cells get real GPU runs (default: 18)")
     p.add_argument("--steps", type=int, default=6,
@@ -276,7 +289,7 @@ def parse_args(argv=None) -> Config:
         budgets=numbers(a.budgets, float) if a.budgets else None,
         budget_step=a.budget_step, host_share=a.host_share,
         backing_gib=a.backing_gib, target_cells=a.target_cells,
-        all_frontier=a.all_frontier,
+        all_frontier=a.all_frontier, resume=a.resume,
         steps=a.steps, stages=stages)
 
 
