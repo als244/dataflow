@@ -214,9 +214,15 @@ def run_cell_backed(client, cfg, budget, backing, steps, data_mode, recipe):
     planned = plan_at_budget(cfg, budget, measured=True, backing_gib=backing)
     eff, hwf = flop_report(cfg, planned.program).per_step()
     with DevicePeak() as devmem:
+        # measured=True or run_engine PLANS ITS OWN roofline program and runs
+        # that, while pred_s above describes the measured-cost plan: the two
+        # numbers then belong to different programs, and the ratio is not a
+        # fidelity measurement at all. (Its default is False.) The real fix is
+        # for measure to stop planning and take predict's plan; until then the
+        # two planning calls must at least ask for the same thing.
         res = run_engine(client, cfg, recipe, MS.cell_pipeline(cfg, data_mode),
                          steps, budget_gib=budget, backing_gib=backing, seed=11,
-                         log=MS.quiet_log)
+                         measured=True, log=MS.quiet_log)
     # What the device actually gave this program, so the plan's memory model can
     # be checked rather than trusted: a run is only "within budget" if the
     # engine's own reserved extent says so.
