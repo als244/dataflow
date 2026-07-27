@@ -99,6 +99,11 @@ means the same thing.
 ### P0 · environment probe — *what can this box hold?*
 `stages/env_probe.py` → `results/env.json`  ·  seconds, needs the device
 
+**Inputs:** the machine itself — the CUDA driver (device memory), the
+scheduler's grant / cgroup cap / `/proc/meminfo` (host limit), and the
+engine's cached link measurement. No files. The `--preset/--seqs/...`
+flags forwarded by `run_experiment.py` override any derived choice.
+
 Reads the limits that actually apply: device memory from the driver, and the
 host limit from the scheduler's grant if there is one (`SLURM_MEM_PER_NODE`),
 else a cgroup cap, else physical RAM. A compute node reports its full physical
@@ -128,6 +133,13 @@ total gets the job killed. From those it derives:
 `run_experiment.py` stage `predict` → `results/data/predict_measured_{opt}.jsonl`
 + `results/data/plans/{opt}/*.json.gz`  ·  the long pole for prediction; needs the device
 
+**Inputs:** `results/env.json` (preset, geometry axes, budget ladder,
+allowance) and the task-profile cache at `<repo>/artifacts/profile-cache/`
+(stage processes run with the repo as their working directory). A cache
+miss profiles that geometry on the GPU and fills it — a fresh box pays
+full profiling exactly once; every later predict is cache hits + CPU
+planning.
+
 For each optimizer, for each sequence length, over every (tokens/round ×
 tokens/step × budget) combination:
 
@@ -152,6 +164,10 @@ allowance (`binding`, `host_marginal_gain`).
 ### P1b · cell selection — *which cells deserve real GPU time?*
 `stages/select_cells.py` → `results/cells.json`  ·  seconds, CPU only
 
+**Inputs:** `results/data/predict_measured_{opt}.jsonl` for EVERY
+optimizer being swept — a cell must be feasible under all of them to be
+selectable. Nothing else; no GPU.
+
 Measuring every survivor would spend hours re-measuring identical behaviour.
 In order:
 
@@ -175,6 +191,12 @@ In order:
 `run_experiment.py` stage `measure` → `results/data/measure_{opt}.jsonl`  ·  the long pole
 overall; needs the device
 
+**Inputs:** `results/cells.json` (which cells), each cell's saved plan
+under `results/data/plans/{opt}/` (a missing or foreign-device artifact
+stops the stage before any GPU time), and `results/env.json` (preset +
+allowance, which sizes the daemon's pinned slab — the host must actually
+have that much memory to pin).
+
 Runs each selected cell on the real engine, per optimizer, for `STEPS` steps
 with the first 3 discarded as warmup, and reports the mean of the tail beside
 the prediction from the cell's **saved plan artifact**. Measure performs no
@@ -192,12 +214,20 @@ time is spent.
 ### P3 · shipped-command validation — *do the documented commands still work?*
 → `results/logs/shipped_bench.log`  ·  minutes, needs the device
 
+**Inputs:** `results/cells.json` (the spine geometry it benches at) and
+`results/env.json`; it then runs the repository's own bench commands.
+
 Runs the repository's own `tools/bench/predict_step.py --measured` and
 `tools/bench/measure_step.py --measured-plan` at the spine geometry. The rest of
 this directory drives the library directly; this stage checks the commands a
 reader would actually type still work at this scale.
 
 ### Analysis
+
+**Inputs:** `results/env.json` + `results/data/*.jsonl` — and for a
+multi-box report, other machines' results roots via
+`stages/report.py --runs name=path ...`.
+
 `stages/analyze.py` runs automatically at the end: feasibility counts, host-pressure
 summary, and the per-cell fidelity table. `stages/make_plots.py <opt>` draws the
 figures.
