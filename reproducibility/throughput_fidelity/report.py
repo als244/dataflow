@@ -144,7 +144,7 @@ def section_planner(run: Run, opt: str) -> str:
                      f"{statistics.fmean(r['h2d_pct'] for r in at):.0f}%",
                      f"{statistics.fmean(r['d2h_pct'] for r in at):.0f}%",
                      f"{statistics.fmean(r['recompute'] / max(1, r['rewritable']) for r in at) * 100:.0f}%"])
-    return ("### How the planner spends a tight budget\n\n"
+    return (f"### How the planner spends a tight budget ({opt})\n\n"
             "Averaged over every feasible cell at each budget. Recompute and "
             "idle are shares of makespan (time), not counts of tasks.\n\n"
             + table(["budget GiB", "recompute time", "idle", "H2D duty",
@@ -255,10 +255,16 @@ def main() -> int:
              "from the JSONL files it wrote.*\n",
              section_setup(runs)]
     primary = runs[0]
+    # Every optimizer swept gets the same treatment. Rendering the landscape
+    # for one of them and the fidelity tables for all of them left the report
+    # asserting things about muon that the reader could only check for adamw.
+    opts = [a.opt] + [o for o in primary.opts() if o != a.opt]
     parts.append("## The throughput landscape\n")
-    parts.append(section_landscape(primary, a.opt))
-    parts.append(section_planner(primary, a.opt))
-    parts.append(section_compare(runs, a.opt))
+    for opt in opts:
+        parts.append(section_landscape(primary, opt))
+        parts.append(section_planner(primary, opt))
+    for opt in opts:
+        parts.append(section_compare(runs, opt))
     parts.append(section_fidelity(runs))
     parts.append(section_host(runs))
     parts.append("## Reproducing this\n\n```bash\n"
