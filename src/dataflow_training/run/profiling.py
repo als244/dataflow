@@ -30,6 +30,27 @@ The plan's measurement-over-estimation principle, mechanized:
 and metadata `{"measured": {"runtime_us", "workspace_bytes", ...}}`; re-plan
 it with `plan_program` before headline runs (final planning on measured
 costs).
+
+MEMORY LIFECYCLE CONTRACT (device):
+- The profiler is IN-PROCESS and engine-free: it drives task
+  executables directly. Operand buffers are raw per-signature
+  backend.alloc/free (exact fit, no pool — there is no plan or budget
+  to pool against yet); kernel-internal scratch goes through torch's
+  caching allocator per the task contract.
+- All profile passes share ONE process-lifetime stream trio
+  (dataflow.runtime.streams), so torch-cached scratch REUSES across
+  signatures and tables instead of stranding per pass.
+- A table's scratch dies with the table: profile_program returns
+  torch's cache to the driver on exit (cache-hit calls never touch
+  the device at all).
+- Raw operand allocation self-heals once on DeviceMemoryError
+  (synchronize + empty torch cache + retry): raw cudaMalloc cannot
+  see torch's cached-idle blocks, and torch only self-heals its own
+  allocations.
+- Costs are disk-cached PER SIGNATURE per (kernel set, profiling
+  environment, device); PROFILE_CACHE_REV is the manual invalidation
+  lever. A signature measured once is never re-measured — across
+  budgets, t_step variants, optimizers, and runs.
 """
 from __future__ import annotations
 
@@ -175,24 +196,14 @@ def thermal_soak(seconds: float = 1.0) -> None:
     del a, b
 
 
-PROFILING_STREAMS: dict = {}
-
-
 def profiling_streams(backend):
-    """One (compute, h2d, d2h) stream trio per backend for EVERY profile
-    pass in this process. torch's caching allocator is STREAM-AWARE: a
-    fresh stream per table makes each table's cached kernel workspaces
-    dead to every later table (the same disease the service fixed for
-    programs with its shared trio), so a long sweep's reserved memory
-    grows monotonically — invisible with headroom, device-OOM on a
-    24 GiB card mid-chunk once the raw operand allocations no longer
-    fit beside the cache."""
-    key = id(backend)
-    if key not in PROFILING_STREAMS:
-        PROFILING_STREAMS[key] = (backend.create_stream("compute"),
-                                  backend.create_stream("h2d"),
-                                  backend.create_stream("d2h"))
-    return PROFILING_STREAMS[key]
+    """The profiler's process-lifetime stream trio (see
+    dataflow.runtime.streams for the stream-lifecycle rule this
+    follows: cached kernel scratch is stream-keyed, so profile passes
+    must share streams or strand it)."""
+    from dataflow.runtime.streams import shared_streams
+
+    return shared_streams(backend, "profiling")
 
 
 class _PcieContender:
@@ -398,6 +409,13 @@ def profile_program(
                 backend.free(b)
     if contender is not None:
         contender.close()
+    # a table's scratch dies with the table: hand torch's cached kernel
+    # workspaces back to the driver so every table STARTS from ~zero
+    # reserved (shared streams already make scratch reusable WITHIN the
+    # table; this bounds what outlives it). Cache-hit calls never reach
+    # here — they return before any device work.
+    torch.cuda.synchronize()
+    torch.cuda.empty_cache()
     return profiles
 
 

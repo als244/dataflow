@@ -72,10 +72,10 @@ def get_session(prog_id: str, store=None):
 
         skey = id(store) if store is not None else 0
         if skey not in _STREAMS:
-            b = get_backend(store)
-            _STREAMS[skey] = (b.create_stream("compute"),
-                              b.create_stream("h2d"),
-                              b.create_stream("d2h"))
+            from dataflow.runtime.streams import shared_streams
+
+            _STREAMS[skey] = shared_streams(get_backend(store),
+                                            ("service", skey))
         ext_pair = None
         if store is not None and store.slab is not None:
             def _alloc(size, _store=store, _owner=prog_id):
