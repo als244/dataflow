@@ -38,11 +38,13 @@ def build_hyper(h: dict | None):
 
 
 class FamilyInitExecutable:
-    """The "family_init" task: fills its output buffers (the training
-    program's initial objects, declared as BACKING outputs) with the
-    family's seeded init — the same ``initial_values`` code path, so
-    the bytes are identical to in-process init by construction.
-    Host-side pinned writes only; nothing is enqueued on the stream."""
+    """The "family_init" HOST task: fills the training program's
+    initial objects with the family's seeded init — the same
+    ``initial_values`` code path, so the bytes are identical to
+    in-process init by construction. Runs on the service host path:
+    ``ctx.mutates`` are BACKING buffers over the objects' catalogued
+    store extents, and the host-side pinned writes land there in place
+    (nothing is enqueued on any stream, and nothing exists twice)."""
 
     def __init__(self, fam, cfg, seed: int, tp_view=None):
         self.fam = fam
@@ -52,7 +54,7 @@ class FamilyInitExecutable:
 
     def launch(self, ctx) -> None:
         program = self.fam.lower(self.cfg)
-        into = {oid: buf for oid, buf in ctx.outputs.items()}
+        into = {oid: buf for oid, buf in ctx.mutates.items()}
         # outputs may be a SUBSET of the training program's initial
         # objects (object_sizes-shrunken optimizer state still fills —
         # its init is a bulk zero bounded by the buffer size)

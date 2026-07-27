@@ -408,11 +408,13 @@ def run_reference(cfg, recipe: Recipe, pipeline, steps: int, *, seed: int = 11,
 def init_model(client, family_name: str, cfg_dict: dict, *,
                seed: int = 0, object_sizes: dict | None = None,
                tp_view: dict | None = None, prog_id: str | None = None):
-    """INIT IS A PROGRAM: build the family's one-task init program,
-    register + run it through the ordinary verbs, and let the daemon's
-    final-object capture persist every initial object (W_/O_/Aux_/data)
-    into the store. Replaces the retired materialize_group verb; the
-    bytes match in-process ``initial_values`` exactly (same code path).
+    """INIT IS A PROGRAM: pre-create every initial object's store
+    extent (``create_object`` — no payload), then register + run the
+    family's one HOST-task init program through the ordinary verbs; the
+    fill lands IN PLACE in those extents, so init's slab footprint is
+    exactly the model state (the old output-task shape held every
+    object twice: task transient + final-capture copy). The bytes
+    match in-process ``initial_values`` exactly (same code path).
     Returns the created object ids."""
     from dataflow.core.jsonio import program_to_dict
     from dataflow_training.model_families.families import (
@@ -426,6 +428,8 @@ def init_model(client, family_name: str, cfg_dict: dict, *,
     program = build_init_program(fam, cfg, seed=seed,
                                  object_sizes=object_sizes,
                                  tp_view=tp_view)
+    for spec in program.initial_objects:
+        client.create_object(spec.id, spec.size_bytes)
     pid = prog_id or f"init-{family_name}-{seed}"
     reg = client.register_program(program_to_dict(program),
                                   resolver=canonical_spec(family_name,
@@ -438,7 +442,7 @@ def init_model(client, family_name: str, cfg_dict: dict, *,
     if out.get("state") != "done":
         raise RuntimeError(f"init run failed: {out}")
     client.unregister_program(reg["prog_id"])
-    return [o.id for t in program.tasks for o in t.outputs]
+    return [s.id for s in program.initial_objects]
 
 
 @contextmanager

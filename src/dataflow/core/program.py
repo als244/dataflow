@@ -74,6 +74,15 @@ class TaskSpec:
     that group executes the task standalone. Empty means a pure-local
     task. Group addressing lives HERE; ``block_params`` stays
     geometry/math the block needs.
+
+    ``host`` marks a HOST-SIDE task: it binds the BACKING extents of
+    its declared objects (all of which must be initial objects; no
+    outputs) and runs synchronously on the service dispatcher thread —
+    no streams, no events, no device work. Its in-place writes land
+    directly in the store's catalogued extents, so host fills never
+    exist twice (no output transient + capture copy). A program is
+    all-host or all-device (registration rejects a mix), and the
+    engine refuses host tasks — they execute on the service host path.
     """
 
     id: str
@@ -90,6 +99,7 @@ class TaskSpec:
     prefetch_after: tuple[TransferDirective, ...] = ()
     label: str | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    host: bool = False
 
     def with_directives(
         self,

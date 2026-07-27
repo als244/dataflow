@@ -4,7 +4,7 @@ naming what IS registered. CPU-only — resolution builds executables,
 it does not launch them.
 
 Tests:
-- test_register_all_resolves_every_family: after register_all, "model_family" is registered and for every family the resolver resolves all training tasks plus the init program's single "family_init" task, whose outputs cover exactly the non-input initial objects.
+- test_register_all_resolves_every_family: after register_all, "model_family" is registered and for every family the resolver resolves all training tasks plus the init program's single HOST "family_init" task, which mutates exactly the non-input initial objects in place (no outputs).
 - test_unknown_kind_is_loud: an unknown kind and a spec missing "kind" each raise ServiceError, naming the registered "model_family" kind and the missing "kind" respectively.
 """
 import pytest
@@ -45,14 +45,19 @@ def test_register_all_resolves_every_family():
         init = build_init_program(fam, cfg, seed=7)
         assert resolver(init.tasks[0]) is not None, name
         assert init.tasks[0].compute_block_key == "family_init"
-        assert not init.initial_objects
+        assert init.tasks[0].host, name
+        assert not init.tasks[0].outputs, name
         # init covers every initial object EXCEPT data: input-role
-        # objects (tokens/targets) are externally fed, never fabricated
+        # objects (tokens/targets) are externally fed, never fabricated.
+        # The objects are the init program's OWN initial objects (bound
+        # store extents) and the host task mutates all of them in place.
         non_data = {s.id for s in program.initial_objects
                     if s.role != "input"}
         data = {s.id for s in program.initial_objects
                 if s.role == "input"}
-        assert {o.id for o in init.tasks[0].outputs} == non_data, name
+        assert {s.id for s in init.initial_objects} == non_data, name
+        assert set(init.tasks[0].mutates) == non_data, name
+        assert set(init.tasks[0].inputs) == non_data, name
         assert data, name
 
 

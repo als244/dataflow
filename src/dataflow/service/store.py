@@ -191,6 +191,20 @@ class Store:
                                "host_ptr requires a real (pinned) boot")
         return self.slab.ptr + rec.extent.offset
 
+    def host_address(self, rec: ObjectRecord) -> int:
+        """Absolute host address of a resident's extent for HOST-SIDE
+        writes — valid in BOTH boot modes (the pinned slab pointer, or
+        the fake boot's bytearray address: plain host memory either
+        way). ``host_ptr`` stays real-boot-only on purpose: its
+        pointers feed engine adoption/DMA, which a bytearray can never
+        serve."""
+        if self.slab is not None:
+            return self.slab.ptr + rec.extent.offset
+        import ctypes
+
+        base = ctypes.addressof(ctypes.c_char.from_buffer(self._bytes))
+        return base + rec.extent.offset
+
     # ---- create/write ----
     def put(self, oid: str, data: bytes | memoryview | None, *,
             size_bytes: int | None = None, meta: dict | None = None,

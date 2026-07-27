@@ -62,6 +62,18 @@ def install(server) -> None:
         return {"object": store._require(a["id"]).info()}, \
             store.get_bytes(a["id"])
 
+    def create_object(call):
+        """Allocate a catalogued extent WITHOUT a payload: content is
+        unspecified until first written (the intended writer is a
+        subsequent run mutating it in place — init-scale fills land
+        directly in the extent instead of existing twice as task
+        transient + catalogue copy). Same-size re-create is a version
+        bump on the existing record; a size change is BINDING_MISMATCH."""
+        a = call.args
+        rec = store.put(a["id"], None, size_bytes=int(a["size_bytes"]),
+                        meta=a.get("meta"), writer=call.session_id)
+        return {"object": rec.info()}
+
     def materialize_object(call):
         return _materialize(call.args["id"], call.args["fill"], call)
 
@@ -145,6 +157,7 @@ def install(server) -> None:
 
     server.dispatcher.handlers.update({
         "put_object": put_object, "get_object": get_object,
+        "create_object": create_object,
         "materialize_object": materialize_object,
         "release_object": release_object,
         "protect_object": protect_object,

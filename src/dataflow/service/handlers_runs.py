@@ -116,6 +116,29 @@ def install(server) -> None:
                                separators=(",", ":")).encode()
         prog_id = "p-" + hashlib.sha256(canonical).hexdigest()[:12]
         program = execution.parse_program(pd)
+        host_tasks = [t.id for t in program.tasks if t.host]
+        if host_tasks and len(host_tasks) != len(program.tasks):
+            raise ServiceError(
+                "BAD_REQUEST",
+                f"program mixes host and device tasks (host: "
+                f"{host_tasks[:3]}) — a program is all-host or all-device")
+        if host_tasks:
+            # host tasks write bound store extents in place: everything
+            # they touch must be an initial object, and nothing is created
+            initial = {s.id for s in program.initial_objects}
+            for t in program.tasks:
+                if t.outputs:
+                    raise ServiceError(
+                        "BAD_REQUEST",
+                        f"host task {t.id!r} declares outputs — host tasks "
+                        f"mutate bound initial objects in place")
+                stray = [o for o in (*t.inputs, *t.mutates)
+                         if o not in initial]
+                if stray:
+                    raise ServiceError(
+                        "BAD_REQUEST",
+                        f"host task {t.id!r}: {stray[:3]} not in "
+                        f"initial_objects — host tasks bind store extents")
         registry.lookup_resolver(a["resolver"])          # validate + cache
         report = _binding_report(program)
         cap = {
@@ -195,6 +218,12 @@ def install(server) -> None:
         runs[run_id] = rec
         run_order.append(run_id)
 
+        # all-host programs never touch the engine: no placement dry-run,
+        # no session/pool — their tasks run on this (dispatcher) thread
+        # against the store extents bound below
+        host_program = bool(program.tasks) and all(t.host
+                                                   for t in program.tasks)
+
         # bind: every initial object must be resident (post-rebind)
         values = {}
         with store.catalog_lock:
@@ -219,9 +248,11 @@ def install(server) -> None:
                 # — advance the version so snapshot dedup stays sound
                 robj.lineage.dirty = True
                 robj.version += 1
-                values[spec.id] = execution.store_buffer(store, robj)
+                values[spec.id] = (execution.host_task_buffer(store, robj)
+                                   if host_program
+                                   else execution.store_buffer(store, robj))
 
-        if entry.placement is None:
+        if not host_program and entry.placement is None:
             entry.placement, entry.pool_demand = execution.prepare_placement(
                 program, values)
 
@@ -253,13 +284,18 @@ def install(server) -> None:
         run_args = args
         nm = getattr(server, "nm", None)
         group_handles = nm.group_handles() if nm is not None else None
-        result, err_kind, outcome = execution.execute_run(
-            program, resolver, values,
-            prog_id=entry.prog_id, store=store,
-            placement=entry.placement, pool_demand=entry.pool_demand,
-            run_args=run_args, cancel_event=active_cancel,
-            groups=group_handles,
-            poison_on_free=st.config.poison_on_free)
+        if host_program:
+            result, err_kind, outcome = execution.execute_host_run(
+                program, resolver, values,
+                run_args=run_args, cancel_event=active_cancel)
+        else:
+            result, err_kind, outcome = execution.execute_run(
+                program, resolver, values,
+                prog_id=entry.prog_id, store=store,
+                placement=entry.placement, pool_demand=entry.pool_demand,
+                run_args=run_args, cancel_event=active_cancel,
+                groups=group_handles,
+                poison_on_free=st.config.poison_on_free)
 
         rec.finished = time.time()
         entry.runs += 1

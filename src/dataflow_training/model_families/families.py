@@ -536,26 +536,29 @@ def resolve_family(cfg) -> ModelFamily:
 def build_init_program(fam, cfg, *, seed: int = 0,
                        object_sizes: dict | None = None,
                        tp_view: dict | None = None):
-    """INIT IS A PROGRAM: one "family_init" task whose OUTPUTS are the
-    training program's initial objects (backing-resident), filled by
-    the family's seeded init inside the task — byte-identical to the
-    in-process ``initial_values`` path by construction. Replaces the
-    retired materialize_group service verb: register + run this
-    program through the ordinary verbs, and the daemon's final-object
-    capture persists every W_/O_/Aux_ object into the store. DATA
-    objects (role "input") are deliberately NOT created here —
-    external inputs must be put_object'd, and registration fails
-    loudly on any that are missing.
+    """INIT IS A PROGRAM: one HOST task that fills the training
+    program's initial W_/O_/Aux_ objects IN PLACE. The objects are the
+    init program's ``initial_objects`` — the daemon binds their
+    catalogued store extents (init_model ``create_object``s each one
+    first) and the family's seeded init writes straight into them,
+    through the same ``initial_values`` code path, so the bytes are
+    identical to in-process init by construction. Nothing is allocated
+    beyond the objects themselves: the previous output-task shape kept
+    every object TWICE in the slab at once (task-output transient +
+    final-capture copy), doubling init's slab footprint. DATA objects
+    (role "input") are deliberately NOT created here — external inputs
+    must be put_object'd, and registration fails loudly on any that
+    are missing.
 
     ``object_sizes`` overrides per-object byte sizes (sharded-optimizer
     runs shrink O_*); ``tp_view`` selects a per-rank weight view for
     tensor-parallel fills (families that support it)."""
     import dataclasses as dc
 
-    from dataflow.core.program import OutputSpec, Program, TaskSpec
+    from dataflow.core.program import Program, TaskSpec
 
     train = fam.lower(cfg)
-    outs = []
+    specs = []
     for spec in train.initial_objects:
         if spec.role == "input":
             # DATA IS EXTERNAL: tokens/targets are the program's real
@@ -568,21 +571,22 @@ def build_init_program(fam, cfg, *, seed: int = 0,
         size = spec.size_bytes
         if object_sizes and spec.id in object_sizes:
             size = int(object_sizes[spec.id])
-        outs.append(OutputSpec(id=spec.id, size_bytes=size,
-                               location="backing", role=spec.role,
-                               tensor=spec.tensor))
+        specs.append(dc.replace(spec, size_bytes=size, location="backing"))
     params = {"seed": int(seed)}
     if tp_view is not None:
         params["tp_view"] = tp_view
+    ids = tuple(s.id for s in specs)
     task = TaskSpec(
         id="family_init_0",
-        outputs=tuple(outs),
+        inputs=ids,
+        mutates=ids,
+        host=True,
         compute_block_key="family_init",
         block_params=params,
     )
     return Program(
         name=f"{getattr(train, 'name', fam.name)}-init",
-        initial_objects=(),
+        initial_objects=tuple(specs),
         tasks=(task,),
-        final_locations={o.id: "backing" for o in outs},
+        final_locations={s.id: "backing" for s in specs},
     )

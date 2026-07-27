@@ -11,6 +11,12 @@ The tasks layer provides real implementations resolved by
 `(compute_block_key, block_params)`. `SyntheticExecutable` models a task of
 known duration and is the workhorse for parity gates (fake backend) and,
 later, calibrated spin kernels (cuda backend).
+
+HOST tasks (TaskSpec.host) run outside the engine, on the service
+dispatcher thread: their context carries ``stream=None``/``backend=None``
+and their inputs/mutates are BACKING buffers over the objects' store
+extents — the executable writes host-side pinned memory synchronously
+and must enqueue nothing anywhere.
 """
 from __future__ import annotations
 

@@ -79,6 +79,10 @@ def _task_to_dict(t: TaskSpec) -> dict[str, Any]:
         d["label"] = t.label
     if t.metadata:
         d["metadata"] = dict(t.metadata)
+    if t.host:
+        # emitted only when set: device tasks keep their exact dict (and
+        # so their content-hash prog_id) from before the field existed
+        d["host"] = True
     return d
 
 
@@ -173,6 +177,7 @@ def _task_from_dict(d: dict[str, Any]) -> TaskSpec:
         prefetch_after=tuple(_trigger_from_dict(x) for x in d.get("prefetch_after", ())),
         label=d.get("label"),
         metadata=dict(d.get("metadata", {})),
+        host=bool(d.get("host", False)),
     )
 
 

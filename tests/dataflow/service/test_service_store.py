@@ -15,7 +15,11 @@ Tests:
 - test_duplicate_lineage_and_group_dup: duplicate records a clean parent lineage, group-duplicate maps members under a tag, and overwriting a parent dirties it.
 - test_protected_object_survives_wipe_unless_forced: a protected object refuses release and survives wipe until force=True.
 - test_query_backing_usage: query_backing reports object count, largest object, and used bytes consistent with engine_status.
+- test_create_object_semantics: create_object allocates a payload-less catalogued extent (query shows the size), same-size re-create is idempotent, and a size change raises BINDING_MISMATCH.
+- test_host_run_fills_in_place: an all-host program binds pre-created store extents and its task's writes land directly in the catalogued objects (fake boot: plain bytearray memory) — no engine, no placement, no transient copies.
+- test_host_program_registration_guards: mixed host+device programs, host tasks with outputs, and host tasks touching non-initial ids are each rejected at registration as BAD_REQUEST.
 - test_real_boot_family_init_byte_identity: on a real pinned slab the init program persists weight and opt-state objects byte-identical to in-process initial_values and materializes no input-role object.
+- test_real_boot_init_fits_tight_slab: on a real pinned slab sized ~1.3x the model state, init_model succeeds and leaves used bytes ~= exactly the model — the in-place host fill needs no transient double (the old output-task shape needed ~2x and failed this slab).
 """
 from __future__ import annotations
 
@@ -224,6 +228,136 @@ def test_query_backing_usage(daemon):
         assert c.engine_status()["pools"]["backing"]["n_objects"] == 2
 
 
+# --------------------------------------------------- create + host runs
+
+def test_create_object_semantics(daemon):
+    sock, _ = daemon
+    with EngineClient(sock, client_name="co") as c:
+        r = c.create_object("pre/a", 4096)
+        assert r["object"]["size_bytes"] == 4096
+        assert c.query_object("pre/a")["size_bytes"] == 4096
+        c.create_object("pre/a", 4096)            # same size: idempotent
+        with pytest.raises(ServiceError) as ei:
+            c.create_object("pre/a", 8192)
+        assert ei.value.code == "BINDING_MISMATCH"
+        # content is unspecified until first written; a same-size put
+        # defines it in place
+        c.put_object("pre/a", b"\x07" * 4096)
+        assert c.get_object("pre/a") == b"\x07" * 4096
+
+
+class HostFillExecutable:
+    """Toy HOST task: memsets each mutated object's extent with a byte
+    derived from its id — the writes land in the store's catalogued
+    memory directly (that in-place landing is what the test pins)."""
+
+    def launch(self, ctx) -> None:
+        import ctypes
+
+        for oid, buf in ctx.mutates.items():
+            ctypes.memset(buf.ptr, sum(oid.encode()) % 251, buf.size_bytes)
+
+
+class HostFillResolver:
+    def __call__(self, task):
+        return HostFillExecutable()
+
+
+def build_host_fill_resolver(spec: dict):
+    return HostFillResolver()
+
+
+def host_fill_registered():
+    from dataflow.service.registry import register_program_resolver
+
+    register_program_resolver("host_fill", build_host_fill_resolver)
+    return {"kind": "host_fill"}
+
+
+def host_program_dict(objects: dict[str, int]) -> dict:
+    from dataflow.core.jsonio import program_to_dict
+    from dataflow.core.program import ObjectSpec, Program, TaskSpec
+
+    ids = tuple(sorted(objects))
+    return program_to_dict(Program(
+        name="host-fill",
+        initial_objects=tuple(ObjectSpec(id=o, size_bytes=objects[o])
+                              for o in ids),
+        tasks=(TaskSpec(id="fill_0", inputs=ids, mutates=ids, host=True,
+                        compute_block_key="host_fill"),),
+        final_locations={o: "backing" for o in ids},
+    ))
+
+
+def test_host_run_fills_in_place(daemon):
+    sock, _ = daemon
+    spec = host_fill_registered()
+    sizes = {"hf/a": 1000, "hf/b": 2000}
+    with EngineClient(sock, client_name="host") as c:
+        for oid, n in sizes.items():
+            c.create_object(oid, n)
+        reg = c.register_program(host_program_dict(sizes), resolver=spec)
+        assert reg["bindings"]["missing_inputs"] == []
+        out = c.run(reg["prog_id"], args={})
+        assert out["state"] == "done"
+        for oid, n in sizes.items():
+            want = bytes([sum(oid.encode()) % 251]) * n
+            assert c.get_object(oid) == want, oid
+        # binding marked the residents dirty (mutation contract)
+        assert c.query_object("hf/a")["lineage"]["dirty"] is True
+        c.unregister_program(reg["prog_id"])
+
+        # an object the program declares but nobody created: the report
+        # names it at registration, and the run refuses loudly
+        more = dict(sizes)
+        more["hf/missing"] = 512
+        reg2 = c.register_program(host_program_dict(more), resolver=spec)
+        assert reg2["bindings"]["missing_inputs"] == ["hf/missing"]
+        with pytest.raises(ServiceError) as ei:
+            c.run(reg2["prog_id"], args={})
+        assert ei.value.code == "MISSING_INPUTS"
+
+
+def test_host_program_registration_guards(daemon):
+    from dataflow.core.jsonio import program_to_dict
+    from dataflow.core.program import (ObjectSpec, OutputSpec, Program,
+                                       TaskSpec)
+
+    sock, _ = daemon
+    spec = host_fill_registered()
+    obj = ObjectSpec(id="hg/a", size_bytes=64)
+
+    mixed = program_to_dict(Program(
+        name="mixed",
+        initial_objects=(obj,),
+        tasks=(TaskSpec(id="h", inputs=("hg/a",), mutates=("hg/a",),
+                        host=True, compute_block_key="host_fill"),
+               TaskSpec(id="d", compute_block_key="host_fill")),
+    ))
+    with_outputs = program_to_dict(Program(
+        name="houts",
+        initial_objects=(obj,),
+        tasks=(TaskSpec(id="h", inputs=("hg/a",), mutates=("hg/a",),
+                        host=True, compute_block_key="host_fill",
+                        outputs=(OutputSpec(id="hg/out", size_bytes=32,
+                                            location="backing"),)),),
+    ))
+    stray = program_to_dict(Program(
+        name="hstray",
+        initial_objects=(obj,),
+        tasks=(TaskSpec(id="h", inputs=("hg/a", "hg/ghost"),
+                        mutates=("hg/ghost",), host=True,
+                        compute_block_key="host_fill"),),
+    ))
+    with EngineClient(sock, client_name="guards") as c:
+        for pd, why in ((mixed, "mixes"), (with_outputs, "outputs"),
+                        (stray, "initial_objects")):
+            with pytest.raises(ServiceError) as ei:
+                c.register_program(pd, resolver=spec)
+            assert ei.value.code == "BAD_REQUEST"
+            assert why in str(ei.value), why
+
+
 # ------------------------------------------------------------- GPU gates
 
 @pytest.mark.gpu
@@ -271,6 +405,44 @@ def test_real_boot_family_init_byte_identity(tmp_path):
             assert u["used_bytes"] >= sum(
                 s.size_bytes for s in prog.initial_objects
                 if s.role != "input")
+    finally:
+        server.state.shutdown_requested.set()
+        server.dispatcher.stop()
+        if server.store.slab is not None:
+            server.store.slab.free()
+
+
+@pytest.mark.gpu
+def test_real_boot_init_fits_tight_slab(tmp_path):
+    """Init's slab footprint is exactly the model state: in a slab with
+    only ~30% headroom over the initial objects, init_model succeeds
+    and used_bytes lands at ~the model. The old output-task shape held
+    every object twice at once (task transient + final-capture copy)
+    and exhausted this slab."""
+    pytest.importorskip("cuda.bindings.runtime")
+    from dataflow_training.model_families.families import family
+    from dataflow_training.register import register_all
+    from dataflow_training.run.presets import cfg_dict as preset_cfg_dict
+
+    register_all()
+    fam = family("llama3")
+    cfg = fam.config_type.tiny()
+    cd = preset_cfg_dict(cfg)
+    prog = fam.lower(cfg)
+    need = sum(s.size_bytes for s in prog.initial_objects
+               if s.role != "input")
+    slab_gib = need * 1.3 / 2 ** 30      # NO floor: the tightness is the test
+    sock, server, _ = _boot(tmp_path, "tight", fake=False,
+                            slab_backing_gib=slab_gib)
+    try:
+        from dataflow_training.run.driver import init_model
+
+        with EngineClient(sock, client_name="tight") as c:
+            created = init_model(c, "llama3", cd, seed=7)
+            assert "W_0" in created
+            u = c.query_backing()
+            # ALIGN rounding pads each extent a little; 10% covers it
+            assert need <= u["used_bytes"] <= need * 1.1
     finally:
         server.state.shutdown_requested.set()
         server.dispatcher.stop()

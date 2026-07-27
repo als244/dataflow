@@ -619,6 +619,12 @@ class Engine:
                 raise CancelledRun(
                     f"cancelled before task {task.id!r} "
                     f"({task_pos}/{len(program.tasks)})")
+            if task.host:
+                raise ExecutionError(
+                    f"task {task.id!r} is host-side: host tasks bind store "
+                    f"extents and run on the service dispatcher, never in "
+                    f"the engine (all-host programs take the service host "
+                    f"path; mixed programs are rejected at registration)")
             fast_out = sum(o.size_bytes for o in task.outputs if o.location == "fast")
             backing_out = sum(o.size_bytes for o in task.outputs if o.location == "backing")
             state.cursor = task_pos

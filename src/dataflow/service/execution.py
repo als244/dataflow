@@ -185,6 +185,18 @@ def store_buffer(store, rec):
                   raw=None)
 
 
+def host_task_buffer(store, rec):
+    """BACKING buffer over an object's store extent for a HOST task.
+    Unlike store_buffer (whose pointer feeds engine adoption/DMA and is
+    therefore real-boot-only), host tasks do plain CPU writes — valid
+    against the pinned slab AND the fake boot's bytearray."""
+    from dataflow.runtime.device.cuda import Buffer
+
+    return Buffer(id=f"store:{rec.id}", location="backing",
+                  size_bytes=rec.size_bytes, ptr=store.host_address(rec),
+                  raw=None)
+
+
 def prepare_placement(program, values):
     """Placement + pool demand, computed once per registered program
     and cached per prog_id."""
@@ -252,6 +264,69 @@ def execute_run(program, resolver, values, *, prog_id, store=None,
         print(outcome.traceback_text, flush=True)
     kind = "CANCELLED" if outcome.is_cancelled else "RUN_FAILED"
     return None, kind, outcome
+
+
+class HostRunResult:
+    """Result shape for an all-HOST program run (execute_host_run): the
+    run handler reads the same fields an engine RunResult carries;
+    every device-side counter is structurally zero — there was no
+    engine, no pool, no placement."""
+
+    def __init__(self, makespan_us: float):
+        self.makespan_us = makespan_us
+        self.peak_fast_bytes = 0
+        self.slab_overflows = 0
+        self.pressure_evictions = 0
+        self.placement_escapes = 0
+        self.objects: dict = {}
+
+    def close(self) -> None:
+        return None
+
+
+def execute_host_run(program, resolver, values, *, run_args, cancel_event):
+    """Run an all-host program: every task binds its declared objects'
+    STORE EXTENTS directly (the ``values`` binding the run handler
+    built) and executes synchronously on the dispatcher thread — the
+    store's single-writer contract, the same thread put_object mutates
+    on. No engine, no placement, no transients: a host task's writes
+    land in the objects' catalogued extents, which is the point —
+    init-scale fills would otherwise exist twice in the slab (task
+    output transient + capture copy).
+
+    Failure contract mirrors execute_run: a raise inside a task comes
+    back as a FAILED RunOutcome (kind + message + task_id + traceback)
+    and the daemon survives. Cancel is honored BETWEEN tasks only —
+    host tasks are synchronous CPU work with no mid-task preemption."""
+    import time as time_mod
+    import traceback as tb_mod
+
+    from dataflow.runtime.engine import RunOutcome, RunOutcomeKind
+    from dataflow.runtime.executable import TaskContext
+
+    t0 = time_mod.perf_counter()
+    for task in program.tasks:
+        if cancel_event is not None and cancel_event.is_set():
+            outcome = RunOutcome(kind=RunOutcomeKind.CANCELLED,
+                                 message=f"cancelled before {task.id}",
+                                 task_id=task.id)
+            return None, "CANCELLED", outcome
+        try:
+            resolver(task).launch(TaskContext(
+                task=task, stream=None,
+                inputs={o: values[o] for o in task.inputs},
+                outputs={},
+                mutates={o: values[o] for o in task.mutates},
+                backend=None, run_args=run_args))
+        except Exception as e:
+            outcome = RunOutcome(kind=RunOutcomeKind.FAILED,
+                                 message=f"{type(e).__name__}: {e}",
+                                 task_id=task.id,
+                                 traceback_text=tb_mod.format_exc())
+            print(f"[host-run-failed] {task.id}: {outcome.message}",
+                  flush=True)
+            return None, "RUN_FAILED", outcome
+    return HostRunResult((time_mod.perf_counter() - t0) * 1e6), None, None
 
 
 def abort_drain(store=None):

@@ -224,6 +224,17 @@ class EngineClient:
             return got[1]
         return got
 
+    def create_object(self, oid: str, size_bytes: int, *,
+                      meta: dict | None = None, wait=True):
+        """Allocate a catalogued extent with NO payload — content is
+        unspecified until first written. The intended writer is a
+        subsequent run that mutates the object in place (host init
+        tasks fill their extents directly). Same-size re-create is
+        idempotent; a size change raises BINDING_MISMATCH."""
+        return self._call("create_object",
+                          {"id": oid, "size_bytes": int(size_bytes),
+                           "meta": meta}, wait=wait)
+
     def materialize_object(self, oid: str, fill: dict, *, wait=True):
         return self._call("materialize_object",
                           {"id": oid, "fill": fill}, wait=wait)
