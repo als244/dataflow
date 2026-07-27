@@ -5,7 +5,8 @@ failures from real infeasibility). Reads data/ in this experiment dir."""
 import json
 import os
 
-D = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+# outputs anchor at the EXPERIMENT root (this file lives in stages/)
+D = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
 
 
 def load(name):

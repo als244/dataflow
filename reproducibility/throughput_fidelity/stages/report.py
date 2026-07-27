@@ -362,7 +362,8 @@ def main() -> int:
     ap.add_argument("--out", default=None, help="default: REPORT.md here")
     a = ap.parse_args()
 
-    here = Path(__file__).resolve().parent
+    # the EXPERIMENT root (this file lives in stages/)
+    here = Path(__file__).resolve().parents[1]
     if a.runs:
         runs = [Run(*spec.split("=", 1)) for spec in a.runs]
         runs = [Run(r.name, Path(r.root)) for r in runs]

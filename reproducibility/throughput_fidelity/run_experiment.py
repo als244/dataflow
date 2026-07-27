@@ -41,6 +41,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+STAGES = HERE / "stages"
 REPO = HERE.parents[1]
 ALL_STAGES = ("probe", "predict", "select", "measure", "shipped", "report")
 
@@ -115,7 +116,7 @@ def stage_probe(cfg: Config) -> dict:
     reports its full RAM even when the job owns a slice, and sizing a pinned
     slab from the node total gets the job killed."""
     say("probe — what can this box hold?")
-    cmd = [cfg.python, str(HERE / "env_probe.py")]
+    cmd = [cfg.python, str(STAGES / "env_probe.py")]
     for flag, value in (("--preset", cfg.preset), ("--seqs", cfg.seqs),
                         ("--t-rounds", cfg.t_rounds), ("--t-steps", cfg.t_steps),
                         ("--budgets", cfg.budgets),
@@ -145,7 +146,7 @@ def stage_predict(cfg: Config, env: dict) -> None:
         out.write_text("")
         log = cfg.logs / f"predict_{opt}.log"
         for seq in env["seqs"]:
-            ok = run([cfg.python, str(HERE / "sweep.py"),
+            ok = run([cfg.python, str(STAGES / "sweep.py"),
                       "--mode", "predict-measured", "--preset", env["preset"],
                       "--opt", opt, "--seq", str(seq),
                       "--t-round", csv(env["t_rounds"]),
@@ -162,7 +163,7 @@ def stage_select(cfg: Config) -> None:
     to the frontier, cluster what remains by plan behaviour, keep a budget
     spine, and add dominated controls that test the reduction."""
     say("select — which cells deserve real GPU time?")
-    run([cfg.python, str(HERE / "select_cells.py"),
+    run([cfg.python, str(STAGES / "select_cells.py"),
          "--opts", ",".join(cfg.opts), "--target", str(cfg.target_cells)]
         + (["--all-frontier"] if cfg.all_frontier else []),
         log=cfg.logs / "select.log")
@@ -188,7 +189,7 @@ def stage_measure(cfg: Config, env: dict) -> None:
             say(f"  resuming: {done} rows already recorded")
         else:
             out.write_text("")
-        ok = run([cfg.python, str(HERE / "sweep.py"), "--mode", "measure",
+        ok = run([cfg.python, str(STAGES / "sweep.py"), "--mode", "measure",
                   "--preset", env["preset"], "--opt", opt,
                   "--steps", str(cfg.steps), "--cells", str(cfg.cells_json),
                   "--backing-gib", str(env["backing_gib"]), "--out", str(out)],
@@ -227,11 +228,11 @@ def stage_report(cfg: Config) -> None:
     left the report showing whatever the previous run produced -- stale
     numbers under a fresh set of figures, which is worse than no report."""
     say("report")
-    run([cfg.python, str(HERE / "analyze.py")])
+    run([cfg.python, str(STAGES / "analyze.py")])
     for opt in cfg.opts:
-        run([cfg.python, str(HERE / "make_plots.py"), opt],
+        run([cfg.python, str(STAGES / "make_plots.py"), opt],
             log=cfg.logs / "plots.log")
-    run([cfg.python, str(HERE / "report.py")], log=cfg.logs / "report.log")
+    run([cfg.python, str(STAGES / "report.py")], log=cfg.logs / "report.log")
 
 
 # ------------------------------------------------------------------- main ---

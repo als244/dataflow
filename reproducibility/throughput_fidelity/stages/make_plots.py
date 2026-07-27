@@ -18,7 +18,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+# the EXPERIMENT root (this file lives in stages/)
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA = os.path.join(HERE, "data")
 FIGS = os.path.join(HERE, "figs")
 STYLES = ["-", "--", ":", "-."]

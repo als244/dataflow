@@ -81,7 +81,8 @@ def kmeans(points, k, iters=40):
 def main():
     import numpy as np
 
-    here = os.path.dirname(os.path.abspath(__file__))
+    # the EXPERIMENT root (this file lives in stages/)
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", default=os.path.join(here, "data"))
     ap.add_argument("--opts", default="adamw,muon")

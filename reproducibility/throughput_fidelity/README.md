@@ -29,9 +29,25 @@ python reproducibility/throughput_fidelity/run_experiment.py \
 Then draw the figures (any time, including mid-run):
 
 ```bash
-python reproducibility/throughput_fidelity/make_plots.py adamw
-python reproducibility/throughput_fidelity/analyze.py
+python reproducibility/throughput_fidelity/stages/make_plots.py adamw
+python reproducibility/throughput_fidelity/stages/analyze.py
 ```
+
+## Layout
+
+```
+run_experiment.py     the one command; spawns the stages below in order
+stages/               the pipeline: env_probe, sweep, select_cells,
+                      analyze, make_plots, report
+diagnostics/          one-off instruments from the fidelity
+                      investigations (see the table at the bottom)
+```
+
+Everything else is GENERATED PER BOX and gitignored: `env.json`,
+`cells.json`, `data/` (rows + saved plans), `figs/`, `logs/`,
+`traces/`, `REPORT.md`, and `attic/` (superseded results kept locally
+as evidence). A fresh clone contains only code; a finished run leaves
+its outputs beside it.
 
 ## Configuration
 
@@ -70,7 +86,7 @@ machine. Run it on a datacentre card or a desktop one and the same command
 means the same thing.
 
 ### P0 · environment probe — *what can this box hold?*
-`env_probe.py` → `env.json`  ·  seconds, needs the device
+`stages/env_probe.py` → `env.json`  ·  seconds, needs the device
 
 Reads the limits that actually apply: device memory from the driver, and the
 host limit from the scheduler's grant if there is one (`SLURM_MEM_PER_NODE`),
@@ -123,7 +139,7 @@ than a gap. Each cell also re-plans once with 25% more host memory to price the
 allowance (`binding`, `host_marginal_gain`).
 
 ### P1b · cell selection — *which cells deserve real GPU time?*
-`select_cells.py` → `cells.json`  ·  seconds, CPU only
+`stages/select_cells.py` → `cells.json`  ·  seconds, CPU only
 
 Measuring every survivor would spend hours re-measuring identical behaviour.
 In order:
@@ -171,8 +187,8 @@ this directory drives the library directly; this stage checks the commands a
 reader would actually type still work at this scale.
 
 ### Analysis
-`analyze.py` runs automatically at the end: feasibility counts, host-pressure
-summary, and the per-cell fidelity table. `make_plots.py <opt>` draws the
+`stages/analyze.py` runs automatically at the end: feasibility counts, host-pressure
+summary, and the per-cell fidelity table. `stages/make_plots.py <opt>` draws the
 figures.
 
 ## Two ways to price a task, and why this uses one
@@ -287,12 +303,12 @@ concatenated and compared without a side channel.
 
 | tool | what it answers |
 |---|---|
-| `analyze.py` | feasibility counts, host pressure, per-cell fidelity table |
-| `make_plots.py <opt>` | the figures above |
-| `task_cost_audit.py` | per task group, the cost the sim used vs the real duration |
-| `deep_dive.py` | one cell end to end: makespan decomposition and the webapp real-vs-sim bundle |
-| `throttle_probe.py` | one task, sustained or back-to-back, `--fill uninit\|zeros\|randn`, `--sets` to defeat buffer reuse |
-| `nsys_gap_analysis.py` | kernel busy vs inter-kernel gaps — is time lost inside kernels or between them |
-| `nsys_kernel_vs_dma.py` | kernel duration against overlapping DMA, and against wall time |
-| `pcie_calib.py` | one-direction-at-a-time link bandwidth — useful only against the engine's concurrent number, which is what plans use |
-| `matmul_burst.py` | a full-power reference load, for comparing power and clock behaviour |
+| `stages/analyze.py` | feasibility counts, host pressure, per-cell fidelity table |
+| `stages/make_plots.py <opt>` | the figures above |
+| `diagnostics/task_cost_audit.py` | per task group, the cost the sim used vs the real duration |
+| `diagnostics/deep_dive.py` | one cell end to end: makespan decomposition and the webapp real-vs-sim bundle |
+| `diagnostics/throttle_probe.py` | one task, sustained or back-to-back, `--fill uninit\|zeros\|randn`, `--sets` to defeat buffer reuse |
+| `diagnostics/nsys_gap_analysis.py` | kernel busy vs inter-kernel gaps — is time lost inside kernels or between them |
+| `diagnostics/nsys_kernel_vs_dma.py` | kernel duration against overlapping DMA, and against wall time |
+| `diagnostics/pcie_calib.py` | one-direction-at-a-time link bandwidth — useful only against the engine's concurrent number, which is what plans use |
+| `diagnostics/matmul_burst.py` | a full-power reference load, for comparing power and clock behaviour |

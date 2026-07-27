@@ -386,7 +386,9 @@ def main():
         "t_steps": t_steps,
         "steps_per_cell": args.steps,
     }
-    dst = args.out or os.path.join(os.path.dirname(os.path.abspath(__file__)), "env.json")
+    dst = args.out or os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "env.json")   # the EXPERIMENT root (this file lives in stages/)
     with open(dst, "w") as fh:
         json.dump(env, fh, indent=2)
     for k, v in env.items():
