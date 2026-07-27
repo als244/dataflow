@@ -412,10 +412,9 @@ def init_model(client, family_name: str, cfg_dict: dict, *,
     extent (``create_object`` — no payload), then register + run the
     family's one HOST-task init program through the ordinary verbs; the
     fill lands IN PLACE in those extents, so init's slab footprint is
-    exactly the model state (the old output-task shape held every
-    object twice: task transient + final-capture copy). The bytes
-    match in-process ``initial_values`` exactly (same code path).
-    Returns the created object ids."""
+    exactly the model state. The bytes match in-process
+    ``initial_values`` exactly (same code path). Returns the created
+    object ids."""
     from dataflow.core.jsonio import program_to_dict
     from dataflow_training.model_families.families import (
         build_init_program,
@@ -510,10 +509,21 @@ def measured_variant(fam, cfg, profiles, resolver, pcie, levels):
     return measured_program(fam, cfg, profiles, resolver, pcie, levels=levels)
 
 
+def roofline_variant(fam, cfg, hw, levels):
+    """One re-lowered recompute variant on roofline seeds, hw-shaped
+    exactly like the base lowering when a profile is given."""
+    if hw is not None:
+        return fam.lower(cfg, hw=hw, recompute_levels=levels)
+    return fam.lower(cfg, recompute_levels=levels)
+
+
 def plan_at_budget(cfg, budget_gib: float, *, recompute: bool = True,
-                   measured: bool = False, backing_gib: float | None = None):
+                   measured: bool = False, backing_gib: float | None = None,
+                   hw=None, profile_cache: dict | None = None):
     """Plan the single-step program at a device budget (GiB). Returns the
     PlannedProgram; its placement is baked in -> a budget-specific prog_id.
+    THE one planner entry: the bench tools' plan_combo delegates here, so
+    a predict-stage plan and a driver plan are the same code path.
 
     ``backing_gib`` is the HOST allowance the plan must also live within — the
     slab the run will actually have. Left None the planner assumes host memory
@@ -531,18 +541,26 @@ def plan_at_budget(cfg, budget_gib: float, *, recompute: bool = True,
     bandwidth, so predictions are floors and reality comes in at or
     better than expected (chain-ordered plans alternate directions
     enough that lanes often achieve uni rates — up to ~20% better
-    than the bidi-priced prediction at the tightest budgets)."""
+    than the bidi-priced prediction at the tightest budgets).
+
+    ``hw`` shapes ROOFLINE lowering to another box's profile (bench
+    sweeps); measured mode ignores it — profiled costs describe THIS
+    box. ``profile_cache`` (a caller-held dict) memoizes the backend,
+    PCIe measurement, and per-(cfg, recompute) profile tables across
+    calls, so a sweep re-profiles per geometry, never per budget."""
     import functools
-    from dataclasses import replace as dc_replace
 
     from dataflow_training.model_families.families import resolve_family
     from dataflow_training.lowering.planning import plan_program
 
     fam = resolve_family(cfg)
+    cache = profile_cache if profile_cache is not None else {}
     backing_cap = int(backing_gib * 1024 ** 3) if backing_gib else None
     if not measured:
-        variant = (lambda levels: fam.lower(cfg, recompute_levels=levels)) if recompute else None
-        return plan_program(fam.lower(cfg),
+        variant = (functools.partial(roofline_variant, fam, cfg, hw)
+                   if recompute else None)
+        base = fam.lower(cfg, hw=hw) if hw is not None else fam.lower(cfg)
+        return plan_program(base,
                             fast_memory_capacity=int(budget_gib * 1024 ** 3),
                             backing_capacity=backing_cap,
                             recompute=recompute, build_variant=variant)
@@ -551,12 +569,24 @@ def plan_at_budget(cfg, budget_gib: float, *, recompute: bool = True,
                                                  measured_profile_table,
                                                  measured_program)
 
-    backend = CudaBackend()
-    dims = fam.derive_dims(cfg)
-    resolver = fam.build_resolver(dims)
-    profiles = measured_profile_table(fam, cfg, resolver, backend,
-                                      recompute=recompute)
-    pcie = cached_pcie(backend)
+    backend = cache.get("_backend")
+    if backend is None:
+        backend = cache.setdefault("_backend", CudaBackend())
+    pcie = cache.get("_pcie")
+    if pcie is None:
+        pcie = cache.setdefault("_pcie", cached_pcie(backend))
+    # repr(cfg) keys the WHOLE config (preset, geometry, opt_policy...):
+    # a shared cache across a sweep can never serve one config's table
+    # to another. `recompute` belongs in the key: the recompute-enabled
+    # table covers variants the save-everything one never contains.
+    key = (repr(cfg), recompute)
+    if key not in cache:
+        dims = fam.derive_dims(cfg)
+        resolver = fam.build_resolver(dims)
+        cache[key] = (measured_profile_table(fam, cfg, resolver, backend,
+                                             recompute=recompute),
+                      resolver)
+    profiles, resolver = cache[key]
     variant = (functools.partial(measured_variant, fam, cfg, profiles,
                                  resolver, pcie)
                if recompute else None)
@@ -580,6 +610,7 @@ def latest_engine_checkpoint(ckpt_dir) -> Path | None:
 def run_engine(client, cfg, recipe: Recipe, pipeline, steps: int, *,
                budget_gib: float, seed: int = 11, recompute: bool = True,
                measured: bool = False, backing_gib: float | None = None,
+               planned=None, expect_prog_id: str | None = None,
                profile: dict | None = None,
                log=print, log_every: int = 10,
                checkpoint_every: int | None = None,
@@ -592,6 +623,14 @@ def run_engine(client, cfg, recipe: Recipe, pipeline, steps: int, *,
     ``next_step() -> PackedStep`` (data.pipeline.DataPipeline /
     PrepackedPipeline). The factory form lets resume construct the
     stepper at the checkpointed data cursor.
+
+    ``planned`` (a PlannedProgram) short-circuits planning entirely:
+    the caller's plan IS the executed program — the fidelity harness
+    passes predict's emitted plan so a measurement can never time a
+    different program than its prediction describes (recompute/
+    measured/backing_gib then play no part here). ``expect_prog_id``
+    gates registration: the registered content hash must equal it or
+    the run refuses before stepping.
 
     ``checkpoint_every``: snapshot W_*/O_* + the loss curve + the data
     cursor every N steps (host-local under ``checkpoint_dir``;
@@ -615,9 +654,10 @@ def run_engine(client, cfg, recipe: Recipe, pipeline, steps: int, *,
     # slot-0-only feeding silently trains junk — the solo-vs-DP
     # divergence root cause; same fix as the fleet loop)
     step_cfg = replace(cfg, num_steps=1)
-    planned = plan_at_budget(step_cfg, budget_gib, backing_gib=backing_gib,
-                             recompute=recompute,
-                             measured=measured)
+    if planned is None:
+        planned = plan_at_budget(step_cfg, budget_gib,
+                                 backing_gib=backing_gib,
+                                 recompute=recompute, measured=measured)
     n_rc = sum(1 for v in (planned.recompute_levels or {}).values() if v)
     ts = planned.transfer_stats or {}
     h2d = ts.get("from_slow", {})
@@ -703,6 +743,11 @@ def run_engine(client, cfg, recipe: Recipe, pipeline, steps: int, *,
     if missing:
         raise RuntimeError(f"unbound inputs: {missing}")
     prog_id = reg["prog_id"]
+    if expect_prog_id is not None and prog_id != expect_prog_id:
+        raise RuntimeError(
+            f"plan mismatch: registered prog_id {prog_id} != expected "
+            f"{expect_prog_id} — the program about to execute is NOT the "
+            f"plan its prediction describes; refusing to measure it")
 
     from dataflow_training.lowering.flops import flop_report
 

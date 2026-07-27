@@ -9,9 +9,15 @@ configuration reference and nothing has to be discovered by reading source. The
 stages run in order and each consumes the previous one's output:
 
     probe     what can this box hold?          -> env.json
-    predict   the whole grid, and its edges    -> data/predict_measured_{opt}.jsonl
+    predict   the whole grid, and its edges;   -> data/predict_measured_{opt}.jsonl
+              each feasible row's OWN plan is     + data/plans/{opt}/*.json.gz
+              saved as the artifact measure
+              will execute (prog_id-hashed) —
+              predict is the ONLY stage that
+              plans
     select    which cells deserve GPU time     -> cells.json
     measure   what the engine actually does    -> data/measure_{opt}.jsonl
+              (executes the saved plans; NO planning here)
     shipped   do the documented commands work? -> logs/shipped_bench.log
     report    tables and figures               -> figs/
 
@@ -167,7 +173,8 @@ def stage_select(cfg: Config) -> None:
 
 def stage_measure(cfg: Config, env: dict) -> None:
     """Run the selected cells on the real engine and report each measurement
-    beside the simulator's prediction for that same plan."""
+    beside the prediction from its saved plan artifact — the same program,
+    by construction and by prog_id gate; measure performs no planning."""
     for opt in cfg.opts:
         say(f"measure ({opt})")
         out = cfg.data / f"measure_{opt}.jsonl"

@@ -30,7 +30,6 @@ from __future__ import annotations
 import argparse
 import sys
 from dataclasses import replace
-from functools import partial
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[2]
@@ -47,70 +46,39 @@ HW_PROFILES = {
 }
 
 
-def lower_variant(fam, cfg, hw, levels):
-    return fam.lower(cfg, hw=hw, recompute_levels=levels)
-
-
-def measured_variant(fam, cfg, profiles, resolver, pcie, levels):
-    from dataflow_training.run.profiling import measured_program
-
-    return measured_program(fam, cfg, profiles, resolver, pcie, levels=levels)
-
-
 def plan_combo(fam, cfg, hw, budget_gib: float, *, measured: bool,
                recompute: bool, profile_cache: dict,
                backing_gib: float | None = None):
-    """One (cfg, budget) plan. ``profile_cache`` memoizes profiles per
-    geometry (budget changes never re-profile; geometry changes do —
-    task shapes differ). ``backing_gib`` sets the sim's host-side
-    ceiling — over-backing plans fail verification (INFEASIBLE row)."""
-    from dataflow_training.lowering.planning import plan_program
+    """One (cfg, budget) plan through THE planner entry
+    (driver.plan_at_budget) — this delegator only keeps the bench
+    tools' historical call shape. ``profile_cache`` memoizes profiles
+    per geometry (budget changes never re-profile). ``backing_gib``
+    sets the sim's host-side ceiling — over-backing plans fail
+    verification (INFEASIBLE row). ``hw`` shapes roofline seeds;
+    measured plans ignore it (profiled costs describe this box)."""
+    from dataflow_training.run.driver import plan_at_budget
 
-    cap = int(budget_gib * 1024 ** 3)
-    bk = int(backing_gib * 1024 ** 3) if backing_gib else None
-    if not measured:
-        return plan_program(
-            fam.lower(cfg, hw=hw), fast_memory_capacity=cap,
-            backing_capacity=bk, recompute=recompute,
-            build_variant=(partial(lower_variant, fam, cfg, hw)
-                           if recompute else None))
-    from dataflow.runtime.device.cuda import CudaBackend
-    from dataflow_training.run.profiling import (cached_pcie,
-                                                 measured_profile_table,
-                                                 measured_program)
-
-    # `recompute` belongs in the key: the table for a recompute-enabled plan
-    # covers variants the save-everything one never contains, so a cache hit
-    # from the narrower build would leave the search unable to price them.
-    backend = profile_cache.get("_backend")
-    if backend is None:
-        backend = profile_cache.setdefault("_backend", CudaBackend())
-    pcie = profile_cache.get("_pcie")
-    if pcie is None:
-        pcie = profile_cache.setdefault("_pcie", cached_pcie(backend))
-    key = (cfg.grad_accum_rounds, cfg.batch, cfg.seq_len, recompute)
-    if key not in profile_cache:
-        dims = fam.derive_dims(cfg)
-        resolver = fam.build_resolver(dims)
-        profile_cache[key] = (measured_profile_table(fam, cfg, resolver, backend,
-                                                     recompute=recompute),
-                              resolver)
-    profiles, resolver = profile_cache[key]
-    return plan_program(
-        measured_program(fam, cfg, profiles, resolver, pcie),
-        fast_memory_capacity=cap, backing_capacity=bk, recompute=recompute,
-        build_variant=(partial(measured_variant, fam, cfg, profiles,
-                               resolver, pcie) if recompute else None))
+    return plan_at_budget(cfg, budget_gib, recompute=recompute,
+                          measured=measured, backing_gib=backing_gib,
+                          hw=None if measured else hw,
+                          profile_cache=profile_cache)
 
 
 def combo_row(fam, cfg, hw, budget: float, *, measured: bool,
               recompute: bool, profile_cache: dict,
               backing_gib: float | None = None) -> dict:
-    from dataflow_training.lowering.flops import flop_report
-
     planned = plan_combo(fam, cfg, hw, budget, measured=measured,
                          recompute=recompute, profile_cache=profile_cache,
                          backing_gib=backing_gib)
+    return combo_row_from_plan(cfg, budget, planned)
+
+
+def combo_row_from_plan(cfg, budget: float, planned) -> dict:
+    """The table row a PlannedProgram describes — split from combo_row so
+    a caller that needs the plan itself (the fidelity sweep saves it as
+    the artifact measure executes) prices the row from the SAME object."""
+    from dataflow_training.lowering.flops import flop_report
+
     rep = flop_report(cfg, planned.program)
     eff, hwf = rep.per_step()
     step_s = planned.makespan_us / 1e6

@@ -8,7 +8,6 @@ imports live behind the resolver registry (registry.py).
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import struct
 import time
@@ -16,7 +15,7 @@ from collections import deque
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from .wire import ServiceError
+from .wire import ServiceError, program_content_id
 
 
 @dataclass
@@ -112,9 +111,7 @@ def install(server) -> None:
         pd = a["program"]
         if isinstance(pd, str):
             pd = json.loads(Path(pd).read_text())
-        canonical = json.dumps(pd, sort_keys=True,
-                               separators=(",", ":")).encode()
-        prog_id = "p-" + hashlib.sha256(canonical).hexdigest()[:12]
+        prog_id = program_content_id(pd)
         program = execution.parse_program(pd)
         host_tasks = [t.id for t in program.tasks if t.host]
         if host_tasks and len(host_tasks) != len(program.tasks):

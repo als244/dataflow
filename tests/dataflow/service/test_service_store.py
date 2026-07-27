@@ -18,6 +18,7 @@ Tests:
 - test_create_object_semantics: create_object allocates a payload-less catalogued extent (query shows the size), same-size re-create is idempotent, and a size change raises BINDING_MISMATCH.
 - test_host_run_fills_in_place: an all-host program binds pre-created store extents and its task's writes land directly in the catalogued objects (fake boot: plain bytearray memory) — no engine, no placement, no transient copies.
 - test_host_program_registration_guards: mixed host+device programs, host tasks with outputs, and host tasks touching non-initial ids are each rejected at registration as BAD_REQUEST.
+- test_program_content_id_matches_registration: the client-side program_content_id hash equals the prog_id registration returns, and survives a program dict -> Program -> dict round-trip (the plan-artifact gate rests on both).
 - test_real_boot_family_init_byte_identity: on a real pinned slab the init program persists weight and opt-state objects byte-identical to in-process initial_values and materializes no input-role object.
 - test_real_boot_init_fits_tight_slab: on a real pinned slab sized ~1.3x the model state, init_model succeeds and leaves used bytes ~= exactly the model — the in-place host fill needs no transient double (the old output-task shape needed ~2x and failed this slab).
 """
@@ -267,7 +268,7 @@ def build_host_fill_resolver(spec: dict):
     return HostFillResolver()
 
 
-def host_fill_registered():
+def register_host_fill():
     from dataflow.service.registry import register_program_resolver
 
     register_program_resolver("host_fill", build_host_fill_resolver)
@@ -291,7 +292,7 @@ def host_program_dict(objects: dict[str, int]) -> dict:
 
 def test_host_run_fills_in_place(daemon):
     sock, _ = daemon
-    spec = host_fill_registered()
+    spec = register_host_fill()
     sizes = {"hf/a": 1000, "hf/b": 2000}
     with EngineClient(sock, client_name="host") as c:
         for oid, n in sizes.items():
@@ -324,7 +325,7 @@ def test_host_program_registration_guards(daemon):
                                        TaskSpec)
 
     sock, _ = daemon
-    spec = host_fill_registered()
+    spec = register_host_fill()
     obj = ObjectSpec(id="hg/a", size_bytes=64)
 
     mixed = program_to_dict(Program(
@@ -356,6 +357,23 @@ def test_host_program_registration_guards(daemon):
                 c.register_program(pd, resolver=spec)
             assert ei.value.code == "BAD_REQUEST"
             assert why in str(ei.value), why
+
+
+def test_program_content_id_matches_registration(daemon):
+    from dataflow.core.jsonio import program_from_dict, program_to_dict
+    from dataflow.service.wire import program_content_id
+
+    sock, _ = daemon
+    spec = register_host_fill()
+    pd = host_program_dict({"pi/a": 256})
+    # round-trip stability: an artifact stores the dict, measure re-parses
+    # and re-serializes it — the hash must survive that
+    assert program_content_id(program_to_dict(program_from_dict(pd))) == program_content_id(pd)
+    with EngineClient(sock, client_name="pid") as c:
+        c.create_object("pi/a", 256)
+        reg = c.register_program(pd, resolver=spec)
+        assert reg["prog_id"] == program_content_id(pd)
+        c.unregister_program(reg["prog_id"])
 
 
 # ------------------------------------------------------------- GPU gates

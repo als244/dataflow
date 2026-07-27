@@ -33,6 +33,20 @@ ERROR_CODES = (
 )
 
 
+def program_content_id(program_dict: dict) -> str:
+    """The program id a dict registers as, derived purely from its
+    content: canonical JSON (sorted keys, no whitespace) -> sha256[:12].
+    Registration uses exactly this function, so a client can compute —
+    and later GATE — the id a program dict will register under (the
+    plan-artifact handoff asserts computed == registered before
+    trusting a measurement)."""
+    import hashlib
+
+    canonical = json.dumps(program_dict, sort_keys=True,
+                           separators=(",", ":")).encode()
+    return "p-" + hashlib.sha256(canonical).hexdigest()[:12]
+
+
 class ServiceError(Exception):
     """Raised client-side for error replies; carried as data server-side."""
 

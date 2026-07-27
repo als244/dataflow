@@ -99,7 +99,7 @@ total gets the job killed. From those it derives:
 
 ### P1 · predictions — *the whole grid, and where it becomes infeasible*
 `run_experiment.py` stage `predict` → `data/predict_measured_{opt}.jsonl`
-·  the long pole for prediction; needs the device
++ `data/plans/{opt}/*.json.gz`  ·  the long pole for prediction; needs the device
 
 For each optimizer, for each sequence length, over every (tokens/round ×
 tokens/step × budget) combination:
@@ -110,7 +110,12 @@ tokens/step × budget) combination:
    first, then placement,
 3. **record** simulated s/step, tok/s, effective and hardware TFLOP/s, peak
    fast and backing bytes, transfer bytes and duty each way, recompute share of
-   makespan, idle share, and the recompute levels chosen.
+   makespan, idle share, and the recompute levels chosen,
+4. **save the plan itself**: each feasible row's annotated program is written
+   as a gzipped artifact (~10 KB) under `data/plans/{opt}/`, stamped with its
+   content-hash `prog_id`, its prediction, and the device it was priced on.
+   These artifacts are what the measure stage executes — predict is the ONLY
+   stage that plans.
 
 Cells the planner cannot fit are written as **INFEASIBLE rows carrying the
 planner's reason**, never skipped, so the feasibility boundary is data rather
@@ -145,12 +150,17 @@ overall; needs the device
 
 Runs each selected cell on the real engine, per optimizer, for `STEPS` steps
 with the first 3 discarded as warmup, and reports the mean of the tail beside
-the simulator's prediction for **that same plan**. The cell is planned with the
-same profiled costs and the same host allowance the run will actually have, so
-predicted and measured describe one plan rather than two. Per cell: `pred_s`,
-`meas_s`, their `ratio` (the fidelity number), tok/s, effective and hardware
-TFLOP/s, recompute levels, peak backing. A cell that fails to plan or run is
-recorded as a row with its error, not a crash.
+the prediction from the cell's **saved plan artifact**. Measure performs no
+planning: it loads the artifact predict wrote, registers exactly that program,
+and refuses unless the registered content-hash `prog_id` equals the
+artifact's — the measured program and its prediction can only ever be the same
+plan. It also refuses artifacts priced on a different device (a fidelity ratio
+against another box's costs describes nothing; re-run predict on this box).
+Per cell: `pred_s` (from the artifact), `meas_s`, their `ratio` (the fidelity
+number), the plan's `prog_id`, tok/s, effective and hardware TFLOP/s,
+recompute levels, peak backing. A cell that fails to run is recorded as a row
+with its error, not a crash; a missing artifact stops the stage before any GPU
+time is spent.
 
 ### P3 · shipped-command validation — *do the documented commands still work?*
 → `logs/shipped_bench.log`  ·  minutes, needs the device
@@ -260,7 +270,9 @@ degrades gracefully: on a workload that never approaches the ceiling it reports
 | `env.json` | what this box chose and why: device, host limit and its source, preset, persistent state, allowance, budget ladder, geometry axes |
 | `cells.json` | cells chosen for real runs, tagged `budget_spine` / `frontier` / `dominated_control`, with predicted s/step |
 | `data/predict_measured_{opt}.jsonl` | one record per grid cell — s/step, tok/s, eff + hw TFLOP/s, peak fast and backing, transfer bytes and duty, recompute and idle share, `binding`, `host_marginal_gain` — or an INFEASIBLE reason |
-| `data/measure_{opt}.jsonl` | per measured cell — `pred_s`, `meas_s`, `ratio`, tok/s, TFLOP/s, recompute levels, peak backing |
+| `data/plans/{opt}/*.json.gz` | each feasible cell's SAVED PLAN: the annotated program dict + `prog_id` + prediction + pricing device — the exact artifact the measure stage executes. Per-device: measure refuses plans priced elsewhere |
+| `data/measure_{opt}.jsonl` | per measured cell — `pred_s`, `meas_s`, `ratio`, the executed plan's `prog_id`, tok/s, TFLOP/s, recompute levels, peak backing |
+| `REPORT.md` | the rendered report: landscape + planner tables per optimizer, fidelity summary |
 | `figs/` | `frontier_{opt}.png` (throughput vs GPU memory, round size optimised and labelled), `throughput_`, `eff_tflops_`, `recompute_pct_`, `idle_pct_` |
 | `logs/`, `traces/` | raw stdout per stage; webapp real-vs-sim bundles and nsys captures |
 

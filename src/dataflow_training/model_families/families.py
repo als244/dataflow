@@ -543,12 +543,11 @@ def build_init_program(fam, cfg, *, seed: int = 0,
     first) and the family's seeded init writes straight into them,
     through the same ``initial_values`` code path, so the bytes are
     identical to in-process init by construction. Nothing is allocated
-    beyond the objects themselves: the previous output-task shape kept
-    every object TWICE in the slab at once (task-output transient +
-    final-capture copy), doubling init's slab footprint. DATA objects
-    (role "input") are deliberately NOT created here — external inputs
-    must be put_object'd, and registration fails loudly on any that
-    are missing.
+    beyond the objects themselves — no task-output transients, no
+    final-capture copies — so init's slab footprint is exactly the
+    model state. DATA objects (role "input") are deliberately NOT
+    created here — external inputs must be put_object'd, and
+    registration fails loudly on any that are missing.
 
     ``object_sizes`` overrides per-object byte sizes (sharded-optimizer
     runs shrink O_*); ``tp_view`` selects a per-rank weight view for

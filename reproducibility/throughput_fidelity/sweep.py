@@ -7,8 +7,13 @@ structured JSONL record per cell (+ a combined CSV) instead of a printed table.
 
 Modes:
   predict          roofline sim (CPU, instant)  -> combo_row(measured=False)
-  predict-measured sim on H100-PROFILED costs    -> combo_row(measured=True)   [needs GPU]
-  measure          real engine run per cell       -> run_cell(measured_plan=True) [needs GPU]
+  predict-measured sim on GPU-PROFILED costs; each feasible row's OWN plan
+                   (annotated program + prog_id + pred_s) is also saved as a
+                   gzipped artifact under --plans — predict is the ONLY
+                   stage that plans                                [needs GPU]
+  measure          run each cell's SAVED plan on the real engine — measure
+                   performs NO planning; the registered prog_id must equal
+                   the artifact's, and pred_s is reported from the artifact
 
 predict/predict-measured sweep the cross-product of --seq/--t-round/--t-step/--budget.
 measure takes an explicit --cells JSON list [{seq,t_round,t_step,budget}, ...]
@@ -20,6 +25,7 @@ t_round | t_step (ga=t_step/t_round); violating cells are recorded as skips.
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
 import os
 import resource
@@ -74,14 +80,75 @@ def base_cfg(preset, opt):
     return base
 
 
-def cfg_for(base, seq, t_round, t_step):
+def cell_config(base, seq, t_round, t_step):
+    # num_steps=1: cells are ONE-STEP programs, the exact shape run_engine
+    # registers (one step slot per client.run) — so a predicted plan IS
+    # runnable as-is
     return replace(base, seq_len=seq, grad_accum_rounds=t_step // t_round,
-                   batch=t_round // seq)
+                   batch=t_round // seq, num_steps=1)
 
 
 def emit(fh, rec):
     fh.write(json.dumps(rec) + "\n")
     fh.flush()
+
+
+# --------------------------------------------------------- plan artifacts
+
+def plan_artifact_path(plans_dir, opt, seq, tr, ts, budget, backing):
+    return os.path.join(plans_dir, opt,
+                        f"s{seq}_tr{tr}_ts{ts}_b{budget:g}_k{backing:g}"
+                        f".json.gz")
+
+
+def save_plan_artifact(path, planned):
+    """Write one selected cell's plan as the artifact measure executes:
+    the ANNOTATED program dict, its content-hash prog_id (the same
+    function registration uses), and the prediction that describes it.
+    Always overwrites — a stale artifact from older code would carry an
+    old program, and measure would silently time the wrong plan. The
+    device name is stamped in because a plan is priced from THIS box's
+    profiled costs: executing another box's plan would produce a
+    fidelity ratio that describes nothing (measure refuses)."""
+    import socket
+
+    from dataflow.core.jsonio import program_to_dict
+    from dataflow.service.wire import program_content_id
+
+    pd = program_to_dict(planned.program)
+    art = {"prog_id": program_content_id(pd),
+           "device": torch.cuda.get_device_name(0),
+           "host": socket.gethostname(),
+           "pred_s": planned.makespan_us / 1e6,
+           "makespan_us": planned.makespan_us,
+           "peak_fast_bytes": planned.peak_fast_bytes,
+           "peak_backing_bytes": planned.peak_backing_bytes,
+           "recompute_levels": dict(planned.recompute_levels or {}),
+           "transfer_stats": planned.transfer_stats or {},
+           "program": pd}
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with gzip.open(path, "wt") as fh:
+        json.dump(art, fh)
+    return art
+
+
+def load_plan_artifact(path):
+    """(artifact dict, reconstructed PlannedProgram) — the program comes
+    back through the same jsonio the wire uses, so registering it hashes
+    to the artifact's prog_id (the gate asserts exactly that)."""
+    from dataflow.core.jsonio import program_from_dict
+    from dataflow_training.lowering.planning import PlannedProgram
+
+    with gzip.open(path, "rt") as fh:
+        art = json.load(fh)
+    planned = PlannedProgram(
+        program=program_from_dict(art["program"]),
+        makespan_us=art["makespan_us"],
+        peak_fast_bytes=art["peak_fast_bytes"],
+        recompute_levels=art["recompute_levels"],
+        peak_backing_bytes=art["peak_backing_bytes"],
+        transfer_stats=art["transfer_stats"])
+    return art, planned
 
 
 def run_predict(args, measured):
@@ -116,12 +183,22 @@ def run_predict(args, measured):
             if not geom_ok(seq, tr, ts):
                 emit(fh, {**meta, "skip": "geometry: need seq|t_round|t_step"})
                 continue
-            cfg = cfg_for(base, seq, tr, ts)
+            cfg = cell_config(base, seq, tr, ts)
             t0 = time.time()
             try:
-                row = PS.combo_row(fam, cfg, hw, bud, measured=measured,
-                                   recompute=True, profile_cache=profile_cache,
-                                   backing_gib=back)
+                planned = PS.plan_combo(fam, cfg, hw, bud, measured=measured,
+                                        recompute=True,
+                                        profile_cache=profile_cache,
+                                        backing_gib=back)
+                row = PS.combo_row_from_plan(cfg, bud, planned)
+                if measured and back is not None:
+                    # this row's OWN plan is the artifact measure executes,
+                    # saved by the same call that priced the row — predict
+                    # is the only stage that plans. (Unlimited-allowance
+                    # rows aren't measurable: no slab to run them in.)
+                    save_plan_artifact(
+                        plan_artifact_path(args.plans, args.opt, seq, tr,
+                                           ts, bud, back), planned)
                 # The allowance is set by policy, so what matters is not how
                 # much the plan "wanted" (that is only defined when host memory
                 # is free) but whether the ceiling BINDS here, and what relief
@@ -204,25 +281,23 @@ class DevicePeak:
         self.peak = max(self.peak, self.used())
 
 
-def run_cell_backed(client, cfg, budget, backing, steps, data_mode, recipe):
-    """One measured cell. Unlike the shipped helper this plans WITH the host
-    allowance the run will actually have, so predicted and executed plans agree
-    (a plan blind to the slab keeps contexts the slab cannot hold)."""
+def run_cell_backed(client, cfg, budget, backing, steps, data_mode, recipe,
+                    artifact, planned):
+    """One measured cell, executing EXACTLY the plan the emit-plans stage
+    wrote: measure performs NO planning. run_engine registers the loaded
+    program and refuses unless the registered prog_id equals the
+    artifact's, and pred_s is REPORTED from the artifact rather than
+    recomputed — the measurement and its prediction can only ever
+    describe the same program."""
     from dataflow_training.lowering.flops import flop_report
-    from dataflow_training.run.driver import plan_at_budget, run_engine
+    from dataflow_training.run.driver import run_engine
 
-    planned = plan_at_budget(cfg, budget, measured=True, backing_gib=backing)
     eff, hwf = flop_report(cfg, planned.program).per_step()
     with DevicePeak() as devmem:
-        # measured=True or run_engine PLANS ITS OWN roofline program and runs
-        # that, while pred_s above describes the measured-cost plan: the two
-        # numbers then belong to different programs, and the ratio is not a
-        # fidelity measurement at all. (Its default is False.) The real fix is
-        # for measure to stop planning and take predict's plan; until then the
-        # two planning calls must at least ask for the same thing.
         res = run_engine(client, cfg, recipe, MS.cell_pipeline(cfg, data_mode),
                          steps, budget_gib=budget, backing_gib=backing, seed=11,
-                         measured=True, log=MS.quiet_log)
+                         planned=planned, expect_prog_id=artifact["prog_id"],
+                         log=MS.quiet_log)
     # What the device actually gave this program, so the plan's memory model can
     # be checked rather than trusted: a run is only "within budget" if the
     # engine's own reserved extent says so.
@@ -235,19 +310,20 @@ def run_cell_backed(client, cfg, budget, backing, steps, data_mode, recipe):
     tail = res.step_wall_s[MS.WARMUP_STEPS:] or res.step_wall_s
     meas_s = sum(tail) / len(tail)
     tokens_step = cfg.max_tokens * cfg.grad_accum_rounds
-    pred_s = planned.makespan_us / 1e6
-    levels = planned.recompute_levels or {}
+    pred_s = artifact["pred_s"]
+    levels = artifact["recompute_levels"] or {}
     return {"seq": cfg.seq_len, "t_round": cfg.max_tokens,
             "ga": cfg.grad_accum_rounds, "tokens_step": tokens_step,
             "budget": budget, "backing": backing,
+            "prog_id": artifact["prog_id"],
             "pred_s": pred_s, "meas_s": meas_s,
             "ratio": meas_s / pred_s if pred_s else float("nan"),
             "tok_s": tokens_step / meas_s,
             "eff_tfs": eff / meas_s / 1e12, "hw_tfs": hwf / meas_s / 1e12,
             "recompute": sum(1 for v in levels.values() if v),
             "rewritable": len(levels),
-            "peak_backing_gib": planned.peak_backing_bytes / 1024 ** 3,
-            "planned_fast_gib": planned.peak_fast_bytes / 1024 ** 3,
+            "peak_backing_gib": artifact["peak_backing_bytes"] / 1024 ** 3,
+            "planned_fast_gib": artifact["peak_fast_bytes"] / 1024 ** 3,
             "engine_extent_gib": reserved / 1024 ** 3,
             "device_peak_gib": devmem.peak / 1024 ** 3,
             "device_baseline_gib": devmem.baseline / 1024 ** 3,
@@ -262,6 +338,36 @@ def run_measure(args):
     base = base_cfg(args.preset, args.opt)
     cells = json.load(open(args.cells))
     default_back = float(str(args.backing_gib).split(",")[0])
+    # measure executes ONLY saved plans: every cell's artifact must
+    # already exist AND have been priced on THIS device — a missing or
+    # foreign artifact is a harness error to fix before any GPU time is
+    # spent, not a per-cell "failed" row
+    here = torch.cuda.get_device_name(0)
+    missing, foreign = [], []
+    for c in cells:
+        if not geom_ok(c["seq"], c["t_round"], c["t_step"]):
+            continue
+        path = plan_artifact_path(args.plans, args.opt, c["seq"],
+                                  c["t_round"], c["t_step"],
+                                  float(c["budget"]),
+                                  float(c.get("backing", default_back)))
+        if not os.path.exists(path):
+            missing.append(os.path.basename(path))
+            continue
+        art, planned_unused = load_plan_artifact(path)
+        if art.get("device", here) != here:
+            foreign.append(f"{os.path.basename(path)} ({art['device']})")
+    if missing:
+        raise SystemExit(
+            f"measure: {len(missing)} cell(s) have no plan artifact under "
+            f"{args.plans} (e.g. {missing[:3]}) — re-run the predict stage "
+            f"(it saves each feasible row's plan); measure does not plan")
+    if foreign:
+        raise SystemExit(
+            f"measure: {len(foreign)} plan(s) were priced on a DIFFERENT "
+            f"device than this box's {here} (e.g. {foreign[:2]}) — a "
+            f"fidelity ratio against another box's costs describes "
+            f"nothing; re-run the predict stage here")
     # the slab is fixed when the client boots, so cells are grouped by the host
     # allowance they were selected at and each group gets its own server
     groups = {}
@@ -303,11 +409,15 @@ def run_measure(args):
                     if not geom_ok(seq, tr, ts):
                         emit(fh, {**meta, "skip": "geometry"})
                         continue
-                    cfg = cfg_for(base, seq, tr, ts)
+                    cfg = cell_config(base, seq, tr, ts)
                     t0 = time.time()
                     try:
+                        art, planned = load_plan_artifact(
+                            plan_artifact_path(args.plans, args.opt, seq,
+                                               tr, ts, bud, backing))
                         row = run_cell_backed(client, cfg, bud, backing,
-                                              args.steps, args.data, recipe)
+                                              args.steps, args.data, recipe,
+                                              art, planned)
                         emit(fh, {**meta, **row,
                                   "wall_s": round(time.time() - t0, 3)})
                         print(f"[measure {args.opt}] {n+1} seq{seq} tr{tr} ts{ts} "
@@ -353,11 +463,17 @@ def main():
                     help="host allowance in GiB; comma-separated to sweep, or "
                          "'unlimited' to let each plan report what it wants")
     ap.add_argument("--cells", default=None, help="measure: JSON list of cells")
+    ap.add_argument("--plans", default=None,
+                    help="plan-artifact directory (default: plans/ beside "
+                         "--out; predict-measured writes it, measure reads it)")
     ap.add_argument("--steps", type=int, default=6)
     ap.add_argument("--data", default=None)
     ap.add_argument("--peak-lr", dest="peak_lr", type=float, default=3e-4)
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
+    if args.plans is None:
+        args.plans = os.path.join(
+            os.path.dirname(os.path.abspath(args.out)), "plans")
     if args.mode == "measure":
         assert args.cells, "--cells required for measure mode"
         run_measure(args)

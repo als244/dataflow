@@ -80,8 +80,8 @@ def _task_to_dict(t: TaskSpec) -> dict[str, Any]:
     if t.metadata:
         d["metadata"] = dict(t.metadata)
     if t.host:
-        # emitted only when set: device tasks keep their exact dict (and
-        # so their content-hash prog_id) from before the field existed
+        # emitted only when set: a device task's dict — and so its
+        # content-hash prog_id — never carries the field
         d["host"] = True
     return d
 

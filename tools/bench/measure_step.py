@@ -53,11 +53,18 @@ def run_cell(client, cfg, budget: float, steps: int, data_mode: str,
     from dataflow_training.lowering.flops import flop_report
     from dataflow_training.run.driver import plan_at_budget, run_engine
 
-    planned = plan_at_budget(cfg, budget, measured=measured_plan)
+    # ONE plan per cell: the object priced in pred_s is the object the
+    # engine executes (planned= skips run_engine's own planning — a
+    # second call could only agree by determinism, and the ratio must
+    # never be able to compare two different programs). num_steps=1
+    # mirrors run_engine's own step_cfg: one step slot per client.run.
+    planned = plan_at_budget(replace(cfg, num_steps=1), budget,
+                             measured=measured_plan)
     rep = flop_report(cfg, planned.program)
     eff, hwf = rep.per_step()
     res = run_engine(client, cfg, recipe, cell_pipeline(cfg, data_mode),
-                     steps, budget_gib=budget, seed=11, log=quiet_log)
+                     steps, budget_gib=budget, seed=11, planned=planned,
+                     log=quiet_log)
     tail = res.step_wall_s[WARMUP_STEPS:] or res.step_wall_s
     meas_s = sum(tail) / len(tail)
     tokens_step = cfg.max_tokens * cfg.grad_accum_rounds
