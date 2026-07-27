@@ -175,6 +175,26 @@ def thermal_soak(seconds: float = 1.0) -> None:
     del a, b
 
 
+PROFILING_STREAMS: dict = {}
+
+
+def profiling_streams(backend):
+    """One (compute, h2d, d2h) stream trio per backend for EVERY profile
+    pass in this process. torch's caching allocator is STREAM-AWARE: a
+    fresh stream per table makes each table's cached kernel workspaces
+    dead to every later table (the same disease the service fixed for
+    programs with its shared trio), so a long sweep's reserved memory
+    grows monotonically — invisible with headroom, device-OOM on a
+    24 GiB card mid-chunk once the raw operand allocations no longer
+    fit beside the cache."""
+    key = id(backend)
+    if key not in PROFILING_STREAMS:
+        PROFILING_STREAMS[key] = (backend.create_stream("compute"),
+                                  backend.create_stream("h2d"),
+                                  backend.create_stream("d2h"))
+    return PROFILING_STREAMS[key]
+
+
 class _PcieContender:
     """Keeps bidirectional PCIe DMA grinding while tasks are timed.
 
@@ -198,8 +218,9 @@ class _PcieContender:
 
     def __init__(self, backend) -> None:
         self.backend = backend
-        self.h2d = backend.create_stream("h2d")
-        self.d2h = backend.create_stream("d2h")
+        streams = profiling_streams(backend)
+        self.h2d = streams[1]
+        self.d2h = streams[2]
         self.pinned = backend.alloc("backing", self.CHUNK)
         self.dev_in = backend.alloc("fast", self.CHUNK)
         self.dev_out = backend.alloc("fast", self.CHUNK)
@@ -262,7 +283,7 @@ def profile_program(
     # across cache refreshes (a re-profile that shifts task costs re-plans)
     fill_gen = torch.Generator(device="cuda")
     fill_gen.manual_seed(PROFILE_FILL_SEED)
-    stream = backend.create_stream("compute")
+    stream = profiling_streams(backend)[0]
     contender = _PcieContender(backend) if contend_pcie else None
 
     # attention blocks resolve the round's Segments workload-side
@@ -293,7 +314,18 @@ def profile_program(
         local: list = []
 
         def buf(size: int):
-            b = backend.alloc("fast", size)
+            from dataflow.runtime.device.cuda import DeviceMemoryError
+
+            try:
+                b = backend.alloc("fast", size)
+            except DeviceMemoryError:
+                # raw cudaMalloc cannot see torch's cached-but-idle
+                # blocks; give the headroom back once and retry
+                torch.cuda.synchronize()
+                torch.cuda.empty_cache()
+                print(f"  [profile] freed torch cache to fit a "
+                      f"{size / 2 ** 30:.1f} GiB operand", flush=True)
+                b = backend.alloc("fast", size)
             local.append(b)
             return b
 
