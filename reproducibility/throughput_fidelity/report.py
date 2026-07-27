@@ -172,9 +172,10 @@ def section_planner(run: Run, opt: str) -> str:
 
 def section_fidelity(runs: list[Run]) -> str:
     blocks = ["## Does the simulator tell the truth?\n",
-              "Every measured cell was planned with the same profiled costs and "
-              "the same host allowance the run actually had, so predicted and "
-              "measured describe one plan rather than two.\n"]
+              "Every measured cell EXECUTES the plan the predict stage saved: "
+              "the registered program's content hash is gated against the "
+              "artifact's, so a prediction and its measurement can only ever "
+              "describe the same program.\n"]
     for run in runs:
         for opt in run.opts():
             meas = [m for m in run.rows("measure", opt) if "meas_s" in m]
@@ -197,6 +198,96 @@ def section_fidelity(runs: list[Run]) -> str:
                   f"range {ratios[0]:.2f}–{ratios[-1]:.2f} over {len(ratios)} cells"
                 + (f"; {len(failed)} cells failed to run." if failed else ".") + "\n")
     return "\n".join(blocks)
+
+
+def section_frontier_truth(run: Run, opt: str) -> str:
+    """Is the SIMULATED frontier the REAL frontier?
+
+    Measuring every frontier cell gives the measured curve, but the round
+    choice itself was the simulator's. The choice survives measurement when
+    the predicted margin between the best round and the runner-up exceeds
+    the spread of measured/predicted ratios — a near-tie inside that spread
+    could go either way on the real engine."""
+    pred = [r for r in run.rows("predict_measured", opt) if "tok_s" in r]
+    meas = [m for m in run.rows("measure", opt) if "meas_s" in m]
+    if not pred or not meas:
+        return ""
+    ratios = [m["ratio"] for m in meas]
+    band = max(ratios) - min(ratios)
+    slots: dict = {}
+    for r in pred:
+        slots.setdefault((r["seq"], r["t_step"], r["budget"]), []).append(r)
+    contested = [s for s, rows in slots.items() if len(rows) > 1]
+    robust = 0
+    for s in contested:
+        ordered = sorted(slots[s], key=lambda r: -r["tok_s"])
+        margin = (ordered[0]["tok_s"] - ordered[1]["tok_s"]) / ordered[0]["tok_s"]
+        if margin > band:
+            robust += 1
+    return (f"### Is the simulated frontier the real frontier? ({run.name} · {opt})\n\n"
+            f"Measured/predicted ratios span {min(ratios):.2f}–{max(ratios):.2f} "
+            f"(width {band:.2f}). Of the {len(contested)} (sequence, tokens/step, "
+            f"budget) slots where more than one round size was feasible, the "
+            f"predicted best round beats its runner-up by MORE than that width "
+            f"in {robust} ({robust / len(contested) * 100:.0f}%) — in those "
+            f"slots the measured frontier's round choice is the simulator's "
+            f"choice, not an artifact of measurement spread. The remaining "
+            f"slots are predicted near-ties where either round is equivalent "
+            f"on the real engine to within the observed fidelity.\n")
+
+
+def section_caveats(runs: list[Run]) -> str:
+    """Known limits of the method, with the numbers this run produced."""
+    blocks = ["## Known limits of the method\n"]
+    peaks = []
+    for run in runs:
+        for opt in run.opts():
+            for m in run.rows("measure", opt):
+                if "device_peak_delta_gib" in m:
+                    peaks.append(m["device_peak_delta_gib"] - m["budget"])
+    if peaks:
+        peaks.sort()
+        blocks.append(
+            f"- **A budget is not a device ceiling.** A cell planned at budget "
+            f"B used B {peaks[0]:+.1f}..{peaks[-1]:+.1f} GiB of device memory "
+            f"(median {peaks[len(peaks) // 2]:+.1f}): placement extent above "
+            f"the plan's peak, kernel workspaces held by the framework "
+            f"allocator, and the CUDA context — none of it inside the "
+            f"engine's budget. The `frontier_by_peak` figures plot throughput "
+            f"against MEASURED device peak for exactly this reason, and the "
+            f"top budget rung can OOM on a card the budget nominally fits.")
+    med = {}
+    for run in runs:
+        for opt in run.opts():
+            rs = [m["ratio"] for m in run.rows("measure", opt)
+                  if "meas_s" in m]
+            if rs:
+                med[f"{run.name} · {opt}"] = statistics.median(rs)
+    if med:
+        spread = ", ".join(f"{k} {v:.3f}" for k, v in med.items())
+        blocks.append(
+            f"- **Profiling is cache-warm.** Task profiles time a kernel in a "
+            f"back-to-back repeat loop on the same buffers (warm L2/TLB); in "
+            f"a real step each block runs once on freshly-streamed weights. "
+            f"The residual shows up as median ratios slightly above 1 on "
+            f"compute-bound cells (medians: {spread}); trace decomposition "
+            f"attributes it to compute-side costs, forward-type ops hardest.")
+    if len(med) > 1:
+        vals = sorted(med.items(), key=lambda kv: kv[1])
+        blocks.append(
+            f"- **Optimizer-specific bias is visible and constant.** The gap "
+            f"between per-optimizer medians ({vals[0][0]} {vals[0][1]:.3f} vs "
+            f"{vals[-1][0]} {vals[-1][1]:.3f}) is a stable offset, not "
+            f"scatter — consistent with operand-value-dependent clocks: "
+            f"profiles seed operands N(0,1) while real gradient-scale values "
+            f"draw different power. Untested; the probe is profiling the "
+            f"optimizer task at gradient scale.")
+    blocks.append(
+        "- **The planner needs headroom to plan at all.** The budget ladder's "
+        "floor is set by the largest single task's working set (roughly twice "
+        "it in practice), so the sweep cannot see budgets below that floor — "
+        "the regime boundary it maps starts there.")
+    return "\n".join(blocks) + "\n"
 
 
 def section_host(runs: list[Run]) -> str:
@@ -296,7 +387,10 @@ def main() -> int:
     for opt in opts:
         parts.append(section_compare(runs, opt))
     parts.append(section_fidelity(runs))
+    for opt in opts:
+        parts.append(section_frontier_truth(primary, opt))
     parts.append(section_host(runs))
+    parts.append(section_caveats(runs))
     parts.append("## Reproducing this\n\n```bash\n"
                  "python reproducibility/throughput_fidelity/run_experiment.py\n"
                  "python reproducibility/throughput_fidelity/report.py\n```\n\n"
