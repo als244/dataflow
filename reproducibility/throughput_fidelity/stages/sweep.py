@@ -346,6 +346,7 @@ def run_measure(args):
     # spent, not a per-cell "failed" row
     here = torch.cuda.get_device_name(0)
     missing, foreign = [], []
+    preds = {}
     for c in cells:
         if not geom_ok(c["seq"], c["t_round"], c["t_step"]):
             continue
@@ -357,6 +358,8 @@ def run_measure(args):
             missing.append(os.path.basename(path))
             continue
         art, planned_unused = load_plan_artifact(path)
+        preds[(c["seq"], c["t_round"], c["t_step"],
+               float(c["budget"]))] = art["pred_s"]
         if art.get("device", here) != here:
             foreign.append(f"{os.path.basename(path)} ({art['device']})")
     if missing:
@@ -391,6 +394,16 @@ def run_measure(args):
     if done:
         print(f"[measure {args.opt}] resuming: {len(done)} cells already "
               f"recorded, skipping them", flush=True)
+    # ETA from the plans themselves: every cell's pred_s is known before
+    # anything runs. Stepping time is exact by construction; the per-cell
+    # overhead (init + register + wipe) is learned from completed cells,
+    # so the estimate self-corrects as the run progresses.
+    remaining_pred = sum(p for k, p in preds.items() if k not in done)
+    n_remaining = sum(1 for k in preds if k not in done)
+    overheads: list = []
+    print(f"[measure {args.opt}] {n_remaining} cells to run: "
+          f"~{remaining_pred * args.steps / 60:.0f} min of stepping "
+          f"+ per-cell overhead (eta refines as cells land)", flush=True)
     n = 0
     with open(args.out, "a") as fh:
         for backing in sorted(groups):
@@ -420,17 +433,26 @@ def run_measure(args):
                         row = run_cell_backed(client, cfg, bud, backing,
                                               args.steps, args.data, recipe,
                                               art, planned)
-                        emit(fh, {**meta, **row,
-                                  "wall_s": round(time.time() - t0, 3)})
+                        wall = time.time() - t0
+                        emit(fh, {**meta, **row, "wall_s": round(wall, 3)})
+                        cell_pred = preds.get((seq, tr, ts, bud), 0.0)
+                        remaining_pred -= cell_pred
+                        n_remaining -= 1
+                        overheads.append(wall - cell_pred * args.steps)
+                        mean_over = sum(overheads) / len(overheads)
+                        eta = (remaining_pred * args.steps
+                               + mean_over * n_remaining)
                         print(f"[measure {args.opt}] {n+1} seq{seq} tr{tr} ts{ts} "
                               f"b{bud:g} k{backing:g}  meas {row['meas_s']:.2f}s "
                               f"pred {row['pred_s']:.2f}s ratio {row['ratio']:.2f}  "
                               f"{row['eff_tfs']:.0f}effTF {row['tok_s']:,.0f}tok/s  "
-                              f"wall {time.time() - t0:.0f}s",
+                              f"wall {wall:.0f}s  eta {eta / 60:.0f}m",
                               flush=True)
                     except Exception as exc:
                         emit(fh, {**meta, "failed": str(exc).splitlines()[0][:120],
                                   "wall_s": round(time.time() - t0, 3)})
+                        remaining_pred -= preds.get((seq, tr, ts, bud), 0.0)
+                        n_remaining -= 1
                         print(f"[measure {args.opt}] {n+1} seq{seq} tr{tr} ts{ts} "
                               f"b{bud:g} k{backing:g}  FAILED: "
                               f"{str(exc).splitlines()[0][:70]}", flush=True)
