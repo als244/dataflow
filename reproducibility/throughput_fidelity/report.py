@@ -131,9 +131,25 @@ def section_landscape(run: Run, opt: str) -> str:
 
 
 def section_planner(run: Run, opt: str) -> str:
+    """Time shares at each budget, over the FRONTIER cells only.
+
+    Averaging every feasible cell mixes populations that are not comparable:
+    idle runs ~80% at a 1K round (nothing to hide the transfers behind) and
+    ~1% at 16K, so the mean is decided by which round sizes happened to be
+    feasible -- which differs per optimizer. Read across optimizers it then
+    says the opposite of the truth: it showed muon idling MORE than adamw when
+    muon idles less on every matched cell, because it does more compute over
+    the same bytes. The frontier is one cell per (sequence, tokens-step,
+    budget) for both, so the columns mean the same thing."""
     feas = [r for r in run.rows("predict_measured", opt) if "tok_s" in r]
     if not feas:
         return ""
+    best: dict = {}
+    for r in feas:
+        slot = (r["seq"], r["t_step"], r["budget"])
+        if slot not in best or r["tok_s"] > best[slot]["tok_s"]:
+            best[slot] = r
+    feas = list(best.values())
     budgets = sorted({r["budget"] for r in feas})
     rows = []
     for b in budgets:
@@ -145,8 +161,10 @@ def section_planner(run: Run, opt: str) -> str:
                      f"{statistics.fmean(r['d2h_pct'] for r in at):.0f}%",
                      f"{statistics.fmean(r['recompute'] / max(1, r['rewritable']) for r in at) * 100:.0f}%"])
     return (f"### How the planner spends a tight budget ({opt})\n\n"
-            "Averaged over every feasible cell at each budget. Recompute and "
-            "idle are shares of makespan (time), not counts of tasks.\n\n"
+            "Averaged over the FRONTIER cells at each budget — the best round "
+            "size per sequence and tokens-per-step, which is what an operator "
+            "would run. Recompute and idle are shares of makespan (time), not "
+            "counts of tasks.\n\n"
             + table(["budget GiB", "recompute time", "idle", "H2D duty",
                      "D2H duty", "layers recomputed"], rows) + "\n\n"
             f"![recompute](figs/recompute_pct_{opt}.png)\n")
