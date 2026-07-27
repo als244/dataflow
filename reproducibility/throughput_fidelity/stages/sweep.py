@@ -221,7 +221,8 @@ def run_predict(args, measured):
                             (more["tok_s"] - row["tok_s"]) / row["tok_s"], 4)
                     except (ValueError, KeyError):
                         row["host_marginal_gain"] = None
-                emit(fh, {**meta, **row, "wall_s": round(time.time() - t0, 3)})
+                wall = round(time.time() - t0, 3)
+                emit(fh, {**meta, **row, "wall_s": wall})
             except ValueError as exc:
                 # the planner cannot fit this cell — that is a result
                 emit(fh, {**meta, "infeasible": str(exc).splitlines()[0][:120],
@@ -237,7 +238,8 @@ def run_predict(args, measured):
             rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // 1024
             print(f"[{mode} {args.opt}] {n} seq{seq} tr{tr} ts{ts} b{bud:g} "
                   f"k{'inf' if back is None else format(back, 'g')}"
-                  f"  peakRSS={rss}MB", flush=True)
+                  f"  wall {time.time() - t0:.1f}s  peakRSS={rss}MB",
+                  flush=True)
     print(f"DONE {mode} {args.opt}: {n} cells -> {args.out}", flush=True)
 
 
@@ -423,7 +425,8 @@ def run_measure(args):
                         print(f"[measure {args.opt}] {n+1} seq{seq} tr{tr} ts{ts} "
                               f"b{bud:g} k{backing:g}  meas {row['meas_s']:.2f}s "
                               f"pred {row['pred_s']:.2f}s ratio {row['ratio']:.2f}  "
-                              f"{row['eff_tfs']:.0f}effTF {row['tok_s']:,.0f}tok/s",
+                              f"{row['eff_tfs']:.0f}effTF {row['tok_s']:,.0f}tok/s  "
+                              f"wall {time.time() - t0:.0f}s",
                               flush=True)
                     except Exception as exc:
                         emit(fh, {**meta, "failed": str(exc).splitlines()[0][:120],

@@ -90,6 +90,12 @@ def say(message: str) -> None:
     print(f"[{time.strftime('%H:%M:%S')}] {message}", flush=True)
 
 
+def elapsed(t0: float) -> str:
+    s = int(time.time() - t0)
+    return f"{s // 3600}:{s % 3600 // 60:02d}:{s % 60:02d}" if s >= 3600 \
+        else f"{s // 60}:{s % 60:02d}"
+
+
 def run(cmd: list[str], *, log: Path | None = None, cwd: Path = REPO) -> bool:
     """One stage process. Output goes to `log` so a failure can be read
     afterwards without re-running the stage that produced it.
@@ -155,6 +161,7 @@ def stage_predict(cfg: Config, env: dict) -> None:
         out.write_text("")
         log = cfg.logs / f"predict_{opt}.log"
         for seq in env["seqs"]:
+            t_seq = time.time()
             ok = run([cfg.python, str(STAGES / "sweep.py"),
                       "--mode", "predict-measured", "--preset", env["preset"],
                       "--opt", opt, "--seq", str(seq),
@@ -164,7 +171,8 @@ def stage_predict(cfg: Config, env: dict) -> None:
                       "--backing-gib", str(env["backing_gib"]),
                       "--out", str(out)], log=log)
             rows = sum(1 for _ in out.open()) if out.exists() else 0
-            say(f"  seq {seq}: {'ok' if ok else 'FAILED'} ({rows} rows)")
+            say(f"  seq {seq}: {'ok' if ok else 'FAILED'} "
+                f"({rows} rows, {elapsed(t_seq)})")
 
 
 def stage_select(cfg: Config) -> None:
@@ -334,22 +342,35 @@ def main(argv=None) -> int:
         f"stages {','.join(cfg.stages)}")
 
     env = json.loads(cfg.env_json.read_text()) if cfg.env_json.exists() else {}
+    t_run = time.time()
     if "probe" in cfg.stages:
+        t0 = time.time()
         env = stage_probe(cfg)
+        say(f"  probe took {elapsed(t0)}")
     elif not env:
         raise SystemExit("no env.json — run the probe stage first")
 
     if "predict" in cfg.stages:
+        t0 = time.time()
         stage_predict(cfg, env)
+        say(f"  predict took {elapsed(t0)}")
     if "select" in cfg.stages:
+        t0 = time.time()
         stage_select(cfg)
+        say(f"  select took {elapsed(t0)}")
     if "measure" in cfg.stages:
+        t0 = time.time()
         stage_measure(cfg, env)
+        say(f"  measure took {elapsed(t0)}")
     if "shipped" in cfg.stages:
+        t0 = time.time()
         stage_shipped(cfg, env)
+        say(f"  shipped took {elapsed(t0)}")
     if "report" in cfg.stages:
+        t0 = time.time()
         stage_report(cfg)
-    say(f"done — data in {cfg.data}, logs in {cfg.logs}")
+        say(f"  report took {elapsed(t0)}")
+    say(f"done in {elapsed(t_run)} — everything under {cfg.results}")
     return 0
 
 
