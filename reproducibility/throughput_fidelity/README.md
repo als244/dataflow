@@ -16,8 +16,9 @@ python reproducibility/throughput_fidelity/run_experiment.py
 
 That is the whole thing. It picks the model, the budgets and the geometry from
 the machine it finds itself on, runs the sweep, and prints the tables. Expect
-one to three hours depending on the card. Results land in `data/`, figures in
-`figs/`, and a summary is printed at the end.
+one to three hours depending on the card. EVERYTHING the run produces lands
+under `results/` (settable with `--results <dir>`), and a summary is printed
+at the end.
 
 A quick look first, on a smaller model with a coarse grid:
 
@@ -41,13 +42,22 @@ stages/               the pipeline: env_probe, sweep, select_cells,
                       analyze, make_plots, report
 diagnostics/          one-off instruments from the fidelity
                       investigations (see the table at the bottom)
+results/              EVERYTHING a run produces, in one place
+                      (gitignored; move it with --results <dir>):
+  env.json              what this box chose and why
+  cells.json            the cells selected for real runs
+  data/                 predict + measure rows; plans/ = saved programs
+  figs/                 the figures
+  logs/                 per-stage stdout
+  traces/               webapp real-vs-sim bundles, nsys captures
+  REPORT.md             the rendered report
+attic/                superseded results kept locally as evidence
+                      (gitignored)
 ```
 
-Everything else is GENERATED PER BOX and gitignored: `env.json`,
-`cells.json`, `data/` (rows + saved plans), `figs/`, `logs/`,
-`traces/`, `REPORT.md`, and `attic/` (superseded results kept locally
-as evidence). A fresh clone contains only code; a finished run leaves
-its outputs beside it.
+A fresh clone contains only code; a finished run leaves everything it
+made under one directory you can archive, diff, or point `report.py
+--runs` at.
 
 ## Configuration
 
@@ -69,6 +79,7 @@ meaningful; set one and only that dimension moves.
 | `--target-cells` | `18` | how many cells get real GPU runs |
 | `--steps` | `6` | steps per measured cell; the first 3 are warmup, so keep ≥ 4 |
 | `--stages` | all | resume or repeat part of a run, e.g. `--stages predict,select,measure` |
+| `--results` | `results/` beside the script | directory for ALL run outputs |
 | `--python` | this interpreter | interpreter for the stage processes |
 
 The grid is the cross product of `SEQS × T_ROUNDS × T_STEPS × BUDGETS`, so
@@ -86,7 +97,7 @@ machine. Run it on a datacentre card or a desktop one and the same command
 means the same thing.
 
 ### P0 · environment probe — *what can this box hold?*
-`stages/env_probe.py` → `env.json`  ·  seconds, needs the device
+`stages/env_probe.py` → `results/env.json`  ·  seconds, needs the device
 
 Reads the limits that actually apply: device memory from the driver, and the
 host limit from the scheduler's grant if there is one (`SLURM_MEM_PER_NODE`),
@@ -114,8 +125,8 @@ total gets the job killed. From those it derives:
   here would report a prettier figure that nothing uses.
 
 ### P1 · predictions — *the whole grid, and where it becomes infeasible*
-`run_experiment.py` stage `predict` → `data/predict_measured_{opt}.jsonl`
-+ `data/plans/{opt}/*.json.gz`  ·  the long pole for prediction; needs the device
+`run_experiment.py` stage `predict` → `results/data/predict_measured_{opt}.jsonl`
++ `results/data/plans/{opt}/*.json.gz`  ·  the long pole for prediction; needs the device
 
 For each optimizer, for each sequence length, over every (tokens/round ×
 tokens/step × budget) combination:
@@ -128,7 +139,7 @@ tokens/step × budget) combination:
    fast and backing bytes, transfer bytes and duty each way, recompute share of
    makespan, idle share, and the recompute levels chosen,
 4. **save the plan itself**: each feasible row's annotated program is written
-   as a gzipped artifact (~10 KB) under `data/plans/{opt}/`, stamped with its
+   as a gzipped artifact (~10 KB) under `results/data/plans/{opt}/`, stamped with its
    content-hash `prog_id`, its prediction, and the device it was priced on.
    These artifacts are what the measure stage executes — predict is the ONLY
    stage that plans.
@@ -139,7 +150,7 @@ than a gap. Each cell also re-plans once with 25% more host memory to price the
 allowance (`binding`, `host_marginal_gain`).
 
 ### P1b · cell selection — *which cells deserve real GPU time?*
-`stages/select_cells.py` → `cells.json`  ·  seconds, CPU only
+`stages/select_cells.py` → `results/cells.json`  ·  seconds, CPU only
 
 Measuring every survivor would spend hours re-measuring identical behaviour.
 In order:
@@ -161,7 +172,7 @@ In order:
    will say so rather than the assumption going unchecked.
 
 ### P2 · measurement — *what the engine actually does*
-`run_experiment.py` stage `measure` → `data/measure_{opt}.jsonl`  ·  the long pole
+`run_experiment.py` stage `measure` → `results/data/measure_{opt}.jsonl`  ·  the long pole
 overall; needs the device
 
 Runs each selected cell on the real engine, per optimizer, for `STEPS` steps
@@ -179,7 +190,7 @@ with its error, not a crash; a missing artifact stops the stage before any GPU
 time is spent.
 
 ### P3 · shipped-command validation — *do the documented commands still work?*
-→ `logs/shipped_bench.log`  ·  minutes, needs the device
+→ `results/logs/shipped_bench.log`  ·  minutes, needs the device
 
 Runs the repository's own `tools/bench/predict_step.py --measured` and
 `tools/bench/measure_step.py --measured-plan` at the spine geometry. The rest of
@@ -283,14 +294,97 @@ degrades gracefully: on a workload that never approaches the ceiling it reports
 
 | path | contents |
 |---|---|
-| `env.json` | what this box chose and why: device, host limit and its source, preset, persistent state, allowance, budget ladder, geometry axes |
-| `cells.json` | cells chosen for real runs, tagged `budget_spine` / `frontier` / `dominated_control`, with predicted s/step |
-| `data/predict_measured_{opt}.jsonl` | one record per grid cell — s/step, tok/s, eff + hw TFLOP/s, peak fast and backing, transfer bytes and duty, recompute and idle share, `binding`, `host_marginal_gain` — or an INFEASIBLE reason |
-| `data/plans/{opt}/*.json.gz` | each feasible cell's SAVED PLAN: the annotated program dict + `prog_id` + prediction + pricing device — the exact artifact the measure stage executes. Per-device: measure refuses plans priced elsewhere |
-| `data/measure_{opt}.jsonl` | per measured cell — `pred_s`, `meas_s`, `ratio`, the executed plan's `prog_id`, tok/s, TFLOP/s, recompute levels, peak backing |
-| `REPORT.md` | the rendered report: landscape + planner tables per optimizer, fidelity summary |
-| `figs/` | `frontier_{opt}.png` (throughput vs GPU memory, round size optimised and labelled), `throughput_`, `eff_tflops_`, `recompute_pct_`, `idle_pct_` |
-| `logs/`, `traces/` | raw stdout per stage; webapp real-vs-sim bundles and nsys captures |
+| `results/env.json` | what this box chose and why: device, host limit and its source, preset, persistent state, allowance, budget ladder, geometry axes |
+| `results/cells.json` | cells chosen for real runs, tagged `budget_spine` / `frontier` / `dominated_control`, with predicted s/step |
+| `results/data/predict_measured_{opt}.jsonl` | one record per grid cell — s/step, tok/s, eff + hw TFLOP/s, peak fast and backing, transfer bytes and duty, recompute and idle share, `binding`, `host_marginal_gain` — or an INFEASIBLE reason |
+| `results/data/plans/{opt}/*.json.gz` | each feasible cell's SAVED PLAN: the annotated program dict + `prog_id` + prediction + pricing device — the exact artifact the measure stage executes. Per-device: measure refuses plans priced elsewhere |
+| `results/data/measure_{opt}.jsonl` | per measured cell — `pred_s`, `meas_s`, `ratio`, the executed plan's `prog_id`, tok/s, TFLOP/s, recompute levels, peak backing |
+| `results/REPORT.md` | the rendered report: landscape + planner tables per optimizer, fidelity summary |
+| `results/figs/` | `frontier_{opt}.png` (throughput vs GPU memory, round size optimised and labelled), `throughput_`, `eff_tflops_`, `recompute_pct_`, `idle_pct_` |
+| `results/logs/`, `results/traces/` | raw stdout per stage; webapp real-vs-sim bundles and nsys captures |
+
+### What the records look like
+
+`results/env.json` — one object, what the probe decided and from what
+evidence (trimmed):
+
+```json
+{"host": "chicago...", "device": "NVIDIA GeForce RTX 5090",
+ "device_gib": 31.3, "preset": "llama3_8b",
+ "host_limit_gib": 177.8, "host_limit_source": "MemAvailable",
+ "backing_gib": 113.8, "budgets": [5.3, 7.5, 11, 15, 21, 26.6],
+ "seqs": [1024, 2048, 4096, 8192], "t_rounds": [1024, "...", 65536],
+ "t_steps": [32768, 65536, 131072], "link": {"bidi_h2d_gbs": "..."}}
+```
+
+`results/cells.json` — a list; one entry per cell chosen for real runs:
+
+```json
+{"seq": 1024, "t_round": 8192, "t_step": 65536, "budget": 26.6,
+ "backing": 113.8, "spines": ["frontier"], "predicted_s": 16.63}
+```
+
+`results/data/predict_measured_{opt}.jsonl` — one JSON object per line
+per grid cell. A feasible cell (trimmed; times in seconds, memory in
+GiB, transfers in GB and % of makespan):
+
+```json
+{"opt": "adamw", "seq": 1024, "t_round": 1024, "t_step": 32768,
+ "budget": 5.3, "backing": 113.8, "ga": 32, "step_s": 55.83,
+ "tok_s": 586.9, "eff_tfs": 26.9, "hw_tfs": 35.3,
+ "peak_gib": 5.297, "backing_gib": 58.29,
+ "h2d_gb": 1358.3, "h2d_pct": 96.9, "d2h_gb": 442.3, "d2h_pct": 31.3,
+ "rc_pct": 3.4, "idle_pct": 79.8, "recompute": 1024, "rewritable": 1024,
+ "binding": false, "host_marginal_gain": 0.0, "wall_s": 22.9}
+```
+
+An infeasible cell records the planner's reason instead of numbers:
+
+```json
+{"opt": "adamw", "seq": 1024, "t_round": 65536, "t_step": 65536,
+ "budget": 5.3, "backing": 113.8,
+ "infeasible": "pressurefit cannot reduce boundary 35 under fast_memory_capacity=5690831667"}
+```
+
+`results/data/plans/{opt}/s{seq}_tr{t_round}_ts{t_step}_b{budget}_k{backing}.json.gz`
+— that cell's SAVED PLAN, the exact program measure registers and runs:
+
+```json
+{"prog_id": "p-465c7cea565e",
+ "device": "NVIDIA GeForce RTX 5090", "host": "chicago...",
+ "pred_s": 8.4798, "makespan_us": 8479768.3,
+ "peak_fast_bytes": 11810778368, "peak_backing_bytes": 65313629911,
+ "recompute_levels": {"ctx_0_0": 1, "...": "..."},
+ "transfer_stats": {"from_slow": {"bytes": "...", "busy_us": "..."},
+                    "to_slow": "...", "compute_busy_us": "..."},
+ "program": {"schema_version": "dataflow-rt/v1", "name": "...",
+             "initial_objects": ["... 59+ objects ..."],
+             "tasks": ["... ~1500 annotated tasks ..."],
+             "final_locations": "..."}}
+```
+
+`results/data/measure_{opt}.jsonl` — one line per measured cell; the
+fidelity number is `ratio`, and `prog_id` names the exact plan it ran:
+
+```json
+{"opt": "adamw", "seq": 1024, "t_round": 8192, "t_step": 131072,
+ "budget": 26.6, "backing": 113.8, "steps": 6, "prog_id": "p-...",
+ "pred_s": 31.65, "meas_s": 32.11, "ratio": 1.015,
+ "tok_s": 4081.9, "eff_tfs": 187.1, "hw_tfs": 196.6,
+ "recompute": 79, "rewritable": 512,
+ "planned_fast_gib": 26.59, "engine_extent_gib": 27.79,
+ "device_peak_gib": 31.03, "device_peak_delta_gib": 29.39,
+ "torch_reserved_gib": 1.68, "within_budget": false, "wall_s": 256.7}
+```
+
+A failed cell carries `"failed": "<first line of the error>"` in place
+of the measurement fields.
+
+`results/figs/` — `throughput_{opt}.png`, `frontier_{opt}.png`,
+`frontier_by_peak_{opt}.png`, `eff_tflops_{opt}.png`,
+`recompute_pct_{opt}.png`, `idle_pct_{opt}.png`.
+`results/logs/` — one `<stage>_{opt}.log` per stage process, the exact
+commands and their stdout. `results/REPORT.md` — the rendered report.
 
 `env.json` also records the link rate plans were priced at, so a run can be
 read back without the machine present.

@@ -8,18 +8,18 @@ Every knob is a flag with a default derived from the machine, so `--help` is the
 configuration reference and nothing has to be discovered by reading source. The
 stages run in order and each consumes the previous one's output:
 
-    probe     what can this box hold?          -> env.json
-    predict   the whole grid, and its edges;   -> data/predict_measured_{opt}.jsonl
-              each feasible row's OWN plan is     + data/plans/{opt}/*.json.gz
+    probe     what can this box hold?          -> results/env.json
+    predict   the whole grid, and its edges;   -> results/data/predict_measured_{opt}.jsonl
+              each feasible row's OWN plan is     + results/data/plans/{opt}/*.json.gz
               saved as the artifact measure
               will execute (prog_id-hashed) —
               predict is the ONLY stage that
               plans
-    select    which cells deserve GPU time     -> cells.json
-    measure   what the engine actually does    -> data/measure_{opt}.jsonl
+    select    which cells deserve GPU time     -> results/cells.json
+    measure   what the engine actually does    -> results/data/measure_{opt}.jsonl
               (executes the saved plans; NO planning here)
-    shipped   do the documented commands work? -> logs/shipped_bench.log
-    report    tables and figures               -> figs/
+    shipped   do the documented commands work? -> results/logs/shipped_bench.log
+    report    tables and figures               -> results/figs/ + results/REPORT.md
 
 Stages are separate processes on purpose. Prediction profiles one geometry at a
 time and a failure in one sequence length should cost that chunk, not the run,
@@ -66,16 +66,24 @@ class Config:
     resume: bool = False
     steps: int = 6
     stages: tuple[str, ...] = ALL_STAGES
-    data: Path = field(default_factory=lambda: HERE / "data")
-    logs: Path = field(default_factory=lambda: HERE / "logs")
+    # every run output lands under this ONE root (--results to move it)
+    results: Path = field(default_factory=lambda: HERE / "results")
+
+    @property
+    def data(self) -> Path:
+        return self.results / "data"
+
+    @property
+    def logs(self) -> Path:
+        return self.results / "logs"
 
     @property
     def env_json(self) -> Path:
-        return HERE / "env.json"
+        return self.results / "env.json"
 
     @property
     def cells_json(self) -> Path:
-        return HERE / "cells.json"
+        return self.results / "cells.json"
 
 
 def say(message: str) -> None:
@@ -116,7 +124,8 @@ def stage_probe(cfg: Config) -> dict:
     reports its full RAM even when the job owns a slice, and sizing a pinned
     slab from the node total gets the job killed."""
     say("probe — what can this box hold?")
-    cmd = [cfg.python, str(STAGES / "env_probe.py")]
+    cmd = [cfg.python, str(STAGES / "env_probe.py"),
+           "--out", str(cfg.env_json)]
     for flag, value in (("--preset", cfg.preset), ("--seqs", cfg.seqs),
                         ("--t-rounds", cfg.t_rounds), ("--t-steps", cfg.t_steps),
                         ("--budgets", cfg.budgets),
@@ -164,6 +173,7 @@ def stage_select(cfg: Config) -> None:
     spine, and add dominated controls that test the reduction."""
     say("select — which cells deserve real GPU time?")
     run([cfg.python, str(STAGES / "select_cells.py"),
+         "--data", str(cfg.data), "--out", str(cfg.cells_json),
          "--opts", ",".join(cfg.opts), "--target", str(cfg.target_cells)]
         + (["--all-frontier"] if cfg.all_frontier else []),
         log=cfg.logs / "select.log")
@@ -228,11 +238,14 @@ def stage_report(cfg: Config) -> None:
     left the report showing whatever the previous run produced -- stale
     numbers under a fresh set of figures, which is worse than no report."""
     say("report")
-    run([cfg.python, str(STAGES / "analyze.py")])
+    run([cfg.python, str(STAGES / "analyze.py"),
+         "--results", str(cfg.results)])
     for opt in cfg.opts:
-        run([cfg.python, str(STAGES / "make_plots.py"), opt],
+        run([cfg.python, str(STAGES / "make_plots.py"), opt,
+             "--results", str(cfg.results)],
             log=cfg.logs / "plots.log")
-    run([cfg.python, str(STAGES / "report.py")], log=cfg.logs / "report.log")
+    run([cfg.python, str(STAGES / "report.py"),
+         "--results", str(cfg.results)], log=cfg.logs / "report.log")
 
 
 # ------------------------------------------------------------------- main ---
@@ -283,6 +296,10 @@ def parse_args(argv=None) -> Config:
                    help="how many cells get real GPU runs (default: 18)")
     p.add_argument("--steps", type=int, default=6,
                    help="steps per measured cell; first 3 are warmup, keep >= 4")
+    p.add_argument("--results", default=None,
+                   help="directory for ALL run outputs (env.json, cells.json, "
+                        "data/, figs/, logs/, traces/, REPORT.md); default: "
+                        "results/ beside this script")
     p.add_argument("--stages", default=",".join(ALL_STAGES),
                    help=f"stages to run, in order, from {','.join(ALL_STAGES)}")
     a = p.parse_args(argv)
@@ -303,7 +320,8 @@ def parse_args(argv=None) -> Config:
         budget_step=a.budget_step, host_share=a.host_share,
         backing_gib=a.backing_gib, target_cells=a.target_cells,
         all_frontier=a.all_frontier, resume=a.resume,
-        steps=a.steps, stages=stages)
+        steps=a.steps, stages=stages,
+        **({"results": Path(a.results).resolve()} if a.results else {}))
 
 
 def main(argv=None) -> int:

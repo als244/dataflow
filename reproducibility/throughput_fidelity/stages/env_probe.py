@@ -388,7 +388,8 @@ def main():
     }
     dst = args.out or os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        "env.json")   # the EXPERIMENT root (this file lives in stages/)
+        "results", "env.json")   # the default results root
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
     with open(dst, "w") as fh:
         json.dump(env, fh, indent=2)
     for k, v in env.items():

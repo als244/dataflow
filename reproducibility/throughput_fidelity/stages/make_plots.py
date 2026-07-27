@@ -18,10 +18,12 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-# the EXPERIMENT root (this file lives in stages/)
-HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA = os.path.join(HERE, "data")
-FIGS = os.path.join(HERE, "figs")
+# a run writes everything under ONE results root (default:
+# <experiment>/results); main() re-points these when --results is given
+RESULTS = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "results")
+DATA = os.path.join(RESULTS, "data")
+FIGS = os.path.join(RESULTS, "figs")
 STYLES = ["-", "--", ":", "-."]
 
 
@@ -31,7 +33,7 @@ def load(name):
 
 
 def env_note():
-    path = os.path.join(HERE, "env.json")
+    path = os.path.join(RESULTS, "env.json")
     if not os.path.exists(path):
         return ""
     e = json.load(open(path))
@@ -318,11 +320,17 @@ def time_budget(pred, fname, opt):
 
 
 def main():
+    global RESULTS, DATA, FIGS
     ap = argparse.ArgumentParser()
     ap.add_argument("opt", nargs="?", default="adamw")
     ap.add_argument("--layer", default="auto",
                     choices=["auto", "measured", "unlimited"])
+    ap.add_argument("--results", default=RESULTS,
+                    help="run output root (data/ read, figs/ written)")
     a = ap.parse_args()
+    RESULTS = a.results
+    DATA = os.path.join(RESULTS, "data")
+    FIGS = os.path.join(RESULTS, "figs")
 
     pred, layer = [], ""
     if a.layer in ("auto", "measured"):

@@ -81,10 +81,11 @@ def kmeans(points, k, iters=40):
 def main():
     import numpy as np
 
-    # the EXPERIMENT root (this file lives in stages/)
-    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # the run's results root (default: <experiment>/results)
+    results = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "results")
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data", default=os.path.join(here, "data"))
+    ap.add_argument("--data", default=os.path.join(results, "data"))
     ap.add_argument("--opts", default="adamw,muon")
     ap.add_argument("--target", type=int, default=18,
                     help="how many cells to measure in total")
@@ -92,7 +93,7 @@ def main():
                     help="measure EVERY frontier cell instead of a sample of "
                          "them; hours rather than minutes, and the measured "
                          "frontier can then be laid over the simulated one")
-    ap.add_argument("--out", default=os.path.join(here, "cells.json"))
+    ap.add_argument("--out", default=os.path.join(results, "cells.json"))
     args = ap.parse_args()
 
     opts = args.opts.split(",")

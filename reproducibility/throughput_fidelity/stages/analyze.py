@@ -1,12 +1,20 @@
 #!/usr/bin/env python
 """Summarize the sweep: predict feasibility, measure success/fidelity, and — for
 failed measure cells — the predicted backing demand (so we can tell backing-ceiling
-failures from real infeasibility). Reads data/ in this experiment dir."""
+failures from real infeasibility). Reads the run's results/data/."""
+import argparse
 import json
 import os
 
-# outputs anchor at the EXPERIMENT root (this file lives in stages/)
-D = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
+# a run writes everything under ONE results root (default:
+# <experiment>/results — the same default run_experiment passes explicitly)
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--results",
+                    default=os.path.join(os.path.dirname(os.path.dirname(
+                        os.path.abspath(__file__))), "results"),
+                    help="run output root (reads its data/)")
+cli = parser.parse_args()
+D = os.path.join(cli.results, "data")
 
 
 def load(name):

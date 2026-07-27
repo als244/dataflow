@@ -1,11 +1,12 @@
-# results are regenerated per box; keep the code in git, not the artifacts
+# a run writes EVERYTHING under results/ (settable: run_experiment --results)
+results/
+# superseded results kept locally as evidence
+attic/
+# legacy pre-results layouts (older checkouts wrote outputs at top level)
 env.json
 cells.json
 logs/
 traces/
 figs/
 data/
-attic/
-# the written report names the machines it ran on; publishing one is a
-# deliberate act (git add -f), not a side effect of running the sweep
 REPORT.md

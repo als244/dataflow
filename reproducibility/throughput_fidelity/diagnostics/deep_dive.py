@@ -147,8 +147,9 @@ def main():
         print(f"  {gap/1e3:7.2f}ms before {tid}   (after {prev})")
 
     stem = a.out or f"dd_seq{a.seq}_tr{a.tr}_ts{a.ts}_b{a.budget:g}_{a.opt}"
-    outdir = os.path.join(   # the EXPERIMENT root (file in diagnostics/)
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "traces")
+    outdir = os.path.join(   # the default results root (file in diagnostics/)
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "results", "traces")
     os.makedirs(outdir, exist_ok=True)
     json.dump({"format": "dataflow-measured-run/v1",
                "meta": {"cell": [a.seq, a.tr, a.ts, a.budget, a.opt], "steps": a.steps},

@@ -357,20 +357,24 @@ def section_compare(runs: list[Run], opt: str) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--runs", nargs="*", default=None,
-                    help="name=path pairs; default: this directory")
+                    help="name=path pairs, each path a run's results root; "
+                         "default: this experiment's results/")
     ap.add_argument("--opt", default="adamw", help="optimizer for the landscape")
-    ap.add_argument("--out", default=None, help="default: REPORT.md here")
+    ap.add_argument("--results",
+                    default=Path(__file__).resolve().parents[1] / "results",
+                    help="run output root (reads env.json + data/ inside)")
+    ap.add_argument("--out", default=None,
+                    help="default: REPORT.md in the results root")
     a = ap.parse_args()
 
-    # the EXPERIMENT root (this file lives in stages/)
-    here = Path(__file__).resolve().parents[1]
+    results = Path(a.results)
     if a.runs:
         runs = [Run(*spec.split("=", 1)) for spec in a.runs]
         runs = [Run(r.name, Path(r.root)) for r in runs]
     else:
-        env_path = here / "env.json"
+        env_path = results / "env.json"
         env = json.loads(env_path.read_text()) if env_path.exists() else {}
-        runs = [Run(env.get("device", "this machine"), here)]
+        runs = [Run(env.get("device", "this machine"), results)]
 
     parts = ["# Training throughput under a GPU memory ceiling\n",
              "*Generated from the sweep's own output; every number below comes "
@@ -398,7 +402,7 @@ def main() -> int:
                  "See that directory's README for the stage-by-stage description "
                  "and every configuration flag.\n")
 
-    out = Path(a.out) if a.out else here / "REPORT.md"
+    out = Path(a.out) if a.out else results / "REPORT.md"
     out.write_text("\n".join(p for p in parts if p))
     print(f"wrote {out} ({out.stat().st_size:,} bytes)")
     return 0
