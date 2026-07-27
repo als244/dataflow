@@ -1,15 +1,14 @@
 # The dataflow engine service
 
 A persistent daemon that owns pinned host memory (the **store
-slab**), holds named objects (weights, optimizer state, data,
-losses) as **residents**, and executes registered dataflow
-**programs** against them. Clients connect over a unix socket,
-put/fetch objects, register programs once, and run them many times
-— training state lives in the store between runs, so a training
-job is "run the step program N times", each step microseconds of
-control overhead away from the in-process engine (the parity gates
-hold service-hosted runs to in-process tok/s and identical
-device/host memory peaks).
+slab**), holds named objects as **residents**, and executes
+registered dataflow **programs** against them. Clients connect over
+a unix socket, put/fetch objects, register programs once, and run
+them many times — persistent state lives in the store between runs,
+so a long job is "run the registered program N times", each run
+microseconds of control overhead away from the in-process engine
+(the parity gates hold service-hosted runs to in-process throughput
+and identical device/host memory peaks).
 
 Start it:
 
@@ -20,7 +19,7 @@ python tools/train/dataflowd.py stop --socket /tmp/dfd.sock
 ```
 
 `--backing-gib` is the ONE pinned budget (default `auto`): residents AND
-run transients (gradients, saved activations) draw from the same slab.
+run transients draw from the same slab.
 Size it to `residents + worst-plan transients` (the plan's demand
 bound); the daemon refuses to pin into the system's last 24 GiB.
 `--fake` boots without CUDA for tests/dev; `--device N` picks the GPU;
@@ -52,49 +51,47 @@ build)` — and the daemon learns kinds three ways:
 `client.list_resolvers()` returns `{"kinds": [...]}` — what the daemon
 currently knows. Registering a program with an unknown
 `resolver_spec["kind"]` fails loudly, naming the registered kinds.
-(Model init also rides this seam: `init_model` builds the family's
-one-task init program and runs it through the ordinary verbs — its
-task resolves through the `"model_family"` kind's `family_init`
-compute key, so server-side init needs no engine vocabulary. Family
-enumeration is likewise workload-side:
-`dataflow_training.model_families.families` / `tools/gen_model_docs/list_models.py`.
-Task-cost profiling never needs the daemon at all — it drives
-executables in-process: `dataflow_training.run.profiling
-.load_or_profile` / `apply_measured_costs`.)
+(Bulk state initialization rides this same seam: the client
+`create_object`s the residents, then registers + runs a HOST-task
+program whose tasks resolve through a registered kind and fill those
+extents in place — server-side init needs no engine vocabulary. The
+training package's wrapper for exactly that, and its in-process
+profiling helpers, live workload-side: [usage.md](usage.md).)
 
 ## Client in five verbs
 
 ```python
 from dataflow.service import EngineClient
-from dataflow_training.run.driver import init_model     # workload-side sugar
 
 with EngineClient("/tmp/dfd.sock", client_name="driver") as c:
-    # 1. state into the store. INIT IS A PROGRAM: init_model builds the
-    #    family's one-task init program, registers + runs it through the
-    #    ordinary verbs, and the final-object capture persists every
-    #    W_/O_/Aux_/data object as a resident.
-    init_model(c, "llama3", cfg_dict, seed=11)
-    c.put_object("tokens_0_0", token_bytes)     # data chunks
+    # 1. state into the store. put_object uploads bytes outright;
+    #    create_object allocates a resident with NO payload for a
+    #    HOST-task init program to fill in place (bulk state exists
+    #    once, never as transient + copy).
+    for oid, nbytes in state_sizes.items():
+        c.create_object(oid, nbytes)
+    ini = c.register_program(init_program_dict, resolver=my_resolver)
+    c.run(ini["prog_id"], args={})
+    c.unregister_program(ini["prog_id"])
+    c.put_object("in/x_0", chunk_bytes)          # external inputs
 
     # 2. register once (content-hashed id; placement cached). The
     #    resolver spec is opaque to the engine except for "kind".
-    reg = c.register_program(program_dict,
-                             resolver={"kind": "model_family",
-                                       "family": "llama3", "cfg": cfg_dict})
+    reg = c.register_program(program_dict, resolver=my_resolver)
 
-    # 3. run many (args reach tasks as opaque run_args: step, valid_rows, ...)
+    # 3. run many (args reach tasks as opaque run_args)
     for k in range(steps):
-        c.put_object(f"tokens_{k+1}", next_chunk, wait=False)  # pre-stage
+        c.put_object(f"in/x_{k+1}", next_chunk, wait=False)  # pre-stage
         r = c.run(reg["prog_id"], args={"step": k},
-                  rebind={"tokens_0_0": f"tokens_{k}"},    # per-step data
-                  fetch=["loss_0_0"])
-        print(k, r["fetched"]["loss_0_0"], r["makespan_us"])
+                  rebind={"in/x_0": f"in/x_{k}"},    # per-run inputs
+                  fetch=["out/y_0"])
+        print(k, r["fetched"]["out/y_0"], r["makespan_us"])
 
     # 4. checkpoint. duplicate_object_group copies a named object group
     #    synchronously on the dispatcher; snapshot freezes ids under
     #    read-leases and streams to disk in the background.
-    c.create_object_group("weights", pattern="W_*")   # fnmatch glob
-    c.duplicate_object_group("weights", tag="ck")
+    c.create_object_group("state", pattern="state/*")   # fnmatch glob
+    c.duplicate_object_group("state", tag="ck")
     s = c.snapshot("all", "/ckpts/step100",
                    client_meta={"step": 100, "cursor": [3, 128]})
     c.wait_snapshot(s["snap_id"])
@@ -106,24 +103,27 @@ with EngineClient("/tmp/dfd.sock", client_name="driver") as c:
     #     creates the object full-size and fills the range — restoring
     #     each responsible rank's artifact in turn REASSEMBLES the
     #     complete object. Ranged entries never dedup.
-    c.snapshot("all", "/ckpts/step100-r0", ids=["W_3"],
-               ranges={"W_3": (0, 1 << 20)})
+    c.snapshot("all", "/ckpts/step100-r0", ids=["state/w3"],
+               ranges={"state/w3": (0, 1 << 20)})
 
     # 5. resume later (client_meta comes back in the same call)
     meta = c.restore_snapshot("/ckpts/step100")["client_meta"]
 ```
 
-## The model in one paragraph
+The training package wraps this whole sequence — init, per-step data
+feed, checkpoints, resume — in its own driver: [usage.md](usage.md).
+
+## The semantics in one paragraph
 
 Objects are engine-global and flat-namespaced: any client sees
-`W_3`. A program's **initial objects** bind to residents at run
+`state/w3`. A program's **initial objects** bind to residents at run
 start (strict size match); whatever the program's
-`final_locations` declares comes OUT resident (losses); everything
-else the run creates (gradients, activation staging) is a
+`final_locations` declares comes OUT resident; everything
+else the run creates is a
 **transient** — named in the program, never in the catalog, carved
-lazily from the same slab, recycled across steps, returned at
+lazily from the same slab, recycled across runs, returned at
 `unregister_program`. `rebind` points a program input id at a
-different resident per run (per-step data feed). Each run also snapshots
+different resident per run (per-run input feed). Each run also snapshots
 the daemon's live peer-group table: tasks that declare `comm_groups`
 resolve their group by NAME at that moment, and run standalone when
 it isn't there (distributed_training.md). Runs execute FIFO on
@@ -131,10 +131,23 @@ one dispatcher; status/query verbs answer instantly from a fast
 path; `cancel_run` takes effect at the next task boundary; a
 failed run poisons nothing (abort drain + boundary unwind).
 
+An ALL-HOST program (every task `host: true` — program_schema.md)
+never enters the engine: no placement dry-run, no session/pool. Its
+tasks run synchronously on the dispatcher thread against the bound
+objects' store extents, so in-place writes land directly in the
+catalogued residents (bulk fills exist once, not twice).
+Registration rejects programs mixing host and device tasks, host
+tasks with outputs, and host tasks touching non-initial objects.
+
 ## The object plane
 
 Beyond `put_object`/`fetch`: `get_object(id)` returns bytes (or
 writes straight to a `dest` path for big residents);
+`create_object(id, size_bytes)` allocates a catalogued extent with NO
+payload — content is unspecified until first written, the intended
+writer being a run that mutates it in place (a host task fills the
+extent directly; same-size re-create is idempotent, a size change
+is BINDING_MISMATCH);
 `materialize_object` fills a resident server-side; **object groups**
 name id sets (`create_object_group(name, members=...)` or one fnmatch
 `pattern`, nestable via `object_groups=`; `query_object_group` lists
@@ -152,10 +165,10 @@ checks, nothing retained).
 (reads proceed; writers — puts, wipes, runs touching those ids —
 wait, parked, until the background writer finishes), streams
 payload + manifest to `dest`, and dedups clean duplicates against
-their parent via version counters (a `W@ck` whose parent later
-trained stores its own bytes — soundness over savings).
+their parent via version counters (a duplicate whose parent was
+later mutated stores its own bytes — soundness over savings).
 `restore_snapshot` recreates residents and object groups and hands
-back your `client_meta` — step counter, LR state, data cursor —
+back your `client_meta` — whatever resume record the client stored —
 so resume is one call.
 
 ## The peer plane
@@ -181,8 +194,8 @@ the fast path even mid-run, as do `list_objects` / `list_programs` /
 `profiler_control("start"/"stop")` flips the annotation layer and
 `cudaProfilerStart/Stop` — under `nsys
 --capture-range=cudaProfilerApi` the capture holds exactly the
-bracketed steps; `train.py --profile` packages the recipe
-([benchmarking.md](benchmarking.md)).
+bracketed runs; [benchmarking.md](benchmarking.md) packages the
+recipe.
 
 **Traces.** Every run records a per-task `RunTrace`; the daemon keeps
 the last 200 events per run (`run_events(run_id)`,
@@ -200,6 +213,7 @@ way to launch anything large. Device-side, the daemon boots with
 long-lived multi-program service does not accumulate allocator
 cache.
 
-The workload<->engine contract (resolver kinds, init-as-program,
-run_args opacity): [program_contract.md](program_contract.md). The
-in-process engine surface underneath: [engine_api.md](engine_api.md).
+The workload<->engine contract (resolver kinds, host-task state
+init, run_args opacity): [program_contract.md](program_contract.md).
+The in-process engine surface underneath:
+[engine_api.md](engine_api.md).

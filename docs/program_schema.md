@@ -34,6 +34,7 @@ Field additions bump the schema version; don't hand-write JSON.
 | `inputs` | tuple[str] | object ids that must be resident in fast memory to dispatch |
 | `outputs` | tuple[OutputSpec] | objects this task CREATES (with sizes/roles) |
 | `mutates` | tuple[str] | objects read-modify-written in place; ordering among mutators of the same object is a dependency |
+| `host` | bool | HOST-side task: binds its objects' BACKING extents (all must be initial objects; no outputs) and runs synchronously on the service dispatcher thread — no streams, no device work; writes land in the store's catalogued extents. A program is all-host or all-device (registration rejects a mix), and the engine refuses host tasks — the service host path executes them. Omitted from JSON when false |
 | `runtime_us` | float | task cost — roofline at lowering, replaced by measured profiles; sim + PressureFit quality depend on it |
 | `group` | str | coarse label (`"optimizer"`, `"recompute"`, ...) used by tooling/display, not by the engine |
 | `compute_block_key` | str | the resolver key: `resolver(task) -> executable` dispatches on it |

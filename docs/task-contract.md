@@ -28,6 +28,18 @@ Three nested layers sign it: kernel implementations (`dataflow_training/kernels/
 ABI), task executables (`runtime/executable.py` `launch()`), and resolve-time
 code (capability probes, warmup).
 
+### Host tasks are a different contract
+
+A task with `TaskSpec.host` never enters the engine (it refuses them), so
+none of the launch-path rules below apply. Its `launch(ctx)` receives
+`stream=None`, `backend=None`, and `inputs`/`mutates` as BACKING buffers
+over the objects' store extents; it runs synchronously on the service
+dispatcher thread — the store's single-writer thread. It MUST do
+host-side writes into those buffers and nothing else: no device work, no
+stream use, no torch CUDA calls, nothing enqueued anywhere. The canonical
+example is `family_init` (seeded model init written straight into the
+catalogued residents).
+
 ### In the launch path (executable `launch()` and every kernel impl it calls)
 
 **MUST**
