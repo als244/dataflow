@@ -155,6 +155,7 @@ def stage_predict(cfg: Config, env: dict) -> None:
     """Plan every cell on costs profiled on this GPU, one sequence length per
     process. Cells the planner cannot fit are recorded with the planner's
     reason rather than skipped, so the feasibility boundary is data."""
+    faults = 0
     for opt in cfg.opts:
         say(f"predict ({opt}) — every cost profiled on this GPU")
         out = cfg.data / f"predict_measured_{opt}.jsonl"
@@ -170,9 +171,29 @@ def stage_predict(cfg: Config, env: dict) -> None:
                       "--budget", csv(env["budgets"]),
                       "--backing-gib", str(env["backing_gib"]),
                       "--out", str(out)], log=log)
-            rows = sum(1 for _ in out.open()) if out.exists() else 0
+            kinds = {"feasible": 0, "infeasible": 0, "error": 0, "skip": 0}
+            if out.exists():
+                for line in out.open():
+                    rec = json.loads(line)
+                    if rec.get("seq") != seq:
+                        continue          # the file accumulates every seq
+                    for kind in ("infeasible", "error", "skip"):
+                        if kind in rec:
+                            kinds[kind] += 1
+                            break
+                    else:
+                        if "tok_s" in rec:
+                            kinds["feasible"] += 1
+            faults += kinds["error"]
             say(f"  seq {seq}: {'ok' if ok else 'FAILED'} "
-                f"({rows} rows, {elapsed(t_seq)})")
+                f"({kinds['feasible']} feasible, {kinds['infeasible']} "
+                f"infeasible, {kinds['error']} ERROR, {kinds['skip']} skip, "
+                f"{elapsed(t_seq)})")
+    if faults:
+        raise SystemExit(
+            f"predict produced {faults} harness-fault (ERROR) rows — these "
+            f"are faults in the sweep, never results; refusing to select/"
+            f"measure on a corrupted grid. See logs/predict_*.log")
 
 
 def stage_select(cfg: Config) -> None:

@@ -175,6 +175,7 @@ def run_predict(args, measured):
              else float(x) for x in str(args.backing_gib).split(",")]
     mode = "predict-measured" if measured else "predict"
     n = 0
+    outcomes = {"feasible": 0, "infeasible": 0, "error": 0, "skip": 0}
     with open(args.out, "a") as fh:
         for seq, tr, ts, bud, back in product(seqs, trs, tss, buds, backs):
             meta = dict(mode=mode, opt=args.opt, preset=args.preset,
@@ -182,6 +183,7 @@ def run_predict(args, measured):
                         backing=back, ts_epoch=time.time())
             if not geom_ok(seq, tr, ts):
                 emit(fh, {**meta, "skip": "geometry: need seq|t_round|t_step"})
+                outcomes["skip"] += 1
                 continue
             cfg = cell_config(base, seq, tr, ts)
             t0 = time.time()
@@ -223,16 +225,19 @@ def run_predict(args, measured):
                         row["host_marginal_gain"] = None
                 wall = round(time.time() - t0, 3)
                 emit(fh, {**meta, **row, "wall_s": wall})
+                outcomes["feasible"] += 1
             except ValueError as exc:
                 # the planner cannot fit this cell — that is a result
                 emit(fh, {**meta, "infeasible": str(exc).splitlines()[0][:120],
                           "wall_s": round(time.time() - t0, 3)})
+                outcomes["infeasible"] += 1
             except Exception as exc:
                 # anything else is a fault in this harness, not a property of
                 # the cell; record it as an error so it cannot be read as a
                 # feasibility boundary
                 emit(fh, {**meta, "error": f"{type(exc).__name__}: {exc}"[:160],
                           "wall_s": round(time.time() - t0, 3)})
+                outcomes["error"] += 1
                 print(f"  ERROR {type(exc).__name__}: {exc}", flush=True)
             n += 1
             rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // 1024
@@ -240,7 +245,14 @@ def run_predict(args, measured):
                   f"k{'inf' if back is None else format(back, 'g')}"
                   f"  wall {time.time() - t0:.1f}s  peakRSS={rss}MB",
                   flush=True)
-    print(f"DONE {mode} {args.opt}: {n} cells -> {args.out}", flush=True)
+    print(f"DONE {mode} {args.opt}: {n} cells "
+          f"({outcomes['feasible']} feasible, {outcomes['infeasible']} "
+          f"infeasible, {outcomes['error']} ERROR, {outcomes['skip']} skip) "
+          f"-> {args.out}", flush=True)
+    # error rows are HARNESS FAULTS by definition (an infeasible cell is a
+    # result; an error is a fault in producing one) — a sweep that had any
+    # exits red so the stage above refuses to build on a corrupted grid
+    return outcomes["error"]
 
 
 class DevicePeak:
@@ -502,8 +514,9 @@ def main():
     if args.mode == "measure":
         assert args.cells, "--cells required for measure mode"
         run_measure(args)
-    else:
-        run_predict(args, measured=(args.mode == "predict-measured"))
+        return 0
+    return 1 if run_predict(args,
+                            measured=(args.mode == "predict-measured")) else 0
 
 
 if __name__ == "__main__":
