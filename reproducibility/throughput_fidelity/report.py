@@ -200,12 +200,23 @@ def section_fidelity(runs: list[Run]) -> str:
 
 
 def section_host(runs: list[Run]) -> str:
+    """Whether the host allowance binds, over the FRONTIER cells.
+
+    Same reason as section_planner: the feasible set differs per optimizer and
+    per box, so a fraction taken over it compares different populations. The
+    frontier is one cell per (sequence, tokens-step, budget) everywhere."""
     rows = []
     for run in runs:
         for opt in run.opts():
             feas = [r for r in run.rows("predict_measured", opt) if "tok_s" in r]
             if not feas:
                 continue
+            best: dict = {}
+            for r in feas:
+                slot = (r["seq"], r["t_step"], r["budget"])
+                if slot not in best or r["tok_s"] > best[slot]["tok_s"]:
+                    best[slot] = r
+            feas = list(best.values())
             bind = [r for r in feas if r.get("binding")]
             gains = sorted(r["host_marginal_gain"] for r in feas
                            if r.get("host_marginal_gain") is not None)
@@ -221,7 +232,8 @@ def section_host(runs: list[Run]) -> str:
             "How much host memory a plan *wants* is only defined when host "
             "memory is free, so the allowance is set from the machine and its "
             "effect measured: whether plans hit it, and what the same cell does "
-            "when re-planned with 25% more room.\n\n"
+            "when re-planned with 25% more room. Frontier cells only, so the "
+            "fractions compare like with like.\n\n"
             + table(["run", "allowance", "cells binding", "median value of +25%",
                      "best", "cells gaining >2%"], rows) + "\n")
 
