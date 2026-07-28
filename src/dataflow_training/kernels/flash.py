@@ -19,10 +19,12 @@ reduction-order class), lse layout identical (n_heads, t) fp32 at
 1e-07, fwd 2.08x, bwd 1.64x.
 
 Optional output buffers: fwd ``out=``/``lse_out=``, bwd ``dq_out=``/
-``dk_out=``/``dv_out=``. The fa3 forward hands ``out`` straight to the
-provider's out_ parameter (no copy); aten has no out variant, so its
-impl computes fresh and copies — the same bytes the call sites used
-to move themselves.
+``dk_out=``/``dv_out=``. Forward fills a provided ``out`` by copy on
+BOTH backends (aten has no out variant; the provider's out_ parameter
+is blocked by torch's custom-op aliasing rule) — the same bytes the
+call sites used to move themselves. The fa3 backward passes dq/dk/dv
+straight through: the provider schema declares them mutated inputs,
+so those grads land in caller buffers with no copy.
 
 Shared knobs: ``causal`` (default True) and ``softmax_scale`` (default
 head_dim ** -0.5) — both backends honor them. Provider-only knobs
@@ -80,7 +82,6 @@ def fa3_flash_fwd(kctx, q, k, v, n_heads, n_kv_heads, head_dim,
 
     t = q.shape[0]
     mq = int(max_seqlen)
-    out3 = None if out is None else out.view(t, n_heads, head_dim)
     # Positional schema of _flash_attn_forward (probed against the wheel):
     # (q, k, v, k_new, v_new, qv, out_, cu_seqlens_q, cu_seqlens_k,
     #  cu_seqlens_k_new, seqused_q, seqused_k, max_seqlen_q, max_seqlen_k,
@@ -88,12 +89,16 @@ def fa3_flash_fwd(kctx, q, k, v, n_heads, n_kv_heads, head_dim,
     #  seqlens_rotary, q_descale, k_descale, v_descale, softmax_scale,
     #  causal, window_size_left, window_size_right, attention_chunk,
     #  softcap, rotary_interleaved, scheduler_metadata, num_splits,
-    #  pack_gqa, sm_margin) -> (out, lse, ...)
+    #  pack_gqa, sm_margin) -> (out, lse, ...). out_ stays None: torch's
+    # custom-op layer forbids a caller buffer there (an output may not
+    # alias an input), so a provided ``out`` is filled by copy — the
+    # backward's dq/dk/dv are schema-declared MUTATED INPUTS and keep
+    # the true zero-copy pass-through.
     res = provider._flash_attn_forward(
         q.view(t, n_heads, head_dim),
         k.view(t, n_kv_heads, head_dim),
         v.view(t, n_kv_heads, head_dim),
-        None, None, None, out3,
+        None, None, None, None,
         cu_seqlens, cu_seqlens, None, None, None, mq, mq,
         None, None, None, None, None, None, None, None, None,
         (float(head_dim) ** -0.5 if softmax_scale is None
@@ -103,9 +108,11 @@ def fa3_flash_fwd(kctx, q, k, v, n_heads, n_kv_heads, head_dim,
     if lse_out is not None:
         lse_out.copy_(lse)
         lse = lse_out
+    flat = res[0].reshape(t, n_heads * head_dim)
     if out is not None:
-        return out, lse
-    return res[0].reshape(t, n_heads * head_dim), lse
+        out.copy_(flat)
+        flat = out
+    return flat, lse
 
 
 def fa3_flash_bwd(kctx, d_attn, q, k, v, attn_out, lse, n_heads,
