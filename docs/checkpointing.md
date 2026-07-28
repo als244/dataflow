@@ -7,6 +7,70 @@ composed on top of it. This page describes the engine API and its
 concurrency contract, then shows usage, ending with how the
 distributed training layer drives it.
 
+## Architecture: who knows what
+
+Checkpointing is layered so that every arrow points down and every
+layer is blind to the ones above it. Each hard edge below is
+enforced by a test or a grep gate, not by convention.
+
+    tools: train / eval / peek
+      | call the conductor and record-layer surfaces only
+      v
+    conductor + checkpoint orchestration
+      dataflow_training/run/{conductor,checkpointing,loop}.py
+      WHEN to save (cadence); RESUME = locate the newest complete
+      record -> validate the continuation (MUST: world, seed, rank
+      rounds; MAY: hosts, backend — capability-checked, never
+      placement-matched) -> provision engines -> restore -> rewind
+      loop state. The conductor is the only cross-rank joiner: it
+      holds a client to every rank; writers never see each other.
+      | compiles the source policy, then drives the record layer
+      v
+    source-policy compiler + responsibility map
+      dataflow_training/distributed/{source_policy,responsibility}.py
+      WHO saves WHICH bytes. Three general classes, decided by the
+      metadata handed in: plan-REPLICATED (simple saves every
+      writer's whole copy, dedup saves disjoint responsibility
+      slices), ELEMENT-SHARDED (slot structure derived from the
+      state layout's fields), and WRITER-PRIVATE (per-rank
+      accumulators, writer-qualified logical ids). Emits per-writer
+      engine slice lists, record slice entries, and each writer's
+      resident-object inventory.
+      | emits slices + record inputs
+      v
+    record layer
+      dataflow/checkpoint/  (workload-blind, client-side)
+      checkpoint_record.json read/write/validate (completeness,
+      exact-span-replica overlap, element alignment, digests);
+      target sets -> per-snapshot fetch + remap plans; the
+      save/load composers driving engine verbs over 1..N clients.
+      Knows logical objects, slices, snapshots, engine specs and
+      opaque caller state. Knows NOTHING of ranks, optimizers, or
+      responsibility.
+      | drives verbs over the wire
+      v
+    engine daemon (dataflowd — one per rank/GPU)
+      THE process: executes programs and serves the wire verbs.
+      Checkpointing sees it only through two verb families:
+      . snapshot verbs (handlers_snapshot.py + client methods):
+        snapshot(dest, slices) / restore_snapshot / wait_*;
+        snapshot.json; per-slice hashes streamed at write; payload
+        IO on the writer thread; read-leases arbitrate against
+        program writes. Executes mappings it is GIVEN; computes
+        none.
+      . the store (store.py): named byte extents, meta, leases.
+        Zero checkpoint knowledge.
+      The daemon interprets NEITHER persistence markers NOR
+      records: ObjectSpec.persistent rides programs as inert
+      metadata the lowering wrote, and checkpoint_record.json
+      never crosses the wire.
+
+Side inputs, deliberately outside the checkpoint stack: ShardPlan
+math (per-field shard boundaries) feeds the responsibility map and
+knows nothing of checkpoints; the lowering assigns
+`ObjectSpec.persistent` at emission — checkpoint membership is
+exactly that marker, never a name prefix or role set.
+
 ## The engine API
 
 The verbs on `EngineClient`:
@@ -190,8 +254,12 @@ directory is engine snapshots and program dumps. Annotated:
        "object_range": [0, 2113024], "hash": "..."}     // take any
     ]
   },
-  "engine_spec": {"0": {"backing_gib": 87.0}, ...},
+  "engine_spec": {              // capability + provenance per writer:
+    "0": {"backing_gib": 87.0,  //   room the state needs, engine that
+          "device": 0, "kernel_set": "cuda", "fake": false}, ...
+  },                            //   wrote it — never a placement demand
   "client_payload": {...},      // OPAQUE; training: losses, data cursor
+  "summary": {"last_loss": 3.41, "steps_recorded": 420},  // display scalars
   "launch": {
     "argv": [...],              // exact invocation
     "resolved": {"preset": ..., "seed": ..., "opt_shard": ...,
@@ -205,15 +273,40 @@ directory is engine snapshots and program dumps. Annotated:
 }
 ```
 
-The record is validated totally at write and at read: slices must
-union to each logical object's full span; overlap is legal only as
-exact-span copies that hash-equal (the replication drift
-certificate — certified equal, any reader may take any replica, and
-assembled reads take the lowest-index covering snapshot); and slice
-endpoints must land on element boundaries when field schemas are
-given. `launch` makes a
-checkpoint auditable and re-invocable without guessing; the client
-payload makes the resumed curve continuous.
+THE RECORD IS THE ENTIRE CONTRACT — its invariants, all enforced
+at write and re-checked at read:
+
+1. Written atomically, LAST. The record's presence is the
+   completeness marker: no record, no checkpoint — snapshot dirs
+   without one are forensics, never resumable state.
+2. The schema guard refuses foreign identifiers loudly; there are
+   no compatibility shims and no converters.
+3. Completeness: every logical object's slices union to its full
+   byte span, with any gap refused by name and range.
+4. Overlap is legal only as exact-span replicas with EQUAL hashes
+   (the replication drift certificate). Certified equal, the
+   copies are interchangeable — any reader may take any replica;
+   assembled reads take the lowest-index covering snapshot.
+   Partial overlaps refuse outright.
+5. A logical id may be writer-qualified (`Aux_0@1`): per-writer
+   state that must never certify as replicated. The rank view
+   resolves bare targets to the writer's qualified object.
+6. Every snapshot lists its resident-object inventory, so rank
+   restores recreate exact local geometry (aligned layouts,
+   padding included) rather than deriving a guess.
+7. With field schemas given, slice endpoints must land on element
+   boundaries and schema digests must match.
+8. `scheme`, `client_payload`, `summary`, and `launch` are opaque:
+   stored and returned, never interpreted by the record layer.
+9. `engine_spec` is capability, never placement: it records what
+   room each writer's state needs and what engine wrote it;
+   restores check capacity and are free to land anywhere with
+   room.
+
+`launch` makes a checkpoint auditable and re-invocable without
+guessing; the client payload makes the resumed curve continuous;
+`summary` carries caller-labeled display scalars (the peek tool
+renders them).
 
 ## Resuming
 
@@ -322,6 +415,26 @@ the rank's own snapshot — self-sufficient, no cross-writer bytes.
 The checkpoint evaluation tool is exactly the weights-only helper
 plus a forward pass.
 
+The `engines` form stands the whole checkpoint back up as a fleet,
+no conductor involved:
+
+```python
+record, engines = load_checkpoint(step_dir, engines="replicate")
+record, engines = load_checkpoint(step_dir,
+                                  engines={"0": clientA, "1": clientB})
+```
+
+`"replicate"` launches one local child daemon per writer, shaped by
+the record's engine spec (device, fake mode) and sized from the
+writer's resident bytes; a caller-supplied mapping uses existing
+engines, each capability-checked before any restore. Either way
+every writer's full rank view is restored, and the result is
+runnable: register the checkpoint's own saved program against the
+restored engine, feed the next step's data from the recorded
+cursor, and stepping continues exactly where the run left off —
+no init and no warm-up, since nothing may overwrite restored
+bytes.
+
 Cross-box runs add one move: snapshots stay on the box that wrote
 them until a resume needs foreign slices (a remapped topology, or a
 logical load of another box's shards), when the conductor pulls and
@@ -384,12 +497,22 @@ Two optimizations for the stall window, in recommended order:
 
 - lease behavior — parked writers wake on release, snapshots see a
   stable image (`tests/dataflow/service/test_service_snapshot.py`)
-- ranged saves and slice round-trips
-  (`tests/dataflow/service/test_slice_snapshots.py`)
-- record format, own-artifact-last reassembly, completeness marker
+- slice mappings, three-pass restore refusals, background-restore
+  parking (`tests/dataflow/service/test_slice_snapshots.py`)
+- record validation refusals with named ranges, target resolution
+  across all three forms (`tests/dataflow/checkpoint/`)
+- the conductor save path, scratch sizing, capability refusals, and
+  the engines mapping
   (`tests/dataflow_training/training/surfaces/test_checkpoint_record.py`)
-- end-to-end resume drills — single box, same-box world 2 with
-  partitioned saves, cross-box with artifact redistribution — each
-  asserting the resumed tail reproduces the uninterrupted run
-  (`tests/fleet/checkpoint_resume/test_world1_resume_drill.py`,
-  `test_world2_resume_drill.py`, `test_crossbox_resume_drill.py`)
+- source policies over real shard layouts, replicated + private
+  classes
+  (`tests/dataflow_training/training/surfaces/test_source_policy_drills.py`)
+- BITWISE resume drills in the default lane — world-2 dense and MoE
+  (full persistent set including expert counts), the remapped
+  rank-to-engine drill, replicate-boot plus one step, and the solo
+  path — each demanding exact tail equality
+  (`test_world2_resume_bitwise.py`, `test_replicate_load.py`,
+  `test_solo_resume_bitwise.py` under
+  `tests/dataflow_training/training/surfaces/`)
+- cross-box drills with snapshot redistribution, ambient-envelope
+  tails (`tests/fleet/checkpoint_resume/`)

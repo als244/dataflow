@@ -21,9 +21,10 @@ Budget flags are memory-tier named and comma-separated per rank:
                    pinned backing store AND refuses plans whose backing peak
                    would not fit it
 
-Checkpoints are manifest v2 at every world size (fleet.json:
-responsibility save plan, launch record, per-rank planned programs);
-resume with --resume auto|<step dir>.
+Checkpoints are one format at every world size: per-writer engine
+snapshots beside the step's saved programs, sealed by
+checkpoint_record.json written last (docs/checkpointing.md); resume
+with --resume auto|<step dir>.
 """
 from __future__ import annotations
 
