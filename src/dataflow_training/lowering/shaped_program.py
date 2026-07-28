@@ -377,7 +377,7 @@ def build_shaped_program(
     final_locations: dict[str, str] = {}
 
     def add_initial(oid: str, size: int, role: str, *, persist: bool = False, tensor: TensorMeta | None = None) -> None:
-        initial.append(ObjectSpec(id=oid, size_bytes=size, location="backing", role=role, tensor=tensor))
+        initial.append(ObjectSpec(id=oid, size_bytes=size, location="backing", role=role, tensor=tensor, persistent=persist))
         if persist:
             final_locations[oid] = "backing"
 

@@ -22,31 +22,33 @@ from dataflow_training.model_families.dsv3 import ShapedDsv3Config, lower_dsv3
 from dataflow_training.model_families.dsv32 import ShapedDsv32Config, lower_dsv32
 from dataflow_training.model_families.glm52 import ShapedGlm52Config, lower_glm52
 
-# Constants last updated DELIBERATELY when tasks gained a cost_key: the
-# geometry two tasks can differ in while their buffers look identical, which
-# has to separate their measured costs. Every family's digest moves, because
-# every task carries the field. The change was proved additive rather than
-# semantic — stripping cost_key from a new program reproduces its previous
-# digest exactly — so what moved is the metadata, not what any family lowers to.
+# Constants last updated DELIBERATELY when initial objects gained the
+# persistent marker: the field that makes checkpoint selection a
+# property of the program rather than a name convention. Every
+# family's digest moves, because every family marks its parameters,
+# optimizer state and cross-step accumulators. The change was proved
+# additive rather than semantic — stripping persistent from a new
+# program's dict reproduces its previous digest exactly — so what
+# moved is the metadata, not what any family lowers to.
 EXPECTED = {
-    "llama3-tiny-ga2-s2": "79efb2a5a7d8c0c9",
-    "llama3-tiny-tail": "8ce346cd75d73ff4",
-    "qwen3-tiny-ga3": "8a5a6e974d51127c",
-    "qwen35-tiny-ga2": "b64c3b28ab98ad2d",
-    "qwen35-tiny-tied": "81b6f4107a58f8b4",
-    "olmoe-tiny": "af83b5562241b08f",
-    "olmoe-tiny-ga2": "c8d4dff8a934619e",
-    "qwen35moe-tiny-ga2": "0e562d6be5bf3930",
-    "qwen3moe-tiny": "7e913c7966056b8b",
-    "qwen3moe-tiny-ga2": "5a2ef4d525e09055",
-    "dsv3-tiny": "9aaa357d40bf96f5",
-    "dsv3-tiny-ga2": "1d43c849c3620815",
-    "dsv32-tiny": "cb2166632574a82f",
-    "dsv32-tiny-ga2": "7b7dc58dee30076e",
-    "dsv32-tiny-dense": "417c25eca98562d1",
-    "glm52-tiny": "b8730946e7d04fe9",
-    "glm52-tiny-ga2": "798e31cd9745656b",
-    "glm52-tiny-warmup": "117060a1342ad1df",
+    "llama3-tiny-ga2-s2": "8826c0f91245927d",
+    "llama3-tiny-tail": "6cce38e17646a28b",
+    "qwen3-tiny-ga3": "591e4ed8245472ef",
+    "qwen35-tiny-ga2": "3a0da0d6526d6531",
+    "qwen35-tiny-tied": "098204ce403f4a4e",
+    "olmoe-tiny": "04891ca13e918046",
+    "olmoe-tiny-ga2": "0b35b3a84d65d902",
+    "qwen35moe-tiny-ga2": "ebe52dd5033707d7",
+    "qwen3moe-tiny": "830638022f968de8",
+    "qwen3moe-tiny-ga2": "105626bd80c94c00",
+    "dsv3-tiny": "27b7155074437df1",
+    "dsv3-tiny-ga2": "452b4839b187e0a6",
+    "dsv32-tiny": "689e3fc7e66bd169",
+    "dsv32-tiny-ga2": "f5f8454169423702",
+    "dsv32-tiny-dense": "7417250fe66159d8",
+    "glm52-tiny": "c469d83c78d6d7d0",
+    "glm52-tiny-ga2": "9942568902349a75",
+    "glm52-tiny-warmup": "66853616d6b780f7",
 }
 
 

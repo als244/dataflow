@@ -10,8 +10,8 @@ remap wire shape. It imports nothing from any workload."""
 from .record import (CheckpointError, RECORD_NAME, RECORD_SCHEMA,
                      read_record, schema_digest, validate_record,
                      write_record)
-from .targets import resolve_targets
+from .targets import persisted_objects, resolve_targets
 
 __all__ = ["CheckpointError", "RECORD_NAME", "RECORD_SCHEMA",
-           "read_record", "resolve_targets", "schema_digest",
-           "validate_record", "write_record"]
+           "persisted_objects", "read_record", "resolve_targets",
+           "schema_digest", "validate_record", "write_record"]

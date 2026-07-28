@@ -40,6 +40,10 @@ def _tensor_to_dict(t: TensorMeta | None) -> dict[str, Any] | None:
 
 def _obj_to_dict(o: ObjectSpec | OutputSpec) -> dict[str, Any]:
     d: dict[str, Any] = {"id": o.id, "size_bytes": o.size_bytes, "location": o.location, "role": o.role}
+    if getattr(o, "persistent", False):
+        # emitted only when true: an unmarked program's dict — and so
+        # its content-hash prog_id — never carries the field
+        d["persistent"] = True
     tensor = _tensor_to_dict(o.tensor)
     if tensor is not None:
         d["tensor"] = tensor
@@ -144,6 +148,7 @@ def _object_from_dict(d: dict[str, Any]) -> ObjectSpec:
         location=d.get("location", "backing"),
         role=d.get("role", "other"),
         tensor=_tensor_from_dict(d.get("tensor")),
+        persistent=bool(d.get("persistent", False)),
     )
 
 

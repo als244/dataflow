@@ -23,13 +23,21 @@ from .types import Location, Role, TensorMeta
 
 @dataclass(frozen=True)
 class ObjectSpec:
-    """An object present before the chain starts (initial memory)."""
+    """An object present before the chain starts (initial memory).
+
+    ``persistent`` marks state a checkpoint must carry: it survives
+    the step boundary and cannot be recomputed from data (parameters,
+    optimizer state, cross-step accumulators). The lowering assigns
+    it at emission; checkpoint selection is exactly this filter.
+    Serialized only when true, so unmarked programs' content ids are
+    unchanged by the field's existence."""
 
     id: str
     size_bytes: int
     location: Location = "backing"
     role: Role = "other"
     tensor: TensorMeta | None = None
+    persistent: bool = False
 
 
 @dataclass(frozen=True)

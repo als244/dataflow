@@ -20,6 +20,14 @@ from __future__ import annotations
 from .record import CheckpointError, coverage_gaps, validate_record
 
 
+def persisted_objects(program) -> list:
+    """The program's persistent ObjectSpecs — the marker filter.
+    A record's object set is this list by construction; no prefixes,
+    no role enumeration."""
+    return [s for s in program.initial_objects
+            if getattr(s, "persistent", False)]
+
+
 def resolve_targets(record: dict, targets, *, validate=True) -> list:
     if validate:
         validate_record(record)
@@ -27,10 +35,48 @@ def resolve_targets(record: dict, targets, *, validate=True) -> list:
         return logical_plan(record, sorted(record["logical_objects"]))
     if isinstance(targets, dict):
         steps = []
-        for key, ids in targets.items():
-            steps += keyed_plan(record, key, list(ids))
+        for key, want in targets.items():
+            steps += keyed_plan(record, key,
+                                target_ids(record, want, key))
         return merge_steps(record, steps)
-    return logical_plan(record, list(targets))
+    return logical_plan(record, target_ids(record, targets, None))
+
+
+def target_ids(record: dict, want, key) -> list:
+    """Materialize a target form into logical ids. A Program targets
+    its persistent objects, and its binding sizes are VALIDATED
+    against the record: an identity-sized object is the logical
+    view; a shard-sized one is a writer's view and needs the key to
+    say whose."""
+    if not hasattr(want, "initial_objects"):
+        return list(want)
+    logical = record["logical_objects"]
+    ids = []
+    for spec in persisted_objects(want):
+        if spec.id not in logical:
+            raise CheckpointError(f"unknown target {spec.id}")
+        if key is None:
+            expect = int(logical[spec.id]["bytes"])
+            hint = " — shard-sized targets need a writer key"
+        else:
+            expect = writer_view_bytes(record, key, spec.id)
+            hint = ""
+        if spec.size_bytes != expect:
+            view = ("logical object" if key is None
+                    else f"writer {key} view")
+            raise CheckpointError(
+                f"{spec.id}: program binds {spec.size_bytes} B but "
+                f"the {view} is {expect} B{hint}")
+        ids.append(spec.id)
+    return ids
+
+
+def writer_view_bytes(record: dict, key, lid: str) -> int:
+    own = [i for i, s in enumerate(record["snapshots"])
+           if s.get("writer") == key]
+    return sum(e["object_range"][1] - e["object_range"][0]
+               for e in record["slices"].get(lid, [])
+               if e["snapshot"] in own)
 
 
 def logical_plan(record: dict, ids: list) -> list:

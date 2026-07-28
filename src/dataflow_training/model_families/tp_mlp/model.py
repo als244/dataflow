@@ -108,7 +108,8 @@ def lower_tp_mlp(cfg: TpMlpConfig) -> Program:
     return Program(
         name=f"tp-mlp-w{cfg.world}r{cfg.rank}",
         initial_objects=(
-            ObjectSpec("W_tp", wl.total_bytes, role="parameter"),
+            ObjectSpec("W_tp", wl.total_bytes, role="parameter",
+                       persistent=True),
             ObjectSpec("x_0", td_bytes, role="activation"),
             ObjectSpec("dy_0", td_bytes, role="activation"),
         ),
