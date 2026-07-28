@@ -47,13 +47,24 @@ def resolve_flash_impl() -> str:
     return attention_registry.current_flash_attention_impl() or "native"
 
 
-ACTIVE_FLASH_IMPL = resolve_flash_impl()
+ACTIVE_FLASH_IMPL: str | None = None
 
 
 def active_flash_impl() -> str:
     """The flash implementation the dispatcher runs ("FA3" or
     "native"). Part of any cost-profile cache key: kernels differ,
-    so their timings do."""
+    so their timings do.
+
+    Resolution is LAZY — first call, not import. Importing this
+    module must not touch the GPU: the capability probe initializes
+    a CUDA context, and clients, conductors, and CPU-only test
+    processes import the ops surface without ever meaning to own
+    device memory. Every flash call resolves first, so activation
+    always precedes the first kernel in processes that do run on
+    the GPU."""
+    global ACTIVE_FLASH_IMPL
+    if ACTIVE_FLASH_IMPL is None:
+        ACTIVE_FLASH_IMPL = resolve_flash_impl()
     return ACTIVE_FLASH_IMPL
 
 
@@ -71,6 +82,7 @@ def flash_fwd(
     expansion). Returns (attn_out (t, d), lse (n_heads, t) ragged layout).
     Probed on this box: bit-clean segment isolation, deterministic-twice,
     sync-audit clean."""
+    active_flash_impl()
     t = q.shape[0]
     mq = int(max_seqlen)
     out, lse, _rng, _unused, _ = torch.ops.aten._flash_attention_forward(
@@ -95,6 +107,7 @@ def flash_bwd(
     round-tripped rng_state). ``.contiguous()`` on lse is LOAD-BEARING: the
     aten flash-bwd kernel reads it assuming contiguous rows (the fla
     contiguity lesson, aten edition — silent garbage grads otherwise)."""
+    active_flash_impl()
     t = q.shape[0]
     mq = int(max_seqlen)
     philox = torch.zeros(2, dtype=torch.uint64, device=q.device)
