@@ -9,7 +9,7 @@ from each writer, zero1 O shards mapped at element offsets), and
 resume restoring each rank from its OWN snapshot in one call.
 
 Tests:
-- test_world2_zero1rs_checkpoint_resume_drill: for each family, two local daemons emit a v1 record whose replicated W carries both writers' whole copies (one authoritative) and whose O maps four zero1 slices, and a fresh pair resumes to reproduce the uninterrupted tail within tolerance.
+- test_world2_zero1rs_checkpoint_resume_drill: for each family, two local daemons emit a v1 record whose replicated W carries both writers' whole hash-certified copies and whose O maps four zero1 slices, and a fresh pair resumes to reproduce the uninterrupted tail within tolerance.
 """
 import json
 import math
@@ -83,13 +83,13 @@ def test_world2_zero1rs_checkpoint_resume_drill(tmp_path, family_name):
     assert m["schema"] == RECORD_SCHEMA
     assert m["scheme"]["world"] == 2
     assert m["scheme"]["source_policy"] == "simple"
-    # simple policy: replicated W saved whole by BOTH writers, one
-    # authoritative winner; zero1rs O = two [m|v] slices per writer
+    # simple policy: replicated W saved whole by BOTH writers as
+    # hash-certified replicas; zero1rs O = two [m|v] slices per writer
     w_bytes = m["logical_objects"]["W_0"]["bytes"]
     w_slices = m["slices"]["W_0"]
     assert len(w_slices) == 2
     assert all(s["object_range"] == [0, w_bytes] for s in w_slices)
-    assert [s["authoritative"] for s in w_slices] == [True, False]
+    assert len({s["hash"] for s in w_slices}) == 1
     o_ids = sorted(o for o in m["logical_objects"]
                    if o.startswith("O_"))
     assert len(m["slices"][o_ids[0]]) == 4

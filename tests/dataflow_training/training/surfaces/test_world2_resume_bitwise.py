@@ -11,7 +11,7 @@ mapping; the MoE drill (qwen3moe) certifies the persistent SET —
 selection is the program's marker, and expert counts ride it.
 
 Tests:
-- test_world2_resume_reproduces_tail_bitwise: a world-2 local-pair run under the DP default writes a v1 record (replicated W as two whole-copy slices with one authoritative winner, zero1rs O shards mapped at element offsets), and a fresh pair resumed from it reproduces the uninterrupted tail bit-for-bit.
+- test_world2_resume_reproduces_tail_bitwise: a world-2 local-pair run under the DP default writes a v1 record (replicated W as two hash-certified whole-copy slices, zero1rs O shards mapped at element offsets), and a fresh pair resumed from it reproduces the uninterrupted tail bit-for-bit.
 - test_world2_moe_persistent_set_round_trips: the qwen3moe world-2 record covers the FULL persistent set — per-rank expert-count Aux objects ride as writer-qualified private logicals — leaves per-step objects out, and the resumed MoE tail equals the uninterrupted tail bit-for-bit.
 """
 import json
@@ -84,14 +84,13 @@ def test_world2_resume_reproduces_tail_bitwise(tmp_path):
     assert ck_step < STEPS, "the drill needs a tail after the record"
 
     # the simple policy saves the replicated W whole from BOTH
-    # writers — same span, hash-certified replicas, one restore winner
+    # writers — same span, hash-certified interchangeable replicas
     w_id = sorted(o for o in record["logical_objects"]
                   if o.startswith("W_"))[0]
     w_slices = record["slices"][w_id]
     w_bytes = record["logical_objects"][w_id]["bytes"]
     assert len(w_slices) == 2
     assert all(s["object_range"] == [0, w_bytes] for s in w_slices)
-    assert [s["authoritative"] for s in w_slices] == [True, False]
     assert len({s["hash"] for s in w_slices}) == 1
     # zero1rs O shards: per-writer slices land at element offsets and
     # the spans union to the full logical object (validated on write)
@@ -163,11 +162,14 @@ def test_world2_moe_persistent_set_round_trips(tmp_path):
 
     # each rank accumulates its OWN expert counts — no step
     # synchronizes the copies — so counts land writer-PRIVATE:
-    # one qualified logical per writer, whole and authoritative,
-    # never certified as replicas
+    # one whole qualified logical per writer, never certified as
+    # replicas
     for w in (0, 1):
-        private = record["slices"][f"{aux_ids[0]}@{w}"]
-        assert len(private) == 1 and private[0]["authoritative"]
+        lid = f"{aux_ids[0]}@{w}"
+        private = record["slices"][lid]
+        aux_bytes = record["logical_objects"][lid]["bytes"]
+        assert len(private) == 1
+        assert private[0]["object_range"] == [0, aux_bytes]
 
     resumed = run(cfg, recipe, legacy_block_pipeline(cfg), STEPS,
                   topology=moe_pair_topo(),

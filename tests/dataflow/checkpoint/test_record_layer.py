@@ -6,8 +6,8 @@ Tests:
 - test_record_round_trip: write_record validates, writes atomically (record absent until complete), and read_record returns the same content with the dataflow-checkpoint/v1 schema.
 - test_read_refuses_incomplete_and_foreign: a step dir without checkpoint_record.json refuses (completeness marker), as does a record carrying a foreign schema string.
 - test_coverage_gap_refuses_with_named_ranges: a logical object whose slices do not union to its full byte span refuses naming the missing ranges.
-- test_ambiguous_overlap_refuses: overlapping slices with no authoritative among them refuse; adding the authoritative flag on one makes the same layout legal.
-- test_authoritative_twins_must_hash_equal: identical-span authoritative slices from two writers demand equal hashes (the replication drift certificate) and refuse naming both writers when they differ.
+- test_partial_overlap_refuses: slices overlapping with DIFFERENT spans refuse (overlap is legal only as exact-span replicas); exact-span hash-equal twins are legal with no designation needed.
+- test_replica_twins_must_hash_equal: identical-span slices from two writers demand equal hashes (the replication drift certificate) and refuse naming both writers when they differ.
 - test_misaligned_slice_refuses: with field schemas given, a slice endpoint inside an element refuses naming the field; on an element boundary it passes.
 - test_digest_mismatch_refuses: with field schemas given, a schema digest that does not match the record's logical_objects entry refuses naming the object.
 - test_slice_reference_bounds: a slice naming a snapshot index outside the snapshots list refuses.
@@ -32,7 +32,7 @@ O_BYTES = 8192
 
 def base_record_kwargs():
     """A minimal valid two-writer record: replicated W_0 saved whole
-    by both writers (writer 0 authoritative), O_0 sharded half/half;
+    by both writers (hash-equal replicas), O_0 sharded half/half;
     each snapshot lists its resident-object inventory (the rank
     view's local geometry)."""
     return dict(
@@ -46,18 +46,16 @@ def base_record_kwargs():
         slices={
             "W_0": [
                 {"snapshot": 0, "snapshot_range": [0, W_BYTES],
-                 "object_range": [0, W_BYTES], "hash": "aa" * 16,
-                 "authoritative": True},
+                 "object_range": [0, W_BYTES], "hash": "aa" * 16},
                 {"snapshot": 1, "snapshot_range": [0, W_BYTES],
                  "object_range": [0, W_BYTES], "hash": "aa" * 16},
             ],
             "O_0": [
                 {"snapshot": 0, "snapshot_range": [0, O_BYTES // 2],
-                 "object_range": [0, O_BYTES // 2], "hash": "bb" * 16,
-                 "authoritative": True},
+                 "object_range": [0, O_BYTES // 2], "hash": "bb" * 16},
                 {"snapshot": 1, "snapshot_range": [0, O_BYTES // 2],
                  "object_range": [O_BYTES // 2, O_BYTES],
-                 "hash": "cc" * 16, "authoritative": True},
+                 "hash": "cc" * 16},
             ],
         },
         engine_spec={"0": {"backing_gib": 1.0},
@@ -106,21 +104,25 @@ def test_coverage_gap_refuses_with_named_ranges(tmp_path):
         "an invalid record must never land on disk"
 
 
-def test_ambiguous_overlap_refuses(tmp_path):
+def test_partial_overlap_refuses(tmp_path):
     kwargs = base_record_kwargs()
-    for s in kwargs["slices"]["W_0"]:
-        s.pop("authoritative", None)         # two full copies, no winner
-    with pytest.raises(CheckpointError, match="W_0"):
+    # writer 1's copy shifted: overlaps writer 0's without matching
+    # its span — no compiled policy produces this shape
+    kwargs["snapshots"][1]["objects"]["W_0"] = W_BYTES // 2
+    kwargs["slices"]["W_0"][1] = {
+        "snapshot": 1, "snapshot_range": [0, W_BYTES // 2],
+        "object_range": [W_BYTES // 4, 3 * W_BYTES // 4],
+        "hash": "ee" * 16}
+    with pytest.raises(CheckpointError, match="exact-span"):
         write_record(tmp_path, **kwargs)
 
-    kwargs["slices"]["W_0"][0]["authoritative"] = True
-    write_record(tmp_path, **kwargs)         # one winner: legal
+    # exact-span hash-equal replicas need no designation
+    write_record(tmp_path, **base_record_kwargs())
 
 
-def test_authoritative_twins_must_hash_equal(tmp_path):
+def test_replica_twins_must_hash_equal(tmp_path):
     kwargs = base_record_kwargs()
     twins = kwargs["slices"]["W_0"]
-    twins[1]["authoritative"] = True
     twins[1]["hash"] = "dd" * 16             # replication drift
     with pytest.raises(CheckpointError) as ei:
         write_record(tmp_path, **kwargs)

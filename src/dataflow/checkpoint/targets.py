@@ -100,9 +100,10 @@ def logical_plan(record: dict, ids: list) -> list:
 
 
 def choose_sources(entries: list) -> list:
-    """One source per elementary interval: the authoritative slice
-    when the interval is multiply covered (validation guarantees a
-    winner exists), the sole coverer otherwise."""
+    """One source per elementary interval. Multiply-covered bytes
+    are exact-span hash-certified replicas (validation guarantees
+    it), so ANY coverer is correct; the reader rule takes the
+    lowest-index covering snapshot, deterministically."""
     bounds = sorted({x for e in entries for x in e["object_range"]})
     chosen = []
     for lo, hi in zip(bounds, bounds[1:]):
@@ -111,13 +112,13 @@ def choose_sources(entries: list) -> list:
                     and hi <= e["object_range"][1]]
         if not covering:
             continue
-        winner = covering[0]
-        for e in covering:
-            if e.get("authoritative"):
-                winner = e
-                break
-        chosen.append((lo, hi, winner))
+        chosen.append((lo, hi,
+                       min(covering, key=snapshot_index)))
     return chosen
+
+
+def snapshot_index(entry: dict) -> int:
+    return int(entry["snapshot"])
 
 
 def keyed_plan(record: dict, key, ids: list) -> list:

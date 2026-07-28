@@ -78,7 +78,6 @@ def test_world1_checkpoint_resume_drill(tmp_path, family_name):
     w_slices = m["slices"]["W_0"]
     assert len(w_slices) == 1
     assert w_slices[0]["object_range"] == [0, w_bytes]
-    assert w_slices[0]["authoritative"]
     assert m["launch"]["argv"] == ["unit", "world1-drill"]
     assert m["launch"]["programs"] == ["programs/rank0.json"]
     assert (manifests[-1].parent / "programs" / "rank0.json").is_file()

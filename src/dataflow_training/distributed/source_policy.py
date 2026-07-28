@@ -114,14 +114,12 @@ def add_replicated(out: dict, logical: dict, oid: str, size: int,
             out["slices"].append({"id": oid, "src": [lo, hi]})
             out["record"].append({"logical": oid,
                                   "snapshot_range": [lo, hi],
-                                  "object_range": [lo, hi],
-                                  "authoritative": True})
+                                  "object_range": [lo, hi]})
         return
     out["slices"].append({"id": oid})
     out["record"].append({"logical": oid,
                           "snapshot_range": [0, size],
-                          "object_range": [0, size],
-                          "authoritative": writer == 0})
+                          "object_range": [0, size]})
 
 
 def add_private(out: dict, logical: dict, oid: str, size: int,
@@ -132,9 +130,9 @@ def add_private(out: dict, logical: dict, oid: str, size: int,
     across writers are NOT replicas here, so certifying them under
     the drift rule would refuse legitimate saves; instead each
     writer's copy becomes its own writer-qualified logical object
-    (``<id>@<writer>``), whole and authoritative. The rank view
-    resolves the bare id to the writer's qualified object and
-    restores it under the bare local name."""
+    (``<id>@<writer>``), whole. The rank view resolves the bare id
+    to the writer's qualified object and restores it under the bare
+    local name."""
     lid = f"{oid}@{writer}"
     known = logical.setdefault(lid, {"bytes": int(size)})
     if known["bytes"] != size:
@@ -144,8 +142,7 @@ def add_private(out: dict, logical: dict, oid: str, size: int,
                           "logical_bytes": int(size)})
     out["record"].append({"logical": lid,
                           "snapshot_range": [0, int(size)],
-                          "object_range": [0, int(size)],
-                          "authoritative": True})
+                          "object_range": [0, int(size)]})
 
 
 def add_sharded(out: dict, logical: dict, oid: str, size: int,
@@ -177,26 +174,24 @@ def add_sharded(out: dict, logical: dict, oid: str, size: int,
         slot = f.name.removesuffix("_slice")
         tail = tail_fields.get(slot)
         pieces.append((f, [cursor + writer * f.nbytes,
-                           cursor + (writer + 1) * f.nbytes], True))
+                           cursor + (writer + 1) * f.nbytes]))
         cursor += world * f.nbytes
         if tail is not None:
             # every writer updates the world-remainder tail
             # redundantly: the overlapping tail slices are replicas,
-            # drift-certified, with writer 0 the restore winner
-            pieces.append((tail, [cursor, cursor + tail.nbytes],
-                           writer == 0))
+            # certified interchangeable by the drift rule
+            pieces.append((tail, [cursor, cursor + tail.nbytes]))
             cursor += tail.nbytes
     total_bytes = cursor
     known = logical.setdefault(oid, {"bytes": total_bytes})
     if known["bytes"] != total_bytes:
         raise ValueError(f"{oid}: logical size conflict "
                          f"{known['bytes']} != {total_bytes}")
-    for f, dst, authoritative in pieces:
+    for f, dst in pieces:
         src = [f.offset_bytes, f.offset_bytes + f.nbytes]
         out["slices"].append({"id": oid, "src": src,
                               "logical_id": oid, "dst": dst,
                               "logical_bytes": total_bytes})
         out["record"].append({"logical": oid,
                               "snapshot_range": list(src),
-                              "object_range": list(dst),
-                              "authoritative": authoritative})
+                              "object_range": list(dst)})

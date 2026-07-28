@@ -9,8 +9,8 @@ cannot pass by luck. CPU-only (fake engines; the policy and record
 logic is byte-level).
 
 Tests:
-- test_simple_policy_round_trip_world2: the simple policy saves whole buffers per writer; each rank restores bitwise from its OWN snapshot (keyed targets, bare ids resolving to writer-qualified private logicals) at its exact resident geometry, and the logical view reassembles the tight [m_all | v_all] — slice fields at element offsets, the replicated tail once — picks the authoritative W, and lists each writer's private Aux copy separately.
-- test_dedup_policy_covers_with_disjoint_slices: dedup saves W as disjoint authoritative responsibility slices — one copy total — and the logical view reassembles it bitwise.
+- test_simple_policy_round_trip_world2: the simple policy saves whole buffers per writer; each rank restores bitwise from its OWN snapshot (keyed targets, bare ids resolving to writer-qualified private logicals) at its exact resident geometry, and the logical view reassembles the tight [m_all | v_all] — slice fields at element offsets, the replicated tail once — reads W from the first covering snapshot, and lists each writer's private Aux copy separately.
+- test_dedup_policy_covers_with_disjoint_slices: dedup saves W as disjoint responsibility slices — one copy total — and the logical view reassembles it bitwise.
 - test_replication_drift_refuses_before_record: diverged W bytes between writers make save_checkpoint refuse naming both writers, and NO record lands.
 """
 import threading
@@ -143,8 +143,9 @@ def test_simple_policy_round_trip_world2(tmp_path):
         o_slices = record["slices"]["O_0"]
         assert len(o_slices) == 8, \
             "2 writers x ([m|v] slice fields + [m|v] tail fields)"
-        assert sum(bool(s["authoritative"]) for s in o_slices) == 6, \
-            "tail replicas: only writer 0's tails carry the flag"
+        tail_spans = [tuple(s["object_range"]) for s in o_slices]
+        assert len(tail_spans) - len(set(tail_spans)) == 2, \
+            "the two tail fields overlap as exact-span replicas"
         assert record["logical_objects"]["O_0"]["bytes"] == O_LOGICAL
         for snap in record["snapshots"]:
             assert snap["objects"]["O_0"] == O_LOCAL, \
@@ -162,7 +163,7 @@ def test_simple_policy_round_trip_world2(tmp_path):
             finally:
                 fresh.shutdown()
 
-        # the logical view: authoritative W + aggregate [m_all|v_all]
+        # the logical view: assembled W + aggregate [m_all|v_all]
         server_l, logical_client = boot(tmp_path, "logical")
         try:
             plan = resolve_targets(record, "all")
@@ -195,7 +196,6 @@ def test_dedup_policy_covers_with_disjoint_slices(tmp_path):
 
         w_slices = record["slices"]["W_0"]
         assert len(w_slices) == 2
-        assert all(s["authoritative"] for s in w_slices)
         spans = sorted(tuple(s["object_range"]) for s in w_slices)
         assert spans == [(0, W_BYTES // 2), (W_BYTES // 2, W_BYTES)], \
             "dedup must save ONE copy as disjoint responsibility slices"

@@ -10,11 +10,12 @@ dirs on disk for forensics and NO record: the step directory is
 incomplete by contract and can never be selected for resume.
 
 The drift check is the free replication certificate: identical-span
-authoritative slices from different writers (the simple policy's
-overlapping replicated copies) must carry EQUAL hashes; disagreement
-refuses the checkpoint, naming the object and both writers, because
+slices from different writers (the simple policy's overlapping
+replicated copies) must carry EQUAL hashes; disagreement refuses the
+checkpoint, naming the object and both writers, because
 certified-replicated state that diverged is a bug upstream of any
-checkpoint.
+checkpoint. Certified equal, the copies are interchangeable — any
+reader may take any replica.
 
 Hashes travel in snapshot_status, so writers on other filesystems
 need ship no bytes for the check. Writers never see each other; the
@@ -79,7 +80,6 @@ def save_checkpoint(writers: dict, dest, *, step, seed,
                 "snapshot_range": list(entry["snapshot_range"]),
                 "object_range": list(entry["object_range"]),
                 "hash": hashes[span],
-                "authoritative": bool(entry.get("authoritative")),
             })
 
     check_replication_drift(slices, snapshots)
@@ -106,11 +106,10 @@ def hash_by_span(status: dict) -> dict:
 
 
 def check_replication_drift(slices: dict, snapshots: list) -> None:
-    """Identical-span slices are REPLICAS by construction — the
-    authoritative flag picks the restore winner, hash equality
-    certifies them interchangeable — so any two entries covering the
-    same span of the same logical object must hash-equal, whichever
-    carries the flag. Refuses naming the object and both writers.
+    """Identical-span slices are REPLICAS by construction — hash
+    equality certifies them interchangeable, so any two entries
+    covering the same span of the same logical object must
+    hash-equal. Refuses naming the object and both writers.
     (validate_record re-checks this — running it here first makes the
     refusal happen BEFORE any record could exist.)"""
     for lid, entries in slices.items():

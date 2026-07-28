@@ -92,10 +92,10 @@ def validate_record(record: dict, *, field_schemas=None) -> None:
        object at a size containing its snapshot_range;
     3. per logical object: ranges in bounds and length-consistent;
     4. completeness — object_ranges union to the full byte span;
-    5. overlap legal ONLY with a winner: any multiply-covered byte
-       needs an authoritative slice, and authoritative twins must be
-       identical spans with EQUAL hashes (the replication drift
-       certificate);
+    5. overlap legal ONLY as exact-span replicas with EQUAL hashes
+       (the replication drift certificate) — partial overlaps
+       refuse; readers may take ANY replica, by convention the
+       lowest-index covering snapshot;
     6. with ``field_schemas``: schema digests match the record and
        every slice endpoint falls on an element boundary of its
        containing field.
@@ -174,9 +174,11 @@ def coverage_gaps(total, entries) -> list:
 
 
 def check_overlap(lid, entries, snapshots) -> None:
-    """Sweep the elementary intervals; multiply-covered bytes need an
-    authoritative winner, and authoritative twins must be
-    identical-span with equal hashes."""
+    """Sweep the elementary intervals; overlap is legal ONLY as
+    exact-span replicas — a multiply-covered byte whose coverers
+    disagree on their spans is a partial overlap, and no compiled
+    policy produces one, so it refuses as malformed. (Hash equality
+    across the replicas is check_replica_hashes' job.)"""
     bounds = sorted({x for e in entries for x in e["object_range"]})
     for lo, hi in zip(bounds, bounds[1:]):
         covering = [e for e in entries
@@ -184,33 +186,22 @@ def check_overlap(lid, entries, snapshots) -> None:
                     and hi <= e["object_range"][1]]
         if len(covering) < 2:
             continue
-        auth = [e for e in covering if e.get("authoritative")]
-        if not auth:
-            raise CheckpointError(
-                f"{lid}: bytes [{lo}, {hi}) covered by "
-                f"{len(covering)} slices with no authoritative "
-                f"winner")
-        first = auth[0]
-        for other in auth[1:]:
+        first = covering[0]
+        for other in covering[1:]:
             if tuple(other["object_range"]) != \
                     tuple(first["object_range"]):
                 raise CheckpointError(
-                    f"{lid}: authoritative slices overlap with "
-                    f"different spans {first['object_range']} vs "
-                    f"{other['object_range']}")
-            if other.get("hash") != first.get("hash"):
-                writers = (snapshots[first["snapshot"]].get("writer"),
-                           snapshots[other["snapshot"]].get("writer"))
-                raise CheckpointError(
-                    f"{lid}: replication drift — authoritative "
-                    f"copies from writers {writers[0]} and "
-                    f"{writers[1]} carry different hashes")
+                    f"{lid}: slices overlap partially at "
+                    f"[{lo}, {hi}) with different spans "
+                    f"{first['object_range']} vs "
+                    f"{other['object_range']} — overlap is legal "
+                    f"only as exact-span replicas")
 
 
 def check_replica_hashes(lid, entries, snapshots) -> None:
     """Identical-span slices are replicas by construction and must
-    hash-equal whichever carries the authoritative flag — the flag
-    picks the restore winner, equality certifies interchangeability
+    hash-equal — equality certifies the copies interchangeable, so
+    any reader may take any replica
     (the replication drift certificate)."""
     by_span: dict = {}
     for e in entries:

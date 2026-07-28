@@ -183,12 +183,11 @@ directory is engine snapshots and program dumps. Annotated:
      "objects": {"W_0": 2113024, "O_0": 6439424}}   // at EXACT local
   ],                            //   geometry, never a derived guess
   "slices": {                   // snapshot bytes -> logical bytes,
-    "W_0": [                    //   hashed, authoritative-flagged
-      {"snapshot": 0, "snapshot_range": [0, 2113024],
-       "object_range": [0, 2113024], "hash": "...",
-       "authoritative": true},
-      {"snapshot": 1, "snapshot_range": [0, 2113024],
-       "object_range": [0, 2113024], "hash": "..."}
+    "W_0": [                    //   hashed; same-span entries are
+      {"snapshot": 0, "snapshot_range": [0, 2113024],   // certified
+       "object_range": [0, 2113024], "hash": "..."},    // replicas —
+      {"snapshot": 1, "snapshot_range": [0, 2113024],   // readers
+       "object_range": [0, 2113024], "hash": "..."}     // take any
     ]
   },
   "engine_spec": {"0": {"backing_gib": 87.0}, ...},
@@ -207,10 +206,12 @@ directory is engine snapshots and program dumps. Annotated:
 ```
 
 The record is validated totally at write and at read: slices must
-union to each logical object's full span, overlapping bytes need an
-authoritative winner, identical-span copies must hash-equal (the
-replication drift certificate), and slice endpoints must land on
-element boundaries when field schemas are given. `launch` makes a
+union to each logical object's full span; overlap is legal only as
+exact-span copies that hash-equal (the replication drift
+certificate — certified equal, any reader may take any replica, and
+assembled reads take the lowest-index covering snapshot); and slice
+endpoints must land on element boundaries when field schemas are
+given. `launch` makes a
 checkpoint auditable and re-invocable without guessing; the client
 payload makes the resumed curve continuous.
 
@@ -269,8 +270,8 @@ checkpoints/<run_name>/step_000420/
 checkpoint boundary)**.** The configured source policy compiles the
 responsibility map into per-writer save sets — `simple` (the
 default) saves everything each writer holds, whole, for
-self-sufficient per-rank snapshots with writer 0 authoritative on
-replicated objects; `dedup` saves one copy of each replicated object
+self-sufficient per-rank snapshots whose replicated copies are
+hash-certified interchangeable; `dedup` saves one copy of each replicated object
 as disjoint responsibility slices — and the composer fans out one
 snapshot per writer, waits for all of them, collects the per-slice
 hashes each daemon streamed, and runs the replication-drift
@@ -301,8 +302,8 @@ refuses foreign schemas loudly.
 
 **Restoring.** Targets resolve against the record into per-snapshot
 restore plans in the engine's remap shape — every requested byte
-sourced exactly once, authoritative slices preferred where coverage
-overlaps:
+sourced exactly once; where certified replicas overlap, the reader
+takes the lowest-index covering snapshot:
 
 ```python
 record, client = load_checkpoint(step_dir, targets=["W_0"])  # weights
