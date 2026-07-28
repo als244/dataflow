@@ -239,18 +239,27 @@ def run(global_cfg, recipe: Recipe, pipeline, steps: int, *,
             Path(checkpoint_dir) / run_name, resume, log)
         distribute_artifacts(ck_record, hosts, log)
         resolved = ck_record["launch"]["resolved"]
-        expect = {"world": (ck_record["scheme"].get("world"), world),
-                  "seed": (ck_record["seed"], seed),
-                  "rank_rounds": (resolved.get("rank_rounds"),
-                                  [len(m) for m in round_map]),
-                  "backend": (resolved.get("backend"), gspec.backend),
-                  "hosts": (resolved.get("hosts"),
-                            [h.name for h in hosts])}
-        for key, (got, want) in expect.items():
+        # MUST match: what the saved state is a function of. MAY
+        # move: where it runs — snapshots are self-sufficient and
+        # each rank's engine is capability-checked at restore, so
+        # hosts and backend are free to differ (noted, not refused).
+        must = {"world": (ck_record["scheme"].get("world"), world),
+                "seed": (ck_record["seed"], seed),
+                "rank_rounds": (resolved.get("rank_rounds"),
+                                [len(m) for m in round_map])}
+        for key, (got, want) in must.items():
             if got != want:
                 raise RuntimeError(
                     f"resume record mismatch: {key} was {got!r} at "
                     f"checkpoint time but the run asks {want!r}")
+        may = {"backend": (resolved.get("backend"), gspec.backend),
+               "hosts": (resolved.get("hosts"),
+                         [h.name for h in hosts])}
+        for key, (got, want) in may.items():
+            if got != want:
+                log(f"[fleet] resume: {key} moved since the "
+                    f"checkpoint ({got!r} -> {want!r}) — allowed, "
+                    f"the state is placement-independent")
 
     run_lock = None
     if ck is not None:

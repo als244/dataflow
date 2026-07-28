@@ -144,7 +144,20 @@ def fleet_loop(ranks, gspec, recipe, pipeline, steps, *, budgets, seed,
                     f"resume under the {policy!r} source policy goes "
                     f"through the record loader "
                     f"(checkpointing.load_checkpoint targets)")
-            from dataflow.checkpoint import resolve_targets
+            from dataflow.checkpoint import (resolve_targets,
+                                             writer_resident_bytes)
+
+            # capability, never placement: the engine must have ROOM
+            # for the rank view; where it sits is the caller's choice
+            needed = writer_resident_bytes(ck_record, str(i))
+            capacity = rank.client.query_backing().get(
+                "capacity_bytes", 0)
+            if capacity < needed:
+                raise RuntimeError(
+                    f"{rank.name}: engine backing "
+                    f"{capacity / 1024 ** 3:.2f} GiB cannot hold the "
+                    f"checkpoint's {needed / 1024 ** 3:.2f} GiB rank "
+                    f"state")
 
             step_dir = Path(ck_record["_step_dir"])
             wanted = sorted({o["id"]

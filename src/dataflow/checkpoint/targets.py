@@ -53,7 +53,10 @@ def target_ids(record: dict, want, key) -> list:
     logical = record["logical_objects"]
     ids = []
     for spec in persisted_objects(want):
-        if spec.id not in logical:
+        known = (spec.id in logical
+                 or (key is not None
+                     and f"{spec.id}@{key}" in logical))
+        if not known:
             raise CheckpointError(f"unknown target {spec.id}")
         if key is None:
             expect = int(logical[spec.id]["bytes"])
@@ -72,11 +75,31 @@ def target_ids(record: dict, want, key) -> list:
 
 
 def writer_view_bytes(record: dict, key, lid: str) -> int:
-    own = [i for i, s in enumerate(record["snapshots"])
-           if s.get("writer") == key]
-    return sum(e["object_range"][1] - e["object_range"][0]
-               for e in record["slices"].get(lid, [])
-               if e["snapshot"] in own)
+    """The writer's RESIDENT size for a target object — read off the
+    snapshot inventory (alignment padding included), which is what a
+    rank restore recreates and what a rank program binds."""
+    for s in record["snapshots"]:
+        if s.get("writer") == key and lid in (s.get("objects") or {}):
+            return int(s["objects"][lid])
+    return 0
+
+
+def writer_resident_bytes(record: dict, key) -> int:
+    """Total bytes writer ``key``'s snapshots recreate at restore —
+    the sum of their resident-object inventories. Capability checks
+    compare THIS against a target engine's backing capacity; the
+    record never says WHERE state must live, only how much room it
+    needs."""
+    total = 0
+    found = False
+    for s in record["snapshots"]:
+        if s.get("writer") == key:
+            found = True
+            total += sum(int(n)
+                         for n in (s.get("objects") or {}).values())
+    if not found:
+        raise CheckpointError(f"no snapshot belongs to writer {key}")
+    return total
 
 
 def logical_plan(record: dict, ids: list) -> list:

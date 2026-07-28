@@ -203,6 +203,22 @@ def load_checkpoint(step_dir, *, targets, client=None,
     step_dir = Path(step_dir)
     record = read_record(step_dir)
     plan = resolve_targets(record, targets)
+    sizes = {}
+    for step in plan:
+        for windows in step["remap"].values():
+            for w in windows:
+                sizes[w["id"]] = int(w["bytes"])
+    needed = sum(sizes.values())
+    if client is not None:
+        # capability, never placement: the engine must have room
+        capacity = client.query_backing().get("capacity_bytes", 0)
+        if capacity < needed:
+            from dataflow.checkpoint import CheckpointError
+
+            raise CheckpointError(
+                f"engine backing {capacity / 1024 ** 3:.2f} GiB "
+                f"cannot hold the {needed / 1024 ** 3:.2f} GiB the "
+                f"targets restore")
     if client is None:
         import tempfile
         import threading
@@ -211,13 +227,7 @@ def load_checkpoint(step_dir, *, targets, client=None,
         from dataflow.service import EngineClient, EngineConfig, Server
 
         if backing_gib is None:
-            sizes = {}
-            for step in plan:
-                for windows in step["remap"].values():
-                    for w in windows:
-                        sizes[w["id"]] = int(w["bytes"])
-            backing_gib = max(0.25, 1.25 * sum(sizes.values())
-                              / 1024 ** 3)
+            backing_gib = max(0.25, 1.25 * needed / 1024 ** 3)
         sock = str(Path(tempfile.mkdtemp()) / "ckload.sock")
         server = Server(EngineConfig(socket_path=sock, fake=True,
                                      slab_backing_gib=backing_gib))

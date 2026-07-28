@@ -17,9 +17,10 @@ from .compose import save_checkpoint
 from .record import (CheckpointError, RECORD_NAME, RECORD_SCHEMA,
                      read_record, schema_digest, validate_record,
                      write_record)
-from .targets import persisted_objects, resolve_targets
+from .targets import (persisted_objects, resolve_targets,
+                      writer_resident_bytes)
 
 __all__ = ["CheckpointError", "RECORD_NAME", "RECORD_SCHEMA",
            "persisted_objects", "read_record", "resolve_targets",
            "save_checkpoint", "schema_digest", "validate_record",
-           "write_record"]
+           "write_record", "writer_resident_bytes"]

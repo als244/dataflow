@@ -6,14 +6,16 @@ the weights-only load, where optimizer bytes never enter the store.
 CPU-only (fake engines).
 
 Tests:
-- test_conductor_save_resume_round_trip: the conductor save path writes a v1 record; resolve_resume(auto) picks the newest complete step and skips a step dir without a record; each rank's own-snapshot restore is bitwise and reports the saved step.
+- test_conductor_save_resume_round_trip: the conductor save path writes a v1 record whose engine_spec carries each writer's capability (backing/device/kernel_set/fake) and whose inventories sum to the rank state; resolve_resume(auto) picks the newest complete step and skips a step dir without a record; each rank's own-snapshot restore is bitwise and reports the saved step.
 - test_load_checkpoint_targets: weights-only targets leave ZERO optimizer bytes resident in a scratch engine sized from the plan; "all" reassembles the aggregate optimizer object; a writer key restores that rank's shard view.
+- test_load_checkpoint_refuses_small_engine: a supplied engine whose backing cannot hold the targets refuses loudly BEFORE any restore call (capability, never placement).
 """
 import threading
 import time
 from dataclasses import dataclass
 
 import numpy as np
+import pytest
 
 from dataflow.checkpoint import RECORD_NAME
 from dataflow.core.jsonio import program_to_dict
@@ -121,6 +123,19 @@ def quiet(_msg):
     return None
 
 
+class TinyEngineStub:
+    """query_backing-only stand-in whose engine is too small for any
+    restore — the capability refusal must fire BEFORE a single
+    restore call reaches it."""
+
+    def query_backing(self):
+        return {"capacity_bytes": 1024}
+
+    def restore_snapshot(self, *args, **kwargs):
+        raise AssertionError(
+            "the capability refusal must precede restores")
+
+
 def test_conductor_save_resume_round_trip(tmp_path):
     w = rng_bytes(7, W_BYTES)
     o = {r: shard_bytes(100 + r) for r in (0, 1)}
@@ -140,6 +155,15 @@ def test_conductor_save_resume_round_trip(tmp_path):
         assert record["client_payload"]["data_cursor"] == {"doc": 9}
         assert record["scheme"]["source_policy"] == "simple"
         assert record["launch"]["resolved"]["world"] == 2
+
+        # the record carries each writer's CAPABILITY (what room the
+        # state needs and what engine wrote it), never placement
+        from dataflow.checkpoint import writer_resident_bytes
+
+        spec = record["engine_spec"]["0"]
+        assert spec["fake"] is True and "kernel_set" in spec
+        assert spec["backing_gib"] > 0
+        assert writer_resident_bytes(record, "0") == W_BYTES + O_LOCAL
 
         # each rank restores its OWN snapshot through the keyed plan
         # (the rank view: logical slices remapped to local geometry)
@@ -212,6 +236,25 @@ def test_load_checkpoint_targets(tmp_path):
             assert bytes(client.get_object("O_0")) == o[1]
         finally:
             client.shutdown()
+    finally:
+        for _server, c in daemons:
+            c.shutdown()
+
+
+def test_load_checkpoint_refuses_small_engine(tmp_path):
+    w = rng_bytes(31, W_BYTES)
+    o = {r: shard_bytes(300 + r) for r in (0, 1)}
+    daemons, ranks, ck = fleet(tmp_path, w, o)
+    ck["dir"].mkdir(parents=True, exist_ok=True)
+    try:
+        meta = {"seed": 11, "rank_rounds": [1, 1], "backend": "fake",
+                "hosts": ["host0", "host1"], "data_cursor": None}
+        save_checkpoint(ranks, ck, 4, meta, [5.0], quiet)
+        from dataflow.checkpoint import CheckpointError
+
+        with pytest.raises(CheckpointError, match="cannot hold"):
+            load_checkpoint(ck["dir"] / "step_000004", targets="all",
+                            client=TinyEngineStub())
     finally:
         for _server, c in daemons:
             c.shutdown()

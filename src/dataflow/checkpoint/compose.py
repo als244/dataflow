@@ -85,10 +85,16 @@ def save_checkpoint(writers: dict, dest, *, step, seed,
     check_replication_drift(slices, snapshots)
     engine_spec = {}
     for key in sorted(writers):
-        backing = writers[key]["client"].query_backing()
+        client = writers[key]["client"]
+        backing = client.query_backing()
+        boot = client.engine_status().get("boot_config") or {}
         engine_spec[str(key)] = {
             "backing_gib": round(
-                backing.get("capacity_bytes", 0) / 1024 ** 3, 2)}
+                backing.get("capacity_bytes", 0) / 1024 ** 3, 2),
+            "device": boot.get("device"),
+            "kernel_set": boot.get("kernel_set"),
+            "fake": bool(boot.get("fake")),
+        }
     return write_record(
         dest, step=step, seed=seed, logical_objects=logical_objects,
         slices=slices, snapshots=snapshots, engine_spec=engine_spec,
