@@ -30,7 +30,7 @@ class PinnedSlab:
     # before the kernel OOM killer fires (observed: full desktop
     # freeze + NVRM page-table failure + reboot). Never pin into the
     # last SYSTEM_RESERVE_GIB of available memory.
-    SYSTEM_RESERVE_GIB = 24.0
+    SYSTEM_RESERVE_GIB = 12.0
 
     def __init__(self, capacity_bytes: int, *, device: int = 0):
         import threading
