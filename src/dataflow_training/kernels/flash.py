@@ -115,10 +115,10 @@ def fa3_flash_fwd(kctx, q, k, v, n_heads, n_kv_heads, head_dim,
     return flat, lse
 
 
-def fa3_flash_bwd(kctx, d_attn, q, k, v, attn_out, lse, n_heads,
-                  n_kv_heads, head_dim, cu_seqlens, max_seqlen,
-                  dq_out=None, dk_out=None, dv_out=None,
-                  causal=True, softmax_scale=None):
+def provider_flash_bwd(d_attn, q, k, v, attn_out, lse, n_heads,
+                       n_kv_heads, head_dim, cu_seqlens, max_seqlen,
+                       dq_out, dk_out, dv_out, causal, softmax_scale,
+                       deterministic):
     import flash_attn_interface as provider
 
     t = q.shape[0]
@@ -143,13 +143,33 @@ def fa3_flash_bwd(kctx, d_attn, q, k, v, attn_out, lse, n_heads,
         cu_seqlens, cu_seqlens, None, None, mq, mq, dq3, dk3, dv3,
         (float(head_dim) ** -0.5 if softmax_scale is None
          else float(softmax_scale)),
-        bool(causal), -1, -1, 0.0, True, 0)
+        bool(causal), -1, -1, 0.0, bool(deterministic), 0)
     return ((dq3.reshape(t, n_heads * head_dim) if dq_out is None
              else dq_out),
             (dk3.reshape(t, n_kv_heads * head_dim) if dk_out is None
              else dk_out),
             (dv3.reshape(t, n_kv_heads * head_dim) if dv_out is None
              else dv_out))
+
+
+def fa3_flash_bwd(kctx, d_attn, q, k, v, attn_out, lse, n_heads,
+                  n_kv_heads, head_dim, cu_seqlens, max_seqlen,
+                  dq_out=None, dk_out=None, dv_out=None,
+                  causal=True, softmax_scale=None):
+    return provider_flash_bwd(
+        d_attn, q, k, v, attn_out, lse, n_heads, n_kv_heads, head_dim,
+        cu_seqlens, max_seqlen, dq_out, dk_out, dv_out, causal,
+        softmax_scale, True)
+
+
+def fa3_nondet_flash_bwd(kctx, d_attn, q, k, v, attn_out, lse, n_heads,
+                         n_kv_heads, head_dim, cu_seqlens, max_seqlen,
+                         dq_out=None, dk_out=None, dv_out=None,
+                         causal=True, softmax_scale=None):
+    return provider_flash_bwd(
+        d_attn, q, k, v, attn_out, lse, n_heads, n_kv_heads, head_dim,
+        cu_seqlens, max_seqlen, dq_out, dk_out, dv_out, causal,
+        softmax_scale, False)
 
 
 register(
@@ -169,4 +189,15 @@ register(
     "flash_bwd", "fa3", deterministic=True, allocates="torch",
     workspace=internal(flash_bwd_hint), priority=10, requires=fa3_ready,
     fn=fa3_flash_bwd,
+)
+# Override-only (priority below fa3, so never auto-resolved): the
+# provider backward on its atomics path — ~1.13-1.21x faster than the
+# deterministic leg at the cost of run-to-run bitwise repeatability.
+# DATAFLOW_KERNELS=fa3_nondet selects it for flash_bwd alone (no other
+# op registers this impl_id); describe() then carries fa3_nondet into
+# the profile-cache key, so det and nondet timings never mix.
+register(
+    "flash_bwd", "fa3_nondet", deterministic=False, allocates="torch",
+    workspace=internal(flash_bwd_hint), priority=5, requires=fa3_ready,
+    fn=fa3_nondet_flash_bwd,
 )
