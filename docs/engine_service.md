@@ -148,8 +148,10 @@ writer being a run that mutates it in place (a host task fills the
 extent directly; same-size re-create is idempotent, a size change
 is BINDING_MISMATCH);
 `materialize_object` fills a resident server-side.
-`wipe(scope)` frees residents by scope (`"backing"` or `"all"`)
-— it skips objects marked with
+`wipe(scope)` frees residents by scope (`"backing"` or `"all"`) and
+resets the backing high-water that `query_backing` reports
+(`peak_bytes`: the slab's true peak — residents, transients and
+scratch alike — since the last wipe) — it skips objects marked with
 `protect_object` unless called with `force`, and refuses ids a
 snapshot currently holds under lease. `unprotect_object` lifts the
 mark. `validate_program` dry-runs registration (schema + binding

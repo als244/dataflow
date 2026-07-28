@@ -12,7 +12,7 @@ Tests:
 - test_materialize_zeros_and_tokens: materialize produces zero bytes and per-seed-deterministic in-range token ids.
 - test_duplicate_copies_bytes_independently: duplicate copies bytes and meta into an independent object — mutating the parent afterwards leaves the copy untouched, and duplicating onto an existing id refuses.
 - test_protected_object_survives_wipe_unless_forced: a protected object refuses release and survives wipe until force=True.
-- test_query_backing_usage: query_backing reports object count, largest object, and used bytes consistent with engine_status.
+- test_query_backing_usage: query_backing reports object count, largest object, and used bytes consistent with engine_status; peak_bytes is the slab high-water — it survives a release and resets to the surviving level on wipe.
 - test_create_object_semantics: create_object allocates a payload-less catalogued extent (query shows the size), same-size re-create is idempotent, and a size change raises BINDING_MISMATCH.
 - test_host_run_fills_in_place: an all-host program binds pre-created store extents and its task's writes land directly in the catalogued objects (fake boot: plain bytearray memory) — no engine, no placement, no transient copies.
 - test_host_program_registration_guards: mixed host+device programs, host tasks with outputs, and host tasks touching non-initial ids are each rejected at registration as BAD_REQUEST.
@@ -203,6 +203,18 @@ def test_query_backing_usage(daemon):
         assert u["largest"][0][0] == "big"
         assert u["used_bytes"] >= 100_000
         assert c.engine_status()["pools"]["backing"]["n_objects"] == 2
+
+        # peak is the high-water: releasing does not lower it, wiping
+        # restarts it from whatever survived
+        assert u["peak_bytes"] >= u["used_bytes"]
+        high = u["peak_bytes"]
+        c.release_object("big")
+        after = c.query_backing()
+        assert after["used_bytes"] < u["used_bytes"]
+        assert after["peak_bytes"] == high
+        c.wipe("all", force=True)
+        wiped = c.query_backing()
+        assert wiped["peak_bytes"] == wiped["used_bytes"]
 
 
 # --------------------------------------------------- create + host runs

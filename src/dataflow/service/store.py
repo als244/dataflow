@@ -41,6 +41,10 @@ class SlabAllocator:
         self.capacity = capacity
         self.free: list[Extent] = [Extent(0, capacity)]
         self.used_bytes = 0
+        # true slab high-water — residents, transients and scratch all
+        # allocate here, so this is the number a memory prediction must
+        # be checked against; wipe() resets it to the post-wipe level
+        self.peak_bytes = 0
 
     def alloc(self, size: int) -> Extent:
         need = -(-size // ALIGN) * ALIGN
@@ -53,6 +57,8 @@ class SlabAllocator:
                     ext.offset += need
                     ext.size -= need
                 self.used_bytes += need
+                if self.used_bytes > self.peak_bytes:
+                    self.peak_bytes = self.used_bytes
                 return got
         raise ServiceError(
             "CAPACITY",
@@ -84,6 +90,7 @@ class SlabAllocator:
         return {
             "capacity_bytes": self.capacity,
             "used_bytes": self.used_bytes,
+            "peak_bytes": self.peak_bytes,
             "free_bytes": self.capacity - self.used_bytes,
             "largest_free_extent": max((e.size for e in self.free),
                                        default=0),
@@ -264,6 +271,10 @@ class Store:
             with self.catalog_lock:
                 self.allocator.release(rec.extent)
                 del self.objects[oid]
+        # a wipe is the natural measurement boundary: the high-water
+        # restarts from whatever survived, so query_backing's
+        # peak_bytes reads "the peak since the last wipe"
+        self.allocator.peak_bytes = self.allocator.used_bytes
         return {"freed_bytes": freed, "n_objects": n, "skipped": skipped}
 
     # ---- inbound peer transfers (peer plane): reserve -> fill -> adopt.
