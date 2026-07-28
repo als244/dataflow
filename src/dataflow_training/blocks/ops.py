@@ -200,11 +200,86 @@ def rope_bwd(dx: torch.Tensor, positions: torch.Tensor, n_heads: int, head_dim: 
     return out.to(dx.dtype).view(t, n_heads * head_dim)
 
 
-# --- flash attention -------------------------------------------------------------
-# The varlen kernels live in attention.py with their implementation
-# dispatch; blocks call them through THIS surface only.
+# --- flash attention (aten low-level fwd/bwd split) ------------------------------
+# These are the NATIVE implementations. Blocks reach flash through the
+# kernel registry (kernels/flash.py), which pins aten or a provider
+# generation (FA3 on sm90) per device at resolve time.
 
-from .attention import active_flash_impl, flash_bwd, flash_fwd  # noqa: E402,F401
+def flash_fwd(
+    q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,
+    n_heads: int, n_kv_heads: int, head_dim: int,
+    cu_seqlens: torch.Tensor, max_seqlen: int,
+    causal: bool = True, softmax_scale: float | None = None,
+    out: torch.Tensor | None = None, lse_out: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Single-launch VARLEN flash-attention forward — the ONLY path (a
+    uniform batch is just equal-length segments). q: (t, d); k, v: (t, kv);
+    causal PER SEGMENT. ``cu_seqlens`` is the device int32 cumulative
+    boundary vector (``Segments.cu``, incl. the final total); ``max_seqlen``
+    is the STATIC host int flash grid (``Segments.max_len`` — NEVER derived
+    from device data, the hidden-sync rule). GQA native (no kv-head
+    expansion). Returns (attn_out (t, d), lse (n_heads, t) ragged layout).
+    Probed on this box: bit-clean segment isolation, deterministic-twice,
+    sync-audit clean."""
+    t = q.shape[0]
+    mq = int(max_seqlen)
+    fresh, lse, _rng, _unused, _ = torch.ops.aten._flash_attention_forward(
+        q.view(t, n_heads, head_dim),
+        k.view(t, n_kv_heads, head_dim),
+        v.view(t, n_kv_heads, head_dim),
+        cu_seqlens, cu_seqlens, mq, mq, 0.0, bool(causal), False,
+        scale=softmax_scale)
+    flat = fresh.reshape(t, n_heads * head_dim)
+    if out is not None:
+        out.copy_(flat)
+        flat = out
+    if lse_out is not None:
+        lse_out.copy_(lse)
+        lse = lse_out
+    return flat, lse
+
+
+def flash_bwd(
+    d_attn: torch.Tensor, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,
+    attn_out: torch.Tensor, lse: torch.Tensor,
+    n_heads: int, n_kv_heads: int, head_dim: int,
+    cu_seqlens: torch.Tensor, max_seqlen: int,
+    causal: bool = True, softmax_scale: float | None = None,
+    dq_out: torch.Tensor | None = None, dk_out: torch.Tensor | None = None,
+    dv_out: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Single-launch VARLEN flash-attention backward — the ONLY path,
+    mirroring flash_fwd. Returns (dq (t,d), dk (t,kv), dv (t,kv)); GQA head
+    grads come back reduced natively. ``cu_seqlens`` = ``Segments.cu``,
+    ``max_seqlen`` = ``Segments.max_len`` (static host int). lse is
+    (n_heads, t). philox zeros are valid (dropout 0 — gate-verified equal to
+    round-tripped rng_state). ``.contiguous()`` on lse is LOAD-BEARING: the
+    aten flash-bwd kernel reads it assuming contiguous rows (the fla
+    contiguity lesson, aten edition — silent garbage grads otherwise)."""
+    t = q.shape[0]
+    mq = int(max_seqlen)
+    philox = torch.zeros(2, dtype=torch.uint64, device=q.device)
+    dq3, dk3, dv3 = torch.ops.aten._flash_attention_backward(
+        d_attn.view(t, n_heads, head_dim),
+        q.view(t, n_heads, head_dim),
+        k.view(t, n_kv_heads, head_dim),
+        v.view(t, n_kv_heads, head_dim),
+        attn_out.view(t, n_heads, head_dim),
+        lse.contiguous(), cu_seqlens, cu_seqlens, mq, mq,
+        0.0, bool(causal), philox, philox, scale=softmax_scale)
+    dq = dq3.reshape(t, n_heads * head_dim)
+    dk = dk3.reshape(t, n_kv_heads * head_dim)
+    dv = dv3.reshape(t, n_kv_heads * head_dim)
+    if dq_out is not None:
+        dq_out.copy_(dq)
+        dq = dq_out
+    if dk_out is not None:
+        dk_out.copy_(dk)
+        dk = dk_out
+    if dv_out is not None:
+        dv_out.copy_(dv)
+        dv = dv_out
+    return dq, dk, dv
 
 
 def attention_reference(

@@ -156,8 +156,8 @@ class OlmoeBlockBwd(MoEAuxTempState, MoEProfileFill, BlockBwd):
         K.rope_fwd(kctx, kn, k, pos, d.n_kv_heads, d.head_dim, d.rope_base)
         del kn
 
-        dq, dk, dv = ops.flash_bwd(
-            d_attn, q, k, a["v"], a["attn_out"], a["lse"],
+        dq, dk, dv = K.flash_bwd(
+            kctx, d_attn, q, k, a["v"], a["attn_out"], a["lse"],
             d.n_heads, d.n_kv_heads, d.head_dim,
             cu_seqlens=seg.cu, max_seqlen=seg.max_len,
         )

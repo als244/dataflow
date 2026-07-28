@@ -164,6 +164,17 @@ def device_caps() -> dict:
             caps["flash_mla"] = True
         except Exception:
             pass
+    # flash-attention provider generations serve EXACT architectures:
+    # FA3 = sm90 only, FA4 = sm100 only (consumer sm120 is served by
+    # neither generation — everything else runs the native aten flash).
+    caps["flash3"] = False
+    if caps["cuda"] and caps.get("cc") == (9, 0):
+        try:
+            import flash_attn_interface  # noqa: F401
+
+            caps["flash3"] = True
+        except Exception:
+            pass
     return caps
 
 

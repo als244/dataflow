@@ -170,8 +170,8 @@ class Dsv3DenseBlockFwd(BlockFwd):
         a = st["a"]
         t = st["q_full"].shape[0]
         h, qk, v = d.n_heads, d.qk_head_dim, d.v_head_dim
-        out_pad, lse = ops.flash_fwd(
-            st.pop("q_full"), st.pop("k_full"), st.pop("v_pad"),
+        out_pad, lse = K.flash_fwd(
+            kctx, st.pop("q_full"), st.pop("k_full"), st.pop("v_pad"),
             h, h, qk, cu_seqlens=st["seg"].cu, max_seqlen=st["seg"].max_len,
         )
         attn_out = out_pad.view(t, h, qk)[..., :v].reshape(t, h * v).contiguous()
@@ -274,8 +274,8 @@ class Dsv3DenseBlockBwd(BlockBwd):
         attn_out_pad = _pad_v(a["attn_out"].view(t, h, v), qk)
         d_attn_pad = _pad_v(d_attn_v.view(t, h, v), qk)
         del d_attn_v
-        dq, dk, dv_pad = ops.flash_bwd(
-            d_attn_pad, q_full, k_full, v_pad, attn_out_pad, a["lse"],
+        dq, dk, dv_pad = K.flash_bwd(
+            kctx, d_attn_pad, q_full, k_full, v_pad, attn_out_pad, a["lse"],
             h, h, qk, cu_seqlens=seg.cu, max_seqlen=seg.max_len,
         )
         del d_attn_pad, q_full, k_full, v_pad, attn_out_pad

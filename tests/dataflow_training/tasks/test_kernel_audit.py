@@ -415,6 +415,71 @@ add_cases("rope_bwd",
           AuditCase("odd_rows", make_rope_bwd_odd, outputs=(1,)))
 
 
+from dataflow_training.blocks import ops as blocks_ops
+
+
+def flash_audit_tensors(g, lens, h, kvh, hd):
+    t = sum(lens)
+    bounds = [0]
+    for n in lens:
+        bounds.append(bounds[-1] + n)
+    cu = torch.tensor(bounds, device="cuda", dtype=torch.int32)
+    return (t, rand(g, t, h * hd), rand(g, t, kvh * hd),
+            rand(g, t, kvh * hd), cu, max(lens))
+
+
+def make_flash_fwd_ragged(g):
+    h, kvh, hd = 4, 2, 64
+    t, q, k, v, cu, mx = flash_audit_tensors(g, (96, 160), h, kvh, hd)
+    out = torch.empty(t, h * hd, device="cuda", dtype=torch.bfloat16)
+    lse = torch.empty(h, t, device="cuda", dtype=torch.float32)
+    return (q, k, v, h, kvh, hd, cu, mx, out, lse), {}
+
+
+def make_flash_fwd_unit_segments(g):
+    # length-1 segments at both ends: a token attending only to itself
+    # (softmax over one element) plus an odd interior length
+    h, kvh, hd = 4, 2, 64
+    t, q, k, v, cu, mx = flash_audit_tensors(g, (1, 127, 1), h, kvh, hd)
+    out = torch.empty(t, h * hd, device="cuda", dtype=torch.bfloat16)
+    lse = torch.empty(h, t, device="cuda", dtype=torch.float32)
+    return (q, k, v, h, kvh, hd, cu, mx, out, lse), {}
+
+
+def make_flash_bwd_ragged(g):
+    h, kvh, hd = 4, 2, 64
+    t, q, k, v, cu, mx = flash_audit_tensors(g, (96, 160), h, kvh, hd)
+    attn_out, lse = blocks_ops.flash_fwd(q, k, v, h, kvh, hd, cu, mx)
+    d_attn = rand(g, t, h * hd)
+    dq = torch.empty(t, h * hd, device="cuda", dtype=torch.bfloat16)
+    dk = torch.empty(t, kvh * hd, device="cuda", dtype=torch.bfloat16)
+    dv = torch.empty(t, kvh * hd, device="cuda", dtype=torch.bfloat16)
+    return (d_attn, q, k, v, attn_out, lse.contiguous(), h, kvh, hd,
+            cu, mx, dq, dk, dv), {}
+
+
+def make_flash_bwd_unit_segments(g):
+    h, kvh, hd = 4, 2, 64
+    t, q, k, v, cu, mx = flash_audit_tensors(g, (1, 127, 1), h, kvh, hd)
+    attn_out, lse = blocks_ops.flash_fwd(q, k, v, h, kvh, hd, cu, mx)
+    d_attn = rand(g, t, h * hd)
+    dq = torch.empty(t, h * hd, device="cuda", dtype=torch.bfloat16)
+    dk = torch.empty(t, kvh * hd, device="cuda", dtype=torch.bfloat16)
+    dv = torch.empty(t, kvh * hd, device="cuda", dtype=torch.bfloat16)
+    return (d_attn, q, k, v, attn_out, lse.contiguous(), h, kvh, hd,
+            cu, mx, dq, dk, dv), {}
+
+
+add_cases("flash_fwd",
+          AuditCase("ragged", make_flash_fwd_ragged, outputs=(8, 9)),
+          AuditCase("unit_segments", make_flash_fwd_unit_segments,
+                    outputs=(8, 9)))
+add_cases("flash_bwd",
+          AuditCase("ragged", make_flash_bwd_ragged, outputs=(11, 12, 13)),
+          AuditCase("unit_segments", make_flash_bwd_unit_segments,
+                    outputs=(11, 12, 13)))
+
+
 def make_adamw_first_step(g):
     n = 3 * 1021
     w = rand(g, n)

@@ -42,6 +42,7 @@ from . import (  # noqa: F401,E402
     dsa,
     dsa_flashmla,
     embed,
+    flash,
     gated_rmsnorm,
     gelu,
     layernorm,

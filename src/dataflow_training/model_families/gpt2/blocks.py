@@ -85,14 +85,14 @@ class Gpt2BlockFwd(BlockFwd):
     @staticmethod
     def _stage_attn(kctx, K, d, st):
         seg = st["seg"]
-        attn_out, lse = ops.flash_fwd(
-            st["q"], st["k"], st["v"], d.n_heads, d.n_heads,
-            d.head_dim, cu_seqlens=seg.cu, max_seqlen=seg.max_len)
+        a = st["a"]
+        attn_out, lse = K.flash_fwd(
+            kctx, st["q"], st["k"], st["v"], d.n_heads, d.n_heads,
+            d.head_dim, cu_seqlens=seg.cu, max_seqlen=seg.max_len,
+            out=None if a is None else a["attn_out"],
+            lse_out=None if a is None else a["lse"])
         st.pop("q"), st.pop("k"), st.pop("v")
         st["attn_out"] = attn_out
-        if st["a"] is not None:
-            st["a"]["lse"].copy_(lse)
-            st["a"]["attn_out"].copy_(attn_out)
 
     @staticmethod
     def _stage_resid1_ln2(kctx, K, d, st):
@@ -218,8 +218,8 @@ class Gpt2BlockBwd(BlockBwd):
             acc("wo", torch.matmul(a["attn_out"].transpose(0, 1), dh_mid))
         if acc.wanted("b_o"):
             acc("b_o", dh_mid.float().sum(0))
-        dq, dk, dv = ops.flash_bwd(
-            d_attn, a["q"], a["k"], a["v"], a["attn_out"], a["lse"],
+        dq, dk, dv = K.flash_bwd(
+            kctx, d_attn, a["q"], a["k"], a["v"], a["attn_out"], a["lse"],
             d.n_heads, d.n_heads, d.head_dim,
             cu_seqlens=seg.cu, max_seqlen=seg.max_len)
         del d_attn

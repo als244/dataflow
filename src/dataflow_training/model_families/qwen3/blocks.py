@@ -160,8 +160,8 @@ class Qwen3BlockBwd(BlockBwd):
         K.rope_fwd(kctx, kn, k, pos, kvh, hd, d.rope_base)
         del kn
 
-        dq, dk, dv = ops.flash_bwd(
-            d_attn, q, k, a["v"], a["attn_out"], a["lse"], h, kvh, hd,
+        dq, dk, dv = K.flash_bwd(
+            kctx, d_attn, q, k, a["v"], a["attn_out"], a["lse"], h, kvh, hd,
             cu_seqlens=seg.cu, max_seqlen=seg.max_len,
         )
         del d_attn, q, k

@@ -216,14 +216,14 @@ class BlockFwd(_Base):
         # ALWAYS varlen: ONE launch for all segments (uniform batch is
         # equal-length segments); cu/max from the run_args prologue Segments
         seg = st["seg"]
-        attn_out, lse = ops.flash_fwd(
-            st["q"], st["k"], st["v"], d.n_heads, d.n_kv_heads,
-            d.head_dim, cu_seqlens=seg.cu, max_seqlen=seg.max_len)
+        a = st["a"]
+        attn_out, lse = K.flash_fwd(
+            kctx, st["q"], st["k"], st["v"], d.n_heads, d.n_kv_heads,
+            d.head_dim, cu_seqlens=seg.cu, max_seqlen=seg.max_len,
+            out=None if a is None else a["attn_out"],
+            lse_out=None if a is None else a["lse"])
         st.pop("q"), st.pop("k"), st.pop("v")
         st["attn_out"] = attn_out
-        if st["a"] is not None:
-            st["a"]["lse"].copy_(lse)
-            st["a"]["attn_out"].copy_(attn_out)
 
     @staticmethod
     def _stage_resid1_norm2(kctx, K, d, st):
@@ -542,8 +542,8 @@ class BlockBwd(_Base):
         d_attn = lin["wo"].dgrad(kctx, dh_mid, w)
         if acc.wanted("wo"):
             acc("wo", lin["wo"].wgrad(kctx, a["attn_out"], dh_mid))
-        dq, dk, dv = ops.flash_bwd(
-            d_attn, a["q"], a["k"], a["v"], a["attn_out"], a["lse"],
+        dq, dk, dv = K.flash_bwd(
+            kctx, d_attn, a["q"], a["k"], a["v"], a["attn_out"], a["lse"],
             d.n_heads, d.n_kv_heads, d.head_dim,
             cu_seqlens=seg.cu, max_seqlen=seg.max_len)
         del d_attn

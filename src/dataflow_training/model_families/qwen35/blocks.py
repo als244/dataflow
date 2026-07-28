@@ -420,15 +420,15 @@ class Qwen35AttnBlockFwd(BlockFwd):
 
     @staticmethod
     def _stage_attn(kctx, K, d, st):
-        attn_out, lse = ops.flash_fwd(
-            st["q"], st["k"], st["v"], d.n_heads, d.n_kv_heads, d.head_dim,
+        a = st["a"]
+        attn_out, lse = K.flash_fwd(
+            kctx, st["q"], st["k"], st["v"], d.n_heads, d.n_kv_heads,
+            d.head_dim,
             cu_seqlens=st["seg"].cu, max_seqlen=st["seg"].max_len,
-        )
+            out=None if a is None else a["attn_out"],
+            lse_out=None if a is None else a["lse"])
         st.pop("q"), st.pop("k"), st.pop("v")
         st["attn_out"] = attn_out
-        if st["a"] is not None:
-            st["a"]["lse"].copy_(lse)
-            st["a"]["attn_out"].copy_(attn_out)
 
     @staticmethod
     def _stage_gate_o(kctx, K, d, st):
@@ -521,8 +521,8 @@ class Qwen35AttnBlockBwd(BlockBwd):
         del qn
         k = Qwen35AttnBlockFwd._partial_rope(kctx, K, d, kn, kvh, pos)
         del kn
-        dq, dk, dv = ops.flash_bwd(
-            d_attn, q, k, a["v"], a["attn_out"], a["lse"], h, kvh, hd,
+        dq, dk, dv = K.flash_bwd(
+            kctx, d_attn, q, k, a["v"], a["attn_out"], a["lse"], h, kvh, hd,
             cu_seqlens=seg.cu, max_seqlen=seg.max_len,
         )
         del d_attn, q, k
