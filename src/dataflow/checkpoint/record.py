@@ -116,6 +116,7 @@ def validate_record(record: dict, *, field_schemas=None) -> None:
         check_entry_shapes(lid, total, entries, len(snapshots))
         check_coverage(lid, total, entries)
         check_overlap(lid, entries, snapshots)
+        check_replica_hashes(lid, entries, snapshots)
         if field_schemas and lid in field_schemas:
             check_digest(lid, spec, field_schemas[lid])
             check_alignment(lid, entries, field_schemas[lid])
@@ -191,6 +192,26 @@ def check_overlap(lid, entries, snapshots) -> None:
                     f"{lid}: replication drift — authoritative "
                     f"copies from writers {writers[0]} and "
                     f"{writers[1]} carry different hashes")
+
+
+def check_replica_hashes(lid, entries, snapshots) -> None:
+    """Identical-span slices are replicas by construction and must
+    hash-equal whichever carries the authoritative flag — the flag
+    picks the restore winner, equality certifies interchangeability
+    (the replication drift certificate)."""
+    by_span: dict = {}
+    for e in entries:
+        by_span.setdefault(tuple(e["object_range"]), []).append(e)
+    for span, twins in by_span.items():
+        first = twins[0]
+        for other in twins[1:]:
+            if other.get("hash") != first.get("hash"):
+                a = snapshots[first["snapshot"]].get("writer")
+                b = snapshots[other["snapshot"]].get("writer")
+                raise CheckpointError(
+                    f"{lid}: replication drift — copies of "
+                    f"{list(span)} from writers {a} and {b} carry "
+                    f"different hashes")
 
 
 def check_digest(lid, spec, fields) -> None:

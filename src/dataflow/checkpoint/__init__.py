@@ -7,6 +7,7 @@ the record IS the contract (docs/checkpointing.md). This package
 validates records totally, refuses loudly with named offenders, and
 resolves target sets into per-snapshot fetch plans in the engine's
 remap wire shape. It imports nothing from any workload."""
+from .compose import save_checkpoint
 from .record import (CheckpointError, RECORD_NAME, RECORD_SCHEMA,
                      read_record, schema_digest, validate_record,
                      write_record)
@@ -14,4 +15,5 @@ from .targets import persisted_objects, resolve_targets
 
 __all__ = ["CheckpointError", "RECORD_NAME", "RECORD_SCHEMA",
            "persisted_objects", "read_record", "resolve_targets",
-           "schema_digest", "validate_record", "write_record"]
+           "save_checkpoint", "schema_digest", "validate_record",
+           "write_record"]
