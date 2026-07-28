@@ -4,9 +4,9 @@ distribution, resume location — with all byte- and record-level work
 delegated to ``dataflow.checkpoint``.
 
 Saving compiles the configured source policy (``simple`` by default:
-every writer saves everything it holds, self-sufficient per-rank
+every source saves everything it holds, self-sufficient per-rank
 snapshots; ``dedup`` opt-in: one copy of each replicated object as
-disjoint responsibility slices) and hands the writers to the
+disjoint responsibility slices) and hands the sources to the
 composer, which fans out snapshots, runs the replication-drift
 certificate over the streamed hashes, and lands
 ``checkpoint_record.json`` atomically LAST — the completeness marker.
@@ -60,7 +60,7 @@ def push_dir(host, src_dir: str, dest_dir: str) -> None:
 
 
 def distribute_artifacts(record: dict, hosts, log) -> None:
-    """Make every writer snapshot locally available on every resuming
+    """Make every source snapshot locally available on every resuming
     host. Under the simple policy a same-mapping resume never needs
     this — each rank's snapshot is already on its box — so hosts that
     hold a snapshot skip the push; the function earns its keep on
@@ -69,27 +69,27 @@ def distribute_artifacts(record: dict, hosts, log) -> None:
 
     step_dir = Path(record["_step_dir"])
     by_name = {h.name: h for h in hosts}
-    writer_hosts = [r["host"] for r in record["launch"]["ranks"]]
+    source_hosts = [r["host"] for r in record["launch"]["ranks"]]
     for i, snap in enumerate(record["snapshots"]):
         src = step_dir / snap["path"]
         if not src.is_dir():
             # written on a REMOTE rank's box — pull it to the
-            # conductor first (the launch names each writer host)
-            writer = by_name.get(writer_hosts[i])
-            if writer is None or writer.is_local():
+            # conductor first (the launch names each source host)
+            source = by_name.get(source_hosts[i])
+            if source is None or source.is_local():
                 raise RuntimeError(
                     f"snapshot {snap['path']} missing at {src} and "
-                    f"its writer {writer_hosts[i]!r} is not reachable")
+                    f"its source {source_hosts[i]!r} is not reachable")
             subprocess.run(
                 ["scp", "-q", "-r",
-                 f"{writer.ssh}:{repo_path(writer, str(src))}",
+                 f"{source.ssh}:{repo_path(source, str(src))}",
                  str(step_dir)], check=True)
             log(f"[fleet] snapshot {snap['path']} pulled from "
-                f"{writer.name}")
+                f"{source.name}")
             if not src.is_dir():
                 raise RuntimeError(
                     f"snapshot {snap['path']} unavailable after pull "
-                    f"from {writer.name}")
+                    f"from {source.name}")
         for host in hosts:
             if host.is_local():
                 continue
@@ -100,8 +100,8 @@ def distribute_artifacts(record: dict, hosts, log) -> None:
                 log(f"[fleet] snapshot {snap['path']} -> {host.name}")
 
 
-def persisted_writer_specs(ranks) -> dict:
-    """{writer_index: [(id, size_bytes), ...]} — each rank's
+def persisted_source_specs(ranks) -> dict:
+    """{source_key: [(id, size_bytes), ...]} — each rank's
     persistent objects at its resident sizes, read off the marker in
     its serialized program. An object may appear under several
     locations (placement pre-copies); it is ONE object, listed
@@ -119,7 +119,7 @@ def persisted_writer_specs(ranks) -> dict:
 def save_checkpoint(ranks, ck: dict, step_next: int, meta: dict,
                     losses_so_far: list, log) -> None:
     """Conductor-driven checkpoint at a step boundary: compile the
-    source policy, hand the writers to the composer, prune old
+    source policy, hand the sources to the composer, prune old
     steps. The record lands LAST or not at all."""
     import os
 
@@ -130,20 +130,20 @@ def save_checkpoint(ranks, ck: dict, step_next: int, meta: dict,
     step_dir = ck["dir"] / f"step_{step_next:06d}"
     os.makedirs(step_dir, exist_ok=True)
     policy = ck.get("source_policy") or "simple"
-    logical, per_writer = compile_source_policy(
+    logical, per_source = compile_source_policy(
         policy=policy, world=len(ranks),
-        writer_specs=persisted_writer_specs(ranks),
+        source_specs=persisted_source_specs(ranks),
         plan=ck["responsibility"], opt_slices=ck.get("opt_slices"))
     # run state (step/losses/cursor) lives in the record's
     # client_payload alone — snapshots carry no client_meta from
     # training (snapshot client_meta remains the bare-engine
     # round-trip feature)
-    writers = {}
+    sources = {}
     for i, rank in enumerate(ranks):
-        writers[i] = {"client": rank.client, "path": f"rank{i}",
-                      "slices": per_writer[i]["slices"],
-                      "record": per_writer[i]["record"],
-                      "objects": per_writer[i]["objects"]}
+        sources[i] = {"client": rank.client, "path": f"rank{i}",
+                      "slices": per_source[i]["slices"],
+                      "record": per_source[i]["record"],
+                      "objects": per_source[i]["objects"]}
     progs = save_programs(step_dir, [r.prog_dict for r in ranks])
     launch = launch_record(
         argv=ck.get("argv"),
@@ -158,7 +158,7 @@ def save_checkpoint(ranks, ck: dict, step_next: int, meta: dict,
                for r in ranks],
         repo=Path.cwd(), programs=progs)
     compose_checkpoint(
-        writers, step_dir, step=step_next, seed=meta["seed"],
+        sources, step_dir, step=step_next, seed=meta["seed"],
         logical_objects=logical,
         scheme={"world": len(ranks),
                 "responsibility": ck["responsibility"],
@@ -188,8 +188,8 @@ def save_checkpoint(ranks, ck: dict, step_next: int, meta: dict,
             log(f"[fleet] pruned checkpoint {old_dir.name}")
 
 
-class SoloWriter:
-    """The world-1 writer as the conductor-shaped save path sees it:
+class SoloSource:
+    """The world-1 source as the conductor-shaped save path sees it:
     one local client and its program."""
 
     def __init__(self, client, prog_dict):
@@ -202,7 +202,7 @@ def save_solo_checkpoint(client, prog_dict, ckpt_dir, step_next, *,
                          cfg, seed, argv, losses, data_cursor,
                          data_meta, keep_last, log) -> None:
     """A world-1 run's checkpoint through the SAME policy-compiled
-    save path the fleet uses: one writer, the world-1 responsibility
+    save path the fleet uses: one source, the world-1 responsibility
     plan (every root whole), a v1 record landing last."""
     import os
 
@@ -223,7 +223,7 @@ def save_solo_checkpoint(client, prog_dict, ckpt_dir, step_next, *,
     meta = {"seed": seed, "rank_rounds": [cfg.grad_accum_rounds],
             "backend": None, "hosts": ["local"],
             "data_cursor": data_cursor}
-    save_checkpoint([SoloWriter(client, prog_dict)], ck, step_next,
+    save_checkpoint([SoloSource(client, prog_dict)], ck, step_next,
                     meta, losses, log)
 
 
@@ -235,22 +235,22 @@ def load_checkpoint(step_dir, *, targets=None, client=None,
     TARGETS form (``engines=None``): returns ``(record, client)``.
     ``targets`` is anything the record resolver takes: ``"all"`` for
     the logical view (complete objects reassembled from every
-    writer's slices), a list of ids for a subset — weights-only
+    source's slices), a list of ids for a subset — weights-only
     evaluation simply targets the parameter objects, so optimizer
-    bytes never enter the store — or ``{writer_key: ids-or-Program}``
+    bytes never enter the store — or ``{source_key: ids-or-Program}``
     for a rank's own view. ``client=None`` boots a scratch in-process
     fake engine sized from the resolved plan itself — the targeted
     objects' bytes plus slack — so any checkpoint the record
     describes loads without a capacity guess (``backing_gib``
     overrides).
 
-    ENGINES form: returns ``(record, {writer_key: client})`` with
-    every writer's FULL rank view restored — the checkpoint stood
+    ENGINES form: returns ``(record, {source_key: client})`` with
+    every source's FULL rank view restored — the checkpoint stood
     back up as a fleet, no conductor involved. ``engines`` is either
-    a caller-supplied ``{writer_key: client}`` mapping (each engine
+    a caller-supplied ``{source_key: client}`` mapping (each engine
     capability-checked before any restore) or ``"replicate"``, which
-    launches one local child daemon per writer shaped by the
-    record's engine spec (device, fake) and sized from the writer's
+    launches one local child daemon per source shaped by the
+    record's engine spec (device, fake) and sized from the source's
     resident bytes; the caller owns shutdown of the returned
     clients."""
     from dataflow.checkpoint import read_record, resolve_targets
@@ -306,34 +306,34 @@ def load_checkpoint(step_dir, *, targets=None, client=None,
 
 
 def restore_fleet(step_dir, record, engines) -> dict:
-    """Every writer's FULL rank view into one engine per writer.
+    """Every source's FULL rank view into one engine per source.
     ``engines="replicate"`` boots local child daemons shaped by the
-    record's engine spec; a ``{writer_key: client}`` mapping uses
+    record's engine spec; a ``{source_key: client}`` mapping uses
     the caller's engines, capability-checked first."""
     from dataflow.checkpoint import (CheckpointError, resolve_targets,
-                                     writer_resident_bytes)
+                                     source_resident_bytes)
 
-    writers = sorted({s["writer"] for s in record["snapshots"]})
+    sources = sorted({s["source"] for s in record["snapshots"]})
     if engines == "replicate":
-        clients = boot_replicas(record, writers)
+        clients = boot_replicas(record, sources)
     else:
         clients = dict(engines)
-        missing = [k for k in writers if k not in clients]
+        missing = [k for k in sources if k not in clients]
         if missing:
             raise CheckpointError(
-                f"engine mapping lacks writers {missing}")
-        for key in writers:
-            needed = writer_resident_bytes(record, key)
+                f"engine mapping lacks sources {missing}")
+        for key in sources:
+            needed = source_resident_bytes(record, key)
             capacity = clients[key].query_backing().get(
                 "capacity_bytes", 0)
             if capacity < needed:
                 raise CheckpointError(
-                    f"writer {key}: engine backing "
+                    f"source {key}: engine backing "
                     f"{capacity / 1024 ** 3:.2f} GiB cannot hold its "
                     f"{needed / 1024 ** 3:.2f} GiB rank state")
-    for key in writers:
+    for key in sources:
         ids = sorted({oid for s in record["snapshots"]
-                      if s["writer"] == key
+                      if s["source"] == key
                       for oid in (s.get("objects") or {})})
         plan = resolve_targets(record, {key: ids})
         for step in plan:
@@ -343,23 +343,23 @@ def restore_fleet(step_dir, record, engines) -> dict:
     return clients
 
 
-def boot_replicas(record, writers) -> dict:
-    """One local child daemon per writer: device and fake mode from
-    the record's engine spec, backing sized from the writer's
+def boot_replicas(record, sources) -> dict:
+    """One local child daemon per source: device and fake mode from
+    the record's engine spec, backing sized from the source's
     resident bytes. Ports walk up from a fixed base; shutting the
     returned clients down stops the daemons."""
     import os
     import time
 
-    from dataflow.checkpoint import writer_resident_bytes
+    from dataflow.checkpoint import source_resident_bytes
     from dataflow.service import EngineClient
     from ..distributed import daemons
     from ..distributed.topology import HostSpec
 
     clients = {}
-    for i, key in enumerate(writers):
+    for i, key in enumerate(sources):
         spec = (record.get("engine_spec") or {}).get(key) or {}
-        needed = writer_resident_bytes(record, key)
+        needed = source_resident_bytes(record, key)
         backing = max(0.25, 1.25 * needed / 1024 ** 3)
         host = HostSpec(name=f"ckload{key}",
                         peer_listen=f"127.0.0.1:{29901 + i}",

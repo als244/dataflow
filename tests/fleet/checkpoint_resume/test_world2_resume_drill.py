@@ -4,12 +4,12 @@ daemons train with checkpoints, a fresh pair resumes, and the tail
 must reproduce the uninterrupted run within the ambient envelope.
 
 This certifies in one gate: the zero1rs default, the simple source
-policy's self-sufficient per-writer snapshots (replicated W whole
-from each writer, zero1 O shards mapped at element offsets), and
+policy's self-sufficient per-source snapshots (replicated W whole
+from each source, zero1 O shards mapped at element offsets), and
 resume restoring each rank from its OWN snapshot in one call.
 
 Tests:
-- test_world2_zero1rs_checkpoint_resume_drill: for each family, two local daemons emit a v1 record whose replicated W carries both writers' whole hash-certified copies and whose O maps four zero1 slices, and a fresh pair resumes to reproduce the uninterrupted tail within tolerance.
+- test_world2_zero1rs_checkpoint_resume_drill: for each family, two local daemons emit a v1 record whose replicated W carries both sources' whole hash-certified copies and whose O maps four zero1 slices, and a fresh pair resumes to reproduce the uninterrupted tail within tolerance.
 """
 import json
 import math
@@ -83,8 +83,8 @@ def test_world2_zero1rs_checkpoint_resume_drill(tmp_path, family_name):
     assert m["schema"] == RECORD_SCHEMA
     assert m["scheme"]["world"] == 2
     assert m["scheme"]["source_policy"] == "simple"
-    # simple policy: replicated W saved whole by BOTH writers as
-    # hash-certified replicas; zero1rs O = two [m|v] slices per writer
+    # simple policy: replicated W saved whole by BOTH sources as
+    # hash-certified replicas; zero1rs O = two [m|v] slices per source
     w_bytes = m["logical_objects"]["W_0"]["bytes"]
     w_slices = m["slices"]["W_0"]
     assert len(w_slices) == 2

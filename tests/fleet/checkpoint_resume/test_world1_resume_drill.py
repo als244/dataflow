@@ -6,7 +6,7 @@ surface: schema id, whole-object slices, launch record with per-rank
 programs, data cursor in the client payload.
 
 Tests:
-- test_world1_checkpoint_resume_drill: for each family, training emits a v1 record (schema id, single-writer whole-object slices, launch argv, per-rank program, data cursor) and a fresh conductor+daemon resume reproduces the uninterrupted tail within tolerance.
+- test_world1_checkpoint_resume_drill: for each family, training emits a v1 record (schema id, single-source whole-object slices, launch argv, per-rank program, data cursor) and a fresh conductor+daemon resume reproduces the uninterrupted tail within tolerance.
 """
 import json
 import math

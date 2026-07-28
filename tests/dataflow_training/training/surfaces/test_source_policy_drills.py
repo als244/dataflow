@@ -9,9 +9,9 @@ cannot pass by luck. CPU-only (fake engines; the policy and record
 logic is byte-level).
 
 Tests:
-- test_simple_policy_round_trip_world2: the simple policy saves whole buffers per writer; each rank restores bitwise from its OWN snapshot (keyed targets, bare ids resolving to writer-qualified private logicals) at its exact resident geometry, and the logical view reassembles the tight [m_all | v_all] — slice fields at element offsets, the replicated tail once — reads W from the first covering snapshot, and lists each writer's private Aux copy separately.
+- test_simple_policy_round_trip_world2: the simple policy saves whole buffers per source; each rank restores bitwise from its OWN snapshot (keyed targets, bare ids resolving to source-qualified private logicals) at its exact resident geometry, and the logical view reassembles the tight [m_all | v_all] — slice fields at element offsets, the replicated tail once — reads W from the first covering snapshot, and lists each source's private Aux copy separately.
 - test_dedup_policy_covers_with_disjoint_slices: dedup saves W as disjoint responsibility slices — one copy total — and the logical view reassembles it bitwise.
-- test_replication_drift_refuses_before_record: diverged W bytes between writers make save_checkpoint refuse naming both writers, and NO record lands.
+- test_replication_drift_refuses_before_record: diverged W bytes between sources make save_checkpoint refuse naming both sources, and NO record lands.
 """
 import threading
 import time
@@ -88,25 +88,25 @@ def fleet_state(w_bytes_by_rank):
     return o
 
 
-def compiled_writers(clients, o, policy):
-    writer_specs = {r: [("W_0", W_BYTES), ("O_0", O_LOCAL)]
+def compiled_sources(clients, o, policy):
+    source_specs = {r: [("W_0", W_BYTES), ("O_0", O_LOCAL)]
                     for r in (0, 1)}
-    logical, per_writer = compile_source_policy(
-        policy=policy, world=2, writer_specs=writer_specs,
+    logical, per_source = compile_source_policy(
+        policy=policy, world=2, source_specs=source_specs,
         plan=PLAN, opt_slices=OPT_SLICES)
-    writers = {}
+    sources = {}
     for r in (0, 1):
-        writers[r] = {"client": clients[r], "path": f"rank{r}",
-                      "slices": per_writer[r]["slices"],
-                      "record": per_writer[r]["record"],
-                      "objects": per_writer[r]["objects"],
+        sources[r] = {"client": clients[r], "path": f"rank{r}",
+                      "slices": per_source[r]["slices"],
+                      "record": per_source[r]["record"],
+                      "objects": per_source[r]["objects"],
                       "client_meta": {"step": 4, "rank": r}}
-    return logical, writers
+    return logical, sources
 
 
 def aggregate_o(o) -> bytes:
     """The tight logical [m_all | v_all]: slice fields at element
-    offsets, the replicated tail once (writer 0's copy)."""
+    offsets, the replicated tail once (source 0's copy)."""
     m = (field_bytes(o[0], "m_slice") + field_bytes(o[1], "m_slice")
          + field_bytes(o[0], "m_tail"))
     v = (field_bytes(o[0], "v_slice") + field_bytes(o[1], "v_slice")
@@ -129,10 +129,10 @@ def test_simple_policy_round_trip_world2(tmp_path):
         for r in (0, 1):
             clients[r].put_object("W_0", w)
             clients[r].put_object("O_0", o[r])
-        logical, writers = compiled_writers(clients, o, "simple")
+        logical, sources = compiled_sources(clients, o, "simple")
         step_dir = tmp_path / "step_000004"
         record = save_checkpoint(
-            writers, step_dir, step=4, seed=11,
+            sources, step_dir, step=4, seed=11,
             logical_objects=logical,
             scheme={"world": 2, "kind": "zero1rs",
                     "source_policy": "simple"},
@@ -142,7 +142,7 @@ def test_simple_policy_round_trip_world2(tmp_path):
             "simple"
         o_slices = record["slices"]["O_0"]
         assert len(o_slices) == 8, \
-            "2 writers x ([m|v] slice fields + [m|v] tail fields)"
+            "2 sources x ([m|v] slice fields + [m|v] tail fields)"
         tail_spans = [tuple(s["object_range"]) for s in o_slices]
         assert len(tail_spans) - len(set(tail_spans)) == 2, \
             "the two tail fields overlap as exact-span replicas"
@@ -187,10 +187,10 @@ def test_dedup_policy_covers_with_disjoint_slices(tmp_path):
         for r in (0, 1):
             clients[r].put_object("W_0", w)
             clients[r].put_object("O_0", o[r])
-        logical, writers = compiled_writers(clients, o, "dedup")
+        logical, sources = compiled_sources(clients, o, "dedup")
         step_dir = tmp_path / "step_000008"
         record = save_checkpoint(
-            writers, step_dir, step=8, seed=11,
+            sources, step_dir, step=8, seed=11,
             logical_objects=logical,
             scheme={"source_policy": "dedup"})
 
@@ -223,10 +223,10 @@ def test_replication_drift_refuses_before_record(tmp_path):
         clients[1].put_object("W_0", rng_bytes(19, W_BYTES))   # drift
         for r in (0, 1):
             clients[r].put_object("O_0", o[r])
-        logical, writers = compiled_writers(clients, o, "simple")
+        logical, sources = compiled_sources(clients, o, "simple")
         step_dir = tmp_path / "step_000012"
         with pytest.raises(CheckpointError) as ei:
-            save_checkpoint(writers, step_dir, step=12, seed=11,
+            save_checkpoint(sources, step_dir, step=12, seed=11,
                             logical_objects=logical)
         message = str(ei.value)
         assert "drift" in message and "0" in message and "1" in message

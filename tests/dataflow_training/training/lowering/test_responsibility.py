@@ -102,26 +102,26 @@ def test_dedup_policy_projection():
     esize = {"fp32": 4, "bf16": 2}[sp[root]["opt_dtype"]]
     total = sp[root]["n_slice"] * 2 + sp[root]["n_tail"]
     o_id = "O_" + root[2:]
-    writer_specs = {
+    source_specs = {
         r: [(root, w_bytes),
             (o_id, 2 * esize * (sp[root]["n_slice"]
                                 + (sp[root]["n_tail"] if r == 1 else 0)))]
         for r in (0, 1)}
-    logical, per_writer = compile_source_policy(
-        policy="dedup", world=2, writer_specs=writer_specs,
+    logical, per_source = compile_source_policy(
+        policy="dedup", world=2, source_specs=source_specs,
         plan=plan, opt_slices=sp)
 
     # owned zero1 shards become slot slices into the aggregate object
     assert logical[o_id]["bytes"] == 2 * esize * total
     for r in (0, 1):
-        o_slices = [s for s in per_writer[r]["slices"]
+        o_slices = [s for s in per_source[r]["slices"]
                     if s["id"] == o_id]
         assert len(o_slices) == 2                 # m slice + v slice
     # partitioned params: disjoint per-rank ranges whose union
     # covers the object, in rank order
     spans = []
     for r in (0, 1):
-        for e in per_writer[r]["record"]:
+        for e in per_source[r]["record"]:
             if e["logical"] == root:
                 spans.append(tuple(e["object_range"]))
     spans.sort()

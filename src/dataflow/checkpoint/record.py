@@ -1,11 +1,11 @@
 """checkpoint_record.json: read, write, validate.
 
-A checkpoint is complete exactly when its record exists: writers land
+A checkpoint is complete exactly when its record exists: source engines land
 their snapshot dirs first, the composer writes the record LAST,
 atomically. The record is validated BEFORE it is written and AFTER it
 is read — an invalid record never lands on disk and never leaves this
 module. Refusals are total and loud, naming the offending object,
-range, field or writers.
+range, field or sources.
 
 The record is workload-blind: logical objects are named byte spans
 with optional field-schema digests; slices map snapshot bytes into
@@ -210,11 +210,11 @@ def check_replica_hashes(lid, entries, snapshots) -> None:
         first = twins[0]
         for other in twins[1:]:
             if other.get("hash") != first.get("hash"):
-                a = snapshots[first["snapshot"]].get("writer")
-                b = snapshots[other["snapshot"]].get("writer")
+                a = snapshots[first["snapshot"]].get("source")
+                b = snapshots[other["snapshot"]].get("source")
                 raise CheckpointError(
                     f"{lid}: replication drift — copies of "
-                    f"{list(span)} from writers {a} and {b} carry "
+                    f"{list(span)} from sources {a} and {b} carry "
                     f"different hashes")
 
 

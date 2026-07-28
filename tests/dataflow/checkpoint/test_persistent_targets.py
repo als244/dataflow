@@ -5,8 +5,8 @@ validated against the record's geometry before any plan is emitted.
 Tests:
 - test_marker_default_and_emit_when_true: ObjectSpec.persistent defaults False and serializes only when true, so an unmarked program's dict — and its content id — never carries the field.
 - test_persisted_objects_filter: persisted_objects returns exactly the marked specs.
-- test_program_targets_identity_and_keyed: an identity-sized program resolves as the logical view; a shard-sized program under its writer key resolves to that writer's windows into a local object.
-- test_program_targets_size_mismatch_refuses: a shard-sized program without a key refuses pointing at the missing writer key; a wrong-sized binding under a key refuses naming both byte counts.
+- test_program_targets_identity_and_keyed: an identity-sized program resolves as the logical view; a shard-sized program under its source key resolves to that source's windows into a local object.
+- test_program_targets_size_mismatch_refuses: a shard-sized program without a key refuses pointing at the missing source key; a wrong-sized binding under a key refuses naming both byte counts.
 """
 import pytest
 
@@ -56,7 +56,7 @@ def test_program_targets_identity_and_keyed():
     assert set(remaps[0]) == {"W_0", "O_0"}
     assert remaps[1]["O_0"][0]["logical"] == [O_BYTES // 2, O_BYTES]
 
-    # shard-sized program under its writer key: the rank view
+    # shard-sized program under its source key: the rank view
     plan = resolve_targets(record, {"1": state_program(O_BYTES // 2)})
     assert [step["snapshot"] for step in plan] == [1]
     remap = plan[0]["remap"]
@@ -68,7 +68,7 @@ def test_program_targets_identity_and_keyed():
 
 def test_program_targets_size_mismatch_refuses():
     record = build_record(base_record_kwargs())
-    with pytest.raises(CheckpointError, match="writer key"):
+    with pytest.raises(CheckpointError, match="source key"):
         resolve_targets(record, state_program(O_BYTES // 2))
     with pytest.raises(CheckpointError) as ei:
         resolve_targets(record, {"1": state_program(O_BYTES)})

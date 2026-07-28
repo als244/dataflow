@@ -1,5 +1,5 @@
 """The fleet step loop: rounds in, losses out — global-denominator
-steps, profiler brackets, v2 checkpoints at boundaries, per-rank peak
+steps, profiler brackets, record-sealed checkpoints at boundaries, per-rank peak
 accounting. Split from fleet.py at phase close."""
 from __future__ import annotations
 
@@ -30,7 +30,8 @@ def fleet_loop(ranks, gspec, recipe, pipeline, steps, *, budgets, seed,
     world = len(ranks)
     start_step = int(ck_record["step"]) if ck_record else 0
 
-    cursor = ck_record.get("data_cursor") if ck_record else None
+    payload = (ck_record.get("client_payload") or {}) if ck_record else {}
+    cursor = payload.get("data_cursor")
     if cursor is not None:
         stepper = pipeline(cursor)
     else:
@@ -74,8 +75,8 @@ def fleet_loop(ranks, gspec, recipe, pipeline, steps, *, budgets, seed,
                 f"({extra_slots[:3]}...) — the loop feeds one step per "
                 f"run; multi-slot programs silently train junk")
         prog_dict = program_to_dict(planned.program)
-        rank.prog_dict = prog_dict          # record v2: saved beside
-                                            # the checkpoint artifacts
+        rank.prog_dict = prog_dict          # saved beside the
+                                            # checkpoint snapshots
         from dataflow_training.run.presets import resolver_family
 
         fam_name = resolver_family(rank.cfg)
@@ -136,7 +137,7 @@ def fleet_loop(ranks, gspec, recipe, pipeline, steps, *, budgets, seed,
             # the START step's rounds. Under the simple policy each
             # rank's snapshot is SELF-SUFFICIENT: one restore of its
             # own snapshot brings back exactly its state, no
-            # cross-writer shipping.
+            # cross-source shipping.
             policy = (ck_record.get("scheme") or {}).get(
                 "source_policy", "simple")
             if policy != "simple":
@@ -145,11 +146,11 @@ def fleet_loop(ranks, gspec, recipe, pipeline, steps, *, budgets, seed,
                     f"through the record loader "
                     f"(checkpointing.load_checkpoint targets)")
             from dataflow.checkpoint import (resolve_targets,
-                                             writer_resident_bytes)
+                                             source_resident_bytes)
 
             # capability, never placement: the engine must have ROOM
             # for the rank view; where it sits is the caller's choice
-            needed = writer_resident_bytes(ck_record, str(i))
+            needed = source_resident_bytes(ck_record, str(i))
             capacity = rank.client.query_backing().get(
                 "capacity_bytes", 0)
             if capacity < needed:
@@ -205,7 +206,7 @@ def fleet_loop(ranks, gspec, recipe, pipeline, steps, *, budgets, seed,
     if ck_record is not None:
         # continuous curve across the resume: pre-checkpoint losses
         # ride the checkpoint record
-        res.losses.extend(ck_record.get("losses", []))
+        res.losses.extend(payload.get("losses", []))
         res.meta["resumed_from_step"] = start_step
 
     # ---- lockstep step loop -------------------------------------------

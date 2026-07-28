@@ -514,7 +514,7 @@ class Server:
             except OSError:
                 pass
             self.dispatcher.join(timeout=30)
-            w = getattr(self, "snapshot_writer", None)
+            w = getattr(self, "payload_thread", None)
             if w is not None:
                 w.stop()
                 w.join(timeout=30)

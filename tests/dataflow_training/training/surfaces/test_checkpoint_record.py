@@ -6,10 +6,10 @@ the weights-only load, where optimizer bytes never enter the store.
 CPU-only (fake engines).
 
 Tests:
-- test_conductor_save_resume_round_trip: the conductor save path writes a v1 record whose engine_spec carries each writer's capability (backing/device/kernel_set/fake) and whose inventories sum to the rank state; resolve_resume(auto) picks the newest complete step and skips a step dir without a record; each rank's own-snapshot restore is bitwise and carries NO client_meta (the record's client_payload owns run state).
-- test_load_checkpoint_targets: weights-only targets leave ZERO optimizer bytes resident in a scratch engine sized from the plan; "all" reassembles the aggregate optimizer object; a writer key restores that rank's shard view.
+- test_conductor_save_resume_round_trip: the conductor save path writes a v1 record whose engine_spec carries each source's capability (backing/device/kernel_set/fake) and whose inventories sum to the rank state; resolve_resume(auto) picks the newest complete step and skips a step dir without a record; each rank's own-snapshot restore is bitwise and carries NO client_meta (the record's client_payload owns run state).
+- test_load_checkpoint_targets: weights-only targets leave ZERO optimizer bytes resident in a scratch engine sized from the plan; "all" reassembles the aggregate optimizer object; a source key restores that rank's shard view.
 - test_load_checkpoint_refuses_small_engine: a supplied engine whose backing cannot hold the targets refuses loudly BEFORE any restore call (capability, never placement).
-- test_load_checkpoint_engines_mapping: an engines mapping restores every writer's FULL rank view bitwise into the caller's engines; a mapping missing a writer refuses, and a too-small engine in the mapping refuses on capability before any restore.
+- test_load_checkpoint_engines_mapping: an engines mapping restores every source's FULL rank view bitwise into the caller's engines; a mapping missing a source refuses, and a too-small engine in the mapping refuses on capability before any restore.
 """
 import threading
 import time
@@ -157,14 +157,14 @@ def test_conductor_save_resume_round_trip(tmp_path):
         assert record["scheme"]["source_policy"] == "simple"
         assert record["launch"]["resolved"]["world"] == 2
 
-        # the record carries each writer's CAPABILITY (what room the
+        # the record carries each source's CAPABILITY (what room the
         # state needs and what engine wrote it), never placement
-        from dataflow.checkpoint import writer_resident_bytes
+        from dataflow.checkpoint import source_resident_bytes
 
         spec = record["engine_spec"]["0"]
         assert spec["fake"] is True and "kernel_set" in spec
         assert spec["backing_gib"] > 0
-        assert writer_resident_bytes(record, "0") == W_BYTES + O_LOCAL
+        assert source_resident_bytes(record, "0") == W_BYTES + O_LOCAL
 
         # each rank restores its OWN snapshot through the keyed plan
         # (the rank view: logical slices remapped to local geometry)
@@ -221,7 +221,7 @@ def test_load_checkpoint_targets(tmp_path):
             client.shutdown()
 
         # the logical view reassembles the tight [m_all | v_all]
-        # from the writers' aligned slice fields
+        # from the sources' aligned slice fields
         expect = (field_bytes(o[0], "m_slice")
                   + field_bytes(o[1], "m_slice")
                   + field_bytes(o[0], "v_slice")
@@ -232,7 +232,7 @@ def test_load_checkpoint_targets(tmp_path):
         finally:
             client.shutdown()
 
-        # a writer key restores that rank's shard view
+        # a source key restores that rank's shard view
         record, client = load_checkpoint(step_dir,
                                          targets={"1": ["O_0"]})
         try:
@@ -284,11 +284,11 @@ def test_load_checkpoint_engines_mapping(tmp_path):
         for r in (0, 1):
             assert bytes(clients[str(r)].get_object("W_0")) == w
             assert bytes(clients[str(r)].get_object("O_0")) == o[r], \
-                f"writer {r}'s rank view must restore ITS shard"
+                f"source {r}'s rank view must restore ITS shard"
 
         from dataflow.checkpoint import CheckpointError
 
-        with pytest.raises(CheckpointError, match="lacks writers"):
+        with pytest.raises(CheckpointError, match="lacks sources"):
             load_checkpoint(step_dir, engines={"0": pair["0"]})
         with pytest.raises(CheckpointError, match="cannot hold"):
             load_checkpoint(step_dir,

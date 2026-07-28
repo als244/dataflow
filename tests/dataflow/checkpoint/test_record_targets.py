@@ -5,14 +5,14 @@ requested byte sourced exactly once, total or loud.
 Resolution has two modes. LOGICAL-view targets ("all", bare ids)
 assemble logical-sized objects; where coverage overlaps (hash-equal
 replicas), the reader rule takes the lowest-index covering snapshot.
-KEYED targets ({writer_key: ids}) are the rank view: they use only
-that writer's own snapshot — the self-sufficiency contract — and
+KEYED targets ({source_key: ids}) are the rank view: they use only
+that source's own snapshot — the self-sufficiency contract — and
 land shard bytes in a LOCAL object at local coordinates.
 
 Tests:
 - test_all_targets_resolve_each_byte_once: "all" resolves every logical byte exactly once — replicated spans read the lowest-index covering snapshot — into per-snapshot remap plans in restore's wire shape.
 - test_id_targets_subset: a single-id target touches only the snapshots that hold its bytes.
-- test_keyed_targets_infer_shard_geometry: {key: [ids]} yields that writer's shard window into a local object at local coordinates, sized by the writer's own ranges.
+- test_keyed_targets_infer_shard_geometry: {key: [ids]} yields that source's shard window into a local object at local coordinates, sized by the source's own ranges.
 - test_uncovered_target_names_ranges: a target whose coverage has a hole refuses naming the logical object and the missing range.
 - test_unknown_target_id_refuses: a target id absent from logical_objects refuses loudly.
 """
@@ -64,14 +64,14 @@ def test_keyed_targets_infer_shard_geometry():
     plan = resolve_targets(record, {"1": ["O_0", "W_0"]})
     steps = plan_by_snapshot(plan)
     assert set(steps) == {1}, \
-        "the rank view uses ONLY that writer's own snapshot"
+        "the rank view uses ONLY that source's own snapshot"
     remap = steps[1]["remap"]
 
-    # writer 1's O_0 shard: logical upper half -> local [0, half)
+    # source 1's O_0 shard: logical upper half -> local [0, half)
     assert remap["O_0"] == [
         {"logical": [O_BYTES // 2, O_BYTES], "id": "O_0",
          "local": [0, O_BYTES // 2], "bytes": O_BYTES // 2}]
-    # writer 1's replicated W_0: full copy, local == logical size
+    # source 1's replicated W_0: full copy, local == logical size
     assert remap["W_0"] == [
         {"logical": [0, W_BYTES], "id": "W_0",
          "local": [0, W_BYTES], "bytes": W_BYTES}]

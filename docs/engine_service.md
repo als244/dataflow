@@ -164,15 +164,15 @@ checks, nothing retained).
 mapping a `src` byte range of a stored object into a logical object
 (`logical_id` + `dst` + `logical_bytes`, defaulting to the identity
 mapping). Either way the saved ids freeze under **read-leases**
-(reads proceed; writers — puts, wipes, runs touching those ids —
-wait, parked, until the background writer finishes) while payload
+(reads proceed; writes — puts, wipes, runs touching those ids —
+wait, parked, until the background payload thread finishes) while payload
 plus `snapshot.json` (schema `dataflow-snapshot/v1`, written last as
 the completeness marker, one streaming blake2b-16 hash per slice)
 land at `dest`.
 `restore_snapshot` is three-pass — validate every placement, verify
 every slice hash (`verify=False` opts out), then place — with the
-payload work on the writer thread behind leases on every target
-(concurrent writers park; admission stays on the dispatcher), so a
+payload work on the payload thread behind leases on every target
+(concurrent writes park; admission stays on the dispatcher), so a
 refusal leaves the store untouched and a large restore never
 freezes the daemon; identity slices recreate their stored objects
 exactly (metadata included), an optional `remap` plan extracts

@@ -1,6 +1,6 @@
 """Cross-box resume drill against the v1 checkpoint record: two REAL
 hosts from topology.toml (nccl or auto backend), zero1rs default,
-self-sufficient per-writer snapshots written on each box, snapshots
+self-sufficient per-source snapshots written on each box, snapshots
 distributed across boxes at resume, and the resumed tail must
 reproduce the uninterrupted run within the ambient envelope.
 

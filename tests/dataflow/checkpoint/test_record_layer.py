@@ -7,7 +7,7 @@ Tests:
 - test_read_refuses_incomplete_and_foreign: a step dir without checkpoint_record.json refuses (completeness marker), as does a record carrying a foreign schema string.
 - test_coverage_gap_refuses_with_named_ranges: a logical object whose slices do not union to its full byte span refuses naming the missing ranges.
 - test_partial_overlap_refuses: slices overlapping with DIFFERENT spans refuse (overlap is legal only as exact-span replicas); exact-span hash-equal twins are legal with no designation needed.
-- test_replica_twins_must_hash_equal: identical-span slices from two writers demand equal hashes (the replication drift certificate) and refuse naming both writers when they differ.
+- test_replica_twins_must_hash_equal: identical-span slices from two sources demand equal hashes (the replication drift certificate) and refuse naming both sources when they differ.
 - test_misaligned_slice_refuses: with field schemas given, a slice endpoint inside an element refuses naming the field; on an element boundary it passes.
 - test_digest_mismatch_refuses: with field schemas given, a schema digest that does not match the record's logical_objects entry refuses naming the object.
 - test_slice_reference_bounds: a slice naming a snapshot index outside the snapshots list refuses.
@@ -31,17 +31,17 @@ O_BYTES = 8192
 
 
 def base_record_kwargs():
-    """A minimal valid two-writer record: replicated W_0 saved whole
-    by both writers (hash-equal replicas), O_0 sharded half/half;
+    """A minimal valid two-source record: replicated W_0 saved whole
+    by both sources (hash-equal replicas), O_0 sharded half/half;
     each snapshot lists its resident-object inventory (the rank
     view's local geometry)."""
     return dict(
         step=4, seed=11,
         logical_objects={"W_0": {"bytes": W_BYTES},
                          "O_0": {"bytes": O_BYTES}},
-        snapshots=[{"path": "rank0", "writer": "0",
+        snapshots=[{"path": "rank0", "source": "0",
                     "objects": {"W_0": W_BYTES, "O_0": O_BYTES // 2}},
-                   {"path": "rank1", "writer": "1",
+                   {"path": "rank1", "source": "1",
                     "objects": {"W_0": W_BYTES, "O_0": O_BYTES // 2}}],
         slices={
             "W_0": [
@@ -106,7 +106,7 @@ def test_coverage_gap_refuses_with_named_ranges(tmp_path):
 
 def test_partial_overlap_refuses(tmp_path):
     kwargs = base_record_kwargs()
-    # writer 1's copy shifted: overlaps writer 0's without matching
+    # source 1's copy shifted: overlaps source 0's without matching
     # its span — no compiled policy produces this shape
     kwargs["snapshots"][1]["objects"]["W_0"] = W_BYTES // 2
     kwargs["slices"]["W_0"][1] = {
@@ -128,7 +128,7 @@ def test_replica_twins_must_hash_equal(tmp_path):
         write_record(tmp_path, **kwargs)
     message = str(ei.value)
     assert "W_0" in message and "0" in message and "1" in message, \
-        "drift refusal must name the object and both writers"
+        "drift refusal must name the object and both sources"
 
     twins[1]["hash"] = twins[0]["hash"]      # agreement: legal
     write_record(tmp_path, **kwargs)

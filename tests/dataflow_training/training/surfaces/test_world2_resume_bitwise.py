@@ -12,8 +12,8 @@ selection is the program's marker, and expert counts ride it.
 
 Tests:
 - test_world2_resume_reproduces_tail_bitwise: a world-2 local-pair run under the DP default writes a v1 record (replicated W as two hash-certified whole-copy slices, zero1rs O shards mapped at element offsets), and a fresh pair resumed from it reproduces the uninterrupted tail bit-for-bit.
-- test_world2_moe_persistent_set_round_trips: the qwen3moe world-2 record covers the FULL persistent set — per-rank expert-count Aux objects ride as writer-qualified private logicals — leaves per-step objects out, and the resumed MoE tail equals the uninterrupted tail bit-for-bit.
-- test_world2_remapped_resume_bitwise: resume with the rank-to-engine mapping SWAPPED (rank 0 rides the slot that wrote rank 1's snapshots): the hosts change is allowed as placement-independent, each rank still restores its OWN writer's state, and the tail stays bitwise — the same-box stand-in for a cross-box topology change.
+- test_world2_moe_persistent_set_round_trips: the qwen3moe world-2 record covers the FULL persistent set — per-rank expert-count Aux objects ride as source-qualified private logicals — leaves per-step objects out, and the resumed MoE tail equals the uninterrupted tail bit-for-bit.
+- test_world2_remapped_resume_bitwise: resume with the rank-to-engine mapping SWAPPED (rank 0 rides the slot that wrote rank 1's snapshots): the hosts change is allowed as placement-independent, each rank still restores its OWN source's state, and the tail stays bitwise — the same-box stand-in for a cross-box topology change.
 """
 import json
 import math
@@ -116,7 +116,7 @@ def test_world2_resume_reproduces_tail_bitwise(tmp_path):
     assert ck_step < STEPS, "the drill needs a tail after the record"
 
     # the simple policy saves the replicated W whole from BOTH
-    # writers — same span, hash-certified interchangeable replicas
+    # sources — same span, hash-certified interchangeable replicas
     w_id = sorted(o for o in record["logical_objects"]
                   if o.startswith("W_"))[0]
     w_slices = record["slices"][w_id]
@@ -124,12 +124,12 @@ def test_world2_resume_reproduces_tail_bitwise(tmp_path):
     assert len(w_slices) == 2
     assert all(s["object_range"] == [0, w_bytes] for s in w_slices)
     assert len({s["hash"] for s in w_slices}) == 1
-    # zero1rs O shards: per-writer slices land at element offsets and
+    # zero1rs O shards: per-source slices land at element offsets and
     # the spans union to the full logical object (validated on write)
     o_id = sorted(o for o in record["logical_objects"]
                   if o.startswith("O_"))[0]
     assert len(record["slices"][o_id]) == 4, \
-        "world-2 zero1 O = two [m|v] slices per writer"
+        "world-2 zero1 O = two [m|v] slices per source"
 
     resumed = run(cfg, recipe, legacy_block_pipeline(cfg), STEPS,
                   topology=pair_topo(),
@@ -137,6 +137,9 @@ def test_world2_resume_reproduces_tail_bitwise(tmp_path):
                   resume="auto", **common)
 
     assert all(math.isfinite(x) for x in resumed.losses)
+    assert len(resumed.losses) == STEPS, \
+        "the record's prior losses must carry into the resumed curve"
+    assert resumed.losses[:ck_step] == truth.losses[:ck_step]
     tail_truth = truth.losses[ck_step:]
     tail_resumed = resumed.losses[-len(tail_truth):]
     assert tail_resumed == tail_truth, (
@@ -193,8 +196,8 @@ def test_world2_moe_persistent_set_round_trips(tmp_path):
             f"{oid}: per-step objects must NOT be on the record"
 
     # each rank accumulates its OWN expert counts — no step
-    # synchronizes the copies — so counts land writer-PRIVATE:
-    # one whole qualified logical per writer, never certified as
+    # synchronizes the copies — so counts land source-PRIVATE:
+    # one whole qualified logical per source, never certified as
     # replicas
     for w in (0, 1):
         lid = f"{aux_ids[0]}@{w}"
@@ -248,7 +251,7 @@ def test_world2_remapped_resume_bitwise(tmp_path):
         ["local0", "local1"]
 
     # resume with the mapping SWAPPED: hosts may move — each rank
-    # still restores its OWN writer's snapshot, capability-checked
+    # still restores its OWN source's snapshot, capability-checked
     resumed = run(cfg, recipe, legacy_block_pipeline(cfg), STEPS,
                   topology=swapped_pair_topo(),
                   launch_argv=["unit", "remap-drill"],

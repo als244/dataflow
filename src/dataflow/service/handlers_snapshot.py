@@ -13,14 +13,14 @@ hash per slice.
 Snapshot is queued->bg: FIFO admission (dispatcher) validates the
 slice list, takes READ-LEASES on the stored ids, freezes metadata, and
 plans payload offsets; the payload copy + hashing run on the dedicated
-snapshot-writer thread reading slab bytes directly — extents are
+payload thread reading slab bytes directly — extents are
 stable while leased. Queued verbs that hit a leased id raise LEASED
-and the dispatcher PARKS them until the writer releases.
+and the dispatcher PARKS them until the payload thread releases.
 
 Restore is queued->bg like snapshot, and THREE-PASS: admission (on
 the dispatcher) resolves every placement, validates it (leases,
 sizes, collisions), creates absent targets and takes leases on all
-targets; the writer thread verifies every payload hash (default ON)
+targets; the payload thread verifies every payload hash (default ON)
 and only then places bytes; a failure rolls back the targets
 admission created — under the still-held leases, so nothing can have
 touched them — and any refusal leaves the store as it was. Default placement follows the
@@ -215,7 +215,7 @@ def verify_payload(path: Path, entries: list) -> None:
 
 def snapshot_job(server, job: dict) -> None:
     """One snapshot's payload copy + snapshot.json write, on the
-    writer thread. Catalog access is read-only views of LEASED
+    payload thread. Catalog access is read-only views of LEASED
     records (release/wipe/put on them are parked meanwhile). Always
     releases the job's leases, success or failure."""
     st, store = server.state, server.store
@@ -257,7 +257,7 @@ def snapshot_job(server, job: dict) -> None:
                 for e in job["entries"]]
         st.emit("snapshot_done", snap_id=snap_id,
                 path=str(dest), bytes=job["bytes_total"])
-    except Exception as e:  # noqa: BLE001 — writer must survive
+    except Exception as e:  # noqa: BLE001 — the payload thread must survive
         with st.lock:
             st.snapshots[snap_id]["state"] = "error"
             st.snapshots[snap_id]["error"] = f"{type(e).__name__}: {e}"
@@ -271,7 +271,7 @@ def snapshot_job(server, job: dict) -> None:
 
 
 def restore_job(server, job: dict) -> None:
-    """One restore's verify + placement, on the writer thread. The
+    """One restore's verify + placement, on the payload thread. The
     targets are LEASED (admission took them) so their extents are
     stable and no dispatcher verb can mutate them — which also makes
     the failure rollback of admission-created targets race-free.
@@ -315,7 +315,7 @@ def restore_job(server, job: dict) -> None:
                 n_restored=len(job["targets"]))
     except ServiceError as e:
         error = {"code": e.code, "message": str(e)}
-    except Exception as e:  # noqa: BLE001 — writer must survive
+    except Exception as e:  # noqa: BLE001 — the payload thread must survive
         error = {"code": "IO_ERROR", "message": f"{type(e).__name__}: {e}"}
     finally:
         if error is not None:
@@ -330,13 +330,13 @@ def restore_job(server, job: dict) -> None:
         store.release_leases(job["lease_ids"])
 
 
-class SnapshotWriter(threading.Thread):
+class PayloadThread(threading.Thread):
     """The payload-IO thread: snapshot copies + snapshot.json writes
     in one direction, restore verify + placement in the other — all
     off the dispatcher. Owns nothing but its job queue."""
 
     def __init__(self, server):
-        super().__init__(name="snapshot-writer", daemon=True)
+        super().__init__(name="snapshot-payload", daemon=True)
         self.server = server
         self.jobs: "queue.Queue[dict | None]" = queue.Queue()
 
@@ -363,9 +363,9 @@ def install(server) -> None:
     st.snapshots = {}
     st.restores = {}
     st.restores_in_flight = []
-    writer = SnapshotWriter(server)
-    writer.start()
-    server.snapshot_writer = writer
+    payload = PayloadThread(server)
+    payload.start()
+    server.payload_thread = payload
     # parked-LEASED retry hook (design: store raises, dispatcher parks)
     store.on_lease_release = server.dispatcher.unpark_all
 
@@ -397,7 +397,7 @@ def install(server) -> None:
             lease_ids = sorted({e["id"] for e in entries})
         snap_id = st.next_id("snap")
         # leases LAST + exception-safe: a failed admission must not
-        # leak leases (leaked leases park every later writer forever
+        # leak leases (leaked leases park every later write forever
         # — found when a KeyError after acquire wedged the suite)
         store.acquire_leases(lease_ids)
         with st.lock:
@@ -415,7 +415,7 @@ def install(server) -> None:
         except Exception:
             store.release_leases(lease_ids)
             raise
-        writer.submit({
+        payload.submit({
             "snap_id": snap_id, "dest": dest,
             "client_meta": client_meta, "entries": entries,
             "lease_ids": lease_ids, "bytes_total": offset,
@@ -500,7 +500,7 @@ def install(server) -> None:
             store.release_leases(lease_ids)
             store.rollback_created(created)
             raise
-        writer.submit({
+        payload.submit({
             "kind": "restore", "restore_id": rid,
             "snap_id": snap.get("snap_id"), "path": str(path),
             "entries": entries, "placements": placements,

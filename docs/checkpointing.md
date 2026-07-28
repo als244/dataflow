@@ -23,18 +23,18 @@ enforced by a test or a grep gate, not by convention.
       rounds; MAY: hosts, backend — capability-checked, never
       placement-matched) -> provision engines -> restore -> rewind
       loop state. The conductor is the only cross-rank joiner: it
-      holds a client to every rank; writers never see each other.
+      holds a client to every rank; sources never see each other.
       | compiles the source policy, then drives the record layer
       v
     source-policy compiler + responsibility map
       dataflow_training/distributed/{source_policy,responsibility}.py
       WHO saves WHICH bytes. Three general classes, decided by the
       metadata handed in: plan-REPLICATED (simple saves every
-      writer's whole copy, dedup saves disjoint responsibility
+      source's whole copy, dedup saves disjoint responsibility
       slices), ELEMENT-SHARDED (slot structure derived from the
-      state layout's fields), and WRITER-PRIVATE (per-rank
-      accumulators, writer-qualified logical ids). Emits per-writer
-      engine slice lists, record slice entries, and each writer's
+      state layout's fields), and SOURCE-PRIVATE (per-rank
+      accumulators, source-qualified logical ids). Emits per-source
+      engine slice lists, record slice entries, and each source's
       resident-object inventory.
       | emits slices + record inputs
       v
@@ -55,7 +55,7 @@ enforced by a test or a grep gate, not by convention.
       . snapshot verbs (handlers_snapshot.py + client methods):
         snapshot(dest, slices) / restore_snapshot / wait_*;
         snapshot.json; per-slice hashes streamed at write; payload
-        IO on the writer thread; read-leases arbitrate against
+        IO on the payload thread; read-leases arbitrate against
         program writes. Executes mappings it is GIVEN; computes
         none.
       . the store (store.py): named byte extents, meta, leases.
@@ -104,7 +104,7 @@ client.wait_restore(restore_id, timeout=...)
 the request, acquires a **read lease** on every object it will save
 — taken last and exception-safe, so a rejected request can never
 leak one — enqueues a copy job, and returns the `snap_id`
-immediately. A dedicated writer thread then streams the leased
+immediately. A dedicated payload thread then streams the leased
 objects' bytes from host backing into `payload.bin` (hashing each
 slice as it streams), writes
 `snapshot.json` to a temp file and renames it into place (a crashed
@@ -113,7 +113,7 @@ releases every lease, on success or failure alike.
 
 The lease is the whole concurrency contract: while held, the saved
 bytes are guaranteed stable — object extents cannot move and no
-writer can touch them.
+write can touch them.
 
 ### Residency contract: snapshots read host backing, always
 
@@ -124,7 +124,7 @@ per-run transients: a run uploads what it needs from backing and
 offloads mutated persistent state back to backing as part of the
 run itself. Snapshot admission then happens on the same single
 dispatcher that runs execute on, so between runs the backing bytes
-ARE the post-step state — the payload writer copies straight from
+ARE the post-step state — the payload thread copies straight from
 the backing extents and never touches the device; no
 device-to-host staging path exists in the snapshot machinery
 because none is needed. Snapshotting a non-resident id fails
@@ -145,7 +145,7 @@ execute until the save's payload copy is off the state it needs:
 ```
 step N compute ──────────┐
                          ├─ snapshot admitted, W_/O_ leased
-payload copy (writer) ───┼────────────────┐
+payload copy (thread) ───┼────────────────┐
 step N+1 run submitted ──┤ PARKED (leased) │
                          │                 ├─ leases released
                          │                 └─ step N+1 unparks, runs
@@ -186,8 +186,8 @@ training, which the leases already guarantee.
 its slices back in three passes — validate every placement, verify
 every slice hash (`verify=False` opts out), then place — so any
 refusal leaves the store untouched. Like snapshot, the payload work
-(verify + placement) runs on the writer thread behind leases on
-every target — a concurrent writer touching a target parks until
+(verify + placement) runs on the payload thread behind leases on
+every target — a concurrent write touching a target parks until
 the restore completes — while admission (validation, creation of
 absent targets, lease acquisition) stays on the dispatcher, so a
 large restore never freezes the daemon's other verbs. The blocking
@@ -226,7 +226,7 @@ client.snapshot(dest,
 ## The checkpoint record schema
 
 `checkpoint_record.json` (`read_record` refuses foreign schemas
-loudly) is the one cross-writer file; everything else in a step
+loudly) is the one cross-source file; everything else in a step
 directory is engine snapshots and program dumps. Annotated:
 
 ```jsonc
@@ -239,11 +239,11 @@ directory is engine snapshots and program dumps. Annotated:
   "logical_objects": {          // the record's namespace: named byte
     "W_0": {"bytes": 2113024}   //   spans (+ field-schema digests)
   },
-  "snapshots": [                // one engine snapshot per writer,
+  "snapshots": [                // one engine snapshot per source,
     {"path": "rank0",           //   with its resident-object sizes:
-     "writer": "0",             //   shard layouts carry alignment
+     "source": "0",             //   shard layouts carry alignment
      "objects": {"W_0": 2113024, "O_0": 6439424}},  // padding, so the
-    {"path": "rank1", "writer": "1",  // rank view recreates objects
+    {"path": "rank1", "source": "1",  // rank view recreates objects
      "objects": {"W_0": 2113024, "O_0": 6439424}}   // at EXACT local
   ],                            //   geometry, never a derived guess
   "slices": {                   // snapshot bytes -> logical bytes,
@@ -254,7 +254,7 @@ directory is engine snapshots and program dumps. Annotated:
        "object_range": [0, 2113024], "hash": "..."}     // take any
     ]
   },
-  "engine_spec": {              // capability + provenance per writer:
+  "engine_spec": {              // capability + provenance per source:
     "0": {"backing_gib": 87.0,  //   room the state needs, engine that
           "device": 0, "kernel_set": "cuda", "fake": false}, ...
   },                            //   wrote it — never a placement demand
@@ -288,9 +288,9 @@ at write and re-checked at read:
    copies are interchangeable — any reader may take any replica;
    assembled reads take the lowest-index covering snapshot.
    Partial overlaps refuse outright.
-5. A logical id may be writer-qualified (`Aux_0@1`): per-writer
+5. A logical id may be source-qualified (`Aux_0@1`): per-source
    state that must never certify as replicated. The rank view
-   resolves bare targets to the writer's qualified object.
+   resolves bare targets to the source's qualified object.
 6. Every snapshot lists its resident-object inventory, so rank
    restores recreate exact local geometry (aligned layouts,
    padding included) rather than deriving a guess.
@@ -299,7 +299,7 @@ at write and re-checked at read:
 8. `scheme`, `client_payload`, `summary`, and `launch` are opaque:
    stored and returned, never interpreted by the record layer.
 9. `engine_spec` is capability, never placement: it records what
-   room each writer's state needs and what engine wrote it;
+   room each source's state needs and what engine wrote it;
    restores check capacity and are free to land anywhere with
    room.
 
@@ -361,31 +361,31 @@ checkpoints/<run_name>/step_000420/
 
 **Saving** (`save_checkpoint`, driven by the conductor at each
 checkpoint boundary)**.** The configured source policy compiles the
-responsibility map into per-writer save sets — `simple` (the
-default) saves everything each writer holds, whole, for
+responsibility map into per-source save sets — `simple` (the
+default) saves everything each source holds, whole, for
 self-sufficient per-rank snapshots whose replicated copies are
 hash-certified interchangeable; `dedup` saves one copy of each replicated object
 as disjoint responsibility slices — and the composer fans out one
-snapshot per writer, waits for all of them, collects the per-slice
+snapshot per source, waits for all of them, collects the per-slice
 hashes each daemon streamed, and runs the replication-drift
 certificate (identical-span copies must hash-equal; disagreement
-refuses the checkpoint naming both writers). State that each rank
+refuses the checkpoint naming both sources). State that each rank
 accumulates privately — per-rank counters no step synchronizes —
-saves under writer-qualified logical ids (`Aux_0@1`) instead of
+saves under source-qualified logical ids (`Aux_0@1`) instead of
 being falsely certified as replicated; resume returns each rank its
 own copy. Minimal form of what
 the training layer does at a step boundary:
 
 ```python
-logical, per_writer = compile_source_policy(
-    policy="simple", world=world, writer_specs=writer_specs,
+logical, per_source = compile_source_policy(
+    policy="simple", world=world, source_specs=source_specs,
     plan=responsibility, opt_slices=opt_slices)
-save_checkpoint(writers, step_dir, step=step, seed=seed,
+save_checkpoint(sources, step_dir, step=step, seed=seed,
                 logical_objects=logical, scheme=scheme,
                 client_payload={"losses": losses})   # record LAST
 ```
 
-`checkpoint_record.json` is written only after every writer reports
+`checkpoint_record.json` is written only after every source reports
 done and the drift certificate passes, so its presence means the
 checkpoint is whole and certified; it also carries the seed, the
 opaque scheme and client payload (data cursor, loss history), and a
@@ -408,10 +408,10 @@ record, client = load_checkpoint(step_dir,
 A weights-only load simply targets the parameter objects — optimizer
 bytes never enter the store, so there is nothing to release. The
 logical view (`"all"`, or bare id lists) reassembles complete
-objects from every writer's slices; a writer key restores that
+objects from every source's slices; a source key restores that
 rank's own view, with logical slices remapped into its local shard
 geometry. Resume under the simple policy is the keyed form against
-the rank's own snapshot — self-sufficient, no cross-writer bytes.
+the rank's own snapshot — self-sufficient, no cross-source bytes.
 The checkpoint evaluation tool is exactly the weights-only helper
 plus a forward pass.
 
@@ -424,11 +424,11 @@ record, engines = load_checkpoint(step_dir,
                                   engines={"0": clientA, "1": clientB})
 ```
 
-`"replicate"` launches one local child daemon per writer, shaped by
+`"replicate"` launches one local child daemon per source, shaped by
 the record's engine spec (device, fake mode) and sized from the
-writer's resident bytes; a caller-supplied mapping uses existing
+source's resident bytes; a caller-supplied mapping uses existing
 engines, each capability-checked before any restore. Either way
-every writer's full rank view is restored, and the result is
+every source's full rank view is restored, and the result is
 runnable: register the checkpoint's own saved program against the
 restored engine, feed the next step's data from the recorded
 cursor, and stepping continues exactly where the run left off —
@@ -495,7 +495,7 @@ Two optimizations for the stall window, in recommended order:
 
 ## What certifies this
 
-- lease behavior — parked writers wake on release, snapshots see a
+- lease behavior — parked writes resume on release, snapshots see a
   stable image (`tests/dataflow/service/test_service_snapshot.py`)
 - slice mappings, three-pass restore refusals, background-restore
   parking (`tests/dataflow/service/test_slice_snapshots.py`)

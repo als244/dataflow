@@ -2,12 +2,13 @@
 per-snapshot fetch plans in restore's remap wire shape — every
 requested byte sourced exactly once, total or loud.
 
-Two precedence modes. LOGICAL-view targets ("all" or bare id lists)
-assemble logical-sized objects and prefer AUTHORITATIVE slices where
-coverage overlaps. KEYED targets ({writer_key: ids}) are the rank
-view: only that writer's own snapshots are used — the
-self-sufficiency contract, no cross-writer shipping — and bytes land
-in a LOCAL object at local coordinates sized by the writer's own
+Two resolution modes. LOGICAL-view targets ("all" or bare id lists)
+assemble logical-sized objects; where certified replicas overlap,
+the reader rule takes the lowest-index covering snapshot. KEYED
+targets ({source_key: ids}) are the rank
+view: only that source's own snapshots are used — the
+self-sufficiency contract, no cross-source shipping — and bytes land
+in a LOCAL object at local coordinates sized by the source's own
 ranges.
 
 Each plan step is one restore call: {"snapshot": index,
@@ -46,7 +47,7 @@ def target_ids(record: dict, want, key) -> list:
     """Materialize a target form into logical ids. A Program targets
     its persistent objects, and its binding sizes are VALIDATED
     against the record: an identity-sized object is the logical
-    view; a shard-sized one is a writer's view and needs the key to
+    view; a shard-sized one is a source's view and needs the key to
     say whose."""
     if not hasattr(want, "initial_objects"):
         return list(want)
@@ -60,13 +61,13 @@ def target_ids(record: dict, want, key) -> list:
             raise CheckpointError(f"unknown target {spec.id}")
         if key is None:
             expect = int(logical[spec.id]["bytes"])
-            hint = " — shard-sized targets need a writer key"
+            hint = " — shard-sized targets need a source key"
         else:
-            expect = writer_view_bytes(record, key, spec.id)
+            expect = source_view_bytes(record, key, spec.id)
             hint = ""
         if spec.size_bytes != expect:
             view = ("logical object" if key is None
-                    else f"writer {key} view")
+                    else f"source {key} view")
             raise CheckpointError(
                 f"{spec.id}: program binds {spec.size_bytes} B but "
                 f"the {view} is {expect} B{hint}")
@@ -74,18 +75,18 @@ def target_ids(record: dict, want, key) -> list:
     return ids
 
 
-def writer_view_bytes(record: dict, key, lid: str) -> int:
-    """The writer's RESIDENT size for a target object — read off the
+def source_view_bytes(record: dict, key, lid: str) -> int:
+    """The source's RESIDENT size for a target object — read off the
     snapshot inventory (alignment padding included), which is what a
     rank restore recreates and what a rank program binds."""
     for s in record["snapshots"]:
-        if s.get("writer") == key and lid in (s.get("objects") or {}):
+        if s.get("source") == key and lid in (s.get("objects") or {}):
             return int(s["objects"][lid])
     return 0
 
 
-def writer_resident_bytes(record: dict, key) -> int:
-    """Total bytes writer ``key``'s snapshots recreate at restore —
+def source_resident_bytes(record: dict, key) -> int:
+    """Total bytes source ``key``'s snapshots recreate at restore —
     the sum of their resident-object inventories. Capability checks
     compare THIS against a target engine's backing capacity; the
     record never says WHERE state must live, only how much room it
@@ -93,12 +94,12 @@ def writer_resident_bytes(record: dict, key) -> int:
     total = 0
     found = False
     for s in record["snapshots"]:
-        if s.get("writer") == key:
+        if s.get("source") == key:
             found = True
             total += sum(int(n)
                          for n in (s.get("objects") or {}).values())
     if not found:
-        raise CheckpointError(f"no snapshot belongs to writer {key}")
+        raise CheckpointError(f"no snapshot belongs to source {key}")
     return total
 
 
@@ -145,19 +146,19 @@ def snapshot_index(entry: dict) -> int:
 
 
 def keyed_plan(record: dict, key, ids: list) -> list:
-    """The rank view: writer ``key``'s own slices restored back to
+    """The rank view: source ``key``'s own slices restored back to
     their RESIDENT geometry — local spans are the recorded
     snapshot_ranges and the created object takes its size from the
     snapshot's object inventory, so shard layouts (aligned fields,
     padded totals) come back exactly as they lived. A bare target id
-    resolves to the writer's QUALIFIED logical object
+    resolves to the source's QUALIFIED logical object
     (``Aux_0`` -> ``Aux_0@1``) when the record carries one —
-    writer-private state comes back under its bare local name."""
+    source-private state comes back under its bare local name."""
     logical = record["logical_objects"]
     own = [i for i, s in enumerate(record["snapshots"])
-           if s.get("writer") == key]
+           if s.get("source") == key]
     if not own:
-        raise CheckpointError(f"no snapshot belongs to writer {key}")
+        raise CheckpointError(f"no snapshot belongs to source {key}")
     pieces = []
     for target in ids:
         lid = target
@@ -169,7 +170,7 @@ def keyed_plan(record: dict, key, ids: list) -> list:
                    if e["snapshot"] in own]
         if not entries:
             raise CheckpointError(
-                f"writer {key} holds no bytes of {lid} — the rank "
+                f"source {key} holds no bytes of {lid} — the rank "
                 f"view restores only from its own snapshots")
         entries.sort(key=entry_span)
         for e in entries:
@@ -177,7 +178,7 @@ def keyed_plan(record: dict, key, ids: list) -> list:
                 "objects") or {}
             if target not in inventory:
                 raise CheckpointError(
-                    f"writer {key}: snapshot carries no resident "
+                    f"source {key}: snapshot carries no resident "
                     f"size for {target}")
             lo, hi = e["object_range"]
             src_lo, src_hi = e["snapshot_range"]

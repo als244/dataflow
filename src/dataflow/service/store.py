@@ -132,7 +132,7 @@ class Store:
     construction)."""
 
     # set by the server at boot: dispatcher.unpark_all — parked
-    # LEASED calls retry when a snapshot writer releases its leases
+    # LEASED calls retry when the snapshot payload thread releases its leases
     on_lease_release = None
 
     def __init__(self, capacity_bytes: int, *, slab=None):
@@ -352,7 +352,7 @@ class Store:
 
         return bytes_view(self.slab.ptr + ext.offset, size_bytes)
 
-    # ---- read-leases (S1.3): snapshot writers hold these ----
+    # ---- read-leases: the snapshot payload thread holds these ----
     def acquire_leases(self, ids: list[str]) -> None:
         with self.catalog_lock:
             for oid in ids:
