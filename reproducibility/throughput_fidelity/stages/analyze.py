@@ -59,8 +59,11 @@ for opt in ("adamw", "muon"):
         k = (r["seq"], r["t_round"], r["t_step"], r["budget"],
              r.get("backing"))
         pmr = key.get(k, {})
-        bk = pmr.get("backing_gib")
+        bk = pmr.get("pred_peak_backing_gib", pmr.get("backing_gib"))
         bkstr = f"{bk:.0f}GiB" if bk is not None else (pmr.get("infeasible", "?")[:16] if pmr else "?")
+        meas_bk = r.get("meas_peak_backing_gib")
+        if meas_bk is not None and bk is not None:
+            bkstr = f"{bk:.0f}->{meas_bk:.0f}GiB"
         if "meas_s" in r:
             print(f"  {r['seq']:>5} {r['t_round']:>6} {r['t_step']:>7} {r['budget']:>5g} {r.get('backing',0):>6g} | "
                   f"{r['meas_s']:>7.2f} {r['pred_s']:>7.2f} {r['ratio']:>5.2f} "

@@ -215,7 +215,8 @@ def run_predict(args, measured):
                 # slope of throughput against host memory — a shadow price at
                 # this operating point rather than an assumed level.
                 if back:
-                    row["binding"] = bool(row["backing_gib"] >= back * 0.999)
+                    row["binding"] = bool(
+                        row["pred_peak_backing_gib"] >= back * 0.999)
                 if back and not row["binding"]:
                     # the ceiling never bound, so a plan given more room is the
                     # same plan — the gain is zero without planning to find out
@@ -324,6 +325,10 @@ def run_cell_backed(client, cfg, budget, backing, steps, data_mode, recipe,
     # engine's own reserved extent says so.
     pools = client.engine_status().get("program_pools", [])
     reserved = max((p.get("fast_extent_bytes", 0) for p in pools), default=0)
+    # the HOST side of the same check: the slab's true high-water for
+    # this cell (residents + transients + scratch; the wipe between
+    # cells resets it), to sit beside the plan's predicted peak
+    backing_peak = client.query_backing().get("peak_bytes", 0)
     # what torch's caching allocator held for this cell: kernel workspaces and
     # scratch the engine never sees, and the bulk of the gap between its extent
     # and the device's own peak
@@ -343,7 +348,9 @@ def run_cell_backed(client, cfg, budget, backing, steps, data_mode, recipe,
             "eff_tfs": eff / meas_s / 1e12, "hw_tfs": hwf / meas_s / 1e12,
             "recompute": sum(1 for v in levels.values() if v),
             "rewritable": len(levels),
-            "peak_backing_gib": artifact["peak_backing_bytes"] / 1024 ** 3,
+            "pred_peak_backing_gib":
+                artifact["peak_backing_bytes"] / 1024 ** 3,
+            "meas_peak_backing_gib": backing_peak / 1024 ** 3,
             "planned_fast_gib": artifact["peak_fast_bytes"] / 1024 ** 3,
             "engine_extent_gib": reserved / 1024 ** 3,
             "device_peak_gib": devmem.peak / 1024 ** 3,
