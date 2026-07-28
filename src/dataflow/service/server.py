@@ -335,6 +335,19 @@ class Connection(threading.Thread):
             args=args, payload=payload, reply_to=self))
 
 
+LIVE_SERVER_THREADS: set[int] = set()
+
+
+def live_server_count() -> int:
+    """In-process servers currently inside serve_forever (its cleanup
+    included). Anything that frees engine backends from another thread
+    while this is nonzero — a test-hygiene drain, a fixture reset —
+    races the server's own teardown over the same pool state: two
+    threads freeing the same memory is heap corruption, not an error
+    you can catch. Probe this BEFORE any cross-thread drain."""
+    return len(LIVE_SERVER_THREADS)
+
+
 class Server:
     """Boot, accept loop, handler registration."""
 
@@ -466,6 +479,13 @@ class Server:
 
     # ---- lifecycle ----
     def serve_forever(self) -> None:
+        LIVE_SERVER_THREADS.add(threading.get_ident())
+        try:
+            self.serve_forever_inner()
+        finally:
+            LIVE_SERVER_THREADS.discard(threading.get_ident())
+
+    def serve_forever_inner(self) -> None:
         path = self.config.socket_path
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         if os.path.exists(path):

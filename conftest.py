@@ -44,11 +44,19 @@ def cuda_test_hygiene(request):
     # ALLOWLIST: only engine-direct suites drain (they own their
     # backends); anything that may keep an in-process threaded server
     # alive across tests (fleet rigs, service suites, example bridges)
-    # must not have buffers freed under it
+    # must not have buffers freed under it. The prefix list encodes
+    # where servers are EXPECTED — the live-thread probe below covers
+    # where they actually ARE: a rig inside a drained prefix whose
+    # server thread is still tearing down (2026-07-28: both boxes'
+    # intermittent suite segfault — the drain raced serve_forever's
+    # close_all_sessions over the same pool, concurrent frees, heap
+    # corruption surfacing anywhere from view invalidation to freed
+    # code objects).
     if nodeid.startswith(("tests/dataflow_training/training",
                           "tests/dataflow_training/models",
                           "tests/dataflow/runtime",
-                          "tests/dataflow_training/pretrain")):
+                          "tests/dataflow_training/pretrain")) \
+            and not in_process_server_live():
         try:
             # raw cudaMalloc slabs leaked by tests that skip
             # close()/free() are invisible to empty_cache — drain them
@@ -57,6 +65,18 @@ def cuda_test_hygiene(request):
         except Exception:
             pass
     torch.cuda.empty_cache()
+
+
+def in_process_server_live() -> bool:
+    """True while any thread of THIS process is inside serve_forever
+    (cleanup included) — draining backends under it corrupts the heap."""
+    server_mod = sys.modules.get("dataflow.service.server")
+    if server_mod is None:
+        return False
+    try:
+        return server_mod.live_server_count() > 0
+    except Exception:
+        return False
 
 
 @pytest.fixture(autouse=True, scope="module")
@@ -76,6 +96,8 @@ def cuda_module_hygiene(request):
     if not nodeid.startswith(("tests/dataflow/service", "tests/fleet",
                               "tests/examples")):
         return
+    if in_process_server_live():
+        return                  # a rig leaked its server; never race it
     try:
         from dataflow.runtime.device.cuda import drain_all_backends
 

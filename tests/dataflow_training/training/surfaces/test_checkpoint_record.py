@@ -60,14 +60,36 @@ def boot(tmp, name):
     sock = str(tmp / f"{name}.sock")
     server = Server(EngineConfig(socket_path=sock, fake=True,
                                  slab_backing_gib=0.1))
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
     for _ in range(300):
         try:
             with EngineClient(sock, client_name="probe"):
                 break
         except (ConnectionError, FileNotFoundError, OSError):
             time.sleep(0.01)
-    return server, EngineClient(sock, client_name=name)
+    return server, thread, EngineClient(sock, client_name=name)
+
+
+def stop_daemons(daemons):
+    """Shutdown AND JOIN every in-process server before returning.
+
+    The client's shutdown verb only SIGNALS the server; its thread then
+    tears the engine down asynchronously (close_all_sessions -> pool
+    drain -> free). Returning to pytest with that thread still inside
+    serve_forever races the autouse cuda hygiene drain over the same
+    backends — concurrent frees, heap corruption, the intermittent
+    suite segfault of 2026-07-28 on both boxes. Joining makes teardown
+    synchronous; the assert makes a wedged server a loud failure
+    instead of a latent race."""
+    for _server, thread, c in daemons:
+        try:
+            c.shutdown()
+        except (ConnectionError, OSError):
+            pass                        # test already shut this one down
+    for _server, thread, c in daemons:
+        thread.join(timeout=30)
+        assert not thread.is_alive(), "in-process server failed to stop"
 
 
 def rng_bytes(seed, n):
@@ -104,8 +126,8 @@ def fleet(tmp_path, w, o):
     daemons = []
     ranks = []
     for r in (0, 1):
-        server, client = boot(tmp_path, f"r{r}")
-        daemons.append((server, client))
+        server, thread, client = boot(tmp_path, f"r{r}")
+        daemons.append((server, thread, client))
         client.put_object("W_0", w)
         client.put_object("O_0", o[r])
         ranks.append(StubRank(name=f"host{r}", client=client,
@@ -172,27 +194,23 @@ def test_conductor_save_resume_round_trip(tmp_path):
 
         step_dir = ck["dir"] / "step_000008"
         for r in (0, 1):
-            server_f, fresh = boot(tmp_path, f"fresh{r}")
-            try:
-                plan = resolve_targets(record,
-                                       {str(r): ["W_0", "O_0"]})
-                assert len(plan) == 1, \
-                    "the simple policy resumes from ONE own snapshot"
-                res = fresh.restore_snapshot(
-                    str(step_dir / plan[0]["path"]),
-                    remap=plan[0]["remap"])
-                assert not res.get("client_meta"), \
-                    "training snapshots carry NO client_meta — the " \
-                    "record's client_payload owns run state"
-                assert bytes(fresh.get_object("W_0")) == w
-                assert bytes(fresh.get_object("O_0")) == o[r]
-            finally:
-                fresh.shutdown()
+            server_f, thread_f, fresh = boot(tmp_path, f"fresh{r}")
+            daemons.append((server_f, thread_f, fresh))
+            plan = resolve_targets(record, {str(r): ["W_0", "O_0"]})
+            assert len(plan) == 1, \
+                "the simple policy resumes from ONE own snapshot"
+            res = fresh.restore_snapshot(
+                str(step_dir / plan[0]["path"]),
+                remap=plan[0]["remap"])
+            assert not res.get("client_meta"), \
+                "training snapshots carry NO client_meta — the " \
+                "record's client_payload owns run state"
+            assert bytes(fresh.get_object("W_0")) == w
+            assert bytes(fresh.get_object("O_0")) == o[r]
         assert (step_dir / RECORD_NAME).is_file()
         assert (step_dir / "programs" / "rank1.json").is_file()
     finally:
-        for _server, c in daemons:
-            c.shutdown()
+        stop_daemons(daemons)
 
 
 def test_load_checkpoint_targets(tmp_path):
@@ -240,8 +258,7 @@ def test_load_checkpoint_targets(tmp_path):
         finally:
             client.shutdown()
     finally:
-        for _server, c in daemons:
-            c.shutdown()
+        stop_daemons(daemons)
 
 
 def test_load_checkpoint_refuses_small_engine(tmp_path):
@@ -259,8 +276,7 @@ def test_load_checkpoint_refuses_small_engine(tmp_path):
             load_checkpoint(ck["dir"] / "step_000004", targets="all",
                             client=TinyEngineStub())
     finally:
-        for _server, c in daemons:
-            c.shutdown()
+        stop_daemons(daemons)
 
 
 def test_load_checkpoint_engines_mapping(tmp_path):
@@ -276,7 +292,8 @@ def test_load_checkpoint_engines_mapping(tmp_path):
         step_dir = ck["dir"] / "step_000004"
         pair = {}
         for r in (0, 1):
-            server_f, c = boot(tmp_path, f"eng{r}")
+            server_f, thread_f, c = boot(tmp_path, f"eng{r}")
+            daemons.append((server_f, thread_f, c))
             fresh.append(c)
             pair[str(r)] = c
 
@@ -295,7 +312,4 @@ def test_load_checkpoint_engines_mapping(tmp_path):
                             engines={"0": pair["0"],
                                      "1": TinyEngineStub()})
     finally:
-        for c in fresh:
-            c.shutdown()
-        for _server, c in daemons:
-            c.shutdown()
+        stop_daemons(daemons)
