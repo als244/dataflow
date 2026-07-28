@@ -27,16 +27,16 @@ GROUP = "dp"
 # code paths share the pipeline, so these constants are what prove a rewire
 # changed nothing.
 #
-# Re-pinned DELIBERATELY when tasks gained a cost_key (the geometry two tasks
-# can differ in while their buffers look identical). The move was proved
-# additive rather than semantic: stripping cost_key from the new program
-# reproduces the previous digest exactly (dp: 63b7dd11deb8839b), and both code
-# paths still agree at every rank.
+# Re-pinned DELIBERATELY when initial objects gained the persistent
+# marker (checkpoint selection as a program property). The move was
+# proved additive rather than semantic: stripping persistent from the
+# new program reproduces the previous digest exactly (dp:
+# ecf68f9b0a05792e), and both code paths still agree at every rank.
 PINNED = {
-    "dp": "ecf68f9b0a05792e",
-    "zero1rs": "25a3f4029fcea871",
-    "tp_r0": "28559715f557430f",
-    "tp_r1": "0a89ebb312e31990",
+    "dp": "fe9a073942ed9696",
+    "zero1rs": "969fd509c9bdfe66",
+    "tp_r0": "2be9fbe5d75e701a",
+    "tp_r1": "d69e4e7ed826c082",
 }
 
 
