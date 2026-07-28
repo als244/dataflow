@@ -204,13 +204,11 @@ def save_solo_checkpoint(client, prog_dict, ckpt_dir, step_next, *,
     """A world-1 run's checkpoint through the SAME policy-compiled
     save path the fleet uses: one source, the world-1 responsibility
     plan (every root whole), a v1 record landing last."""
-    import os
-
     from ..distributed.responsibility import responsibility_map
-    from ..distributed.topology import HostSpec
+    from ..distributed.topology import HostSpec, repo_root
 
     host = HostSpec(name="local", peer_listen="127.0.0.1:0",
-                    ssh=None, repo=os.getcwd())
+                    ssh=None, repo=str(repo_root()))
     ck = {"dir": Path(ckpt_dir),
           "responsibility": responsibility_map(cfg, 1),
           "opt_slices": None, "source_policy": "simple",
@@ -348,13 +346,12 @@ def boot_replicas(record, sources) -> dict:
     the record's engine spec, backing sized from the source's
     resident bytes. Ports walk up from a fixed base; shutting the
     returned clients down stops the daemons."""
-    import os
     import time
 
     from dataflow.checkpoint import source_resident_bytes
     from dataflow.service import EngineClient
     from ..distributed import daemons
-    from ..distributed.topology import HostSpec
+    from ..distributed.topology import HostSpec, repo_root
 
     clients = {}
     for i, key in enumerate(sources):
@@ -363,7 +360,7 @@ def boot_replicas(record, sources) -> dict:
         backing = max(0.25, 1.25 * needed / 1024 ** 3)
         host = HostSpec(name=f"ckload{key}",
                         peer_listen=f"127.0.0.1:{29901 + i}",
-                        ssh=None, repo=os.getcwd(),
+                        ssh=None, repo=str(repo_root()),
                         backing_gib=backing, budget_gib=1.0,
                         device=int(spec.get("device") or 0))
         flags = "--fake" if spec.get("fake") else ""
