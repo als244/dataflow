@@ -596,8 +596,13 @@ def load_or_profile(
     # second optimizer differs only in its optimizer tasks, yet keying the file
     # by the whole signature SET made it re-measure every block and head task
     # as well.
+    from dataflow_training.blocks.attention import active_flash_impl
+
     env = {
         "kernel_set": kernel_set or {},
+        # Dispatcher-level flash implementation (FA3 vs native aten): same
+        # task signatures, different kernels, different timings.
+        "flash": active_flash_impl(),
         "device": torch.cuda.get_device_name() if torch.cuda.is_available() else "cpu",
         "soak_seconds": kwargs.get("soak_seconds", 1.0),
         "contend_pcie": kwargs.get("contend_pcie", True),
