@@ -1,15 +1,15 @@
-"""World-2 same-box resume drill against manifest v2 — under the DP
+"""World-2 same-box resume drill against the v1 record — under the DP
 default (zero1rs engages automatically at world > 1): two local
 daemons train with checkpoints, a fresh pair resumes, and the tail
 must reproduce the uninterrupted run within the ambient envelope.
 
-This certifies in one gate: the zero1rs default, the
-responsibility-partitioned RANGED saves (each rank writes its param
-byte range + its own O shard), and resume's ordered artifact replay
-reassembling complete params on both ranks.
+This certifies in one gate: the zero1rs default, the simple source
+policy's self-sufficient per-writer snapshots (replicated W whole
+from each writer, zero1 O shards mapped at element offsets), and
+resume restoring each rank from its OWN snapshot in one call.
 
 Tests:
-- test_world2_zero1rs_checkpoint_resume_drill: for each family, two local daemons emit a v2 manifest with param bytes partitioned into contiguous per-rank ranges under zero1rs, and a fresh pair resumes to reproduce the uninterrupted tail within tolerance.
+- test_world2_zero1rs_checkpoint_resume_drill: for each family, two local daemons emit a v1 record whose replicated W carries both writers' whole copies (one authoritative) and whose O maps four zero1 slices, and a fresh pair resumes to reproduce the uninterrupted tail within tolerance.
 """
 import json
 import math
@@ -21,6 +21,7 @@ torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
     pytest.skip("no GPU", allow_module_level=True)
 
+from dataflow.checkpoint import RECORD_SCHEMA  # noqa: E402
 from dataflow_training.data.pipeline import legacy_block_pipeline  # noqa: E402
 from dataflow_training.distributed.fleet import (  # noqa: E402
     ParallelismScheme,
@@ -79,12 +80,19 @@ def test_world2_zero1rs_checkpoint_resume_drill(tmp_path, family_name):
     manifests = sorted((ck_dir / "drill2").glob("step_*/checkpoint_record.json"))
     assert manifests, "no checkpoints written"
     m = json.loads(manifests[-1].read_text())
-    assert m["format"] == 2
-    assert m["world"] == 2
-    # zero1rs default: param bytes PARTITIONED across the two ranks
-    w0 = m["save_plan"]["W_0"]
-    assert [e["rank"] for e in w0] == [0, 1]
-    assert w0[0]["hi"] == w0[1]["lo"]
+    assert m["schema"] == RECORD_SCHEMA
+    assert m["scheme"]["world"] == 2
+    assert m["scheme"]["source_policy"] == "simple"
+    # simple policy: replicated W saved whole by BOTH writers, one
+    # authoritative winner; zero1rs O = two [m|v] slices per writer
+    w_bytes = m["logical_objects"]["W_0"]["bytes"]
+    w_slices = m["slices"]["W_0"]
+    assert len(w_slices) == 2
+    assert all(s["object_range"] == [0, w_bytes] for s in w_slices)
+    assert [s["authoritative"] for s in w_slices] == [True, False]
+    o_ids = sorted(o for o in m["logical_objects"]
+                   if o.startswith("O_"))
+    assert len(m["slices"][o_ids[0]]) == 4
     assert m["launch"]["resolved"]["opt_shard"] == "zero1rs"
     assert m["launch"]["programs"] == ["programs/rank0.json",
                                        "programs/rank1.json"]

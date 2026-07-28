@@ -1,11 +1,15 @@
 """Source-policy save/restore drills: two in-process daemons play a
-world-2 fleet — replicated W, zero1-sharded O ([m|v] slots) — and the
-compiled policies round-trip bitwise through save_checkpoint and
-resolve_targets. CPU-only (fake engines; the policy and record logic
-is byte-level).
+world-2 fleet — replicated W, zero1-sharded O in the REAL slice
+layout (256-aligned [m_slice|v_slice|m_tail|v_tail] fields with a
+redundantly-updated world-remainder tail) — and the compiled
+policies round-trip bitwise through save_checkpoint and
+resolve_targets. The shard sizes are chosen alignment-HOSTILE
+(n_slice bytes not a multiple of 256) so tight-packing arithmetic
+cannot pass by luck. CPU-only (fake engines; the policy and record
+logic is byte-level).
 
 Tests:
-- test_simple_policy_round_trip_world2: the simple policy saves whole buffers per writer; each rank restores bitwise from its OWN snapshot (keyed targets), and the logical view reassembles the aggregate O ([m_all | v_all]) and picks the authoritative W.
+- test_simple_policy_round_trip_world2: the simple policy saves whole buffers per writer; each rank restores bitwise from its OWN snapshot (keyed targets) at its exact resident geometry, and the logical view reassembles the tight [m_all | v_all] — slice fields at element offsets, the replicated tail once — and picks the authoritative W.
 - test_dedup_policy_covers_with_disjoint_slices: dedup saves W as disjoint authoritative responsibility slices — one copy total — and the logical view reassembles it bitwise.
 - test_replication_drift_refuses_before_record: diverged W bytes between writers make save_checkpoint refuse naming both writers, and NO record lands.
 """
@@ -19,14 +23,19 @@ from dataflow.checkpoint import (CheckpointError, RECORD_NAME,
                                  read_record, resolve_targets,
                                  save_checkpoint)
 from dataflow.service import EngineClient, EngineConfig, Server
+from dataflow_training.blocks.layouts import opt_state_slice_layout
 from dataflow_training.distributed.source_policy import \
     compile_source_policy
 
 W_BYTES = 8192
-N_ELEMS = 512                        # zero1 elements per rank (fp32)
-O_LOCAL = 2 * N_ELEMS * 4            # [m_r | v_r]
-OPT_SLICES = {"W_0": {"n_slice": N_ELEMS, "n_tail": 0,
+N_SLICE = 500              # 2000 B per slot: NOT 256-aligned
+N_TAIL = 3                 # world remainder, updated on every rank
+OPT_SLICES = {"W_0": {"n_slice": N_SLICE, "n_tail": N_TAIL,
                       "opt_dtype": "fp32"}}
+O_LAYOUT = opt_state_slice_layout(N_SLICE, N_TAIL, "fp32")
+O_LOCAL = O_LAYOUT.total_bytes
+N_LOGICAL = 2 * N_SLICE + N_TAIL
+O_LOGICAL = 2 * N_LOGICAL * 4        # tight [m_all | v_all]
 PLAN = {"W_0": [
     {"rank": 0, "lo": 0, "hi": W_BYTES // 2, "role": "responsible"},
     {"rank": 1, "lo": W_BYTES // 2, "hi": W_BYTES,
@@ -53,10 +62,29 @@ def rng_bytes(seed, n):
     return rng.integers(0, 256, n, dtype=np.uint8).tobytes()
 
 
+def shard_bytes(seed, tail_seed):
+    """A layout-true [m_slice|v_slice|m_tail|v_tail] payload: rng
+    content in the fields, ZERO alignment padding (padding is layout,
+    not state), and the tail fields from a SHARED seed — the
+    byte-equal contract updates the tail identically on every
+    rank."""
+    out = bytearray(O_LOCAL)
+    for f in O_LAYOUT.fields:
+        content_seed = tail_seed if f.name.endswith("_tail") else seed
+        out[f.offset_bytes:f.offset_bytes + f.nbytes] = \
+            rng_bytes(content_seed * 7 + f.offset_bytes, f.nbytes)
+    return bytes(out)
+
+
+def field_bytes(payload: bytes, name: str) -> bytes:
+    f = O_LAYOUT.field(name)
+    return payload[f.offset_bytes:f.offset_bytes + f.nbytes]
+
+
 def fleet_state(w_bytes_by_rank):
-    """(clients, o_bytes) for a world-2 fleet with the given per-rank
-    W payloads and distinct zero1 O shards."""
-    o = {r: rng_bytes(100 + r, O_LOCAL) for r in (0, 1)}
+    """Per-rank zero1 O shards for a world-2 fleet: distinct slice
+    fields, identical tail fields."""
+    o = {r: shard_bytes(100 + r, 999) for r in (0, 1)}
     return o
 
 
@@ -71,14 +99,19 @@ def compiled_writers(clients, o, policy):
         writers[r] = {"client": clients[r], "path": f"rank{r}",
                       "slices": per_writer[r]["slices"],
                       "record": per_writer[r]["record"],
+                      "objects": per_writer[r]["objects"],
                       "client_meta": {"step": 4, "rank": r}}
     return logical, writers
 
 
 def aggregate_o(o) -> bytes:
-    half = O_LOCAL // 2
-    return (o[0][:half] + o[1][:half]
-            + o[0][half:] + o[1][half:])
+    """The tight logical [m_all | v_all]: slice fields at element
+    offsets, the replicated tail once (writer 0's copy)."""
+    m = (field_bytes(o[0], "m_slice") + field_bytes(o[1], "m_slice")
+         + field_bytes(o[0], "m_tail"))
+    v = (field_bytes(o[0], "v_slice") + field_bytes(o[1], "v_slice")
+         + field_bytes(o[0], "v_tail"))
+    return m + v
 
 
 def restore_plan(client, step_dir, plan):
@@ -107,6 +140,15 @@ def test_simple_policy_round_trip_world2(tmp_path):
         assert (step_dir / RECORD_NAME).is_file()
         assert read_record(step_dir)["scheme"]["source_policy"] == \
             "simple"
+        o_slices = record["slices"]["O_0"]
+        assert len(o_slices) == 8, \
+            "2 writers x ([m|v] slice fields + [m|v] tail fields)"
+        assert sum(bool(s["authoritative"]) for s in o_slices) == 6, \
+            "tail replicas: only writer 0's tails carry the flag"
+        assert record["logical_objects"]["O_0"]["bytes"] == O_LOGICAL
+        for snap in record["snapshots"]:
+            assert snap["objects"]["O_0"] == O_LOCAL, \
+                "the snapshot inventory records resident geometry"
 
         # each rank restores from its OWN snapshot: the rank view
         for r in (0, 1):

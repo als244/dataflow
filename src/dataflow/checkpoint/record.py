@@ -87,7 +87,9 @@ def validate_record(record: dict, *, field_schemas=None) -> None:
     """Total validation: every rule loud, every refusal named.
 
     1. schema guard;
-    2. slice references stay inside the snapshots list;
+    2. slice references stay inside the snapshots list, and each
+       referenced snapshot's object inventory carries the slice's
+       object at a size containing its snapshot_range;
     3. per logical object: ranges in bounds and length-consistent;
     4. completeness — object_ranges union to the full byte span;
     5. overlap legal ONLY with a winner: any multiply-covered byte
@@ -113,7 +115,7 @@ def validate_record(record: dict, *, field_schemas=None) -> None:
     for lid, spec in logical.items():
         total = int(spec["bytes"])
         entries = slices.get(lid, [])
-        check_entry_shapes(lid, total, entries, len(snapshots))
+        check_entry_shapes(lid, total, entries, snapshots)
         check_coverage(lid, total, entries)
         check_overlap(lid, entries, snapshots)
         check_replica_hashes(lid, entries, snapshots)
@@ -122,13 +124,13 @@ def validate_record(record: dict, *, field_schemas=None) -> None:
             check_alignment(lid, entries, field_schemas[lid])
 
 
-def check_entry_shapes(lid, total, entries, n_snapshots) -> None:
+def check_entry_shapes(lid, total, entries, snapshots) -> None:
     for e in entries:
         snap = e["snapshot"]
-        if not (0 <= int(snap) < n_snapshots):
+        if not (0 <= int(snap) < len(snapshots)):
             raise CheckpointError(
                 f"{lid}: slice names snapshot {snap} but the record "
-                f"lists {n_snapshots}")
+                f"lists {len(snapshots)}")
         src, dst = e["snapshot_range"], e["object_range"]
         if dst[1] - dst[0] != src[1] - src[0]:
             raise CheckpointError(
@@ -137,6 +139,15 @@ def check_entry_shapes(lid, total, entries, n_snapshots) -> None:
         if not (0 <= dst[0] < dst[1] <= total):
             raise CheckpointError(
                 f"{lid}: object_range {dst} outside [0, {total})")
+        resident = (snapshots[int(snap)].get("objects") or {}).get(lid)
+        if resident is None:
+            raise CheckpointError(
+                f"{lid}: snapshot {snap} lists no resident size for "
+                f"it — the rank view cannot recreate local geometry")
+        if not (0 <= src[0] < src[1] <= int(resident)):
+            raise CheckpointError(
+                f"{lid}: snapshot_range {src} outside the resident "
+                f"object [0, {resident})")
 
 
 def check_coverage(lid, total, entries) -> None:

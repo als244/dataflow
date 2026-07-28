@@ -121,6 +121,11 @@ def choose_sources(entries: list) -> list:
 
 
 def keyed_plan(record: dict, key, ids: list) -> list:
+    """The rank view: writer ``key``'s own slices restored back to
+    their RESIDENT geometry — local spans are the recorded
+    snapshot_ranges and the created object takes its size from the
+    snapshot's object inventory, so shard layouts (aligned fields,
+    padded totals) come back exactly as they lived."""
     logical = record["logical_objects"]
     own = [i for i, s in enumerate(record["snapshots"])
            if s.get("writer") == key]
@@ -137,16 +142,19 @@ def keyed_plan(record: dict, key, ids: list) -> list:
                 f"writer {key} holds no bytes of {lid} — the rank "
                 f"view restores only from its own snapshots")
         entries.sort(key=entry_span)
-        local_total = sum(e["object_range"][1] - e["object_range"][0]
-                          for e in entries)
-        cursor = 0
         for e in entries:
+            inventory = record["snapshots"][e["snapshot"]].get(
+                "objects") or {}
+            if lid not in inventory:
+                raise CheckpointError(
+                    f"writer {key}: snapshot carries no resident "
+                    f"size for {lid}")
             lo, hi = e["object_range"]
+            src_lo, src_hi = e["snapshot_range"]
             pieces.append((e["snapshot"], lid,
                            {"logical": [lo, hi], "id": lid,
-                            "local": [cursor, cursor + (hi - lo)],
-                            "bytes": local_total}))
-            cursor += hi - lo
+                            "local": [src_lo, src_hi],
+                            "bytes": int(inventory[lid])}))
     return pieces
 
 

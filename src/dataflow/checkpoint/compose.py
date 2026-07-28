@@ -32,8 +32,10 @@ def save_checkpoint(writers: dict, dest, *, step, seed,
                     timeout: float = 600.0) -> dict:
     """``writers``: {key: {"client": EngineClient, "path": subdir
     name, "slices": engine slice list, "record": record slice
-    entries without hashes, "client_meta": optional dict}} — the
-    shape the source-policy compiler emits, one entry per writer.
+    entries without hashes, "objects": the writer's resident sizes
+    {id: bytes} (recorded on its snapshot entry so rank-view restores
+    recreate exact local geometry), "client_meta": optional dict}} —
+    the shape the source-policy compiler emits, one entry per writer.
     Returns the record dict after landing it last."""
     from pathlib import Path
 
@@ -60,7 +62,10 @@ def save_checkpoint(writers: dict, dest, *, step, seed,
     for key in sorted(writers):
         order[key] = len(snapshots)
         snapshots.append({"path": writers[key]["path"],
-                          "writer": str(key)})
+                          "writer": str(key),
+                          "objects": {oid: int(n) for oid, n in
+                                      (writers[key].get("objects")
+                                       or {}).items()}})
     for key in sorted(writers):
         hashes = hash_by_span(statuses[key])
         for entry in writers[key]["record"]:

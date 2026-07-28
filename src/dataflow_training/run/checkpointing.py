@@ -135,6 +135,7 @@ def save_checkpoint(ranks, ck: dict, step_next: int, meta: dict,
         writers[i] = {"client": rank.client, "path": f"rank{i}",
                       "slices": per_writer[i]["slices"],
                       "record": per_writer[i]["record"],
+                      "objects": per_writer[i]["objects"],
                       "client_meta": {"step": step_next, "rank": i,
                                       **meta}}
     progs = save_programs(step_dir, [r.prog_dict for r in ranks])
@@ -179,7 +180,7 @@ def save_checkpoint(ranks, ck: dict, step_next: int, meta: dict,
 
 
 def load_checkpoint(step_dir, *, targets, client=None,
-                    backing_gib: float = 1.0):
+                    backing_gib=None):
     """Restore a checkpoint's TARGETS into an engine and return
     ``(record, client)``.
 
@@ -189,7 +190,10 @@ def load_checkpoint(step_dir, *, targets, client=None,
     evaluation simply targets the parameter objects, so optimizer
     bytes never enter the store — or ``{writer_key: ids-or-Program}``
     for a rank's own view. ``client=None`` boots a scratch in-process
-    fake engine sized by ``backing_gib``."""
+    fake engine sized from the resolved plan itself — the targeted
+    objects' bytes plus slack — so any checkpoint the record
+    describes loads without a capacity guess (``backing_gib``
+    overrides)."""
     from dataflow.checkpoint import read_record, resolve_targets
 
     step_dir = Path(step_dir)
@@ -202,6 +206,14 @@ def load_checkpoint(step_dir, *, targets, client=None,
 
         from dataflow.service import EngineClient, EngineConfig, Server
 
+        if backing_gib is None:
+            sizes = {}
+            for step in plan:
+                for windows in step["remap"].values():
+                    for w in windows:
+                        sizes[w["id"]] = int(w["bytes"])
+            backing_gib = max(0.25, 1.25 * sum(sizes.values())
+                              / 1024 ** 3)
         sock = str(Path(tempfile.mkdtemp()) / "ckload.sock")
         server = Server(EngineConfig(socket_path=sock, fake=True,
                                      slab_backing_gib=backing_gib))

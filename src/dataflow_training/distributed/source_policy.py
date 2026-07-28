@@ -11,16 +11,28 @@ disjoint responsibility slices instead — one copy total across the
 checkpoint, each slice authoritative — trading self-sufficiency and
 redundancy for disk.
 
-zero1-sharded optimizer objects are shard-sized residents packing
-their slot regions locally ([m_r | v_r]); their logical object is the
-world-spanning [m_all | v_all], so each writer contributes TWO slices
-per object — its m range and its v range — at element-derived
-offsets. Objects that are neither replicated-by-size nor zero1-paired
-are refused loudly rather than guessed at.
+zero1-sharded optimizer objects are shard-sized residents laid out by
+``opt_state_slice_layout`` — aligned ``[m_slice | v_slice]`` fields
+plus, when the element count doesn't divide the world, ``m_tail`` /
+``v_tail`` fields every rank updates redundantly. Their logical
+object is the tight world-spanning ``[m_all | v_all]`` byte space:
+each writer's slice fields map to element-derived offsets in it, and
+the replicated tail fields overlap across writers (writer 0
+authoritative) so the drift certificate covers the redundant tail
+updates too. Alignment padding between fields is layout, not state —
+it maps to no logical byte. Objects that are neither
+replicated-by-size nor zero1-paired are refused loudly rather than
+guessed at.
+
+Each writer also emits its resident-object inventory ({id: bytes});
+the composer records it per snapshot so the rank view can recreate
+objects at their exact local sizes, padding included.
 """
 from __future__ import annotations
 
-DTYPE_BYTES = {"bf16": 2, "fp16": 2, "fp32": 4, "int32": 4, "int64": 8}
+from dataflow.core import DTYPE_BITS
+
+from ..blocks.layouts import opt_state_slice_layout
 
 
 def opt_root(oid: str) -> str | None:
@@ -29,16 +41,6 @@ def opt_root(oid: str) -> str | None:
     if oid.startswith("O_"):
         return "W_" + oid[2:]
     return None
-
-
-def zero1_span(opt_slices: dict, root: str, rank: int, world: int):
-    """(elements_this_rank, element_offset, total_elements, esize)
-    for a zero1-sharded root, in optimizer elements."""
-    sh = opt_slices[root]
-    esize = DTYPE_BYTES[sh["opt_dtype"]]
-    n_slice, n_tail = int(sh["n_slice"]), int(sh["n_tail"])
-    elems = n_slice + (n_tail if rank == world - 1 else 0)
-    return elems, rank * n_slice, n_slice * world + n_tail, esize
 
 
 def compile_source_policy(*, policy: str, world: int, writer_specs: dict,
@@ -53,13 +55,17 @@ def compile_source_policy(*, policy: str, world: int, writer_specs: dict,
 
     Returns (logical_objects, per_writer): logical_objects is the
     record's {id: {"bytes": N}}; per_writer[k] carries "slices" (the
-    engine wire lists) and "record" (record slice entries without
-    hashes — the composer fills those from snapshot statuses).
+    engine wire lists), "record" (record slice entries without
+    hashes — the composer fills those from snapshot statuses), and
+    "objects" (the writer's resident sizes, recorded per snapshot so
+    the rank view recreates local geometry exactly).
     """
     if policy not in ("simple", "dedup"):
         raise ValueError(f"unknown source policy {policy!r}")
     logical: dict = {}
-    per_writer = {k: {"slices": [], "record": []}
+    per_writer = {k: {"slices": [], "record": [],
+                      "objects": {oid: int(size)
+                                  for oid, size in writer_specs[k]}}
                   for k in sorted(writer_specs)}
     sizes_by_writer = {w: dict(specs)
                        for w, specs in writer_specs.items()}
@@ -112,32 +118,46 @@ def add_replicated(out: dict, logical: dict, oid: str, size: int,
 def add_zero1_shard(out: dict, logical: dict, oid: str, size: int,
                     writer: int, world: int, opt_slices: dict,
                     root: str) -> None:
-    elems, off, total, esize = zero1_span(opt_slices, root, writer,
-                                          world)
-    if size != 2 * elems * esize:
+    sh = opt_slices[root]
+    n_slice, n_tail = int(sh["n_slice"]), int(sh["n_tail"])
+    esize = DTYPE_BITS[sh["opt_dtype"]] // 8
+    layout = opt_state_slice_layout(n_slice, n_tail, sh["opt_dtype"])
+    if size != layout.total_bytes:
         raise ValueError(
             f"{oid}: writer {writer} holds {size} B but its zero1 "
-            f"shard is {2 * elems * esize} B (m+v of {elems} "
-            f"elements)")
+            f"slice layout is {layout.total_bytes} B "
+            f"({[f.name for f in layout.fields]})")
+    total = n_slice * world + n_tail
     total_bytes = 2 * total * esize
     known = logical.setdefault(oid, {"bytes": total_bytes})
     if known["bytes"] != total_bytes:
         raise ValueError(f"{oid}: logical size conflict "
                          f"{known['bytes']} != {total_bytes}")
-    half_local = elems * esize
     half_logical = total * esize
-    pieces = (
-        ("m", [0, half_local],
-         [off * esize, off * esize + half_local]),
-        ("v", [half_local, 2 * half_local],
-         [half_logical + off * esize,
-          half_logical + off * esize + half_local]),
-    )
-    for _slot, src, dst in pieces:
+    even = world * n_slice * esize
+    pieces = [
+        ("m_slice", [writer * n_slice * esize,
+                     (writer + 1) * n_slice * esize], True),
+        ("v_slice", [half_logical + writer * n_slice * esize,
+                     half_logical + (writer + 1) * n_slice * esize],
+         True),
+    ]
+    if n_tail:
+        # every rank updates the world-remainder tail redundantly:
+        # the overlapping tail slices are replicas, drift-certified,
+        # with writer 0 the restore winner
+        pieces += [
+            ("m_tail", [even, half_logical], writer == 0),
+            ("v_tail", [half_logical + even, total_bytes],
+             writer == 0),
+        ]
+    for field_name, dst, authoritative in pieces:
+        f = layout.field(field_name)
+        src = [f.offset_bytes, f.offset_bytes + f.nbytes]
         out["slices"].append({"id": oid, "src": src,
                               "logical_id": oid, "dst": dst,
                               "logical_bytes": total_bytes})
         out["record"].append({"logical": oid,
                               "snapshot_range": list(src),
                               "object_range": list(dst),
-                              "authoritative": True})
+                              "authoritative": authoritative})

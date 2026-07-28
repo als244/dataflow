@@ -1,6 +1,6 @@
-"""Cross-box resume drill against the v2 checkpoint record: two REAL
+"""Cross-box resume drill against the v1 checkpoint record: two REAL
 hosts from topology.toml (nccl or auto backend), zero1rs default,
-checkpoints written per responsibility on each box, artifacts
+self-sufficient per-writer snapshots written on each box, snapshots
 distributed across boxes at resume, and the resumed tail must
 reproduce the uninterrupted run within the ambient envelope.
 
@@ -8,7 +8,7 @@ Skips without a topology.toml carrying a remote host (runs on the
 conductor box of the pair).
 
 Tests:
-- test_crossbox_zero1rs_resume_matches_uninterrupted_tail: across two real hosts the v2 manifest records a world-2 zero1rs save, resume replays box-distributed artifacts, rank and aggregate loader views agree on the replicated weights, and the resumed tail matches the uninterrupted tail within tolerance.
+- test_crossbox_zero1rs_resume_matches_uninterrupted_tail: across two real hosts the v1 record captures a world-2 zero1rs save, resume restores each rank's own snapshot on its box, rank and logical loader views agree on the replicated weights, and the resumed tail matches the uninterrupted tail within tolerance.
 """
 import json
 import math
@@ -32,6 +32,7 @@ if "dp" not in TOPO.groups or len(TOPO.groups["dp"].members) < 2:
     pytest.skip("crossbox drill needs a [groups.dp] with >=2 members",
                 allow_module_level=True)
 
+from dataflow.checkpoint import RECORD_SCHEMA  # noqa: E402
 from dataflow_training.data.pipeline import legacy_block_pipeline  # noqa: E402
 from dataflow_training.distributed.fleet import (  # noqa: E402
     ParallelismScheme,
@@ -82,8 +83,9 @@ def test_crossbox_zero1rs_resume_matches_uninterrupted_tail(tmp_path,
     manifests = sorted((ck_dir / "xdrill").glob("step_*/checkpoint_record.json"))
     assert manifests, "no checkpoints written"
     m = json.loads(manifests[-1].read_text())
-    assert m["format"] == 2
-    assert m["world"] == 2
+    assert m["schema"] == RECORD_SCHEMA
+    assert m["scheme"]["world"] == 2
+    assert m["scheme"]["source_policy"] == "simple"
     assert m["launch"]["resolved"]["opt_shard"] == "zero1rs"
     ck_step = m["step"]
 

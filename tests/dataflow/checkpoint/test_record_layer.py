@@ -11,6 +11,7 @@ Tests:
 - test_misaligned_slice_refuses: with field schemas given, a slice endpoint inside an element refuses naming the field; on an element boundary it passes.
 - test_digest_mismatch_refuses: with field schemas given, a schema digest that does not match the record's logical_objects entry refuses naming the object.
 - test_slice_reference_bounds: a slice naming a snapshot index outside the snapshots list refuses.
+- test_missing_inventory_refuses: a snapshot listing no resident size for a sliced object refuses (the rank view needs local geometry), as does a snapshot_range beyond the listed resident size.
 """
 import json
 
@@ -31,13 +32,17 @@ O_BYTES = 8192
 
 def base_record_kwargs():
     """A minimal valid two-writer record: replicated W_0 saved whole
-    by both writers (writer 0 authoritative), O_0 sharded half/half."""
+    by both writers (writer 0 authoritative), O_0 sharded half/half;
+    each snapshot lists its resident-object inventory (the rank
+    view's local geometry)."""
     return dict(
         step=4, seed=11,
         logical_objects={"W_0": {"bytes": W_BYTES},
                          "O_0": {"bytes": O_BYTES}},
-        snapshots=[{"path": "rank0", "writer": "0"},
-                   {"path": "rank1", "writer": "1"}],
+        snapshots=[{"path": "rank0", "writer": "0",
+                    "objects": {"W_0": W_BYTES, "O_0": O_BYTES // 2}},
+                   {"path": "rank1", "writer": "1",
+                    "objects": {"W_0": W_BYTES, "O_0": O_BYTES // 2}}],
         slices={
             "W_0": [
                 {"snapshot": 0, "snapshot_range": [0, W_BYTES],
@@ -140,6 +145,7 @@ def test_misaligned_slice_refuses():
     bad = dict(base_record_kwargs())
     bad["logical_objects"]["O_0"]["schema_digest"] = \
         schema_digest(fields["O_0"])
+    bad["snapshots"][0]["objects"]["O_0"] = O_BYTES  # inventory legal:
     bad["slices"]["O_0"][0]["object_range"] = [0, O_BYTES // 2 + 2]
     bad["slices"]["O_0"][0]["snapshot_range"] = [0, O_BYTES // 2 + 2]
     bad["slices"]["O_0"][1]["object_range"] = [O_BYTES // 2 + 2, O_BYTES]
@@ -162,6 +168,19 @@ def test_slice_reference_bounds(tmp_path):
     kwargs = base_record_kwargs()
     kwargs["slices"]["W_0"][0]["snapshot"] = 7
     with pytest.raises(CheckpointError, match="snapshot"):
+        write_record(tmp_path, **kwargs)
+
+
+def test_missing_inventory_refuses(tmp_path):
+    kwargs = base_record_kwargs()
+    del kwargs["snapshots"][1]["objects"]["O_0"]
+    with pytest.raises(CheckpointError, match="resident"):
+        write_record(tmp_path, **kwargs)
+
+    # a snapshot_range beyond the listed resident size also refuses
+    kwargs = base_record_kwargs()
+    kwargs["snapshots"][0]["objects"]["O_0"] = O_BYTES // 4
+    with pytest.raises(CheckpointError, match="resident"):
         write_record(tmp_path, **kwargs)
 
 

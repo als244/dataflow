@@ -1,12 +1,12 @@
-"""World-1 resume drill against the v2 checkpoint record: train with
+"""World-1 resume drill against the v1 checkpoint record: train with
 checkpoints, resume from a FRESH conductor + daemon (process-death
 equivalent), and the resumed tail must reproduce the uninterrupted run
-within the cross-process ambient envelope. Also asserts the manifest v2
-surface: format, responsibility save_plan, launch record with per-rank
-programs, data cursor.
+within the cross-process ambient envelope. Also asserts the record
+surface: schema id, whole-object slices, launch record with per-rank
+programs, data cursor in the client payload.
 
 Tests:
-- test_world1_checkpoint_resume_drill: for each family, training emits a v2 manifest (format, single-rank save_plan, launch argv, per-rank program, data cursor) and a fresh conductor+daemon resume reproduces the uninterrupted tail within tolerance.
+- test_world1_checkpoint_resume_drill: for each family, training emits a v1 record (schema id, single-writer whole-object slices, launch argv, per-rank program, data cursor) and a fresh conductor+daemon resume reproduces the uninterrupted tail within tolerance.
 """
 import json
 import math
@@ -18,6 +18,7 @@ torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
     pytest.skip("no GPU", allow_module_level=True)
 
+from dataflow.checkpoint import RECORD_SCHEMA  # noqa: E402
 from dataflow_training.data.pipeline import legacy_block_pipeline  # noqa: E402
 from dataflow_training.distributed.fleet import (  # noqa: E402
     local_topology,
@@ -67,17 +68,21 @@ def test_world1_checkpoint_resume_drill(tmp_path, family_name):
                          launch_argv=["unit", "world1-drill"],
                          checkpoint_every=2, **common)
 
-    # manifest v2 surface at the newest checkpoint
+    # v1 record surface at the newest checkpoint
     manifests = sorted((ck_dir / "drill").glob("step_*/checkpoint_record.json"))
     assert manifests, "no checkpoints written"
     m = json.loads(manifests[-1].read_text())
-    assert m["format"] == 2
-    assert m["world"] == 1
-    assert m["save_plan"]["W_0"][0]["rank"] == 0
+    assert m["schema"] == RECORD_SCHEMA
+    assert m["scheme"]["world"] == 1
+    w_bytes = m["logical_objects"]["W_0"]["bytes"]
+    w_slices = m["slices"]["W_0"]
+    assert len(w_slices) == 1
+    assert w_slices[0]["object_range"] == [0, w_bytes]
+    assert w_slices[0]["authoritative"]
     assert m["launch"]["argv"] == ["unit", "world1-drill"]
     assert m["launch"]["programs"] == ["programs/rank0.json"]
     assert (manifests[-1].parent / "programs" / "rank0.json").is_file()
-    assert m["data_cursor"] is not None
+    assert m["client_payload"]["data_cursor"] is not None
     ck_step = m["step"]
     assert ck_step < STEPS
 

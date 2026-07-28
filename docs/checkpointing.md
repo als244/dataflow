@@ -175,9 +175,13 @@ directory is engine snapshots and program dumps. Annotated:
   "logical_objects": {          // the record's namespace: named byte
     "W_0": {"bytes": 2113024}   //   spans (+ field-schema digests)
   },
-  "snapshots": [                // one engine snapshot per writer
-    {"path": "rank0", "writer": "0"}, {"path": "rank1", "writer": "1"}
-  ],
+  "snapshots": [                // one engine snapshot per writer,
+    {"path": "rank0",           //   with its resident-object sizes:
+     "writer": "0",             //   shard layouts carry alignment
+     "objects": {"W_0": 2113024, "O_0": 6439424}},  // padding, so the
+    {"path": "rank1", "writer": "1",  // rank view recreates objects
+     "objects": {"W_0": 2113024, "O_0": 6439424}}   // at EXACT local
+  ],                            //   geometry, never a derived guess
   "slices": {                   // snapshot bytes -> logical bytes,
     "W_0": [                    //   hashed, authoritative-flagged
       {"snapshot": 0, "snapshot_range": [0, 2113024],
@@ -231,12 +235,13 @@ the record so the saved curve stays continuous; and the invocation
 is validated against `launch.resolved` (world, seed, preset), with
 mismatches refused rather than silently retrained.
 
-Certification: the three resume drills (single box, same-box world
-2 with partitioned saves, cross-box with artifact redistribution)
-each train with checkpoints, resume on FRESH daemons, and assert the
-resumed tail reproduces the uninterrupted run's losses within a
-tight envelope (currently 5e-4 worst-step), on top of the bitwise
-slice-reassembly gates.
+Certification: the resume drills train with checkpoints, resume on
+FRESH daemons, and compare the resumed tail against the
+uninterrupted run's losses. The same-box world-2 drill demands the
+tails EQUAL BIT FOR BIT — exact equality is the claim that the
+record captures every byte the tail depends on — while the
+cross-box drills allow a tight ambient envelope (5e-4 worst-step),
+all on top of the bitwise slice-reassembly gates.
 
 ## Single GPU is the world-1 special case
 
