@@ -13,7 +13,7 @@ Tests:
 - test_slice_validation_refusals: out-of-bounds src, dst/src length mismatch, dst beyond logical_bytes, conflicting logical_bytes, unknown id, and an empty slice list each refuse with BAD_REQUEST.
 - test_duplicate_snapshots_full_and_independent: a duplicated object stores its own full payload (no reference segments, no lineage or version keys, no dedup count) and both objects round-trip independently on a fresh daemon.
 - test_snapshot_has_no_group_concept: snapshot.json carries no group table, restore reports none, and the group verbs are gone from the client surface.
-- test_restore_runs_in_background_and_parks_writers: a non-blocking restore returns a restore id while its payload work runs off the dispatcher; a concurrent write to a target parks until the restore's leases release, then lands.
+- test_restore_runs_in_background_and_parks_writers: a non-blocking restore holds leases from admission while its payload work waits behind queued writer jobs; a concurrent write to a target parks until the restore completes, then lands.
 - test_restore_status_lifecycle: restore_status tracks a restore to done with its restored list and client_meta; an unknown id refuses with UNKNOWN_RESTORE.
 - test_second_daemon_on_live_socket_refuses: a second server on a live socket refuses loudly instead of unlinking it, while a stale socket file is reclaimed.
 """
@@ -377,47 +377,40 @@ def test_snapshot_has_no_group_concept(tmp_path):
         c.shutdown()
 
 
-def boot_wide(tmp, name):
-    """A daemon with enough slab for a restore whose payload work is
-    long enough to observe in flight."""
-    sock = str(tmp / f"{name}.sock")
-    server = Server(EngineConfig(socket_path=sock, fake=True,
-                                 slab_backing_gib=1.2))
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    for _ in range(300):
-        try:
-            with EngineClient(sock, client_name="probe"):
-                break
-        except (ConnectionError, FileNotFoundError, OSError):
-            time.sleep(0.01)
-    return server, EngineClient(sock, client_name=name)
-
-
 def test_restore_runs_in_background_and_parks_writers(tmp_path):
-    big = 512 << 20
-    payload = b"\xa5" * big
-    server, c = boot_wide(tmp_path, "bg-a")
+    payload = rng_bytes(61, SMALL)
+    server, c = boot(tmp_path, "bg-a")
     try:
-        c.put_object("W_big", payload)
+        c.put_object("W_small", payload)
         dest = tmp_path / "bg"
-        wait_snap(c, c.snapshot(str(dest)))
-        c.wipe("all", force=True)
+        wait_snap(c, c.snapshot(str(dest), slices=[{"id": "W_small"}]))
+        c.release_object("W_small")
+
+        # Stuff the writer queue: restore leases are taken at
+        # ADMISSION (dispatcher), but the payload job waits its turn
+        # behind these snapshots — a wide, deterministic window in
+        # which the leases are observably held. The stuffer is
+        # materialized server-side, so no bytes cross the wire.
+        c.materialize_object("stuffer", {"kind": "zeros",
+                                         "size_bytes": 128 << 20})
+        c.snapshot(str(tmp_path / "q1"))
+        c.snapshot(str(tmp_path / "q2"))
 
         out = c.restore_snapshot(str(dest), block=False)
         rid = out["restore_id"]
-        replacement = b"\x5a" * big
-        ticket = c.put_object("W_big", replacement, wait=False)
-        time.sleep(0.10)
+        replacement = b"\x5a" * SMALL
+        ticket = c.put_object("W_small", replacement, wait=False)
         status = c.restore_status(rid)
-        assert status["state"] in ("restoring", "done")
-        if status["state"] == "restoring":
-            assert not ticket.done.is_set(), \
-                "a write to a restore target must PARK until it completes"
+        assert status["state"] == "restoring", \
+            "queued writer jobs must hold the restore in flight"
+        time.sleep(0.05)
+        assert not ticket.done.is_set(), \
+            "a write to a restore target must PARK until it completes"
         done = c.wait_restore(rid)
         assert done["state"] == "done"
-        assert done["restored"] == ["W_big"]
+        assert done["restored"] == ["W_small"]
         c.wait(ticket, timeout=30)
-        assert bytes(c.get_object("W_big")) == replacement, \
+        assert bytes(c.get_object("W_small")) == replacement, \
             "the parked write must land AFTER the restore"
     finally:
         c.shutdown()
