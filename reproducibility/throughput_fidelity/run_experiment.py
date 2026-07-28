@@ -235,6 +235,11 @@ def stage_measure(cfg: Config, env: dict) -> None:
                  log=cfg.logs / f"measure_{opt}.log")
         rows = sum(1 for _ in out.open()) if out.exists() else 0
         say(f"  {opt}: {'ok' if ok else 'FAILED'} ({rows} rows)")
+        if not ok:
+            raise SystemExit(
+                f"measure ({opt}) FAILED after {rows} rows — see "
+                f"logs/measure_{opt}.log; refusing to run the later "
+                f"stages on an unmeasured grid")
 
 
 def stage_shipped(cfg: Config, env: dict) -> None:

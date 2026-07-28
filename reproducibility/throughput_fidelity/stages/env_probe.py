@@ -62,6 +62,7 @@ PRESET_LADDER = ["llama3_8b", "l3_1b", "l3_760m", "l3_350m", "l3_125m"]
 # regime this runtime exists for.
 PERSISTENT_HEADROOM = 1.15   # staging/copies alongside the persistent floor
 HOST_SHARE = 0.8             # of the applicable host limit
+BOOT_DRIFT_GUARD = 2 * (1 << 30)   # available moves between probe and boots
 BUDGET_STEP = 2 ** 0.5       # ratio between budget rungs
 DEVICE_SHARE = 0.85          # of device memory the largest budget may use
 ROUND_RUNGS = 7              # doublings of tokens-per-round to offer
@@ -345,6 +346,19 @@ def main():
                else (args.host_share or HOST_SHARE) * host_bytes)
     engine_max = meminfo_available_bytes() - int(PinnedSlab.SYSTEM_RESERVE_GIB * GIB)
     backing = min(backing, engine_max)
+    # The number the daemon will actually ACCEPT, not just what pins:
+    # PinnedSlab refuses to pin into the last SYSTEM_RESERVE of
+    # available memory, and available drifts between probe time and
+    # the many daemon boots of a long run (a raw pin can succeed at a
+    # size the boot then refuses by half a GiB, killing the measure
+    # phase hours later). Cap by the boot rule with drift headroom so
+    # every later stage can honor the allowance printed here.
+    from dataflow.service.hostmem import PinnedSlab, meminfo_available_bytes
+
+    boot_limit = (meminfo_available_bytes()
+                  - int(PinnedSlab.SYSTEM_RESERVE_GIB * GIB)
+                  - BOOT_DRIFT_GUARD)
+    backing = min(backing, boot_limit)
     backing = largest_pinnable(backing, persist * PERSISTENT_HEADROOM)
 
     # a task needs its own inputs+outputs resident; that bounds the useful floor
