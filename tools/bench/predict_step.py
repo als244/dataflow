@@ -46,9 +46,22 @@ HW_PROFILES = {
 }
 
 
+def profile_combo(cfg, *, recompute: bool, profile_cache: dict,
+                  refresh: bool = False) -> None:
+    """Measure every profile plan_combo will read for ``cfg`` — the GPU
+    half of prediction as its own callable (the sweep's profile stage).
+    Budget-independent by construction: profiles key on task signatures.
+    ``refresh`` re-measures from scratch."""
+    from dataflow_training.run.driver import warm_profiles
+
+    warm_profiles(cfg, recompute=recompute, profile_cache=profile_cache,
+                  refresh=refresh)
+
+
 def plan_combo(fam, cfg, hw, budget_gib: float, *, measured: bool,
                recompute: bool, profile_cache: dict,
-               backing_gib: float | None = None):
+               backing_gib: float | None = None,
+               require_cached: bool = False):
     """One (cfg, budget) plan through THE planner entry
     (driver.plan_at_budget) — this delegator only keeps the bench
     tools' historical call shape. ``profile_cache`` memoizes profiles
@@ -61,15 +74,18 @@ def plan_combo(fam, cfg, hw, budget_gib: float, *, measured: bool,
     return plan_at_budget(cfg, budget_gib, recompute=recompute,
                           measured=measured, backing_gib=backing_gib,
                           hw=None if measured else hw,
-                          profile_cache=profile_cache)
+                          profile_cache=profile_cache,
+                          require_cached=require_cached)
 
 
 def combo_row(fam, cfg, hw, budget: float, *, measured: bool,
               recompute: bool, profile_cache: dict,
-              backing_gib: float | None = None) -> dict:
+              backing_gib: float | None = None,
+              require_cached: bool = False) -> dict:
     planned = plan_combo(fam, cfg, hw, budget, measured=measured,
                          recompute=recompute, profile_cache=profile_cache,
-                         backing_gib=backing_gib)
+                         backing_gib=backing_gib,
+                         require_cached=require_cached)
     return combo_row_from_plan(cfg, budget, planned)
 
 

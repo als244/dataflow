@@ -129,22 +129,49 @@ total gets the job killed. From those it derives:
   it is lower than either direction benchmarked alone, so re-benchmarking it
   here would report a prettier figure that nothing uses.
 
+### P0b · cost profiling — *every task cost, measured once*
+`run_experiment.py` stage `profile` → `<repo>/artifacts/profile-cache/`
+(per-signature disk cache)  ·  the GPU-bound half of prediction
+
+**Inputs:** `results/env.json` (preset, geometry axes). No budgets: profiles
+are keyed by task signatures, and budgets shape *plans*, not tasks — so the
+grid here is sequence length × tokens/round × tokens/step per optimizer, and
+one pass covers every budget the sweep will ever plan.
+
+Walks the geometries predict will plan and measures every unique task
+signature they reach (base lowering plus every recompute-level variant, plus
+the box's PCIe rates) into the per-signature disk cache. The stage exists to
+**isolate GPU work from CPU work**: after it completes, predict is cache hits
+plus planning — CPU-only — which also means the two can eventually run under
+separate job allocations (GPU node profiles, CPU node predicts) while
+`--all-frontier`/`--resume` stay one command.
+
+- Idempotent: the cache is the state, so a rerun (or `--resume`) is a fast
+  cache walk that measures only what is missing.
+- `--fresh-profiles` re-measures everything from scratch, overwriting the
+  cached entries for the swept geometries (use after a kernel change that
+  the cache key does not capture — though the key covers the kernel set,
+  device, torch version, and profiling environment, so this should be rare).
+- A failure here halts the run: a cost this stage cannot measure is a cost
+  predict cannot read.
+
 ### P1 · predictions — *the whole grid, and where it becomes infeasible*
 `run_experiment.py` stage `predict` → `results/data/predict_measured_{opt}.jsonl`
 + `results/data/plans/{opt}/*.json.gz`  ·  the long pole for prediction; needs the device
 
 **Inputs:** `results/env.json` (preset, geometry axes, budget ladder,
 allowance) and the task-profile cache at `<repo>/artifacts/profile-cache/`
-(stage processes run with the repo as their working directory). A cache
-miss profiles that geometry on the GPU and fills it — a fresh box pays
-full profiling exactly once; every later predict is cache hits + CPU
-planning.
+(stage processes run with the repo as their working directory), populated
+by the profile stage. With a warm cache predict is CPU-only work. A cache
+miss still profiles that geometry on the GPU by default (it should not
+happen after a profile stage); pass `--require-profiles` to make a miss a
+hard error instead — the guarantee a GPU-free predict allocation needs.
 
 For each optimizer, for each sequence length, over every (tokens/round ×
 tokens/step × budget) combination:
 
-1. **profile** every unique task signature on this GPU (disk-cached per
-   geometry + kernel set + device + sequence length),
+1. **read** every task cost from the profile cache (measuring any
+   straggler signature the profile stage did not cover — none, normally),
 2. **plan** the step at that budget and host allowance — recompute planning
    first, then placement,
 3. **record** simulated s/step, tok/s, effective and hardware TFLOP/s, peak

@@ -9,7 +9,16 @@ configuration reference and nothing has to be discovered by reading source. The
 stages run in order and each consumes the previous one's output:
 
     probe     what can this box hold?          -> results/env.json
-    predict   the whole grid, and its edges;   -> results/data/predict_measured_{opt}.jsonl
+    profile   every task cost predict will     -> artifacts/profile-cache
+              read, measured on this GPU —        (per-signature disk cache)
+              the ONLY stage that measures
+              costs; budget-independent, so
+              the grid is seq x t_round x
+              t_step per optimizer
+    predict   the whole grid, and its edges,   -> results/data/predict_measured_{opt}.jsonl
+              planned on the profile stage's
+              costs (CPU-only work when the
+              cache is warm);
               each feasible row's OWN plan is     + results/data/plans/{opt}/*.json.gz
               saved as the artifact measure
               will execute (prog_id-hashed) —
@@ -47,7 +56,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 STAGES = HERE / "stages"
 REPO = HERE.parents[1]
-ALL_STAGES = ("probe", "predict", "select", "measure", "shipped", "report")
+ALL_STAGES = ("probe", "profile", "predict", "select", "measure",
+              "shipped", "report")
 
 
 @dataclass
@@ -66,6 +76,8 @@ class Config:
     host_share: float | None = None    # fraction of host RAM; None -> 0.8
     backing_gib: float | None = None   # explicit allowance, overrides the share
     target_cells: int = 18
+    fresh_profiles: bool = False
+    require_profiles: bool = False
     all_frontier: bool = False
     resume: bool = False
     steps: int = 6
@@ -155,6 +167,32 @@ def stage_probe(cfg: Config) -> dict:
     return env
 
 
+def stage_profile(cfg: Config, env: dict) -> None:
+    """Measure every task cost predict will read — the GPU half of
+    prediction as its own stage, so predict itself is CPU-only work over
+    a warm cache (and, later, schedulable on a GPU-free allocation).
+    One process per (optimizer, sequence length) like predict, so a
+    failure costs a chunk. Idempotent through the per-signature disk
+    cache: a rerun (or --resume) is a fast cache walk; --fresh-profiles
+    re-measures from scratch."""
+    for opt in cfg.opts:
+        say(f"profile ({opt}) — every cost predict will read, measured here")
+        log = cfg.logs / f"profile_{opt}.log"
+        for seq in env["seqs"]:
+            t_seq = time.time()
+            ok = run([cfg.python, str(STAGES / "sweep.py"),
+                      "--mode", "profile", "--preset", env["preset"],
+                      "--opt", opt, "--seq", str(seq),
+                      "--t-round", csv(env["t_rounds"]),
+                      "--t-step", csv(env["t_steps"])]
+                     + (["--fresh"] if cfg.fresh_profiles else []), log=log)
+            say(f"  seq {seq}: {'ok' if ok else 'FAILED'} ({elapsed(t_seq)})")
+            if not ok:
+                raise SystemExit(
+                    "profile stage failed — a cost it cannot measure is a "
+                    "cost predict cannot read. See logs/profile_*.log")
+
+
 def stage_predict(cfg: Config, env: dict) -> None:
     """Plan every cell on costs profiled on this GPU, one sequence length per
     process. Cells the planner cannot fit are recorded with the planner's
@@ -182,7 +220,9 @@ def stage_predict(cfg: Config, env: dict) -> None:
                       "--t-step", csv(env["t_steps"]),
                       "--budget", csv(env["budgets"]),
                       "--backing-gib", str(env["backing_gib"]),
-                      "--out", str(out)], log=log)
+                      "--out", str(out)]
+                     + (["--require-profiles"] if cfg.require_profiles
+                        else []), log=log)
             kinds = {"feasible": 0, "infeasible": 0, "error": 0, "skip": 0}
             if out.exists():
                 for line in out.open():
@@ -341,6 +381,16 @@ def parse_args(argv=None) -> Config:
                         "only the missing cells")
     p.add_argument("--target-cells", type=int, default=18,
                    help="how many cells get real GPU runs (default: 18)")
+    p.add_argument("--fresh-profiles", dest="fresh_profiles",
+                   action="store_true",
+                   help="profile stage re-measures every task cost from "
+                        "scratch, overwriting the disk cache for the swept "
+                        "geometries")
+    p.add_argument("--require-profiles", dest="require_profiles",
+                   action="store_true",
+                   help="predict hard-errors on any profile-cache miss "
+                        "instead of measuring — guarantees a GPU-free "
+                        "predict (default: measure the stragglers)")
     p.add_argument("--steps", type=int, default=6,
                    help="steps per measured cell; first 3 are warmup, keep >= 4")
     p.add_argument("--results", default=None,
@@ -366,6 +416,7 @@ def parse_args(argv=None) -> Config:
         budgets=numbers(a.budgets, float) if a.budgets else None,
         budget_step=a.budget_step, host_share=a.host_share,
         backing_gib=a.backing_gib, target_cells=a.target_cells,
+        fresh_profiles=a.fresh_profiles, require_profiles=a.require_profiles,
         all_frontier=a.all_frontier, resume=a.resume,
         steps=a.steps, stages=stages,
         **({"results": Path(a.results).resolve()} if a.results else {}))
@@ -389,6 +440,10 @@ def main(argv=None) -> int:
     elif not env:
         raise SystemExit("no env.json — run the probe stage first")
 
+    if "profile" in cfg.stages:
+        t0 = time.time()
+        stage_profile(cfg, env)
+        say(f"  profile took {elapsed(t0)}")
     if "predict" in cfg.stages:
         t0 = time.time()
         stage_predict(cfg, env)

@@ -6,6 +6,10 @@ identical to `tools/bench/predict_step.py` / `measure_step.py`, but emits one
 structured JSONL record per cell (+ a combined CSV) instead of a printed table.
 
 Modes:
+  profile          measure every task cost predict will read (GPU) into the
+                   per-signature disk cache; grid = seq x t_round x t_step
+                   (budgets shape plans, not tasks). Idempotent; --fresh
+                   re-measures from scratch                        [needs GPU]
   predict          roofline sim (CPU, instant)  -> combo_row(measured=False)
   predict-measured sim on GPU-PROFILED costs; each feasible row's OWN plan
                    (annotated program + prog_id + pred_s) is also saved as a
@@ -173,6 +177,43 @@ def load_plan_artifact(path):
     return art, planned
 
 
+def run_profile(args) -> bool:
+    """Measure every task cost predict will read, one geometry at a time —
+    the GPU half of prediction as its own stage. The grid is
+    seq x t_round x t_step ONLY: budgets shape plans, not task signatures,
+    so they never appear here. Idempotent through the per-signature disk
+    cache (a rerun is a fast cache walk); --fresh re-measures from
+    scratch. Faults are loud: a cost this stage cannot measure is a cost
+    predict cannot read."""
+    base = base_cfg(args.preset, args.opt)
+    profile_cache: dict = {}
+    seqs = [int(x) for x in args.seq.split(",")]
+    trs = [int(x) for x in args.t_round.split(",")]
+    tss = [int(x) for x in args.t_step.split(",")]
+    n = skips = 0
+    for seq, tr, ts in product(seqs, trs, tss):
+        if not geom_ok(seq, tr, ts):
+            skips += 1
+            continue
+        cfg = cell_config(base, seq, tr, ts)
+        t0 = time.time()
+        try:
+            PS.profile_combo(cfg, recompute=True,
+                             profile_cache=profile_cache,
+                             refresh=args.fresh)
+        except Exception as exc:
+            print(f"  ERROR {type(exc).__name__}: {exc}", flush=True)
+            return False
+        n += 1
+        rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // 1024
+        print(f"[profile {args.opt}] {n} seq{seq} tr{tr} ts{ts}"
+              f"  wall {time.time() - t0:.1f}s  peakRSS={rss}MB",
+              flush=True)
+    print(f"DONE profile {args.opt}: {n} geometries measured-or-verified, "
+          f"{skips} geometry skips", flush=True)
+    return True
+
+
 def run_predict(args, measured):
     base = base_cfg(args.preset, args.opt)
     fam = resolve_family(base)
@@ -232,7 +273,8 @@ def run_predict(args, measured):
                 planned = PS.plan_combo(fam, cfg, hw, bud, measured=measured,
                                         recompute=True,
                                         profile_cache=profile_cache,
-                                        backing_gib=back)
+                                        backing_gib=back,
+                                        require_cached=args.require_profiles)
                 row = PS.combo_row_from_plan(cfg, bud, planned)
                 if measured and back is not None:
                     # this row's OWN plan is the artifact measure executes,
@@ -260,7 +302,8 @@ def run_predict(args, measured):
                         more = PS.combo_row(fam, cfg, hw, bud, measured=measured,
                                             recompute=True,
                                             profile_cache=profile_cache,
-                                            backing_gib=back * HOST_PROBE)
+                                            backing_gib=back * HOST_PROBE,
+                                            require_cached=args.require_profiles)
                         row["host_marginal_gain"] = round(
                             (more["tok_s"] - row["tok_s"]) / row["tok_s"], 4)
                     except (ValueError, KeyError):
@@ -544,7 +587,8 @@ def run_measure(args):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--mode", required=True,
-                    choices=["predict", "predict-measured", "measure"])
+                    choices=["profile", "predict", "predict-measured",
+                             "measure"])
     ap.add_argument("--preset", required=True)
     ap.add_argument("--opt", default="adamw", choices=["adamw", "muon"])
     ap.add_argument("--seq", default="1024,2048,4096,8192")
@@ -563,10 +607,20 @@ def main():
                     help="plan-artifact directory (default: plans/ beside "
                          "--out; predict-measured writes it, measure reads it)")
     ap.add_argument("--steps", type=int, default=6)
+    ap.add_argument("--fresh", action="store_true",
+                    help="profile: re-measure every signature from scratch, "
+                         "overwriting the disk cache for these geometries")
+    ap.add_argument("--require-profiles", dest="require_profiles",
+                    action="store_true",
+                    help="predict-measured: hard-error on any profile-cache "
+                         "miss instead of measuring — for GPU-free predict")
     ap.add_argument("--data", default=None)
     ap.add_argument("--peak-lr", dest="peak_lr", type=float, default=3e-4)
-    ap.add_argument("--out", required=True)
+    ap.add_argument("--out", default=None)
     args = ap.parse_args()
+    if args.mode == "profile":
+        return 0 if run_profile(args) else 1
+    assert args.out, "--out required for predict/measure modes"
     if args.plans is None:
         args.plans = os.path.join(
             os.path.dirname(os.path.abspath(args.out)), "plans")

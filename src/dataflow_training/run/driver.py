@@ -517,9 +517,46 @@ def roofline_variant(fam, cfg, hw, levels):
     return fam.lower(cfg, recompute_levels=levels)
 
 
+def warm_profiles(cfg, *, recompute: bool = True,
+                  profile_cache: dict | None = None,
+                  refresh: bool = False) -> None:
+    """Measure (or verify) every profile plan_at_budget will read for
+    ``cfg`` — the GPU half of prediction, runnable as its own stage.
+
+    Fills the same caller-held ``profile_cache`` entries plan_at_budget
+    reads (the (repr(cfg), recompute) table, the backend, the PCIe
+    measurement) and the same disk cache underneath, so a later measured
+    plan — even one passing require_cached=True — performs no
+    measurement at all. Budgets never appear here: profiles key on task
+    signatures, which budgets do not touch, so one warm covers every
+    budget the sweep will plan. ``refresh`` re-measures from scratch,
+    overwriting what the disk cache held for these lowerings."""
+    from dataflow.runtime.device.cuda import CudaBackend
+    from dataflow_training.model_families.families import resolve_family
+    from dataflow_training.run.profiling import (cached_pcie,
+                                                 measured_profile_table)
+
+    fam = resolve_family(cfg)
+    cache = profile_cache if profile_cache is not None else {}
+    backend = cache.get("_backend")
+    if backend is None:
+        backend = cache.setdefault("_backend", CudaBackend())
+    if cache.get("_pcie") is None:
+        cache.setdefault("_pcie", cached_pcie(backend, refresh=refresh))
+    key = (repr(cfg), recompute)
+    if key not in cache:
+        dims = fam.derive_dims(cfg)
+        resolver = fam.build_resolver(dims)
+        cache[key] = (measured_profile_table(fam, cfg, resolver, backend,
+                                             recompute=recompute,
+                                             refresh=refresh),
+                      resolver)
+
+
 def plan_at_budget(cfg, budget_gib: float, *, recompute: bool = True,
                    measured: bool = False, backing_gib: float | None = None,
-                   hw=None, profile_cache: dict | None = None):
+                   hw=None, profile_cache: dict | None = None,
+                   require_cached: bool = False):
     """Plan the single-step program at a device budget (GiB). Returns the
     PlannedProgram; its placement is baked in -> a budget-specific prog_id.
     THE one planner entry: the bench tools' plan_combo delegates here, so
@@ -584,7 +621,8 @@ def plan_at_budget(cfg, budget_gib: float, *, recompute: bool = True,
         dims = fam.derive_dims(cfg)
         resolver = fam.build_resolver(dims)
         cache[key] = (measured_profile_table(fam, cfg, resolver, backend,
-                                             recompute=recompute),
+                                             recompute=recompute,
+                                             require_cached=require_cached),
                       resolver)
     profiles, resolver = cache[key]
     variant = (functools.partial(measured_variant, fam, cfg, profiles,

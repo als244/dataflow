@@ -440,6 +440,7 @@ def recompute_level_pins(program) -> list[dict[str, int]]:
 
 
 def measured_profile_table(fam, cfg, resolver, backend, *, recompute: bool = True,
+                           refresh: bool = False,
                            **kwargs) -> dict[tuple, TaskProfile]:
     """The cost table for ``cfg``, covering every variant that will be priced.
 
@@ -450,7 +451,13 @@ def measured_profile_table(fam, cfg, resolver, backend, *, recompute: bool = Tru
     same coverage, so they share this rather than each assembling a table:
     two copies of that assembly is how the gap survived being fixed once."""
     bare = fam.lower(cfg)
-    profiles = load_or_profile(bare, resolver, backend, **kwargs)
+    # ``refresh`` applies to the FIRST lowering only: it empties the store
+    # once, and every variant after it re-measures exactly what the emptied
+    # store no longer covers. Passing it to every call would leave the file
+    # holding only the LAST lowering's signatures (each refresh restarts
+    # the store), losing the base program's costs.
+    profiles = load_or_profile(bare, resolver, backend, refresh=refresh,
+                               **kwargs)
     if recompute:
         for pins in recompute_level_pins(bare):
             profiles = load_or_profile(fam.lower(cfg, recompute_levels=pins),
@@ -570,6 +577,7 @@ def load_or_profile(
     cache_dir=None,
     kernel_set: dict[str, str] | None = None,
     refresh: bool = False,
+    require_cached: bool = False,
     **kwargs,
 ) -> dict[tuple, TaskProfile]:
     """Disk-cached profile_program.
@@ -616,6 +624,16 @@ def load_or_profile(
         store = {eval(k): TaskProfile(**v) for k, v in raw["profiles"].items()}
     wanted = {_signature(t, sizes, resolver) for t in program.tasks}
     missing = wanted - set(store)
+    if missing and require_cached:
+        # The caller declared itself measurement-free (a predict stage on a
+        # warm cache, possibly on a box with no GPU time to give). Missing
+        # signatures then mean the profile stage did not cover this program
+        # — profiling here silently would put GPU work where the caller
+        # promised none, so refuse with the remedy instead.
+        raise RuntimeError(
+            f"profile cache {path.name} is missing {len(missing)} of "
+            f"{len(wanted)} task signatures and require_cached is set — "
+            f"run the profile stage for this geometry first")
     if missing:
         print(f"profile cache {path.name}: {len(wanted) - len(missing)}/{len(wanted)} "
               f"known, measuring {len(missing)}")
