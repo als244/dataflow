@@ -164,16 +164,10 @@ def fleet_loop(ranks, gspec, recipe, pipeline, steps, *, budgets, seed,
                              for o in rank.prog_dict["initial_objects"]
                              if o.get("persistent")})
             plan = resolve_targets(ck_record, {str(i): wanted})
-            restored_step = None
             for restore in plan:
-                res = rank.client.restore_snapshot(
+                rank.client.restore_snapshot(
                     str(step_dir / restore["path"]),
                     remap=restore["remap"], overwrite=True)
-                restored_step = res["client_meta"]["step"]
-            if restored_step != start_step:
-                raise RuntimeError(
-                    f"{rank.name}: restored step {restored_step} != "
-                    f"resume step {start_step}")
             step_lens_by_rank[i] = put_rank_rounds(rank, step_packed,
                                                    tokens_per_round,
                                                    execute_padding=execute_padding,

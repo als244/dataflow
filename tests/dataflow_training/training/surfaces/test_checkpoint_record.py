@@ -6,7 +6,7 @@ the weights-only load, where optimizer bytes never enter the store.
 CPU-only (fake engines).
 
 Tests:
-- test_conductor_save_resume_round_trip: the conductor save path writes a v1 record whose engine_spec carries each writer's capability (backing/device/kernel_set/fake) and whose inventories sum to the rank state; resolve_resume(auto) picks the newest complete step and skips a step dir without a record; each rank's own-snapshot restore is bitwise and reports the saved step.
+- test_conductor_save_resume_round_trip: the conductor save path writes a v1 record whose engine_spec carries each writer's capability (backing/device/kernel_set/fake) and whose inventories sum to the rank state; resolve_resume(auto) picks the newest complete step and skips a step dir without a record; each rank's own-snapshot restore is bitwise and carries NO client_meta (the record's client_payload owns run state).
 - test_load_checkpoint_targets: weights-only targets leave ZERO optimizer bytes resident in a scratch engine sized from the plan; "all" reassembles the aggregate optimizer object; a writer key restores that rank's shard view.
 - test_load_checkpoint_refuses_small_engine: a supplied engine whose backing cannot hold the targets refuses loudly BEFORE any restore call (capability, never placement).
 - test_load_checkpoint_engines_mapping: an engines mapping restores every writer's FULL rank view bitwise into the caller's engines; a mapping missing a writer refuses, and a too-small engine in the mapping refuses on capability before any restore.
@@ -181,7 +181,9 @@ def test_conductor_save_resume_round_trip(tmp_path):
                 res = fresh.restore_snapshot(
                     str(step_dir / plan[0]["path"]),
                     remap=plan[0]["remap"])
-                assert res["client_meta"]["step"] == 8
+                assert not res.get("client_meta"), \
+                    "training snapshots carry NO client_meta — the " \
+                    "record's client_payload owns run state"
                 assert bytes(fresh.get_object("W_0")) == w
                 assert bytes(fresh.get_object("O_0")) == o[r]
             finally:

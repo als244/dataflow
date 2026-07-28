@@ -335,11 +335,10 @@ def cmd_peek(args) -> int:
     run_dir = CKPTS / args.run
     manifests = sorted(run_dir.glob("step_*/checkpoint_record.json"))
     if manifests:
-        manifest = json.loads(manifests[-1].read_text())
-        payload = manifest.get("client_payload", {})
-        losses = [float(x) for x in
-                  payload.get("losses", manifest.get("losses", []))]
-        step = manifest["step"]
+        record = json.loads(manifests[-1].read_text())
+        payload = record.get("client_payload", {})
+        losses = [float(x) for x in payload.get("losses", [])]
+        step = record["step"]
         source = str(manifests[-1])
     else:
         print(f"no complete checkpoints under {run_dir}", file=sys.stderr)
@@ -358,6 +357,8 @@ def cmd_peek(args) -> int:
     print(f"{args.run}: {len(losses)} steps recorded (through {step})")
     print(f"  last loss {losses[-1]:.4f}   EMA({args.ema}) {ema_v:.4f}"
           f"   min {min(losses):.4f}")
+    for key in sorted(record.get("summary") or {}):
+        print(f"  {key}: {record['summary'][key]}")
     print(f"  partial curve -> {out}")
     return 0
 

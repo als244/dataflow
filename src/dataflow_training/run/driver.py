@@ -597,16 +597,6 @@ def plan_at_budget(cfg, budget_gib: float, *, recompute: bool = True,
                         recompute=recompute, build_variant=variant)
 
 
-def latest_engine_checkpoint(ckpt_dir) -> Path | None:
-    """Newest COMPLETE solo checkpoint under ``ckpt_dir`` (the snapshot
-    writer lands snapshot.json last, so its presence is the
-    completeness marker), or None."""
-    if ckpt_dir is None:
-        return None
-    found = sorted(Path(ckpt_dir).glob("step_*/snapshot.json"))
-    return found[-1].parent if found else None
-
-
 def run_engine(client, cfg, recipe: Recipe, pipeline, steps: int, *,
                budget_gib: float, seed: int = 11, recompute: bool = True,
                measured: bool = False, backing_gib: float | None = None,
@@ -632,11 +622,13 @@ def run_engine(client, cfg, recipe: Recipe, pipeline, steps: int, *,
     gates registration: the registered content hash must equal it or
     the run refuses before stepping.
 
-    ``checkpoint_every``: snapshot W_*/O_* + the loss curve + the data
-    cursor every N steps (host-local under ``checkpoint_dir``;
-    keep-last pruning). ``resume``: restore the newest complete
-    checkpoint, seek the pipeline to its cursor (checkpoints without
-    a cursor fast-forward the stepper CPU-side), and continue.
+    ``checkpoint_every``: every N steps the persistent set rides the
+    SAME policy-compiled save path the fleet uses — one snapshot plus
+    a checkpoint record landing last under ``checkpoint_dir``
+    (keep-last pruning). ``resume``: restore the newest complete
+    record's rank view, seek the pipeline to its recorded cursor
+    (records without one fast-forward the stepper CPU-side), and
+    continue.
 
     ``execute_padding``: under-full rounds normally execute ONLY their
     content (wire bounds stop at the content edge; tasks compute over
@@ -644,9 +636,6 @@ def run_engine(client, cfg, recipe: Recipe, pipeline, steps: int, *,
     segment instead — the filler rows execute for real with exactly
     zero loss contribution. Debug/fallback lane; numerics match either
     way (the under-full equivalence gate pins it)."""
-    import json as json_mod
-    import shutil
-
     from dataflow.core.jsonio import program_to_dict
 
     # one optimizer step per client.run with fresh data: the program
@@ -687,18 +676,16 @@ def run_engine(client, cfg, recipe: Recipe, pipeline, steps: int, *,
     T = cfg.max_tokens
 
     start_step = 0
-    resume_meta = None
-    resume_ck = None
+    ck_record = None
+    payload = {}
     if resume:
-        resume_ck = latest_engine_checkpoint(checkpoint_dir)
-        if resume_ck is None:
-            raise RuntimeError(f"resume: no complete checkpoint under "
-                               f"{checkpoint_dir}")
-        resume_meta = json_mod.loads(
-            (resume_ck / "snapshot.json").read_text())["client_meta"]
-        start_step = int(resume_meta["step"])
-    if resume_meta is not None and resume_meta.get("data_cursor"):
-        stepper = pipeline(resume_meta["data_cursor"])
+        from dataflow_training.run.checkpointing import resolve_resume
+
+        ck_record = resolve_resume(Path(checkpoint_dir), "auto", log)
+        payload = ck_record["client_payload"]
+        start_step = int(ck_record["step"])
+    if ck_record is not None and payload.get("data_cursor"):
+        stepper = pipeline(payload["data_cursor"])
     else:
         stepper = pipeline(None)
         if start_step:
@@ -766,14 +753,20 @@ def run_engine(client, cfg, recipe: Recipe, pipeline, steps: int, *,
     persist = sorted({s.id for s in planned.program.initial_objects
                       if s.persistent})
     if resume:
-        got = client.restore_snapshot(str(resume_ck), overwrite=True)
-        meta = got["client_meta"]
-        if int(meta["seed"]) != seed:
-            raise RuntimeError(f"resume: checkpoint seed {meta['seed']} "
-                               f"!= run seed {seed}")
-        res.losses = [float(x) for x in meta["losses"]]
-        res.meta["resumed_from"] = str(resume_ck)
-        log(f"[engine] resumed @ step {start_step} from {resume_ck}")
+        from dataflow.checkpoint import resolve_targets
+
+        if int(ck_record["seed"]) != seed:
+            raise RuntimeError(f"resume: checkpoint seed "
+                               f"{ck_record['seed']} != run seed "
+                               f"{seed}")
+        step_dir = Path(ck_record["_step_dir"])
+        for restore in resolve_targets(ck_record, {"0": persist}):
+            client.restore_snapshot(str(step_dir / restore["path"]),
+                                    remap=restore["remap"],
+                                    overwrite=True)
+        res.losses = [float(x) for x in payload["losses"]]
+        res.meta["resumed_from"] = str(step_dir)
+        log(f"[engine] resumed @ step {start_step} from {step_dir}")
     fetch = [f"loss_0_{r}" for r in range(R)]
     prof_start = profile.get("start") if profile else None
     prof_stop = profile.get("stop") if profile else None
@@ -822,23 +815,14 @@ def run_engine(client, cfg, recipe: Recipe, pipeline, steps: int, *,
         step_next = step + 1
         if checkpoint_every and step_next % checkpoint_every == 0 \
                 and checkpoint_dir is not None:
-            dest = Path(checkpoint_dir) / f"step_{step_next:06d}"
-            out = client.snapshot(str(dest),
-                                  slices=[{"id": oid} for oid in persist],
-                                  client_meta={"step": step_next,
-                                               "seed": seed,
-                                               "losses": res.losses,
-                                               "data_cursor": last_cursor})
-            done = client.wait_snapshot(out["snap_id"], timeout=600.0)
-            if done["state"] != "done":
-                raise RuntimeError(f"checkpoint @ {step_next} failed: "
-                                   f"{done}")
-            log(f"[engine] checkpoint @ step {step_next} -> {dest}")
-            if keep_last > 0:
-                complete = sorted(
-                    Path(checkpoint_dir).glob("step_*/snapshot.json"))
-                for mf in complete[:-keep_last]:
-                    shutil.rmtree(mf.parent, ignore_errors=True)
+            from dataflow_training.run.checkpointing import \
+                save_solo_checkpoint
+
+            save_solo_checkpoint(
+                client, prog_dict, checkpoint_dir, step_next,
+                cfg=cfg, seed=seed, argv=sys.argv,
+                losses=res.losses, data_cursor=last_cursor,
+                data_meta=data_meta, keep_last=keep_last, log=log)
     ran = max(1, steps - start_step)
     res.meta["data"] = dict(data_meta,
                             content_tokens=content_total,

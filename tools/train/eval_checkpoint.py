@@ -67,12 +67,11 @@ def main() -> int:
     run_dir = CKPTS / args.run
     if args.step is not None:
         ck = run_dir / f"step_{args.step:06d}"
-        if not ((ck / "checkpoint_record.json").is_file()
-                or (ck / "snapshot.json").is_file()):
+        if not (ck / "checkpoint_record.json").is_file():
             print(f"no complete checkpoint at {ck}", file=sys.stderr)
             return 1
     else:
-        marks = sorted(run_dir.glob("step_*/checkpoint_record.json"))             or sorted(run_dir.glob("step_*/snapshot.json"))
+        marks = sorted(run_dir.glob("step_*/checkpoint_record.json"))
         if not marks:
             print(f"no complete checkpoints under {run_dir}", file=sys.stderr)
             return 1

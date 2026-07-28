@@ -134,14 +134,16 @@ def save_checkpoint(ranks, ck: dict, step_next: int, meta: dict,
         policy=policy, world=len(ranks),
         writer_specs=persisted_writer_specs(ranks),
         plan=ck["responsibility"], opt_slices=ck.get("opt_slices"))
+    # run state (step/losses/cursor) lives in the record's
+    # client_payload alone — snapshots carry no client_meta from
+    # training (snapshot client_meta remains the bare-engine
+    # round-trip feature)
     writers = {}
     for i, rank in enumerate(ranks):
         writers[i] = {"client": rank.client, "path": f"rank{i}",
                       "slices": per_writer[i]["slices"],
                       "record": per_writer[i]["record"],
-                      "objects": per_writer[i]["objects"],
-                      "client_meta": {"step": step_next, "rank": i,
-                                      **meta}}
+                      "objects": per_writer[i]["objects"]}
     progs = save_programs(step_dir, [r.prog_dict for r in ranks])
     launch = launch_record(
         argv=ck.get("argv"),
@@ -165,6 +167,9 @@ def save_checkpoint(ranks, ck: dict, step_next: int, meta: dict,
         client_payload={"losses": list(losses_so_far),
                         "data_cursor": meta.get("data_cursor"),
                         "seed": meta["seed"]},
+        summary=({"last_loss": round(float(losses_so_far[-1]), 4),
+                  "steps_recorded": len(losses_so_far)}
+                 if losses_so_far else {}),
         launch=launch)
     log(f"[fleet] checkpoint @ step {step_next} -> {step_dir} "
         f"({policy}, {len(ranks)} snapshot(s))")
@@ -181,6 +186,45 @@ def save_checkpoint(ranks, ck: dict, step_next: int, meta: dict,
                 if not host.is_local():
                     run_on(host, f"rm -rf {repo_path(host, str(old_dir))}")
             log(f"[fleet] pruned checkpoint {old_dir.name}")
+
+
+class SoloWriter:
+    """The world-1 writer as the conductor-shaped save path sees it:
+    one local client and its program."""
+
+    def __init__(self, client, prog_dict):
+        self.name = "local"
+        self.client = client
+        self.prog_dict = prog_dict
+
+
+def save_solo_checkpoint(client, prog_dict, ckpt_dir, step_next, *,
+                         cfg, seed, argv, losses, data_cursor,
+                         data_meta, keep_last, log) -> None:
+    """A world-1 run's checkpoint through the SAME policy-compiled
+    save path the fleet uses: one writer, the world-1 responsibility
+    plan (every root whole), a v1 record landing last."""
+    import os
+
+    from ..distributed.responsibility import responsibility_map
+    from ..distributed.topology import HostSpec
+
+    host = HostSpec(name="local", peer_listen="127.0.0.1:0",
+                    ssh=None, repo=os.getcwd())
+    ck = {"dir": Path(ckpt_dir),
+          "responsibility": responsibility_map(cfg, 1),
+          "opt_slices": None, "source_policy": "simple",
+          "keep_last": int(keep_last), "argv": list(argv),
+          "resolved": {"preset": getattr(cfg, "preset", None),
+                       "seed": seed, "opt_shard": None,
+                       "tp_mlp": False},
+          "data_meta": data_meta or {},
+          "hosts_by_name": {"local": host}}
+    meta = {"seed": seed, "rank_rounds": [cfg.grad_accum_rounds],
+            "backend": None, "hosts": ["local"],
+            "data_cursor": data_cursor}
+    save_checkpoint([SoloWriter(client, prog_dict)], ck, step_next,
+                    meta, losses, log)
 
 
 def load_checkpoint(step_dir, *, targets=None, client=None,
