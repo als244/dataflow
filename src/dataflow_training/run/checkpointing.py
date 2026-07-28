@@ -183,11 +183,12 @@ def save_checkpoint(ranks, ck: dict, step_next: int, meta: dict,
             log(f"[fleet] pruned checkpoint {old_dir.name}")
 
 
-def load_checkpoint(step_dir, *, targets, client=None,
-                    backing_gib=None):
-    """Restore a checkpoint's TARGETS into an engine and return
-    ``(record, client)``.
+def load_checkpoint(step_dir, *, targets=None, client=None,
+                    backing_gib=None, engines=None):
+    """Restore a checkpoint into engines and return the record with
+    what was booted.
 
+    TARGETS form (``engines=None``): returns ``(record, client)``.
     ``targets`` is anything the record resolver takes: ``"all"`` for
     the logical view (complete objects reassembled from every
     writer's slices), a list of ids for a subset — weights-only
@@ -197,11 +198,25 @@ def load_checkpoint(step_dir, *, targets, client=None,
     fake engine sized from the resolved plan itself — the targeted
     objects' bytes plus slack — so any checkpoint the record
     describes loads without a capacity guess (``backing_gib``
-    overrides)."""
+    overrides).
+
+    ENGINES form: returns ``(record, {writer_key: client})`` with
+    every writer's FULL rank view restored — the checkpoint stood
+    back up as a fleet, no conductor involved. ``engines`` is either
+    a caller-supplied ``{writer_key: client}`` mapping (each engine
+    capability-checked before any restore) or ``"replicate"``, which
+    launches one local child daemon per writer shaped by the
+    record's engine spec (device, fake) and sized from the writer's
+    resident bytes; the caller owns shutdown of the returned
+    clients."""
     from dataflow.checkpoint import read_record, resolve_targets
 
     step_dir = Path(step_dir)
     record = read_record(step_dir)
+    if engines is not None:
+        return record, restore_fleet(step_dir, record, engines)
+    if targets is None:
+        raise ValueError("load_checkpoint needs targets= or engines=")
     plan = resolve_targets(record, targets)
     sizes = {}
     for step in plan:
@@ -244,3 +259,80 @@ def load_checkpoint(step_dir, *, targets, client=None,
         client.restore_snapshot(str(step_dir / step["path"]),
                                 remap=step["remap"], overwrite=True)
     return record, client
+
+
+def restore_fleet(step_dir, record, engines) -> dict:
+    """Every writer's FULL rank view into one engine per writer.
+    ``engines="replicate"`` boots local child daemons shaped by the
+    record's engine spec; a ``{writer_key: client}`` mapping uses
+    the caller's engines, capability-checked first."""
+    from dataflow.checkpoint import (CheckpointError, resolve_targets,
+                                     writer_resident_bytes)
+
+    writers = sorted({s["writer"] for s in record["snapshots"]})
+    if engines == "replicate":
+        clients = boot_replicas(record, writers)
+    else:
+        clients = dict(engines)
+        missing = [k for k in writers if k not in clients]
+        if missing:
+            raise CheckpointError(
+                f"engine mapping lacks writers {missing}")
+        for key in writers:
+            needed = writer_resident_bytes(record, key)
+            capacity = clients[key].query_backing().get(
+                "capacity_bytes", 0)
+            if capacity < needed:
+                raise CheckpointError(
+                    f"writer {key}: engine backing "
+                    f"{capacity / 1024 ** 3:.2f} GiB cannot hold its "
+                    f"{needed / 1024 ** 3:.2f} GiB rank state")
+    for key in writers:
+        ids = sorted({oid for s in record["snapshots"]
+                      if s["writer"] == key
+                      for oid in (s.get("objects") or {})})
+        plan = resolve_targets(record, {key: ids})
+        for step in plan:
+            clients[key].restore_snapshot(
+                str(Path(step_dir) / step["path"]),
+                remap=step["remap"], overwrite=True)
+    return clients
+
+
+def boot_replicas(record, writers) -> dict:
+    """One local child daemon per writer: device and fake mode from
+    the record's engine spec, backing sized from the writer's
+    resident bytes. Ports walk up from a fixed base; shutting the
+    returned clients down stops the daemons."""
+    import os
+    import time
+
+    from dataflow.checkpoint import writer_resident_bytes
+    from dataflow.service import EngineClient
+    from ..distributed import daemons
+    from ..distributed.topology import HostSpec
+
+    clients = {}
+    for i, key in enumerate(writers):
+        spec = (record.get("engine_spec") or {}).get(key) or {}
+        needed = writer_resident_bytes(record, key)
+        backing = max(0.25, 1.25 * needed / 1024 ** 3)
+        host = HostSpec(name=f"ckload{key}",
+                        peer_listen=f"127.0.0.1:{29901 + i}",
+                        ssh=None, repo=os.getcwd(),
+                        backing_gib=backing, budget_gib=1.0,
+                        device=int(spec.get("device") or 0))
+        flags = "--fake" if spec.get("fake") else ""
+        p = daemons.launch(host, lane="ckload", backing_gib=backing,
+                           extra_flags=flags)
+        deadline = time.time() + 60.0
+        while True:
+            try:
+                clients[key] = EngineClient(p["sock"],
+                                            client_name="ckload")
+                break
+            except (ConnectionError, FileNotFoundError, OSError):
+                if time.time() > deadline:
+                    raise
+                time.sleep(0.05)
+    return clients

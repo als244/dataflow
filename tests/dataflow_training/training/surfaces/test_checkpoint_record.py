@@ -9,6 +9,7 @@ Tests:
 - test_conductor_save_resume_round_trip: the conductor save path writes a v1 record whose engine_spec carries each writer's capability (backing/device/kernel_set/fake) and whose inventories sum to the rank state; resolve_resume(auto) picks the newest complete step and skips a step dir without a record; each rank's own-snapshot restore is bitwise and reports the saved step.
 - test_load_checkpoint_targets: weights-only targets leave ZERO optimizer bytes resident in a scratch engine sized from the plan; "all" reassembles the aggregate optimizer object; a writer key restores that rank's shard view.
 - test_load_checkpoint_refuses_small_engine: a supplied engine whose backing cannot hold the targets refuses loudly BEFORE any restore call (capability, never placement).
+- test_load_checkpoint_engines_mapping: an engines mapping restores every writer's FULL rank view bitwise into the caller's engines; a mapping missing a writer refuses, and a too-small engine in the mapping refuses on capability before any restore.
 """
 import threading
 import time
@@ -256,5 +257,43 @@ def test_load_checkpoint_refuses_small_engine(tmp_path):
             load_checkpoint(ck["dir"] / "step_000004", targets="all",
                             client=TinyEngineStub())
     finally:
+        for _server, c in daemons:
+            c.shutdown()
+
+
+def test_load_checkpoint_engines_mapping(tmp_path):
+    w = rng_bytes(41, W_BYTES)
+    o = {r: shard_bytes(400 + r) for r in (0, 1)}
+    daemons, ranks, ck = fleet(tmp_path, w, o)
+    ck["dir"].mkdir(parents=True, exist_ok=True)
+    fresh = []
+    try:
+        meta = {"seed": 11, "rank_rounds": [1, 1], "backend": "fake",
+                "hosts": ["host0", "host1"], "data_cursor": None}
+        save_checkpoint(ranks, ck, 4, meta, [5.0], quiet)
+        step_dir = ck["dir"] / "step_000004"
+        pair = {}
+        for r in (0, 1):
+            server_f, c = boot(tmp_path, f"eng{r}")
+            fresh.append(c)
+            pair[str(r)] = c
+
+        record, clients = load_checkpoint(step_dir, engines=pair)
+        for r in (0, 1):
+            assert bytes(clients[str(r)].get_object("W_0")) == w
+            assert bytes(clients[str(r)].get_object("O_0")) == o[r], \
+                f"writer {r}'s rank view must restore ITS shard"
+
+        from dataflow.checkpoint import CheckpointError
+
+        with pytest.raises(CheckpointError, match="lacks writers"):
+            load_checkpoint(step_dir, engines={"0": pair["0"]})
+        with pytest.raises(CheckpointError, match="cannot hold"):
+            load_checkpoint(step_dir,
+                            engines={"0": pair["0"],
+                                     "1": TinyEngineStub()})
+    finally:
+        for c in fresh:
+            c.shutdown()
         for _server, c in daemons:
             c.shutdown()
