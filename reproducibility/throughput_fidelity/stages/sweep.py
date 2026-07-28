@@ -426,9 +426,21 @@ def run_measure(args):
     n = 0
     with open(args.out, "a") as fh:
         for backing in sorted(groups):
+            # Cells carry the allowance they were PLANNED under; the box
+            # pins what it can TODAY (available memory drifts between
+            # runs). The slab only has to hold each plan's actual
+            # demand — bounded by its predicted backing, not by the
+            # planning ceiling — so boot at the honest size and let any
+            # genuinely oversized plan fail loudly as its own row.
+            boot_gib = float(backing)
+            if args.backing_gib and float(args.backing_gib) < boot_gib:
+                boot_gib = float(args.backing_gib)
+                print(f"[measure {args.opt}] cells planned at "
+                      f"{backing:g} GiB; box now pins {boot_gib:g} — "
+                      f"booting {boot_gib:g}", flush=True)
             print(f"[measure {args.opt}] backing {backing:g} GiB "
                   f"({len(groups[backing])} cells)", flush=True)
-            with engine_client(backing_gib=backing, log=MS.quiet_log) as client:
+            with engine_client(backing_gib=boot_gib, log=MS.quiet_log) as client:
                 for c in groups[backing]:
                     seq, tr, ts = c["seq"], c["t_round"], c["t_step"]
                     bud = float(c["budget"])
