@@ -242,8 +242,8 @@ def install(server) -> None:
                         f"{spec.id}: {target} is {robj.size_bytes} B, "
                         f"program wants {spec.size_bytes} B")
                 # a run may mutate any bound resident in place (W/O)
-                # — advance the version so snapshot dedup stays sound
-                robj.lineage.dirty = True
+                # — advance the version so fast-residency caching
+                # sees the write
                 robj.version += 1
                 values[spec.id] = (execution.host_task_buffer(store, robj)
                                    if host_program

@@ -254,24 +254,6 @@ class EngineClient:
         return self._call("duplicate_object",
                           {"src": src, "dst": dst}, wait=wait)
 
-    def duplicate_object_group(self, ogid: str, *, tag: str,
-                               rename: str = "{id}@{tag}",
-                               new_ogid: str | None = None, wait=True):
-        return self._call("duplicate_object_group",
-                          {"ogid": ogid, "tag": tag, "rename": rename,
-                           "new_ogid": new_ogid}, wait=wait)
-
-    def create_object_group(self, ogid: str, members=(), *,
-                            pattern: str | None = None,
-                            object_groups=(), wait=True):
-        return self._call("create_object_group",
-                          {"ogid": ogid, "members": list(members),
-                           "pattern": pattern,
-                           "object_groups": list(object_groups)}, wait=wait)
-
-    def delete_object_group(self, ogid: str, *, wait=True):
-        return self._call("delete_object_group", {"ogid": ogid}, wait=wait)
-
     def wipe(self, scope: str, *, force=False, wait=True):
         return self._call("wipe", {"scope": scope, "force": force},
                           wait=wait)
@@ -282,9 +264,6 @@ class EngineClient:
     def list_objects(self, pattern: str = "*", *, limit: int = 1000):
         return self._call("list_objects",
                           {"pattern": pattern, "limit": limit})
-
-    def query_object_group(self, ogid: str):
-        return self._call("query_object_group", {"ogid": ogid})
 
     def query_backing(self):
         return self._call("query_backing", {})
@@ -325,9 +304,8 @@ class EngineClient:
                 raise TimeoutError(f"snapshot {snap_id} still writing")
             _t.sleep(poll)
 
-    def restore_snapshot(self, path: str, *, duplicates="recreate",
-                         overwrite=False, verify=True, remap=None,
-                         wait=True):
+    def restore_snapshot(self, path: str, *, overwrite=False,
+                         verify=True, remap=None, wait=True):
         """Place a snapshot's slices back into the store. Hashes are
         verified BEFORE any placement (``verify=False`` restores the
         on-disk bytes unchecked). ``remap`` extracts logical ranges
@@ -335,9 +313,8 @@ class EngineClient:
         placement: {logical_id: [{"logical": [c, d), "id": local_id,
         "local": [x, y), "bytes": local_total}, ...]}."""
         return self._call("restore_snapshot",
-                          {"path": str(path), "duplicates": duplicates,
-                           "overwrite": overwrite, "verify": verify,
-                           "remap": remap}, wait=wait)
+                          {"path": str(path), "overwrite": overwrite,
+                           "verify": verify, "remap": remap}, wait=wait)
 
     def register_program(self, program, *, resolver: dict,
                          name: str | None = None, wait=True):
@@ -373,10 +350,6 @@ class EngineClient:
         return self._call("send_object",
                           {"oid": oid, "peer_id": peer_id, "as_id": as_id,
                            "overwrite": overwrite})
-
-    def send_object_group(self, ogid: str, peer_id: str, **kw) -> dict:
-        return self._call("send_object_group",
-                          {"ogid": ogid, "peer_id": peer_id, **kw})
 
     def transfer_status(self, send_id: str) -> dict:
         return self._call("transfer_status", {"send_id": send_id})

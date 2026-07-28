@@ -11,6 +11,8 @@ Tests:
 - test_refusal_mid_list_leaves_store_untouched: a size-mismatched resident target refuses the whole restore during validation — earlier valid entries are not placed.
 - test_snapshot_json_schema_and_hashes: snapshot.json carries the dataflow-snapshot/v1 schema and fully materialized slice entries whose hashes match recomputed blake2b-16; a tampered schema string refuses with VERSION_SKEW; a dir without snapshot.json refuses with IO_ERROR.
 - test_slice_validation_refusals: out-of-bounds src, dst/src length mismatch, dst beyond logical_bytes, conflicting logical_bytes, unknown id, and an empty slice list each refuse with BAD_REQUEST.
+- test_duplicate_snapshots_full_and_independent: a duplicated object stores its own full payload (no reference segments, no lineage or version keys, no dedup count) and both objects round-trip independently on a fresh daemon.
+- test_snapshot_has_no_group_concept: snapshot.json carries no group table, restore reports none, and the group verbs are gone from the client surface.
 - test_second_daemon_on_live_socket_refuses: a second server on a live socket refuses loudly instead of unlinking it, while a stale socket file is reclaimed.
 """
 import hashlib
@@ -323,6 +325,52 @@ def test_slice_validation_refusals(tmp_path):
         with pytest.raises(ServiceError) as ei:      # empty slice list
             c.snapshot(dest, slices=[])
         assert ei.value.code == "BAD_REQUEST"
+    finally:
+        c.shutdown()
+
+
+def test_duplicate_snapshots_full_and_independent(tmp_path):
+    payload = rng_bytes(47, SMALL)
+    server, c = boot(tmp_path, "dup-a")
+    try:
+        c.put_object("W_root", payload)
+        c.duplicate_object("W_root", "W_root@ck")
+        dest = tmp_path / "dup"
+        out = c.snapshot(str(dest))
+        assert "n_deduped" not in out
+        wait_snap(c, out)
+    finally:
+        c.shutdown()
+
+    m = snapshot_json(dest)
+    assert len(m["slices"]) == 2
+    for entry in m["slices"]:
+        assert "ref" not in entry["payload"], \
+            "duplicates must store their own full payload"
+        assert "lineage" not in entry and "version" not in entry
+    server2, c2 = boot(tmp_path, "dup-b")
+    try:
+        c2.restore_snapshot(str(dest))
+        assert bytes(c2.get_object("W_root")) == payload
+        assert bytes(c2.get_object("W_root@ck")) == payload
+    finally:
+        c2.shutdown()
+
+
+def test_snapshot_has_no_group_concept(tmp_path):
+    server, c = boot(tmp_path, "nogroup")
+    try:
+        assert not hasattr(c, "create_object_group")
+        assert not hasattr(c, "duplicate_object_group")
+        c.put_object("W_solo", rng_bytes(53, SMALL))
+        dest = tmp_path / "flat"
+        wait_snap(c, c.snapshot(str(dest)))
+        assert "object_groups" not in snapshot_json(dest)
+        c.wipe("all", force=True)
+        res = c.restore_snapshot(str(dest))
+        assert "object_groups_recreated" not in res
+        with pytest.raises(TypeError):
+            c.restore_snapshot(str(dest), duplicates="recreate")
     finally:
         c.shutdown()
 

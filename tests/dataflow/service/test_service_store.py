@@ -1,18 +1,16 @@
 """Store gates: allocator, object CRUD over the wire (binary frames both
-directions), groups/hierarchy/reserved names, duplicate+lineage,
-protect/wipe, queries — CPU (fake slab). GPU: real pinned boot +
-init-program byte-identity vs initial_values.
+directions), duplicate, protect/wipe, queries — CPU (fake slab).
+GPU: real pinned boot + init-program byte-identity vs initial_values.
 
 Tests:
 - test_allocator_coalesce_and_reuse: the slab allocator aligns offsets, first-fit-reuses a freed gap, and coalesces back to one full-capacity extent once all is released.
 - test_allocator_capacity_error_detail: an over-capacity alloc raises CAPACITY carrying the largest free extent in its detail.
-- test_put_get_roundtrip_bytes: put/get round-trips bytes and query reports meta and a dirty, parentless lineage.
+- test_put_get_roundtrip_bytes: put/get round-trips bytes and query reports the stored meta.
 - test_put_get_file_forms: the file-path put/get forms write and read byte-identical content on disk.
 - test_overwrite_same_size_ok_mismatch_rejected: a same-size overwrite succeeds but a different-size one raises BINDING_MISMATCH.
 - test_unknown_object: querying a missing object returns None and getting it raises UNKNOWN_OBJECT.
 - test_materialize_zeros_and_tokens: materialize produces zero bytes and per-seed-deterministic in-range token ids.
-- test_object_groups_hierarchy_and_reserved: groups compose hierarchically with correct member and byte counts while reserved and unknown names are refused.
-- test_duplicate_lineage_and_group_dup: duplicate records a clean parent lineage, group-duplicate maps members under a tag, and overwriting a parent dirties it.
+- test_duplicate_copies_bytes_independently: duplicate copies bytes and meta into an independent object — mutating the parent afterwards leaves the copy untouched, and duplicating onto an existing id refuses.
 - test_protected_object_survives_wipe_unless_forced: a protected object refuses release and survives wipe until force=True.
 - test_query_backing_usage: query_backing reports object count, largest object, and used bytes consistent with engine_status.
 - test_create_object_semantics: create_object allocates a payload-less catalogued extent (query shows the size), same-size re-create is idempotent, and a size change raises BINDING_MISMATCH.
@@ -99,7 +97,6 @@ def test_put_get_roundtrip_bytes(daemon):
         assert back == blob
         info = c.query_object("blob/a")
         assert info["meta"]["role"] == "test"
-        assert info["lineage"] == {"parent": None, "dirty": True}
 
 
 def test_put_get_file_forms(daemon, tmp_path):
@@ -153,45 +150,24 @@ def test_materialize_zeros_and_tokens(daemon):
         assert c.get_object("tok2") == c.get_object("tok")
 
 
-# ---------------------------------------------------- groups + duplicate
+# ---------------------------------------------------------- duplicate
 
-def test_object_groups_hierarchy_and_reserved(daemon):
-    sock, _ = daemon
-    with EngineClient(sock, client_name="grp") as c:
-        for i in range(3):
-            c.put_object(f"W_{i}", b"w" * 1000)
-            c.put_object(f"O_{i}", b"o" * 2000)
-        c.create_object_group("weights", pattern="W_*")
-        c.create_object_group("opt_state", pattern="O_*")
-        g = c.create_object_group("model_state",
-                                  object_groups=["weights", "opt_state"])
-        assert g["object_group"]["n_members"] == 6
-        q = c.query_object_group("model_state")
-        assert q["bytes"] == 3 * 1000 + 3 * 2000
-        with pytest.raises(ServiceError):
-            c.create_object_group("backing")     # reserved
-        with pytest.raises(ServiceError) as ei:
-            c.query_object_group("nope")
-        assert ei.value.code == "UNKNOWN_GROUP"
-
-
-def test_duplicate_lineage_and_group_dup(daemon):
+def test_duplicate_copies_bytes_independently(daemon):
     sock, _ = daemon
     with EngineClient(sock, client_name="dup") as c:
-        c.put_object("W_0", b"w0" * 500)
-        c.put_object("W_1", b"w1" * 500)
-        c.create_object_group("weights", pattern="W_*")
+        c.put_object("W_0", b"w0" * 500, meta={"role": "weights"})
         r = c.duplicate_object("W_0", "W_0@init")
-        assert r["object"]["lineage"] == {"parent": "W_0", "dirty": False}
+        assert r["object"]["size_bytes"] == 1000
+        assert r["object"]["meta"] == {"role": "weights"}
         assert c.get_object("W_0@init") == b"w0" * 500
 
-        d = c.duplicate_object_group("weights", tag="ck1")
-        assert d["mapping"] == {"W_0": "W_0@ck1", "W_1": "W_1@ck1"}
-        assert c.query_object_group("weights@ck1")["n_members"] == 2
-
-        # overwriting the parent dirties its lineage record
+        # the copy is independent: mutating the parent changes nothing
         c.put_object("W_0", b"XX" * 500)
-        assert c.query_object("W_0")["lineage"]["dirty"] is True
+        assert c.get_object("W_0@init") == b"w0" * 500
+
+        with pytest.raises(ServiceError) as ei:
+            c.duplicate_object("W_0", "W_0@init")     # exists
+        assert ei.value.code == "BAD_REQUEST"
 
 
 # ------------------------------------------------------- protect + wipe
@@ -304,8 +280,6 @@ def test_host_run_fills_in_place(daemon):
         for oid, n in sizes.items():
             want = bytes([sum(oid.encode()) % 251]) * n
             assert c.get_object(oid) == want, oid
-        # binding marked the residents dirty (mutation contract)
-        assert c.query_object("hf/a")["lineage"]["dirty"] is True
         c.unregister_program(reg["prog_id"])
 
         # an object the program declares but nobody created: the report

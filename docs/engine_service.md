@@ -98,8 +98,7 @@ with EngineClient("/tmp/dfd.sock", client_name="driver") as c:
     #     stored object and may map a src byte range into a logical
     #     object (logical_id + dst + logical_bytes; all default to the
     #     identity mapping). Restoring each responsible saver's
-    #     snapshot in turn REASSEMBLES the complete object. Explicit
-    #     slice lists never dedup.
+    #     snapshot in turn REASSEMBLES the complete object.
     c.snapshot("/ckpts/step100-r0",
                slices=[{"id": "state/w3", "src": [0, 1 << 20]}])
 
@@ -148,12 +147,9 @@ payload — content is unspecified until first written, the intended
 writer being a run that mutates it in place (a host task fills the
 extent directly; same-size re-create is idempotent, a size change
 is BINDING_MISMATCH);
-`materialize_object` fills a resident server-side; **object groups**
-name id sets (`create_object_group(name, members=...)` or one fnmatch
-`pattern`, nestable via `object_groups=`; `query_object_group` lists
-the resolved members; the scope names `"all"` and `"backing"` are
-reserved). `wipe(scope)` frees residents by scope (an object-group
-name, `"backing"`, or `"all"`) — it skips objects marked with
+`materialize_object` fills a resident server-side.
+`wipe(scope)` frees residents by scope (`"backing"` or `"all"`)
+— it skips objects marked with
 `protect_object` unless called with `force`, and refuses ids a
 snapshot currently holds under lease. `unprotect_object` lifts the
 mark. `validate_program` dry-runs registration (schema + binding
@@ -170,9 +166,7 @@ mapping). Either way the saved ids freeze under **read-leases**
 wait, parked, until the background writer finishes) while payload
 plus `snapshot.json` (schema `dataflow-snapshot/v1`, written last as
 the completeness marker, one streaming blake2b-16 hash per slice)
-land at `dest`. Bulk snapshots dedup clean duplicates against their
-parent via version counters (a duplicate whose parent was later
-mutated stores its own bytes — soundness over savings).
+land at `dest`.
 `restore_snapshot` is three-pass — validate every placement, verify
 every slice hash (`verify=False` opts out), then place — so a
 refusal leaves the store untouched; identity slices recreate their

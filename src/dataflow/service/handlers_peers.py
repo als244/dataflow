@@ -94,20 +94,6 @@ def install(server) -> None:
         return {"send_id": send_id, "dest_id": dest,
                 "bytes": rec.size_bytes}
 
-    def send_object_group(call):
-        a = call.args
-        ids = store.resolve_object_group(a["ogid"])
-        sent = []
-        for oid in ids:
-            sub = dict(call.args)
-            sub["oid"] = oid
-            sub.pop("ogid", None)
-            call2 = type(call)(ticket=call.ticket, session_id=call.session_id,
-                               op="send_object", args=sub, payload=None,
-                               reply_to=call.reply_to)
-            sent.append(send_object(call2)["send_id"])
-        return {"send_ids": sent, "n": len(sent)}
-
     def peer_commit_inbound(call):
         a = call.args
         rec = store.adopt_inbound(a["dest_id"], a["extent"],
@@ -305,7 +291,6 @@ def install(server) -> None:
         "peer_connect": peer_connect,
         "peer_disconnect": peer_disconnect,
         "send_object": send_object,
-        "send_object_group": send_object_group,
         "peer_commit_inbound": peer_commit_inbound,
     })
 

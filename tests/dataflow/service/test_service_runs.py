@@ -8,7 +8,7 @@ health, and unified-budget transient accounting.
 Tests:
 - test_rebind_two_token_slabs: two resident token sets rebound per run give different losses across binds, and a rebind naming a missing object raises MISSING_INPUTS.
 - test_poison_isolation_and_next_run_succeeds: a run rebinding to a wrong-size resident raises BINDING_MISMATCH, after which the daemon stays healthy and the next run completes.
-- test_weights_adopted_not_refilled: W_0 changes in place after a run and a second run continues from those weights (loss decreases), with the object marked dirty in its lineage.
+- test_weights_adopted_not_refilled: W_0 changes in place after a run and a second run continues from those weights (loss decreases).
 - test_cancel_mid_run_leaves_healthy_daemon: cancelling a running job surfaces CANCELLED and a cancelled run state, and the daemon stays healthy so the next run completes.
 - test_transients_visible_and_reclaimed: after a run the backing reports owner-tagged transient bytes alongside residents, and unregistering the program returns that owner's transients to the free list.
 """
@@ -167,8 +167,6 @@ def test_weights_adopted_not_refilled(rig):
         l1 = c.run(reg["prog_id"], args={"step": 1},
                    fetch=["loss_0_0"])["fetched"]["loss_0_0"]
         assert l1 < l0                    # memorizing the fixed batch
-        info = c.query_object("W_0")
-        assert info["lineage"]["dirty"] is True
 
 
 def test_cancel_mid_run_leaves_healthy_daemon(rig):

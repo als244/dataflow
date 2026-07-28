@@ -2,7 +2,7 @@
 
 Queued (dispatcher thread): put/get/materialize/release/protect/
 duplicate/object-group mutations/wipe. Fast path (connection threads,
-under state.lock): query_object/list_objects/query_object_group/
+under state.lock): query_object/list_objects/
 query_backing/query_fast. The Store itself is single-writer
 (dispatcher); fast-path readers only touch plain dicts under the
 lock.
@@ -122,35 +122,6 @@ def install(server) -> None:
         rec = store.duplicate(call.args["src"], call.args["dst"])
         return {"object": rec.info()}
 
-    def duplicate_object_group(call):
-        a = call.args
-        ids = store.resolve_object_group(a["ogid"])
-        tag = a["tag"]
-        rename = a.get("rename", "{id}@{tag}")
-        mapping = {}
-        for oid in ids:
-            dst = rename.format(id=oid, tag=tag)
-            store.duplicate(oid, dst)
-            mapping[oid] = dst
-        new_ogid = a.get("new_ogid") or f"{a['ogid']}@{tag}"
-        grp = store.create_object_group(new_ogid, list(mapping.values()),
-                                        None, [])
-        return {"object_group": grp.info(store), "mapping": mapping}
-
-    def create_object_group(call):
-        a = call.args
-        grp = store.create_object_group(
-            a["ogid"], list(a.get("members", ())),
-            a.get("pattern"), list(a.get("object_groups", ())))
-        return {"object_group": grp.info(store)}
-
-    def delete_object_group(call):
-        with store.catalog_lock:
-            if call.args["ogid"] not in store.object_groups:
-                raise ServiceError("UNKNOWN_GROUP", call.args["ogid"])
-            del store.object_groups[call.args["ogid"]]
-        return {"ok": True}
-
     def wipe(call):
         return store.wipe(call.args["scope"],
                           force=bool(call.args.get("force")))
@@ -163,9 +134,6 @@ def install(server) -> None:
         "protect_object": protect_object,
         "unprotect_object": unprotect_object,
         "duplicate_object": duplicate_object,
-        "duplicate_object_group": duplicate_object_group,
-        "create_object_group": create_object_group,
-        "delete_object_group": delete_object_group,
         "wipe": wipe,
     })
 
@@ -186,17 +154,6 @@ def install(server) -> None:
                    if _fn.fnmatch(k, pat)][:limit]
         return out
 
-    def query_object_group(conn, args):
-        with store.catalog_lock:
-            grp = store.object_groups.get(args["ogid"])
-            if grp is None:
-                raise ServiceError("UNKNOWN_GROUP", args["ogid"])
-            info = grp.info(store)
-            info["members"] = [store.objects[i].info()
-                               for i in store.resolve_object_group(grp.ogid)
-                               if i in store.objects]
-            return info
-
     def query_backing(conn, args):
         with store.catalog_lock:
             u = store.usage()
@@ -209,6 +166,5 @@ def install(server) -> None:
 
     server.fast_handlers.update({
         "query_object": query_object, "list_objects": list_objects,
-        "query_object_group": query_object_group,
         "query_backing": query_backing, "query_fast": query_fast,
     })

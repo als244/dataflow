@@ -17,14 +17,6 @@ snapshot-writer thread reading slab bytes directly — extents are
 stable while leased. Queued verbs that hit a leased id raise LEASED
 and the dispatcher PARKS them until the writer releases.
 
-Dedup: in the bulk path (no explicit slice list) an object whose
-lineage parent is in the same snapshot, whose own record is clean, AND
-whose recorded parent_version still equals the parent's current
-version references the parent's payload segment instead of storing
-bytes; explicit slice lists never dedup. Parents must sort before
-children for the reference to bind ("W" < "W@ck" lexicographically —
-the duplicate naming convention guarantees it).
-
 Restore is fully queued (dispatcher) and THREE-PASS: resolve every
 placement and validate it (leases, sizes, collisions), verify every
 payload hash (default ON), and only then place bytes — a refusal at
@@ -105,21 +97,13 @@ def resolve_slices(store, specs: list) -> list:
                 f"logical {logical_id}: conflicting logical_bytes "
                 f"{seen} != {logical_bytes}")
         logical_sizes[logical_id] = logical_bytes
-        lin = rec.lineage
         entries.append({
             "id": oid, "size_bytes": size, "meta": rec.meta,
-            "protected": rec.protected, "version": rec.version,
-            "lineage": {"parent": lin.parent, "dirty": lin.dirty,
-                        "parent_version": lin.parent_version},
+            "protected": rec.protected,
             "src": src, "logical_id": logical_id, "dst": dst,
             "logical_bytes": logical_bytes,
         })
     return entries
-
-
-def payload_segment(entry: dict, by_id: dict) -> dict:
-    seg = entry["payload"]
-    return by_id[seg["ref"]]["payload"] if "ref" in seg else seg
 
 
 def validate_remap(remap: dict) -> None:
@@ -160,7 +144,7 @@ def validate_remap(remap: dict) -> None:
                     f"remap {logical_id}: overlapping windows")
 
 
-def resolve_placements(entries: list, by_id: dict, remap) -> tuple:
+def resolve_placements(entries: list, remap) -> tuple:
     """Turn slice entries into concrete byte placements. Without a
     remap plan a slice lands at dst in its logical-named object; with
     one, the dst range is intersected with the plan's windows (split
@@ -169,7 +153,7 @@ def resolve_placements(entries: list, by_id: dict, remap) -> tuple:
     full size and creation metadata."""
     placements, required = [], {}
     for e in entries:
-        seg = payload_segment(e, by_id)
+        seg = e["payload"]
         dlo, dhi = e["dst"]
         pieces = []
         if remap is None:
@@ -204,12 +188,9 @@ def resolve_placements(entries: list, by_id: dict, remap) -> tuple:
 def verify_payload(path: Path, entries: list) -> None:
     """Re-hash every stored payload segment and compare against the
     recorded slice hashes; refuses with VERIFY_FAILED before any
-    placement happens (dedup refs share their parent's segment and
-    are covered by the parent's check)."""
+    placement happens."""
     with open(path / "payload.bin", "rb") as f:
         for e in entries:
-            if "ref" in e["payload"]:
-                continue
             seg = e["payload"]
             h = slice_hash()
             f.seek(seg["offset"])
@@ -259,8 +240,6 @@ class SnapshotWriter(threading.Thread):
                 with open(dest / "payload.bin", "wb") as f:
                     for e in job["entries"]:
                         seg = e["payload"]
-                        if "ref" in seg:
-                            continue
                         rec = store.objects[e["id"]]
                         mv = store.view(rec)[e["src"][0]:e["src"][1]]
                         h = slice_hash()
@@ -274,10 +253,6 @@ class SnapshotWriter(threading.Thread):
                                 st.snapshots[snap_id]["bytes_done"] += \
                                     len(chunk)
                         e["hash"] = h.hexdigest()
-                by_id = {e["id"]: e for e in job["entries"]}
-                for e in job["entries"]:
-                    if "ref" in e["payload"]:
-                        e["hash"] = by_id[e["payload"]["ref"]]["hash"]
                 doc = {
                     "schema": SNAPSHOT_SCHEMA,
                     "service_schema": SCHEMA_VERSION,
@@ -285,7 +260,6 @@ class SnapshotWriter(threading.Thread):
                     "created_t": time.time(),
                     "client_meta": job["client_meta"],
                     "slices": job["entries"],
-                    "object_groups": job["object_groups"],
                 }
                 tmp = dest / "snapshot.json.tmp"
                 tmp.write_text(json.dumps(doc, indent=1))
@@ -331,7 +305,7 @@ def install(server) -> None:
         if explicit is not None and not explicit:
             raise ServiceError("BAD_REQUEST", "slices is empty")
 
-        entries, offset, payload_ids = [], 0, set()
+        entries, offset = [], 0
         with store.catalog_lock:
             if explicit is None:
                 ids = sorted(store.objects)
@@ -344,31 +318,11 @@ def install(server) -> None:
                 specs = explicit
             entries = resolve_slices(store, specs)
             for e in entries:
-                lin = e["lineage"]
-                parent = lin["parent"]
-                if (explicit is None and not lin["dirty"]
-                        and parent in payload_ids
-                        and lin["parent_version"] is not None
-                        and store.objects[parent].version
-                        == lin["parent_version"]
-                        and store.objects[parent].size_bytes
-                        == e["size_bytes"]):
-                    e["payload"] = {"ref": parent}
-                else:
-                    n = e["src"][1] - e["src"][0]
-                    e["payload"] = {"offset": offset, "size": n}
-                    offset = align_up(offset + n)
-                    payload_ids.add(e["id"])
+                n = e["src"][1] - e["src"][0]
+                e["payload"] = {"offset": offset, "size": n}
+                offset = align_up(offset + n)
             lease_ids = sorted({e["id"] for e in entries})
-            idset = set(lease_ids)
-            ogroups = [
-                {"ogid": g.ogid, "members": list(g.members),
-                 "sub_groups": list(g.sub_groups)}
-                for g in store.object_groups.values()
-                if set(store.resolve_object_group(g.ogid)) <= idset
-            ]
         snap_id = st.next_id("snap")
-        n_deduped = sum(1 for e in entries if "ref" in e["payload"])
         # leases LAST + exception-safe: a failed admission must not
         # leak leases (leaked leases park every later writer forever
         # — found when a KeyError after acquire wedged the suite)
@@ -378,7 +332,7 @@ def install(server) -> None:
             st.snapshots[snap_id] = {
                 "snap_id": snap_id, "state": "writing",
                 "bytes_done": 0, "bytes_total": offset,
-                "n_objects": len(entries), "n_deduped": n_deduped,
+                "n_objects": len(entries),
                 "path": str(dest), "created_t": time.time(),
                 "error": None,
             }
@@ -391,11 +345,10 @@ def install(server) -> None:
         writer.submit({
             "snap_id": snap_id, "dest": dest,
             "client_meta": client_meta, "entries": entries,
-            "object_groups": ogroups, "lease_ids": lease_ids,
-            "bytes_total": offset,
+            "lease_ids": lease_ids, "bytes_total": offset,
         })
         return {"ok": True, "snap_id": snap_id, "bytes_total": offset,
-                "n_objects": len(entries), "n_deduped": n_deduped}
+                "n_objects": len(entries)}
 
     # ------------------------------------------------ status (fast)
     def snapshot_status(conn, args):
@@ -412,9 +365,6 @@ def install(server) -> None:
         overwrite = bool(a.get("overwrite", False))
         verify = bool(a.get("verify", True))
         remap = a.get("remap") or None
-        duplicates = a.get("duplicates", "recreate")
-        if duplicates not in ("recreate", "roots_only"):
-            raise ServiceError("BAD_REQUEST", f"duplicates '{duplicates}'")
         sj = path / "snapshot.json"
         if not sj.is_file():
             raise ServiceError("IO_ERROR", f"no snapshot.json at {path}")
@@ -424,15 +374,10 @@ def install(server) -> None:
                 "VERSION_SKEW",
                 f"snapshot schema {snap.get('schema')!r} != "
                 f"{SNAPSHOT_SCHEMA!r}")
-        all_entries = snap["slices"]
-        by_id = {e["id"]: e for e in all_entries}
-        entries = all_entries
-        if duplicates == "roots_only":
-            entries = [e for e in all_entries
-                       if e["lineage"]["parent"] not in by_id]
+        entries = snap["slices"]
         if remap is not None:
             validate_remap(remap)
-        placements, required = resolve_placements(entries, by_id, remap)
+        placements, required = resolve_placements(entries, remap)
 
         # PASS 1 — validate every placement; nothing mutates yet
         # (LEASED must precede any mutation: the park rule)
@@ -455,7 +400,7 @@ def install(server) -> None:
 
         # PASS 2 — verify every payload hash; store still untouched
         if verify:
-            verify_payload(path, all_entries)
+            verify_payload(path, entries)
 
         # PASS 3 — place bytes, then identity metadata
         restored = set()
@@ -485,26 +430,9 @@ def install(server) -> None:
             for e in entries:
                 if identity_slice(e) and e["id"] in restored:
                     rec = store.objects[e["id"]]
-                    lin = e["lineage"]
                     rec.protected = bool(e.get("protected", False))
-                    rec.lineage.parent = lin["parent"]
-                    rec.lineage.dirty = lin["dirty"]
-                    rec.lineage.parent_version = lin["parent_version"]
-                    rec.version = e.get("version", 0)
-
-        groups_recreated = []
-        for g in snap.get("object_groups", []):
-            if g["ogid"] in store.object_groups:
-                continue
-            if not all(m in store.objects for m in g["members"]):
-                continue                # partial restores may drop members
-            store.create_object_group(g["ogid"], g["members"], None,
-                                      [s for s in g["sub_groups"]
-                                       if s in store.object_groups])
-            groups_recreated.append(g["ogid"])
         st.emit("restore_done", path=str(path), n_restored=len(restored))
         return {"ok": True, "restored": sorted(restored),
-                "object_groups_recreated": groups_recreated,
                 "client_meta": snap.get("client_meta", {})}
 
     server.dispatcher.handlers["snapshot"] = snapshot

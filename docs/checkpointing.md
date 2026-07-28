@@ -12,20 +12,23 @@ distributed training layer drives it.
 Four verbs on `EngineClient`:
 
 ```python
-out = client.snapshot(scope, dest, ids=None, ranges=None,
+out = client.snapshot(dest, slices=None,
                       client_meta=None)     # -> {"snap_id": ...}
 client.snapshot_status(snap_id)             # -> {"state", "bytes_done", ...}
 client.wait_snapshot(snap_id, timeout=...)  # poll until done/error
-client.restore_snapshot(path, overwrite=False)
+client.restore_snapshot(path, overwrite=False, verify=True, remap=None)
 ```
 
-- `scope` selects objects ("all" plus an explicit `ids=` list is the
-  common form). `ranges={oid: (lo, hi)}` saves only that byte range
-  of an object — the primitive that partitioned-responsibility
+- `slices=None` saves every resident object whole. An explicit
+  `slices` list selects exactly: each slice names a stored object
+  `id` and may map a `src` byte range into a logical object
+  (`logical_id`, `dst`, `logical_bytes` — all defaulting to the
+  identity mapping) — the primitive partitioned-responsibility
   saves use. `client_meta` is an arbitrary JSON dict that
-  round-trips through the artifact (steps, ranks, tags).
-- `dest` becomes one **artifact directory**: `manifest.json` (the
-  object index — ids, sizes, ranges, payload offsets, your
+  round-trips through the snapshot (steps, ranks, tags).
+- `dest` becomes one **snapshot directory**: `snapshot.json` (schema
+  `dataflow-snapshot/v1` — the slice index with sizes, mappings,
+  payload offsets, one blake2b-16 hash per slice, and your
   `client_meta`) plus `payload.bin` (raw bytes).
 
 ### Under the hood: asynchronous, lease-protected
@@ -35,9 +38,10 @@ the request, acquires a **read lease** on every object it will save
 — taken last and exception-safe, so a rejected request can never
 leak one — enqueues a copy job, and returns the `snap_id`
 immediately. A dedicated writer thread then streams the leased
-objects' bytes from host backing into `payload.bin`, writes
-`manifest.json` to a temp file and renames it into place (a crashed
-save never leaves a plausible-looking artifact), and finally
+objects' bytes from host backing into `payload.bin` (hashing each
+slice as it streams), writes
+`snapshot.json` to a temp file and renames it into place (a crashed
+save never leaves a plausible-looking snapshot), and finally
 releases every lease, on success or failure alike.
 
 The lease is the whole concurrency contract: while held, the saved
@@ -57,9 +61,7 @@ ARE the post-step state — the payload writer copies straight from
 the backing extents and never touches the device; no
 device-to-host staging path exists in the snapshot machinery
 because none is needed. Snapshotting a non-resident id fails
-validation loudly. On the restore side, a `placement` argument
-("initial" | "backing_only") chooses whether restored objects also
-take their initial device placement or land backing-only.
+validation loudly.
 
 ### How waiting works
 
@@ -113,10 +115,14 @@ training, which the leases already guarantee.
 
 ### Restore
 
-`restore_snapshot(path, overwrite=True)` reads one artifact and puts
-its objects back: full entries overwrite (or create) the object;
-**ranged** entries fill just their byte range in place, creating a
-full-size object first if none exists. `client_meta` comes back in
+`restore_snapshot(path, overwrite=True)` reads one snapshot and puts
+its slices back in three passes — validate every placement, verify
+every slice hash (`verify=False` opts out), then place — so any
+refusal leaves the store untouched. Identity slices overwrite (or
+create) their object whole; mapped slices land at `dst` in their
+logical object, creating it at `logical_bytes` if absent; an
+optional `remap` plan extracts logical ranges into local objects
+instead. `client_meta` comes back in
 the result, so a restorer can verify what it loaded.
 
 ## Example usage
@@ -124,21 +130,22 @@ the result, so a restorer can verify what it loaded.
 Single engine, save and restore:
 
 ```python
-out = client.snapshot("all", "/ckpt/step_000420/rank0",
-                      ids=["W_0", "O_0"],
+out = client.snapshot("/ckpt/step_000420/rank0",
+                      slices=[{"id": "W_0"}, {"id": "O_0"}],
                       client_meta={"step": 420, "rank": 0})
-client.wait_snapshot(out["snap_id"], timeout=600.0)   # artifact ready
+client.wait_snapshot(out["snap_id"], timeout=600.0)   # snapshot ready
 ...
 res = client.restore_snapshot("/ckpt/step_000420/rank0",
                               overwrite=True)
 assert res["client_meta"]["step"] == 420
 ```
 
-A ranged save (only the first MiB of `W_0`, plus all of `O_0`):
+A sliced save (only the first MiB of `W_0`, plus all of `O_0`):
 
 ```python
-client.snapshot("all", dest, ids=["O_0", "W_0"],
-                ranges={"W_0": (0, 1 << 20)},
+client.snapshot(dest,
+                slices=[{"id": "O_0"},
+                        {"id": "W_0", "src": [0, 1 << 20]}],
                 client_meta={"rank": 0})
 ```
 
@@ -211,8 +218,8 @@ slice-reassembly gates.
 
 There is deliberately one checkpoint format at every world size.
 A single-GPU run writes the same step directory with `world: 1`:
-one `rank0/` artifact, a `save_plan` in which rank 0 owns every
-object whole (no ranges), one program dump — and the same
+one `rank0/` snapshot, a `save_plan` in which rank 0 owns every
+object whole, one program dump — and the same
 `read_record` / `artifacts_for_restore` / `restore_snapshot` path
 reads it back. Nothing about resume, validation, or the completeness
 marker is distributed-specific; the distributed composition below is
@@ -238,8 +245,10 @@ of what the training layer does at a step boundary:
 
 ```python
 ids, ranges = rank_save_args(save_plan, rank, own_objects=["O_0"])
-out = client.snapshot("all", f"{step_dir}/rank{rank}",
-                      ids=ids, ranges=ranges,
+slices = [{"id": oid} if oid not in ranges
+          else {"id": oid, "src": list(ranges[oid])}
+          for oid in ids]
+out = client.snapshot(f"{step_dir}/rank{rank}", slices=slices,
                       client_meta={"step": step, "rank": rank})
 # ... all ranks' copies overlap each other; then:
 client.wait_snapshot(out["snap_id"], timeout=600.0)
@@ -311,15 +320,15 @@ by this tooling; there is deliberately no converter.
 
 Two optimizations for the stall window, in recommended order:
 
-1. **Duplicate-then-snapshot** (preferred first). Use the engine's
-   `duplicate_object_group` verb: fast on-device copy of the
-   persistent group under a tag, release the live objects
-   immediately, snapshot the background copy while training
-   proceeds. Shrinks the stall to the device-copy time regardless of
-   payload IO, needs no engine dispatch changes, and the verb
-   already exists — the training layer just has to wire
-   duplicate -> snapshot-the-copy -> drop-the-copy into its
-   step-boundary save.
+1. **Duplicate-then-snapshot** (preferred first). Duplicate each
+   persistent object (`duplicate_object` — a fast on-device copy),
+   let training continue immediately, and snapshot the copies under
+   their real identities via slice mapping
+   (`slices=[{"id": oid + "@ck", "logical_id": oid}, ...]`), then
+   release the copies. Shrinks the stall to the device-copy time
+   regardless of payload IO and needs no engine dispatch changes —
+   the training layer wires duplicate -> snapshot-the-copies ->
+   release into its step-boundary save.
 
 2. **Task-granular lease waits.** Leases are READ leases, so the
    forward/backward — which only reads the weights — could legally

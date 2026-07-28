@@ -236,5 +236,5 @@ perftest-style tables.
 |---|---|
 | links | `peer_connect`, `peer_disconnect`, `list_peers` |
 | groups | `create_peer_group` (coordinator only; returns = all attached) |
-| transfers | `send_object`, `send_object_group`, `transfer_status`, `wait_transfer` |
+| transfers | `send_object`, `transfer_status`, `wait_transfer` |
 | diagnostics | `coll_bench`, `p2p_bench` (see Benchmarking the planes), `subscribe_events` (`peer_up/peer_down/peer_rdma_up/group_*`), `engine_status` |

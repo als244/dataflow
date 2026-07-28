@@ -2,14 +2,11 @@
 
 Load-bearing gate: checkpoint round-trip — train 2 steps, snapshot,
 wipe everything, restore, train 2 more ⇒ losses continue EXACTLY as
-an uninterrupted 4-step run (same process ⇒ bit-equal). Plus: the
-dedup soundness pair (clean dup dedups; parent-mutated dup does NOT
-— the version-counter rule), lease-parked writers waking on release,
-and client_meta round-trip.
+an uninterrupted 4-step run (same process ⇒ bit-equal). Plus:
+lease-parked writers waking on release and client_meta round-trip.
 
 Tests:
 - test_checkpoint_roundtrip_bit_continuity: a snapshot/wipe/restore split at step 2 reproduces the uninterrupted 4-step loss sequence and round-trips client_meta.
-- test_dedup_clean_vs_mutated_parent: a clean duplicate dedups to one payload while mutating the parent via a run drops the dedup count to zero.
 - test_leased_writer_parks_until_release: a release on a leased object parks until the lease is dropped, while an unrelated writer proceeds, then completes.
 - test_snapshot_status_unknown_id_rejected: snapshot_status on an unknown id raises ServiceError with code UNKNOWN_SNAPSHOT.
 """
@@ -133,26 +130,6 @@ def test_checkpoint_roundtrip_bit_continuity(rig):
         got = first + second
         assert [round(x, 10) for x in got] == \
             [round(x, 10) for x in ref], (got, ref)
-
-
-def test_dedup_clean_vs_mutated_parent(rig):
-    with EngineClient(rig["sock"], client_name="dedup") as c:
-        reg = _fresh_state(c, rig)
-        # find one weight object to duplicate
-        w = next(o["id"] for o in c.list_objects("W_*"))
-        c.duplicate_object(w, f"{w}@ck")
-
-        # clean dup + untouched parent => ONE payload (dedup)
-        s1 = c.snapshot(str(rig["tmp"] / "dd1"))
-        assert s1["n_deduped"] == 1, s1
-        c.wait_snapshot(s1["snap_id"])
-
-        # a run MUTATES the parent (bound resident) => dedup must die
-        _steps(c, reg["prog_id"], [0])
-        s2 = c.snapshot(str(rig["tmp"] / "dd2"))
-        assert s2["n_deduped"] == 0, s2
-        c.wait_snapshot(s2["snap_id"])
-        c.unregister_program(reg["prog_id"])
 
 
 def test_leased_writer_parks_until_release(rig):
