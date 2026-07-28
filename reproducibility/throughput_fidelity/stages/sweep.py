@@ -174,12 +174,19 @@ def run_predict(args, measured):
     backs = [None if x.strip().lower() in ("unlimited", "none", "")
              else float(x) for x in str(args.backing_gib).split(",")]
     mode = "predict-measured" if measured else "predict"
+    if measured:
+        import torch
+
+        hw_stamp = torch.cuda.get_device_name(0)
+    else:
+        hw_stamp = args.hw
     n = 0
     outcomes = {"feasible": 0, "infeasible": 0, "error": 0, "skip": 0}
     with open(args.out, "a") as fh:
         for seq, tr, ts, bud, back in product(seqs, trs, tss, buds, backs):
             meta = dict(mode=mode, opt=args.opt, preset=args.preset,
-                        seq=seq, t_round=tr, t_step=ts, budget=bud, hw=args.hw,
+                        seq=seq, t_round=tr, t_step=ts, budget=bud,
+                        hw=hw_stamp,
                         backing=back, ts_epoch=time.time())
             if not geom_ok(seq, tr, ts):
                 emit(fh, {**meta, "skip": "geometry: need seq|t_round|t_step"})
