@@ -42,7 +42,7 @@ def test_event_coverage_and_reattach(fake_rig):
     st = fake_rig["server"].state
     with EngineClient(fake_rig["sock"], client_name="mon") as c:
         c.put_object("blob", b"\x07" * 8192)
-        s = c.snapshot("all", str(fake_rig["tmp"] / "snap_ev"))
+        s = c.snapshot(str(fake_rig["tmp"] / "snap_ev"))
         done = c.wait_snapshot(s["snap_id"])
         assert done["state"] == "done"
         c.wipe("all", force=True)
@@ -74,7 +74,7 @@ def test_status_wiring(fake_rig):
         s = c.engine_status()
         assert s["counters"]["api_calls"] >= 0
         assert s["snapshots_in_flight"] == []
-        snap = c.snapshot("all", str(fake_rig["tmp"] / "snap_sw"))
+        snap = c.snapshot(str(fake_rig["tmp"] / "snap_sw"))
         c.wait_snapshot(snap["snap_id"])
         s2 = c.engine_status()
         assert s2["snapshots_in_flight"] == []   # drained after done

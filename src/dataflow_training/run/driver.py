@@ -599,11 +599,11 @@ def plan_at_budget(cfg, budget_gib: float, *, recompute: bool = True,
 
 def latest_engine_checkpoint(ckpt_dir) -> Path | None:
     """Newest COMPLETE solo checkpoint under ``ckpt_dir`` (the snapshot
-    writer lands manifest.json last, so its presence is the
+    writer lands snapshot.json last, so its presence is the
     completeness marker), or None."""
     if ckpt_dir is None:
         return None
-    found = sorted(Path(ckpt_dir).glob("step_*/manifest.json"))
+    found = sorted(Path(ckpt_dir).glob("step_*/snapshot.json"))
     return found[-1].parent if found else None
 
 
@@ -695,7 +695,7 @@ def run_engine(client, cfg, recipe: Recipe, pipeline, steps: int, *,
             raise RuntimeError(f"resume: no complete checkpoint under "
                                f"{checkpoint_dir}")
         resume_meta = json_mod.loads(
-            (resume_ck / "manifest.json").read_text())["client_meta"]
+            (resume_ck / "snapshot.json").read_text())["client_meta"]
         start_step = int(resume_meta["step"])
     if resume_meta is not None and resume_meta.get("data_cursor"):
         stepper = pipeline(resume_meta["data_cursor"])
@@ -823,7 +823,8 @@ def run_engine(client, cfg, recipe: Recipe, pipeline, steps: int, *,
         if checkpoint_every and step_next % checkpoint_every == 0 \
                 and checkpoint_dir is not None:
             dest = Path(checkpoint_dir) / f"step_{step_next:06d}"
-            out = client.snapshot("all", str(dest), ids=persist,
+            out = client.snapshot(str(dest),
+                                  slices=[{"id": oid} for oid in persist],
                                   client_meta={"step": step_next,
                                                "seed": seed,
                                                "losses": res.losses,
@@ -835,7 +836,7 @@ def run_engine(client, cfg, recipe: Recipe, pipeline, steps: int, *,
             log(f"[engine] checkpoint @ step {step_next} -> {dest}")
             if keep_last > 0:
                 complete = sorted(
-                    Path(checkpoint_dir).glob("step_*/manifest.json"))
+                    Path(checkpoint_dir).glob("step_*/snapshot.json"))
                 for mf in complete[:-keep_last]:
                     shutil.rmtree(mf.parent, ignore_errors=True)
     ran = max(1, steps - start_step)

@@ -1,28 +1,43 @@
-"""Snapshot / restore endpoints (S1.3) — installed at boot.
+"""Snapshot / restore endpoints — installed at boot.
 
-Snapshot is queued->bg: FIFO admission (dispatcher) resolves the
-scope, takes READ-LEASES on the id set, freezes metadata, and plans
-payload offsets; the PAYLOAD copy runs on the dedicated
-snapshot-writer thread (thread #5, design note §IV) reading slab
-bytes directly — extents are stable while leased. Queued verbs that
-hit a leased id raise LEASED and the dispatcher PARKS them until the
-writer releases (no error surfaces to the client).
+A snapshot saves SLICES: byte ranges of stored objects mapped into
+logical objects. Each slice records where its bytes came from (``src``,
+a range in the stored object) and where they belong (``logical_id`` +
+``dst``, a range in the logical object's byte space, whose total size
+is ``logical_bytes``); a whole-object save is the identity mapping and
+needs no explicit fields. The snapshot dir is self-describing:
+``payload.bin`` + ``snapshot.json`` (schema ``dataflow-snapshot/v1``,
+written LAST as the completeness marker) with a streaming blake2b-16
+hash per slice.
 
-Dedup: an object whose lineage parent is in the same snapshot, whose
-own record is clean, AND whose recorded parent_version still equals
-the parent's current version references the parent's payload segment
-instead of storing bytes. (Version counters exist because a clean
-duplicate does NOT imply byte-equality once the parent trains
-onward.) Parents must sort before children for the reference to
-bind ("W" < "W@ck" lexicographically — the duplicate naming
-convention guarantees it); unsortable exotics just store bytes.
+Snapshot is queued->bg: FIFO admission (dispatcher) validates the
+slice list, takes READ-LEASES on the stored ids, freezes metadata, and
+plans payload offsets; the payload copy + hashing run on the dedicated
+snapshot-writer thread reading slab bytes directly — extents are
+stable while leased. Queued verbs that hit a leased id raise LEASED
+and the dispatcher PARKS them until the writer releases.
 
-Restore is fully queued (runs on the dispatcher): recreates
-residents + object_groups from manifest/payload; returns client_meta
-so a driver recovers its own state in the same call.
+Dedup: in the bulk path (no explicit slice list) an object whose
+lineage parent is in the same snapshot, whose own record is clean, AND
+whose recorded parent_version still equals the parent's current
+version references the parent's payload segment instead of storing
+bytes; explicit slice lists never dedup. Parents must sort before
+children for the reference to bind ("W" < "W@ck" lexicographically —
+the duplicate naming convention guarantees it).
+
+Restore is fully queued (dispatcher) and THREE-PASS: resolve every
+placement and validate it (leases, sizes, collisions), verify every
+payload hash (default ON), and only then place bytes — a refusal at
+any pass leaves the store untouched. Default placement follows the
+slice mapping (logical-named targets; an identity slice recreates its
+stored object exactly, metadata included). An optional remap plan
+EXTRACTS logical ranges into local objects instead: each slice's dst
+is intersected with the plan's windows, split where a window splits
+it, and skipped where no window covers it.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import queue
 import threading
@@ -32,16 +47,190 @@ from pathlib import Path
 from .wire import SCHEMA_VERSION, ServiceError
 
 ALIGN = 4096
-MANIFEST_SCHEMA = "dataflow-snap/s1"
-_CHUNK = 64 << 20
+SNAPSHOT_SCHEMA = "dataflow-snapshot/v1"
+CHUNK_BYTES = 64 << 20
 
 
-def _align(n: int) -> int:
+def align_up(n: int) -> int:
     return (n + ALIGN - 1) // ALIGN * ALIGN
 
 
+def slice_hash():
+    return hashlib.blake2b(digest_size=16)
+
+
+def identity_slice(entry: dict) -> bool:
+    """A slice that reproduces its stored object exactly: whole-object
+    src, same-named logical of the same size, unshifted dst. Identity
+    slices restore the stored object's metadata; mapped slices place
+    bytes only."""
+    return (entry["logical_id"] == entry["id"]
+            and entry["src"] == [0, entry["size_bytes"]]
+            and entry["dst"] == entry["src"]
+            and entry["logical_bytes"] == entry["size_bytes"])
+
+
+def resolve_slices(store, specs: list) -> list:
+    """Validate a slice list and normalize it into snapshot entries
+    with every mapping field explicit. Refuses with BAD_REQUEST naming
+    the offending slice; caller holds the catalog lock."""
+    entries = []
+    logical_sizes: dict = {}
+    for s in specs:
+        oid = s.get("id")
+        rec = store.objects.get(oid)
+        if rec is None:
+            raise ServiceError("BAD_REQUEST", f"slice id absent: {oid}")
+        size = rec.size_bytes
+        src = [int(x) for x in (s.get("src") or (0, size))]
+        if not (0 <= src[0] < src[1] <= size):
+            raise ServiceError("BAD_REQUEST",
+                               f"src {src} outside {oid} ({size} B)")
+        logical_id = s.get("logical_id") or oid
+        dst = [int(x) for x in (s.get("dst") or src)]
+        if dst[1] - dst[0] != src[1] - src[0]:
+            raise ServiceError(
+                "BAD_REQUEST",
+                f"{oid}: dst {dst} length != src {src} length")
+        logical_bytes = int(s.get("logical_bytes") or size)
+        if not (0 <= dst[0] < dst[1] <= logical_bytes):
+            raise ServiceError(
+                "BAD_REQUEST",
+                f"{oid}: dst {dst} outside logical {logical_id} "
+                f"({logical_bytes} B)")
+        seen = logical_sizes.get(logical_id)
+        if seen is not None and seen != logical_bytes:
+            raise ServiceError(
+                "BAD_REQUEST",
+                f"logical {logical_id}: conflicting logical_bytes "
+                f"{seen} != {logical_bytes}")
+        logical_sizes[logical_id] = logical_bytes
+        lin = rec.lineage
+        entries.append({
+            "id": oid, "size_bytes": size, "meta": rec.meta,
+            "protected": rec.protected, "version": rec.version,
+            "lineage": {"parent": lin.parent, "dirty": lin.dirty,
+                        "parent_version": lin.parent_version},
+            "src": src, "logical_id": logical_id, "dst": dst,
+            "logical_bytes": logical_bytes,
+        })
+    return entries
+
+
+def payload_segment(entry: dict, by_id: dict) -> dict:
+    seg = entry["payload"]
+    return by_id[seg["ref"]]["payload"] if "ref" in seg else seg
+
+
+def validate_remap(remap: dict) -> None:
+    """A remap plan maps logical ranges into local objects:
+    {logical_id: [{"logical": [c, d], "id": local_id,
+                   "local": [x, y], "bytes": local_total}, ...]}.
+    Window lengths must match and windows of one logical must not
+    overlap; local targets sharing an id must agree on their size."""
+    local_sizes: dict = {}
+    for logical_id, windows in remap.items():
+        spans = []
+        for w in windows:
+            llo, lhi = (int(w["logical"][0]), int(w["logical"][1]))
+            xlo, xhi = (int(w["local"][0]), int(w["local"][1]))
+            total = int(w["bytes"])
+            if llo >= lhi or lhi - llo != xhi - xlo:
+                raise ServiceError(
+                    "BAD_REQUEST",
+                    f"remap {logical_id}: local {w['local']} length "
+                    f"!= logical {w['logical']}")
+            if not (0 <= xlo < xhi <= total):
+                raise ServiceError(
+                    "BAD_REQUEST",
+                    f"remap {logical_id}: local {w['local']} outside "
+                    f"{w['id']} ({total} B)")
+            seen = local_sizes.get(w["id"])
+            if seen is not None and seen != total:
+                raise ServiceError(
+                    "BAD_REQUEST",
+                    f"remap: {w['id']} sized {seen} B and {total} B")
+            local_sizes[w["id"]] = total
+            spans.append((llo, lhi))
+        spans.sort()
+        for (alo, ahi), (blo, bhi) in zip(spans, spans[1:]):
+            if blo < ahi:
+                raise ServiceError(
+                    "BAD_REQUEST",
+                    f"remap {logical_id}: overlapping windows")
+
+
+def resolve_placements(entries: list, by_id: dict, remap) -> tuple:
+    """Turn slice entries into concrete byte placements. Without a
+    remap plan a slice lands at dst in its logical-named object; with
+    one, the dst range is intersected with the plan's windows (split
+    where a window splits it, skipped where none covers it). Returns
+    (placements, required) where required maps every target to its
+    full size and creation metadata."""
+    placements, required = [], {}
+    for e in entries:
+        seg = payload_segment(e, by_id)
+        dlo, dhi = e["dst"]
+        pieces = []
+        if remap is None:
+            meta = e["meta"] if identity_slice(e) else None
+            pieces.append((e["logical_id"], e["logical_bytes"], meta,
+                           dlo, dhi, seg["offset"]))
+        else:
+            for w in remap.get(e["logical_id"], ()):
+                ilo = max(dlo, int(w["logical"][0]))
+                ihi = min(dhi, int(w["logical"][1]))
+                if ilo >= ihi:
+                    continue
+                tlo = int(w["local"][0]) + (ilo - int(w["logical"][0]))
+                pieces.append((w["id"], int(w["bytes"]), None,
+                               tlo, tlo + (ihi - ilo),
+                               seg["offset"] + (ilo - dlo)))
+        for target, total, meta, tlo, thi, file_off in pieces:
+            want = required.get(target)
+            if want is not None and want["size"] != total:
+                raise ServiceError(
+                    "BAD_REQUEST",
+                    f"{target}: placements disagree on size "
+                    f"({want['size']} B != {total} B)")
+            if want is None:
+                required[target] = {"size": total, "meta": meta}
+            placements.append({"target": target, "lo": tlo, "hi": thi,
+                               "file_offset": file_off,
+                               "entry": e})
+    return placements, required
+
+
+def verify_payload(path: Path, entries: list) -> None:
+    """Re-hash every stored payload segment and compare against the
+    recorded slice hashes; refuses with VERIFY_FAILED before any
+    placement happens (dedup refs share their parent's segment and
+    are covered by the parent's check)."""
+    with open(path / "payload.bin", "rb") as f:
+        for e in entries:
+            if "ref" in e["payload"]:
+                continue
+            seg = e["payload"]
+            h = slice_hash()
+            f.seek(seg["offset"])
+            left = seg["size"]
+            while left:
+                chunk = f.read(min(CHUNK_BYTES, left))
+                if not chunk:
+                    raise ServiceError("IO_ERROR",
+                                       f"short payload read for {e['id']}")
+                h.update(chunk)
+                left -= len(chunk)
+            if h.hexdigest() != e.get("hash"):
+                raise ServiceError(
+                    "VERIFY_FAILED",
+                    f"{e['id']}: payload hash mismatch (corrupt or "
+                    f"tampered slice); pass verify=False to restore "
+                    f"the on-disk bytes anyway")
+
+
 class SnapshotWriter(threading.Thread):
-    """Thread #5: payload copies + manifest writes, off the dispatcher.
+    """Payload copies + snapshot.json writes, off the dispatcher.
     Owns nothing but its job queue; catalog access is read-only views
     of LEASED records (release/wipe/put on them are parked meanwhile).
     Always releases the job's leases, success or failure."""
@@ -73,30 +262,40 @@ class SnapshotWriter(threading.Thread):
                         if "ref" in seg:
                             continue
                         rec = store.objects[e["id"]]
-                        mv = store.view(rec)
-                        rng = e.get("range")
-                        if rng:
-                            mv = mv[rng[0]:rng[1]]
+                        mv = store.view(rec)[e["src"][0]:e["src"][1]]
+                        h = slice_hash()
                         f.seek(seg["offset"])
-                        f.write(mv)
-                        with st.lock:
-                            st.snapshots[snap_id]["bytes_done"] += len(mv)
-                manifest = {
-                    "schema": MANIFEST_SCHEMA,
+                        n = seg["size"]
+                        for off in range(0, n, CHUNK_BYTES):
+                            chunk = mv[off:min(off + CHUNK_BYTES, n)]
+                            f.write(chunk)
+                            h.update(chunk)
+                            with st.lock:
+                                st.snapshots[snap_id]["bytes_done"] += \
+                                    len(chunk)
+                        e["hash"] = h.hexdigest()
+                by_id = {e["id"]: e for e in job["entries"]}
+                for e in job["entries"]:
+                    if "ref" in e["payload"]:
+                        e["hash"] = by_id[e["payload"]["ref"]]["hash"]
+                doc = {
+                    "schema": SNAPSHOT_SCHEMA,
                     "service_schema": SCHEMA_VERSION,
                     "snap_id": snap_id,
-                    "label": job["label"],
                     "created_t": time.time(),
-                    "scope": job["scope"],
                     "client_meta": job["client_meta"],
-                    "objects": job["entries"],
+                    "slices": job["entries"],
                     "object_groups": job["object_groups"],
                 }
-                tmp = dest / "manifest.json.tmp"
-                tmp.write_text(json.dumps(manifest, indent=1))
-                tmp.rename(dest / "manifest.json")
+                tmp = dest / "snapshot.json.tmp"
+                tmp.write_text(json.dumps(doc, indent=1))
+                tmp.rename(dest / "snapshot.json")
                 with st.lock:
                     st.snapshots[snap_id]["state"] = "done"
+                    st.snapshots[snap_id]["slices"] = [
+                        {"id": e["id"], "logical_id": e["logical_id"],
+                         "dst": e["dst"], "hash": e["hash"]}
+                        for e in job["entries"]]
                 st.emit("snapshot_done", snap_id=snap_id,
                         path=str(dest), bytes=job["bytes_total"])
             except Exception as e:  # noqa: BLE001 — writer must survive
@@ -126,66 +325,42 @@ def install(server) -> None:
     # ------------------------------------------------ snapshot (queued->bg)
     def snapshot(call):
         a = call.args
-        scope, dest = a["scope"], a["dest"]
+        dest = a["dest"]
         client_meta = a.get("client_meta") or {}
-        label = a.get("label")
-        # ranges: {oid: [lo, hi)} — save only the byte range a saver is
-        # RESPONSIBLE for (slice-granular save plans). Ranged entries
-        # record the FULL object size plus the range; they never dedup.
-        ranges = {k: (int(v[0]), int(v[1]))
-                  for k, v in (a.get("ranges") or {}).items()}
-        if a.get("ids"):
-            # explicit id list (SavePlan dedup: a saver writes only
-            # the objects its plan assigns it)
-            ids = sorted(a["ids"])
-            missing = [i for i in ids if i not in store.objects]
-            if missing:
-                raise ServiceError("BAD_REQUEST",
-                                   f"snapshot ids absent: {missing[:5]}")
-        else:
-            ids = sorted(store.resolve_scope(scope))
-        if not ids:
-            raise ServiceError("BAD_REQUEST", f"scope '{scope}' is empty")
+        explicit = a.get("slices")
+        if explicit is not None and not explicit:
+            raise ServiceError("BAD_REQUEST", "slices is empty")
 
         entries, offset, payload_ids = [], 0, set()
         with store.catalog_lock:
-            for oid in ids:
-                rec = store.objects[oid]
-                rng = ranges.get(oid)
-                if rng is not None:
-                    lo, hi = rng
-                    if not (0 <= lo < hi <= rec.size_bytes):
-                        raise ServiceError(
-                            "BAD_REQUEST",
-                            f"range {rng} outside {oid} "
-                            f"({rec.size_bytes} B)")
-                lin = rec.lineage
-                parent = lin.parent
-                seg = None
-                if (rng is None and not lin.dirty and parent in payload_ids
-                        and lin.parent_version is not None
+            if explicit is None:
+                ids = sorted(store.objects)
+                if not ids:
+                    raise ServiceError("BAD_REQUEST",
+                                       "store is empty; nothing to "
+                                       "snapshot")
+                specs = [{"id": oid} for oid in ids]
+            else:
+                specs = explicit
+            entries = resolve_slices(store, specs)
+            for e in entries:
+                lin = e["lineage"]
+                parent = lin["parent"]
+                if (explicit is None and not lin["dirty"]
+                        and parent in payload_ids
+                        and lin["parent_version"] is not None
                         and store.objects[parent].version
-                        == lin.parent_version
+                        == lin["parent_version"]
                         and store.objects[parent].size_bytes
-                        == rec.size_bytes):
-                    seg = {"ref": parent}
+                        == e["size_bytes"]):
+                    e["payload"] = {"ref": parent}
                 else:
-                    n = (rng[1] - rng[0]) if rng else rec.size_bytes
-                    seg = {"offset": offset, "size": n}
-                    offset = _align(offset + n)
-                    payload_ids.add(oid)
-                entry = {
-                    "id": oid, "size_bytes": rec.size_bytes,
-                    "meta": rec.meta, "protected": rec.protected,
-                    "version": rec.version,
-                    "lineage": {"parent": lin.parent, "dirty": lin.dirty,
-                                "parent_version": lin.parent_version},
-                    "payload": seg,
-                }
-                if rng is not None:
-                    entry["range"] = [rng[0], rng[1]]
-                entries.append(entry)
-            idset = set(ids)
+                    n = e["src"][1] - e["src"][0]
+                    e["payload"] = {"offset": offset, "size": n}
+                    offset = align_up(offset + n)
+                    payload_ids.add(e["id"])
+            lease_ids = sorted({e["id"] for e in entries})
+            idset = set(lease_ids)
             ogroups = [
                 {"ogid": g.ogid, "members": list(g.members),
                  "sub_groups": list(g.sub_groups)}
@@ -193,35 +368,34 @@ def install(server) -> None:
                 if set(store.resolve_object_group(g.ogid)) <= idset
             ]
         snap_id = st.next_id("snap")
+        n_deduped = sum(1 for e in entries if "ref" in e["payload"])
         # leases LAST + exception-safe: a failed admission must not
         # leak leases (leaked leases park every later writer forever
         # — found when a KeyError after acquire wedged the suite)
-        store.acquire_leases(ids)
+        store.acquire_leases(lease_ids)
         with st.lock:
             st.snapshots_in_flight.append(snap_id)
             st.snapshots[snap_id] = {
                 "snap_id": snap_id, "state": "writing",
                 "bytes_done": 0, "bytes_total": offset,
-                "n_objects": len(ids), "n_deduped": len(ids) - len(
-                    payload_ids),
-                "path": str(dest), "label": label,
-                "created_t": time.time(), "error": None,
+                "n_objects": len(entries), "n_deduped": n_deduped,
+                "path": str(dest), "created_t": time.time(),
+                "error": None,
             }
         try:
             st.emit("snapshot_started", snap_id=snap_id, path=str(dest),
-                    n_objects=len(ids), bytes=offset)
+                    n_objects=len(entries), bytes=offset)
         except Exception:
-            store.release_leases(ids)
+            store.release_leases(lease_ids)
             raise
         writer.submit({
-            "snap_id": snap_id, "dest": dest, "scope": scope,
-            "label": label, "client_meta": client_meta,
-            "entries": entries, "object_groups": ogroups,
-            "lease_ids": ids, "bytes_total": offset,
+            "snap_id": snap_id, "dest": dest,
+            "client_meta": client_meta, "entries": entries,
+            "object_groups": ogroups, "lease_ids": lease_ids,
+            "bytes_total": offset,
         })
         return {"ok": True, "snap_id": snap_id, "bytes_total": offset,
-                "n_objects": len(ids),
-                "n_deduped": len(ids) - len(payload_ids)}
+                "n_objects": len(entries), "n_deduped": n_deduped}
 
     # ------------------------------------------------ status (fast)
     def snapshot_status(conn, args):
@@ -235,90 +409,103 @@ def install(server) -> None:
     def restore_snapshot(call):
         a = call.args
         path = Path(a["path"])
-        placement = a.get("placement", "initial")
-        duplicates = a.get("duplicates", "recreate")
         overwrite = bool(a.get("overwrite", False))
-        if placement not in ("initial", "backing_only"):
-            raise ServiceError("BAD_REQUEST", f"placement '{placement}'")
+        verify = bool(a.get("verify", True))
+        remap = a.get("remap") or None
+        duplicates = a.get("duplicates", "recreate")
         if duplicates not in ("recreate", "roots_only"):
             raise ServiceError("BAD_REQUEST", f"duplicates '{duplicates}'")
-        mf_path = path / "manifest.json"
-        if not mf_path.is_file():
-            raise ServiceError("IO_ERROR", f"no manifest at {path}")
-        manifest = json.loads(mf_path.read_text())
-        if manifest.get("schema") != MANIFEST_SCHEMA:
-            raise ServiceError("VERSION_SKEW",
-                               f"manifest schema {manifest.get('schema')}")
-        by_id = {e["id"]: e for e in manifest["objects"]}
+        sj = path / "snapshot.json"
+        if not sj.is_file():
+            raise ServiceError("IO_ERROR", f"no snapshot.json at {path}")
+        snap = json.loads(sj.read_text())
+        if snap.get("schema") != SNAPSHOT_SCHEMA:
+            raise ServiceError(
+                "VERSION_SKEW",
+                f"snapshot schema {snap.get('schema')!r} != "
+                f"{SNAPSHOT_SCHEMA!r}")
+        all_entries = snap["slices"]
+        by_id = {e["id"]: e for e in all_entries}
+        entries = all_entries
+        if duplicates == "roots_only":
+            entries = [e for e in all_entries
+                       if e["lineage"]["parent"] not in by_id]
+        if remap is not None:
+            validate_remap(remap)
+        placements, required = resolve_placements(entries, by_id, remap)
 
-        # lease pre-pass: LEASED must precede any mutation (park rule)
+        # PASS 1 — validate every placement; nothing mutates yet
+        # (LEASED must precede any mutation: the park rule)
         with store.catalog_lock:
-            for e in manifest["objects"]:
-                rec = store.objects.get(e["id"])
-                if rec is not None and rec.lease_refs:
-                    raise ServiceError("LEASED", e["id"])
-
-        restored, skipped = [], []
-        with open(path / "payload.bin", "rb") as f:
-            for e in manifest["objects"]:
-                oid = e["id"]
-                if (duplicates == "roots_only"
-                        and e["lineage"]["parent"] in by_id):
-                    skipped.append(oid)
+            for target, want in required.items():
+                rec = store.objects.get(target)
+                if rec is None:
                     continue
-                exists = store.objects.get(oid)
-                if exists is not None:
-                    if not overwrite:
-                        raise ServiceError(
-                            "COLLISION",
-                            f"{oid} resident; pass overwrite=True")
-                    if exists.size_bytes != e["size_bytes"]:
-                        raise ServiceError(
-                            "BINDING_MISMATCH",
-                            f"{oid}: resident {exists.size_bytes} B != "
-                            f"snapshot {e['size_bytes']} B")
-                seg = e["payload"]
-                src = by_id[seg["ref"]]["payload"] if "ref" in seg else seg
-                rng = e.get("range")
-                if rng and exists is not None:
-                    rec = exists          # fill the range in place
-                else:
-                    rec = store.put(oid, None, size_bytes=e["size_bytes"],
-                                    meta=e["meta"], writer="restore")
+                if rec.lease_refs:
+                    raise ServiceError("LEASED", target)
+                if rec.size_bytes != want["size"]:
+                    raise ServiceError(
+                        "BINDING_MISMATCH",
+                        f"{target}: resident {rec.size_bytes} B != "
+                        f"snapshot {want['size']} B")
+                if not overwrite:
+                    raise ServiceError(
+                        "COLLISION",
+                        f"{target} resident; pass overwrite=True")
+
+        # PASS 2 — verify every payload hash; store still untouched
+        if verify:
+            verify_payload(path, all_entries)
+
+        # PASS 3 — place bytes, then identity metadata
+        restored = set()
+        with open(path / "payload.bin", "rb") as f:
+            for p in placements:
+                target = p["target"]
+                rec = store.objects.get(target)
+                if rec is None:
+                    want = required[target]
+                    rec = store.put(target, None,
+                                    size_bytes=want["size"],
+                                    meta=want["meta"], writer="restore")
                 mv = store.view(rec)
-                lo, hi = (rng[0], rng[1]) if rng else (0, e["size_bytes"])
-                f.seek(src["offset"])
-                off = lo
-                while off < hi:
-                    n = f.readinto(mv[off:min(off + _CHUNK, hi)])
+                f.seek(p["file_offset"])
+                off = p["lo"]
+                while off < p["hi"]:
+                    n = f.readinto(mv[off:min(off + CHUNK_BYTES,
+                                              p["hi"])])
                     if not n:
                         raise ServiceError(
-                            "IO_ERROR", f"short payload read for {oid}")
+                            "IO_ERROR", f"short payload read for {target}")
                     off += n
-                lin = e["lineage"]
-                rec.protected = bool(e.get("protected", False))
-                rec.lineage.parent = lin["parent"]
-                rec.lineage.dirty = lin["dirty"]
-                rec.lineage.parent_version = lin["parent_version"]
-                rec.version = e.get("version", 0)
-                rec.last_write = {"by": f"restore:{manifest['snap_id']}",
+                rec.last_write = {"by": f"restore:{snap['snap_id']}",
                                   "t": time.time()}
-                restored.append(oid)
+                restored.add(target)
+        if remap is None:
+            for e in entries:
+                if identity_slice(e) and e["id"] in restored:
+                    rec = store.objects[e["id"]]
+                    lin = e["lineage"]
+                    rec.protected = bool(e.get("protected", False))
+                    rec.lineage.parent = lin["parent"]
+                    rec.lineage.dirty = lin["dirty"]
+                    rec.lineage.parent_version = lin["parent_version"]
+                    rec.version = e.get("version", 0)
 
         groups_recreated = []
-        for g in manifest.get("object_groups", []):
+        for g in snap.get("object_groups", []):
             if g["ogid"] in store.object_groups:
                 continue
             if not all(m in store.objects for m in g["members"]):
-                continue                      # roots_only may drop members
+                continue                # partial restores may drop members
             store.create_object_group(g["ogid"], g["members"], None,
                                       [s for s in g["sub_groups"]
                                        if s in store.object_groups])
             groups_recreated.append(g["ogid"])
         st.emit("restore_done", path=str(path), n_restored=len(restored))
-        return {"ok": True, "restored": restored, "skipped": skipped,
+        return {"ok": True, "restored": sorted(restored),
                 "object_groups_recreated": groups_recreated,
-                "client_meta": manifest.get("client_meta", {})}
+                "client_meta": snap.get("client_meta", {})}
 
     server.dispatcher.handlers["snapshot"] = snapshot
     server.dispatcher.handlers["restore_snapshot"] = restore_snapshot

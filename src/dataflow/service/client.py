@@ -293,19 +293,22 @@ class EngineClient:
         return self._call("query_fast", {})
 
     # ---- programs + runs ----
-    def snapshot(self, scope: str, dest: str, *, ids=None,
-                 ranges=None, client_meta=None, label=None, wait=True):
-        """``ranges``: {object_id: (lo, hi)} — save only the byte range
-        this saver is RESPONSIBLE for (slice-granular save plans);
-        restore fills ranges back into full-size objects."""
+    def snapshot(self, dest: str, *, slices=None, client_meta=None,
+                 wait=True):
+        """Write a snapshot of store bytes to ``dest``. With
+        ``slices=None`` every resident object is saved whole. An
+        explicit ``slices`` list selects exactly: each dict names a
+        stored object ``id`` and may map a byte range into a logical
+        object — ``src`` (range in the stored object; default the
+        whole object), ``logical_id`` (default ``id``), ``dst``
+        (range in the logical object; default ``src``) and
+        ``logical_bytes`` (the logical object's total size; default
+        the stored size). Returns the admission receipt; completion
+        via ``wait_snapshot``."""
         return self._call("snapshot",
-                          {"scope": scope, "dest": str(dest),
-                           "ids": list(ids) if ids else None,
-                           "ranges": ({k: [int(v[0]), int(v[1])]
-                                       for k, v in ranges.items()}
-                                      if ranges else None),
-                           "client_meta": client_meta or {},
-                           "label": label}, wait=wait)
+                          {"dest": str(dest), "slices": slices,
+                           "client_meta": client_meta or {}},
+                          wait=wait)
 
     def snapshot_status(self, snap_id: str):
         return self._call("snapshot_status", {"snap_id": snap_id})
@@ -322,13 +325,19 @@ class EngineClient:
                 raise TimeoutError(f"snapshot {snap_id} still writing")
             _t.sleep(poll)
 
-    def restore_snapshot(self, path: str, *, placement="initial",
-                         duplicates="recreate", overwrite=False,
+    def restore_snapshot(self, path: str, *, duplicates="recreate",
+                         overwrite=False, verify=True, remap=None,
                          wait=True):
+        """Place a snapshot's slices back into the store. Hashes are
+        verified BEFORE any placement (``verify=False`` restores the
+        on-disk bytes unchecked). ``remap`` extracts logical ranges
+        into local objects instead of the default logical-named
+        placement: {logical_id: [{"logical": [c, d), "id": local_id,
+        "local": [x, y), "bytes": local_total}, ...]}."""
         return self._call("restore_snapshot",
-                          {"path": str(path), "placement": placement,
-                           "duplicates": duplicates,
-                           "overwrite": overwrite}, wait=wait)
+                          {"path": str(path), "duplicates": duplicates,
+                           "overwrite": overwrite, "verify": verify,
+                           "remap": remap}, wait=wait)
 
     def register_program(self, program, *, resolver: dict,
                          name: str | None = None, wait=True):

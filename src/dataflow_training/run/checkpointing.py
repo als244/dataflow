@@ -117,8 +117,12 @@ def save_checkpoint(ranks, ck: dict, step_next: int, meta: dict,
         ranges = {oid: rng for oid, rng in ranges.items()
                   if oid in persist}
         dest = str(step_dir / f"rank{i}")
+        slices = [{"id": oid} if oid not in ranges
+                  else {"id": oid, "src": [int(ranges[oid][0]),
+                                           int(ranges[oid][1])]}
+                  for oid in ids]
         out = rank.client.snapshot(
-            "all", dest, ids=ids, ranges=ranges,
+            dest, slices=slices,
             client_meta={"step": step_next, "rank": i, **meta})
         snaps.append((rank, out["snap_id"]))
     for rank, snap_id in snaps:

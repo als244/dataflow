@@ -81,8 +81,12 @@ def test_checkpoint_record_v2_roundtrip_two_ranks(tmp_path):
         ids, ranges = rank_save_args(plan, r, own_objects=["O_0"])
         assert ids == ["O_0", "W_0"]
         assert ("W_0" in ranges) and ("O_0" not in ranges)
-        wait_snap(c, c.snapshot("all", str(step_dir / f"rank{r}"),
-                                ids=ids, ranges=ranges,
+        slices = [{"id": oid} if oid not in ranges
+                  else {"id": oid, "src": [int(ranges[oid][0]),
+                                           int(ranges[oid][1])]}
+                  for oid in ids]
+        wait_snap(c, c.snapshot(str(step_dir / f"rank{r}"),
+                                slices=slices,
                                 client_meta={"rank": r, "step": 4}))
 
     progs = save_programs(step_dir, [{"tasks": ["t0"]}, {"tasks": ["t1"]}])

@@ -87,26 +87,26 @@ with EngineClient("/tmp/dfd.sock", client_name="driver") as c:
                   fetch=["out/y_0"])
         print(k, r["fetched"]["out/y_0"], r["makespan_us"])
 
-    # 4. checkpoint. duplicate_object_group copies a named object group
-    #    synchronously on the dispatcher; snapshot freezes ids under
-    #    read-leases and streams to disk in the background.
-    c.create_object_group("state", pattern="state/*")   # fnmatch glob
-    c.duplicate_object_group("state", tag="ck")
-    s = c.snapshot("all", "/ckpts/step100",
+    # 4. checkpoint. snapshot freezes the saved ids under read-leases
+    #    and streams payload + snapshot.json to disk in the background.
+    s = c.snapshot("/ckpts/step100",
                    client_meta={"step": 100, "cursor": [3, 128]})
     c.wait_snapshot(s["snap_id"])
 
-    # 4b. SLICE snapshots: save only the byte range this saver is
-    #     RESPONSIBLE for (slice-granular save plans). A ranged entry
-    #     records the FULL object size plus its [lo, hi); restore
-    #     fills the range into the resident object (overwrite=True) or
-    #     creates the object full-size and fills the range — restoring
-    #     each responsible rank's artifact in turn REASSEMBLES the
-    #     complete object. Ranged entries never dedup.
-    c.snapshot("all", "/ckpts/step100-r0", ids=["state/w3"],
-               ranges={"state/w3": (0, 1 << 20)})
+    # 4b. SLICE snapshots: an explicit slice list selects exactly which
+    #     bytes to save and where they belong. Each slice names a
+    #     stored object and may map a src byte range into a logical
+    #     object (logical_id + dst + logical_bytes; all default to the
+    #     identity mapping). Restoring each responsible saver's
+    #     snapshot in turn REASSEMBLES the complete object. Explicit
+    #     slice lists never dedup.
+    c.snapshot("/ckpts/step100-r0",
+               slices=[{"id": "state/w3", "src": [0, 1 << 20]}])
 
-    # 5. resume later (client_meta comes back in the same call)
+    # 5. resume later (client_meta comes back in the same call).
+    #    Slice hashes are verified BEFORE any placement; a remap plan
+    #    can extract logical ranges into differently-named local
+    #    objects instead of the default placement.
     meta = c.restore_snapshot("/ckpts/step100")["client_meta"]
 ```
 
@@ -161,15 +161,25 @@ checks, nothing retained).
 
 ## Snapshots
 
-`snapshot(scope, dest)` freezes an id set under **read-leases**
+`snapshot(dest)` saves every resident object whole;
+`snapshot(dest, slices=[...])` saves exactly the listed slices, each
+mapping a `src` byte range of a stored object into a logical object
+(`logical_id` + `dst` + `logical_bytes`, defaulting to the identity
+mapping). Either way the saved ids freeze under **read-leases**
 (reads proceed; writers — puts, wipes, runs touching those ids —
-wait, parked, until the background writer finishes), streams
-payload + manifest to `dest`, and dedups clean duplicates against
-their parent via version counters (a duplicate whose parent was
-later mutated stores its own bytes — soundness over savings).
-`restore_snapshot` recreates residents and object groups and hands
-back your `client_meta` — whatever resume record the client stored —
-so resume is one call.
+wait, parked, until the background writer finishes) while payload
+plus `snapshot.json` (schema `dataflow-snapshot/v1`, written last as
+the completeness marker, one streaming blake2b-16 hash per slice)
+land at `dest`. Bulk snapshots dedup clean duplicates against their
+parent via version counters (a duplicate whose parent was later
+mutated stores its own bytes — soundness over savings).
+`restore_snapshot` is three-pass — validate every placement, verify
+every slice hash (`verify=False` opts out), then place — so a
+refusal leaves the store untouched; identity slices recreate their
+stored objects exactly (metadata included), an optional `remap` plan
+extracts logical ranges into local objects instead, and your
+`client_meta` — whatever resume record the client stored — comes
+back in the same call.
 
 ## The peer plane
 

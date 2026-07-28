@@ -115,9 +115,8 @@ def test_checkpoint_roundtrip_bit_continuity(rig):
         reg = _fresh_state(c, rig)
         first = _steps(c, reg["prog_id"], [0, 1])
         dest = str(rig["tmp"] / "ck2")
-        s = c.snapshot("all", dest,
-                       client_meta={"step": 2, "cursor": [3, 128]},
-                       label="step2")
+        s = c.snapshot(dest,
+                       client_meta={"step": 2, "cursor": [3, 128]})
         done = c.wait_snapshot(s["snap_id"])
         assert done["state"] == "done", done
         c.unregister_program(reg["prog_id"])
@@ -144,13 +143,13 @@ def test_dedup_clean_vs_mutated_parent(rig):
         c.duplicate_object(w, f"{w}@ck")
 
         # clean dup + untouched parent => ONE payload (dedup)
-        s1 = c.snapshot("all", str(rig["tmp"] / "dd1"))
+        s1 = c.snapshot(str(rig["tmp"] / "dd1"))
         assert s1["n_deduped"] == 1, s1
         c.wait_snapshot(s1["snap_id"])
 
         # a run MUTATES the parent (bound resident) => dedup must die
         _steps(c, reg["prog_id"], [0])
-        s2 = c.snapshot("all", str(rig["tmp"] / "dd2"))
+        s2 = c.snapshot(str(rig["tmp"] / "dd2"))
         assert s2["n_deduped"] == 0, s2
         c.wait_snapshot(s2["snap_id"])
         c.unregister_program(reg["prog_id"])

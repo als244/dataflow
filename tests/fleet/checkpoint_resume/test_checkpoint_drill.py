@@ -124,7 +124,7 @@ def test_checkpoint_resume_bitwise(tmp_path):
         put_step(ca, cfg, 0)
         prog_a = register(ca, cfg, prog_dict)
         head = train_steps(ca, prog_a, cfg, 0, K)
-        out = ca.snapshot("all", snap_dir,
+        out = ca.snapshot(snap_dir,
                           client_meta={"step": K, "seed": SEED,
                                        "cfg": cfg_dict(cfg),
                                        "prog_id": prog_a})
