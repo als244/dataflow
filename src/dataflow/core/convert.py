@@ -108,7 +108,8 @@ def apply_chain_annotations(program: Program, chain: Any) -> Program:
     produced by re-lowering, not by chain surgery). Directives are copied
     onto each task; pre-placed initial fast copies (extra (id, "fast")
     initial-memory entries emitted by PressureFit) are appended to
-    ``initial_objects`` with tensor metadata inherited from the backing entry.
+    ``initial_objects`` as full-fidelity copies of the backing entry at
+    the new location.
     """
     chain_task_ids = [t.id for t in chain.tasks]
     program_task_ids = [t.id for t in program.tasks]
@@ -150,15 +151,10 @@ def apply_chain_annotations(program: Program, chain: Any) -> Program:
             raise ValueError(
                 f"annotated chain adds initial object {sim_obj.id!r} unknown to the program"
             )
-        new_initial.append(
-            ObjectSpec(
-                id=src.id,
-                size_bytes=src.size_bytes,
-                location=sim_obj.location,
-                role=src.role,
-                tensor=src.tensor,
-            )
-        )
+        # a full-fidelity copy at the new location: a pre-placement
+        # twin differs by WHERE, never by WHAT — every other field
+        # (persistent included) must survive
+        new_initial.append(replace(src, location=sim_obj.location))
         existing.add(key)
 
     # The planner-annotated chain is authoritative for capacities/bandwidths

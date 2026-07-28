@@ -1,5 +1,5 @@
 """Source-policy save/restore drills: two in-process daemons play a
-world-2 fleet — replicated W, zero1-sharded O in the REAL slice
+world-2 fleet — replicated W, element-sharded O in the REAL slice
 layout (256-aligned [m_slice|v_slice|m_tail|v_tail] fields with a
 redundantly-updated world-remainder tail) — and the compiled
 policies round-trip bitwise through save_checkpoint and
@@ -9,7 +9,7 @@ cannot pass by luck. CPU-only (fake engines; the policy and record
 logic is byte-level).
 
 Tests:
-- test_simple_policy_round_trip_world2: the simple policy saves whole buffers per writer; each rank restores bitwise from its OWN snapshot (keyed targets) at its exact resident geometry, and the logical view reassembles the tight [m_all | v_all] — slice fields at element offsets, the replicated tail once — and picks the authoritative W.
+- test_simple_policy_round_trip_world2: the simple policy saves whole buffers per writer; each rank restores bitwise from its OWN snapshot (keyed targets, bare ids resolving to writer-qualified private logicals) at its exact resident geometry, and the logical view reassembles the tight [m_all | v_all] — slice fields at element offsets, the replicated tail once — picks the authoritative W, and lists each writer's private Aux copy separately.
 - test_dedup_policy_covers_with_disjoint_slices: dedup saves W as disjoint authoritative responsibility slices — one copy total — and the logical view reassembles it bitwise.
 - test_replication_drift_refuses_before_record: diverged W bytes between writers make save_checkpoint refuse naming both writers, and NO record lands.
 """
@@ -82,8 +82,8 @@ def field_bytes(payload: bytes, name: str) -> bytes:
 
 
 def fleet_state(w_bytes_by_rank):
-    """Per-rank zero1 O shards for a world-2 fleet: distinct slice
-    fields, identical tail fields."""
+    """Per-rank element-sharded O for a world-2 fleet: distinct
+    slice fields, identical tail fields."""
     o = {r: shard_bytes(100 + r, 999) for r in (0, 1)}
     return o
 

@@ -103,12 +103,16 @@ def distribute_artifacts(record: dict, hosts, log) -> None:
 def persisted_writer_specs(ranks) -> dict:
     """{writer_index: [(id, size_bytes), ...]} — each rank's
     persistent objects at its resident sizes, read off the marker in
-    its serialized program."""
+    its serialized program. An object may appear under several
+    locations (placement pre-copies); it is ONE object, listed
+    once."""
     specs = {}
     for i, rank in enumerate(ranks):
-        specs[i] = [(o["id"], int(o["size_bytes"]))
-                    for o in rank.prog_dict["initial_objects"]
-                    if o.get("persistent")]
+        by_id = {}
+        for o in rank.prog_dict["initial_objects"]:
+            if o.get("persistent"):
+                by_id[o["id"]] = int(o["size_bytes"])
+        specs[i] = sorted(by_id.items())
     return specs
 
 

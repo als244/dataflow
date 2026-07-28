@@ -1,36 +1,42 @@
 """Source policies: WHO saves WHICH bytes, compiled from the
 responsibility map into engine slice lists and record slice entries.
 
-``simple`` (the default): every writer saves everything it holds,
-whole — its full replicated objects and its own shard-sized objects —
-so each writer's snapshot restores that rank with zero cross-writer
-shipping. Replicated objects overlap across writers with writer 0
-authoritative; the equal-hash rule on those overlaps certifies
-replication on every save. ``dedup`` saves each replicated object as
-disjoint responsibility slices instead — one copy total across the
-checkpoint, each slice authoritative — trading self-sufficiency and
+Every persistent object falls in exactly one of three GENERAL
+classes, decided by the metadata handed in — nothing here knows any
+particular parallelism scheme by name:
+
+REPLICATED (the object appears in the responsibility plan): every
+writer holds the same bytes. ``simple`` (the default) has every
+writer save its whole copy, so each writer's snapshot restores that
+rank with zero cross-writer shipping; the copies overlap on the
+record and the equal-hash rule across them certifies replication on
+every save. ``dedup`` saves one copy total instead, as the plan's
+disjoint responsibility slices — trading self-sufficiency and
 redundancy for disk.
 
-zero1-sharded optimizer objects are shard-sized residents laid out by
-``opt_state_slice_layout`` — aligned ``[m_slice | v_slice]`` fields
-plus, when the element count doesn't divide the world, ``m_tail`` /
-``v_tail`` fields every rank updates redundantly. Their logical
-object is the tight world-spanning ``[m_all | v_all]`` byte space:
-each writer's slice fields map to element-derived offsets in it, and
-the replicated tail fields overlap across writers (writer 0
-authoritative) so the drift certificate covers the redundant tail
-updates too. Alignment padding between fields is layout, not state —
-it maps to no logical byte. Objects that are neither
-replicated-by-size nor zero1-paired are refused loudly rather than
-guessed at.
+ELEMENT-SHARDED (the object's root appears in ``opt_slices``):
+writers hold disjoint element ranges of paired state, resident in
+the slice+tail layout ``opt_state_slice_layout`` describes — aligned
+per-slot fields plus, when the element count doesn't divide the
+world, tail fields every writer updates redundantly. The logical
+object is the tight world-spanning concatenation of the slot spaces;
+each writer's fields map at element-derived offsets, and the
+redundant tail fields overlap across writers so the drift
+certificate covers them too. Alignment padding between fields is
+layout, not state — it maps to no logical byte.
+
+WRITER-PRIVATE (everything else): state each writer accumulates on
+its own, with nothing synchronizing the copies — same-size copies
+across writers are NOT replicas, so each writer's copy becomes its
+own writer-qualified logical object rather than being falsely
+certified. Replication and its drift certificate apply exactly to
+the plan's objects.
 
 Each writer also emits its resident-object inventory ({id: bytes});
 the composer records it per snapshot so the rank view can recreate
 objects at their exact local sizes, padding included.
 """
 from __future__ import annotations
-
-from dataflow.core import DTYPE_BITS
 
 from ..blocks.layouts import opt_state_slice_layout
 
@@ -50,8 +56,8 @@ def compile_source_policy(*, policy: str, world: int, writer_specs: dict,
     ``writer_specs``: {writer_index: [(id, size_bytes), ...]} — each
     writer's persisted objects at ITS resident sizes (the marker
     filter applied to its program). ``plan``: the responsibility map.
-    ``opt_slices``: zero1 shard dict {root: {n_slice, n_tail,
-    opt_dtype}} when the optimizer is sharded, else None.
+    ``opt_slices``: element-shard dict {root: {n_slice, n_tail,
+    opt_dtype}} when optimizer state is sharded, else None.
 
     Returns (logical_objects, per_writer): logical_objects is the
     record's {id: {"bytes": N}}; per_writer[k] carries "slices" (the
@@ -74,13 +80,16 @@ def compile_source_policy(*, policy: str, world: int, writer_specs: dict,
         for oid, size in specs:
             root = opt_root(oid)
             if opt_slices and root in opt_slices:
-                add_zero1_shard(per_writer[writer], logical, oid, size,
-                                writer, world, opt_slices, root)
-                continue
-            sizes = {w: held.get(oid)
-                     for w, held in sizes_by_writer.items()}
-            add_replicated(per_writer[writer], logical, oid, size,
-                           writer, policy, plan, sizes)
+                add_sharded(per_writer[writer], logical, oid, size,
+                            writer, world, opt_slices, root)
+            elif oid in plan:
+                sizes = {w: held.get(oid)
+                         for w, held in sizes_by_writer.items()}
+                add_replicated(per_writer[writer], logical, oid, size,
+                               writer, policy, plan, sizes)
+            else:
+                add_private(per_writer[writer], logical, oid, size,
+                            writer)
     return logical, per_writer
 
 
@@ -115,44 +124,74 @@ def add_replicated(out: dict, logical: dict, oid: str, size: int,
                           "authoritative": writer == 0})
 
 
-def add_zero1_shard(out: dict, logical: dict, oid: str, size: int,
-                    writer: int, world: int, opt_slices: dict,
-                    root: str) -> None:
+def add_private(out: dict, logical: dict, oid: str, size: int,
+                writer: int) -> None:
+    """Writer-PRIVATE state: an object outside the responsibility
+    plan and outside the element-shard pairing accumulates per
+    writer, with nothing synchronizing the copies. Same-size copies
+    across writers are NOT replicas here, so certifying them under
+    the drift rule would refuse legitimate saves; instead each
+    writer's copy becomes its own writer-qualified logical object
+    (``<id>@<writer>``), whole and authoritative. The rank view
+    resolves the bare id to the writer's qualified object and
+    restores it under the bare local name."""
+    lid = f"{oid}@{writer}"
+    known = logical.setdefault(lid, {"bytes": int(size)})
+    if known["bytes"] != size:
+        raise ValueError(f"{lid}: logical size conflict "
+                         f"{known['bytes']} != {size}")
+    out["slices"].append({"id": oid, "logical_id": lid,
+                          "logical_bytes": int(size)})
+    out["record"].append({"logical": lid,
+                          "snapshot_range": [0, int(size)],
+                          "object_range": [0, int(size)],
+                          "authoritative": True})
+
+
+def add_sharded(out: dict, logical: dict, oid: str, size: int,
+                writer: int, world: int, opt_slices: dict,
+                root: str) -> None:
+    """Slot structure comes entirely from the layout's fields — one
+    ``<slot>_slice`` field per state slot, each optionally paired
+    with a ``<slot>_tail`` — so any optimizer's slot set (one slot,
+    two, more; any dtype) compiles through the same arithmetic. The
+    logical object concatenates per-slot spaces in field order; a
+    slot's space is the writers' slice extents in writer order plus
+    its tail."""
     sh = opt_slices[root]
-    n_slice, n_tail = int(sh["n_slice"]), int(sh["n_tail"])
-    esize = DTYPE_BITS[sh["opt_dtype"]] // 8
-    layout = opt_state_slice_layout(n_slice, n_tail, sh["opt_dtype"])
+    layout = opt_state_slice_layout(int(sh["n_slice"]),
+                                    int(sh["n_tail"]),
+                                    sh["opt_dtype"])
     if size != layout.total_bytes:
         raise ValueError(
-            f"{oid}: writer {writer} holds {size} B but its zero1 "
-            f"slice layout is {layout.total_bytes} B "
+            f"{oid}: writer {writer} holds {size} B but its element-"
+            f"shard layout is {layout.total_bytes} B "
             f"({[f.name for f in layout.fields]})")
-    total = n_slice * world + n_tail
-    total_bytes = 2 * total * esize
+    slice_fields = [f for f in layout.fields
+                    if f.name.endswith("_slice")]
+    tail_fields = {f.name.removesuffix("_tail"): f
+                   for f in layout.fields if f.name.endswith("_tail")}
+    pieces = []
+    cursor = 0
+    for f in slice_fields:
+        slot = f.name.removesuffix("_slice")
+        tail = tail_fields.get(slot)
+        pieces.append((f, [cursor + writer * f.nbytes,
+                           cursor + (writer + 1) * f.nbytes], True))
+        cursor += world * f.nbytes
+        if tail is not None:
+            # every writer updates the world-remainder tail
+            # redundantly: the overlapping tail slices are replicas,
+            # drift-certified, with writer 0 the restore winner
+            pieces.append((tail, [cursor, cursor + tail.nbytes],
+                           writer == 0))
+            cursor += tail.nbytes
+    total_bytes = cursor
     known = logical.setdefault(oid, {"bytes": total_bytes})
     if known["bytes"] != total_bytes:
         raise ValueError(f"{oid}: logical size conflict "
                          f"{known['bytes']} != {total_bytes}")
-    half_logical = total * esize
-    even = world * n_slice * esize
-    pieces = [
-        ("m_slice", [writer * n_slice * esize,
-                     (writer + 1) * n_slice * esize], True),
-        ("v_slice", [half_logical + writer * n_slice * esize,
-                     half_logical + (writer + 1) * n_slice * esize],
-         True),
-    ]
-    if n_tail:
-        # every rank updates the world-remainder tail redundantly:
-        # the overlapping tail slices are replicas, drift-certified,
-        # with writer 0 the restore winner
-        pieces += [
-            ("m_tail", [even, half_logical], writer == 0),
-            ("v_tail", [half_logical + even, total_bytes],
-             writer == 0),
-        ]
-    for field_name, dst, authoritative in pieces:
-        f = layout.field(field_name)
+    for f, dst, authoritative in pieces:
         src = [f.offset_bytes, f.offset_bytes + f.nbytes]
         out["slices"].append({"id": oid, "src": src,
                               "logical_id": oid, "dst": dst,

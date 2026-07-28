@@ -139,11 +139,13 @@ def check_entry_shapes(lid, total, entries, snapshots) -> None:
         if not (0 <= dst[0] < dst[1] <= total):
             raise CheckpointError(
                 f"{lid}: object_range {dst} outside [0, {total})")
-        resident = (snapshots[int(snap)].get("objects") or {}).get(lid)
+        bare = lid.rsplit("@", 1)[0] if "@" in lid else lid
+        resident = (snapshots[int(snap)].get("objects") or {}).get(bare)
         if resident is None:
             raise CheckpointError(
                 f"{lid}: snapshot {snap} lists no resident size for "
-                f"it — the rank view cannot recreate local geometry")
+                f"{bare} — the rank view cannot recreate local "
+                f"geometry")
         if not (0 <= src[0] < src[1] <= int(resident)):
             raise CheckpointError(
                 f"{lid}: snapshot_range {src} outside the resident "

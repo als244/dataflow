@@ -121,9 +121,6 @@ def fleet_loop(ranks, gspec, recipe, pipeline, steps, *, budgets, seed,
         if missing:
             raise RuntimeError(f"{rank.name}: unbound {missing}")
         rank.prog_id = reg["prog_id"]
-        rank.persist_ids = sorted(
-            s.id for s in planned.program.initial_objects
-            if s.id.startswith(("W_", "O_")))
         log(f"[fleet] {rank.name}: registered {rank.prog_id} "
             f"(rounds {rank.rounds}, budget {budgets[i]} GiB)")
         # WARM-UP (group absent => comm skips): compiles + loads every
@@ -150,9 +147,9 @@ def fleet_loop(ranks, gspec, recipe, pipeline, steps, *, budgets, seed,
             from dataflow.checkpoint import resolve_targets
 
             step_dir = Path(ck_record["_step_dir"])
-            wanted = [o["id"]
-                      for o in rank.prog_dict["initial_objects"]
-                      if o.get("persistent")]
+            wanted = sorted({o["id"]
+                             for o in rank.prog_dict["initial_objects"]
+                             if o.get("persistent")})
             plan = resolve_targets(ck_record, {str(i): wanted})
             restored_step = None
             for restore in plan:

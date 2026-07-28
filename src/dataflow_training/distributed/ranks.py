@@ -19,8 +19,6 @@ class RankState:
         self.prog_id = prog_id
         self.losses: list = []
         self.error: str | None = None
-        self.persist_ids: list = []    # W_*/O_* ids from the rank's
-                                       # registered program (SavePlan)
 
 
 class StepRun:

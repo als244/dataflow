@@ -11,7 +11,7 @@ Tests:
 """
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -51,7 +51,6 @@ class StubRank:
     name: str
     client: object
     prog_dict: dict
-    persist_ids: list = field(default_factory=list)
 
 
 def boot(tmp, name):
@@ -107,8 +106,7 @@ def fleet(tmp_path, w, o):
         client.put_object("W_0", w)
         client.put_object("O_0", o[r])
         ranks.append(StubRank(name=f"host{r}", client=client,
-                              prog_dict=rank_program(),
-                              persist_ids=["O_0", "W_0"]))
+                              prog_dict=rank_program()))
     ck = {"dir": tmp_path / "run", "run": "drill",
           "responsibility": PLAN, "opt_slices": OPT_SLICES,
           "source_policy": "simple", "keep_last": 0,

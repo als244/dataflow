@@ -42,9 +42,9 @@ class CheckpointPayload:
         record = read_record(ckpt_dir)
         prog_rel = record["launch"]["programs"][0]
         prog = json.loads((Path(ckpt_dir) / prog_rel).read_text())
-        weight_ids = [o["id"] for o in prog["initial_objects"]
-                      if o.get("persistent")
-                      and o.get("role") == "parameter"]
+        weight_ids = sorted({o["id"] for o in prog["initial_objects"]
+                             if o.get("persistent")
+                             and o.get("role") == "parameter"})
         record, self.client = load_checkpoint(ckpt_dir,
                                               targets=weight_ids)
         self.step = int(record["step"])

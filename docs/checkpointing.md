@@ -275,7 +275,11 @@ as disjoint responsibility slices — and the composer fans out one
 snapshot per writer, waits for all of them, collects the per-slice
 hashes each daemon streamed, and runs the replication-drift
 certificate (identical-span copies must hash-equal; disagreement
-refuses the checkpoint naming both writers). Minimal form of what
+refuses the checkpoint naming both writers). State that each rank
+accumulates privately — per-rank counters no step synchronizes —
+saves under writer-qualified logical ids (`Aux_0@1`) instead of
+being falsely certified as replicated; resume returns each rank its
+own copy. Minimal form of what
 the training layer does at a step boundary:
 
 ```python

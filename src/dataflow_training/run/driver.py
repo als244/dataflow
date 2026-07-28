@@ -763,8 +763,8 @@ def run_engine(client, cfg, recipe: Recipe, pipeline, steps: int, *,
                           "data": data_meta,
                           "flops_per_step": {"effective": f_eff,
                                              "hardware": f_hw}})
-    persist = sorted(s.id for s in planned.program.initial_objects
-                     if s.id.startswith(("W_", "O_")))
+    persist = sorted({s.id for s in planned.program.initial_objects
+                      if s.persistent})
     if resume:
         got = client.restore_snapshot(str(resume_ck), overwrite=True)
         meta = got["client_meta"]

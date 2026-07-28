@@ -125,16 +125,22 @@ def keyed_plan(record: dict, key, ids: list) -> list:
     their RESIDENT geometry — local spans are the recorded
     snapshot_ranges and the created object takes its size from the
     snapshot's object inventory, so shard layouts (aligned fields,
-    padded totals) come back exactly as they lived."""
+    padded totals) come back exactly as they lived. A bare target id
+    resolves to the writer's QUALIFIED logical object
+    (``Aux_0`` -> ``Aux_0@1``) when the record carries one —
+    writer-private state comes back under its bare local name."""
     logical = record["logical_objects"]
     own = [i for i, s in enumerate(record["snapshots"])
            if s.get("writer") == key]
     if not own:
         raise CheckpointError(f"no snapshot belongs to writer {key}")
     pieces = []
-    for lid in ids:
+    for target in ids:
+        lid = target
+        if lid not in logical and f"{target}@{key}" in logical:
+            lid = f"{target}@{key}"
         if lid not in logical:
-            raise CheckpointError(f"unknown target {lid}")
+            raise CheckpointError(f"unknown target {target}")
         entries = [e for e in record["slices"].get(lid, [])
                    if e["snapshot"] in own]
         if not entries:
@@ -145,16 +151,16 @@ def keyed_plan(record: dict, key, ids: list) -> list:
         for e in entries:
             inventory = record["snapshots"][e["snapshot"]].get(
                 "objects") or {}
-            if lid not in inventory:
+            if target not in inventory:
                 raise CheckpointError(
                     f"writer {key}: snapshot carries no resident "
-                    f"size for {lid}")
+                    f"size for {target}")
             lo, hi = e["object_range"]
             src_lo, src_hi = e["snapshot_range"]
             pieces.append((e["snapshot"], lid,
-                           {"logical": [lo, hi], "id": lid,
+                           {"logical": [lo, hi], "id": target,
                             "local": [src_lo, src_hi],
-                            "bytes": int(inventory[lid])}))
+                            "bytes": int(inventory[target])}))
     return pieces
 
 

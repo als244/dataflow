@@ -6,7 +6,13 @@ caller state, all in one atomically-last checkpoint_record.json —
 the record IS the contract (docs/checkpointing.md). This package
 validates records totally, refuses loudly with named offenders, and
 resolves target sets into per-snapshot fetch plans in the engine's
-remap wire shape. It imports nothing from any workload."""
+remap wire shape. It imports nothing from any workload.
+
+One namespace rule: a logical id may be WRITER-QUALIFIED
+(``Aux_0@1``) — per-writer state that must never certify as
+replicated. The rank view resolves a bare target to the writer's
+qualified object and restores it under the bare local name; the
+logical view lists qualified objects as they are."""
 from .compose import save_checkpoint
 from .record import (CheckpointError, RECORD_NAME, RECORD_SCHEMA,
                      read_record, schema_digest, validate_record,

@@ -1,15 +1,15 @@
 {
   "dsv3": {
     "bare": "82d342c5eee249ee64a049dea80b35bdb315063ca02fcbad6c868e4d04cabe25",
-    "planned": "16a3b9b6a7ce98134b68b13678dbd7ce1853f42dd982aa3f8737c98bce4e08f2"
+    "planned": "5291b3ca89488cdd0cc3c0bfc06e476b984926342af99af2bf0d9d617bbaf3b1"
   },
   "dsv32": {
     "bare": "0c54cc8bc55000389c16504c2c30fe7bf7021f76c0e50e80be092a90fe10a62c",
-    "planned": "5f64930fd09bade70a9ceec1bbe4191301e332cdf54c14123f3740c86b51581e"
+    "planned": "7a4adb2132ca512d154667a4b969fc5d4bc9f2a2e51c7f56812f21d6427190a6"
   },
   "glm52": {
     "bare": "6d9a452b5297804e7ad557c696bcce52e1ab8b916f9c94ac516c5d3f6e915a87",
-    "planned": "5971f7aa79bc38dfd21d860c528bd0aaa254a88c415923f5ad6265237606170c"
+    "planned": "2c94a6b5fb1b93fae35680a95366e24964a554ddf3c70cae5f04aff502489e8a"
   },
   "llama3": {
     "bare": "51508bec4d8bf5e41cebde812d9df0c5905dc4b9fc18de3c39402677f5986822",
@@ -17,7 +17,7 @@
   },
   "olmoe": {
     "bare": "fcaf42674471471abe8d2f688acdc85b04682ec71ee3fa7f80b44fc05d099950",
-    "planned": "526e51553198a2290ace1f6bfcbb5eb37e17750592f71e27e040d53259c10831"
+    "planned": "1a9cdc6c9e62786f625a25402ce0f08827ffdd9263a92d88326d364d7db9a807"
   },
   "qwen3": {
     "bare": "60c17d116f84e9dae8d6603758ae3efd334d334bced6e372a44d3be49b51f15a",
@@ -29,10 +29,10 @@
   },
   "qwen35moe": {
     "bare": "c04463db89d9283458290a235b36cb57c4ed8bbf688092c61425c5597ef2ce03",
-    "planned": "f6be48128d4804a039c9aeae0a148244c3f8330bf827afee99c062446f17b772"
+    "planned": "578e095f92137c55a980d7bcb41b958a2dde9400bce006ca052931be6a3c18ca"
   },
   "qwen3moe": {
     "bare": "5f06c2a3c85f32cd013bac5a5ad17c24f9c7a65178b287dbf54f0ebe3fbc5a3e",
-    "planned": "e07dd712858d92ea541fbced69f5aa0ca1884f427f72661bba943532458292b9"
+    "planned": "2b47b0d4d3b52d4f75af5e432fe2e6de695e443c866fb9d2001815f4d1cb345c"
   }
 }
