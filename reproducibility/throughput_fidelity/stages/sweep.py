@@ -93,6 +93,28 @@ def emit(fh, rec):
     fh.flush()
 
 
+def recorded_rows(out_path, label):
+    """Parsed rows already in a JSONL output — the resume basis for
+    both predict and measure. A run killed mid-append can leave one
+    torn trailing line; it is removed so the file is valid JSONL
+    again, and that one cell simply re-runs."""
+    rows = []
+    if not os.path.exists(out_path):
+        return rows
+    kept = []
+    for line in open(out_path):
+        try:
+            rows.append(json.loads(line))
+        except ValueError:
+            with open(out_path, "w") as fh:
+                fh.writelines(kept)
+            print(f"[{label}] dropped a torn trailing line (killed "
+                  f"mid-write); that cell re-runs", flush=True)
+            break
+        kept.append(line)
+    return rows
+
+
 # --------------------------------------------------------- plan artifacts
 
 def plan_artifact_path(plans_dir, opt, seq, tr, ts, budget, backing):
@@ -182,8 +204,20 @@ def run_predict(args, measured):
         hw_stamp = args.hw
     n = 0
     outcomes = {"feasible": 0, "infeasible": 0, "error": 0, "skip": 0}
+    # RESUME: rows are appended and flushed per cell, so an
+    # interrupted predict keeps every cell it finished — and its
+    # saved plan. Cells already recorded are passed over, never
+    # replanned and never re-emitted.
+    done = set()
+    for r in recorded_rows(args.out, f"{mode} {args.opt}"):
+        done.add((r.get("seq"), r.get("t_round"), r.get("t_step"),
+                  r.get("budget"), r.get("backing")))
+    resumed = 0
     with open(args.out, "a") as fh:
         for seq, tr, ts, bud, back in product(seqs, trs, tss, buds, backs):
+            if (seq, tr, ts, bud, back) in done:
+                resumed += 1
+                continue
             meta = dict(mode=mode, opt=args.opt, preset=args.preset,
                         seq=seq, t_round=tr, t_step=ts, budget=bud,
                         hw=hw_stamp,
@@ -255,8 +289,9 @@ def run_predict(args, measured):
                   flush=True)
     print(f"DONE {mode} {args.opt}: {n} cells "
           f"({outcomes['feasible']} feasible, {outcomes['infeasible']} "
-          f"infeasible, {outcomes['error']} ERROR, {outcomes['skip']} skip) "
-          f"-> {args.out}", flush=True)
+          f"infeasible, {outcomes['error']} ERROR, {outcomes['skip']} skip"
+          + (f", {resumed} already recorded" if resumed else "")
+          + f") -> {args.out}", flush=True)
     # error rows are HARNESS FAULTS by definition (an infeasible cell is a
     # result; an error is a fault in producing one) — a sweep that had any
     # exits red so the stage above refuses to build on a corrupted grid
@@ -412,11 +447,9 @@ def run_measure(args):
     # data rather than as a repeat -- expensive on a frontier pass that takes
     # hours, and silently wrong afterwards.
     done = set()
-    if os.path.exists(args.out):
-        for line in open(args.out):
-            r = json.loads(line)
-            if "meas_s" in r or "failed" in r:
-                done.add((r["seq"], r["t_round"], r["t_step"], r["budget"]))
+    for r in recorded_rows(args.out, f"measure {args.opt}"):
+        if "meas_s" in r or "failed" in r:
+            done.add((r["seq"], r["t_round"], r["t_step"], r["budget"]))
     if done:
         print(f"[measure {args.opt}] resuming: {len(done)} cells already "
               f"recorded, skipping them", flush=True)

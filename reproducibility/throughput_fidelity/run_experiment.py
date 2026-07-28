@@ -25,7 +25,11 @@ Stages are separate processes on purpose. Prediction profiles one geometry at a
 time and a failure in one sequence length should cost that chunk, not the run,
 so each is spawned, waited on, and reported independently.
 
-Use --stages to resume or repeat part of a run, e.g. after adding budgets:
+Use --resume to pick an interrupted run back up wherever it stopped:
+predict and measure both keep the rows already on disk and run only
+the missing cells (finished cells keep their saved plans), so a fully
+finished stage collapses to a skip-through. Use --stages to repeat a
+specific part deliberately, e.g. after adding budgets:
 
     ... run_experiment.py --stages predict,select,measure --budgets 4,8,16,32
 """
@@ -159,7 +163,15 @@ def stage_predict(cfg: Config, env: dict) -> None:
     for opt in cfg.opts:
         say(f"predict ({opt}) — every cost profiled on this GPU")
         out = cfg.data / f"predict_measured_{opt}.jsonl"
-        out.write_text("")
+        # Same contract as measure: rows are appended and flushed per
+        # cell, so an interrupted run keeps every cell it finished
+        # (and its saved plan). Truncating under --resume would throw
+        # exactly that away; fresh runs still start clean.
+        if cfg.resume:
+            done = sum(1 for _ in out.open()) if out.exists() else 0
+            say(f"  resuming: {done} rows already recorded")
+        else:
+            out.write_text("")
         log = cfg.logs / f"predict_{opt}.log"
         for seq in env["seqs"]:
             t_seq = time.time()
@@ -324,8 +336,9 @@ def parse_args(argv=None) -> Config:
     p.add_argument("--all-frontier", dest="all_frontier", action="store_true",
                    help="measure every frontier cell, not a sample (hours)")
     p.add_argument("--resume", action="store_true",
-                   help="keep measure rows already on disk and only run the "
-                        "cells missing from them")
+                   help="pick an interrupted run back up: predict and "
+                        "measure keep the rows already on disk and run "
+                        "only the missing cells")
     p.add_argument("--target-cells", type=int, default=18,
                    help="how many cells get real GPU runs (default: 18)")
     p.add_argument("--steps", type=int, default=6,
