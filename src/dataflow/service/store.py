@@ -360,6 +360,17 @@ class Store:
         if hook is not None:
             hook()
 
+    def rollback_created(self, ids: list[str]) -> None:
+        """Remove objects a failed restore created and return their
+        extents. The caller still HOLDS the leases on them, so no
+        dispatcher verb can be mid-flight on the records (leased
+        mutations park) — the pop is race-free."""
+        with self.catalog_lock:
+            for oid in ids:
+                rec = self.objects.pop(oid, None)
+                if rec is not None:
+                    self.allocator.release(rec.extent)
+
     # ---- duplicate ----
     def duplicate(self, src: str, dst: str) -> ObjectRecord:
         s = self._require(src)

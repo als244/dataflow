@@ -17,10 +17,13 @@ snapshot-writer thread reading slab bytes directly — extents are
 stable while leased. Queued verbs that hit a leased id raise LEASED
 and the dispatcher PARKS them until the writer releases.
 
-Restore is fully queued (dispatcher) and THREE-PASS: resolve every
-placement and validate it (leases, sizes, collisions), verify every
-payload hash (default ON), and only then place bytes — a refusal at
-any pass leaves the store untouched. Default placement follows the
+Restore is queued->bg like snapshot, and THREE-PASS: admission (on
+the dispatcher) resolves every placement, validates it (leases,
+sizes, collisions), creates absent targets and takes leases on all
+targets; the writer thread verifies every payload hash (default ON)
+and only then places bytes; a failure rolls back the targets
+admission created — under the still-held leases, so nothing can have
+touched them — and any refusal leaves the store as it was. Default placement follows the
 slice mapping (logical-named targets; an identity slice recreates its
 stored object exactly, metadata included). An optional remap plan
 EXTRACTS logical ranges into local objects instead: each slice's dst
@@ -210,11 +213,127 @@ def verify_payload(path: Path, entries: list) -> None:
                     f"the on-disk bytes anyway")
 
 
+def snapshot_job(server, job: dict) -> None:
+    """One snapshot's payload copy + snapshot.json write, on the
+    writer thread. Catalog access is read-only views of LEASED
+    records (release/wipe/put on them are parked meanwhile). Always
+    releases the job's leases, success or failure."""
+    st, store = server.state, server.store
+    snap_id = job["snap_id"]
+    try:
+        dest = Path(job["dest"])
+        dest.mkdir(parents=True, exist_ok=True)
+        with open(dest / "payload.bin", "wb") as f:
+            for e in job["entries"]:
+                seg = e["payload"]
+                rec = store.objects[e["id"]]
+                mv = store.view(rec)[e["src"][0]:e["src"][1]]
+                h = slice_hash()
+                f.seek(seg["offset"])
+                n = seg["size"]
+                for off in range(0, n, CHUNK_BYTES):
+                    chunk = mv[off:min(off + CHUNK_BYTES, n)]
+                    f.write(chunk)
+                    h.update(chunk)
+                    with st.lock:
+                        st.snapshots[snap_id]["bytes_done"] += len(chunk)
+                e["hash"] = h.hexdigest()
+        doc = {
+            "schema": SNAPSHOT_SCHEMA,
+            "service_schema": SCHEMA_VERSION,
+            "snap_id": snap_id,
+            "created_t": time.time(),
+            "client_meta": job["client_meta"],
+            "slices": job["entries"],
+        }
+        tmp = dest / "snapshot.json.tmp"
+        tmp.write_text(json.dumps(doc, indent=1))
+        tmp.rename(dest / "snapshot.json")
+        with st.lock:
+            st.snapshots[snap_id]["state"] = "done"
+            st.snapshots[snap_id]["slices"] = [
+                {"id": e["id"], "logical_id": e["logical_id"],
+                 "dst": e["dst"], "hash": e["hash"]}
+                for e in job["entries"]]
+        st.emit("snapshot_done", snap_id=snap_id,
+                path=str(dest), bytes=job["bytes_total"])
+    except Exception as e:  # noqa: BLE001 — writer must survive
+        with st.lock:
+            st.snapshots[snap_id]["state"] = "error"
+            st.snapshots[snap_id]["error"] = f"{type(e).__name__}: {e}"
+        st.emit("snapshot_error", snap_id=snap_id,
+                error=f"{type(e).__name__}: {e}")
+    finally:
+        with st.lock:
+            if snap_id in st.snapshots_in_flight:
+                st.snapshots_in_flight.remove(snap_id)
+        store.release_leases(job["lease_ids"])
+
+
+def restore_job(server, job: dict) -> None:
+    """One restore's verify + placement, on the writer thread. The
+    targets are LEASED (admission took them) so their extents are
+    stable and no dispatcher verb can mutate them — which also makes
+    the failure rollback of admission-created targets race-free.
+    Always releases the leases, success or failure."""
+    st, store = server.state, server.store
+    rid = job["restore_id"]
+    error = None
+    try:
+        path = Path(job["path"])
+        if job["verify"]:
+            verify_payload(path, job["entries"])
+        with open(path / "payload.bin", "rb") as f:
+            for p in job["placements"]:
+                target = p["target"]
+                rec = store.objects[target]
+                mv = store.view(rec)
+                f.seek(p["file_offset"])
+                off = p["lo"]
+                while off < p["hi"]:
+                    n = f.readinto(mv[off:min(off + CHUNK_BYTES,
+                                              p["hi"])])
+                    if not n:
+                        raise ServiceError(
+                            "IO_ERROR",
+                            f"short payload read for {target}")
+                    off += n
+        now = time.time()
+        for e in job["entries"]:
+            if (job["remap"] is None and identity_slice(e)
+                    and e["id"] in store.objects):
+                store.objects[e["id"]].protected = \
+                    bool(e.get("protected", False))
+        for target in job["targets"]:
+            store.objects[target].last_write = {
+                "by": f"restore:{job['snap_id']}", "t": now}
+        with st.lock:
+            st.restores[rid].update(
+                state="done", restored=job["targets"],
+                client_meta=job["client_meta"])
+        st.emit("restore_done", path=str(path),
+                n_restored=len(job["targets"]))
+    except ServiceError as e:
+        error = {"code": e.code, "message": str(e)}
+    except Exception as e:  # noqa: BLE001 — writer must survive
+        error = {"code": "IO_ERROR", "message": f"{type(e).__name__}: {e}"}
+    finally:
+        if error is not None:
+            store.rollback_created(job["created"])
+            with st.lock:
+                st.restores[rid].update(state="error", error=error)
+            st.emit("restore_error", restore_id=rid,
+                    error=error["message"])
+        with st.lock:
+            if rid in st.restores_in_flight:
+                st.restores_in_flight.remove(rid)
+        store.release_leases(job["lease_ids"])
+
+
 class SnapshotWriter(threading.Thread):
-    """Payload copies + snapshot.json writes, off the dispatcher.
-    Owns nothing but its job queue; catalog access is read-only views
-    of LEASED records (release/wipe/put on them are parked meanwhile).
-    Always releases the job's leases, success or failure."""
+    """The payload-IO thread: snapshot copies + snapshot.json writes
+    in one direction, restore verify + placement in the other — all
+    off the dispatcher. Owns nothing but its job queue."""
 
     def __init__(self, server):
         super().__init__(name="snapshot-writer", daemon=True)
@@ -232,64 +351,18 @@ class SnapshotWriter(threading.Thread):
             job = self.jobs.get()
             if job is None:
                 return
-            st, store = self.server.state, self.server.store
-            snap_id = job["snap_id"]
-            try:
-                dest = Path(job["dest"])
-                dest.mkdir(parents=True, exist_ok=True)
-                with open(dest / "payload.bin", "wb") as f:
-                    for e in job["entries"]:
-                        seg = e["payload"]
-                        rec = store.objects[e["id"]]
-                        mv = store.view(rec)[e["src"][0]:e["src"][1]]
-                        h = slice_hash()
-                        f.seek(seg["offset"])
-                        n = seg["size"]
-                        for off in range(0, n, CHUNK_BYTES):
-                            chunk = mv[off:min(off + CHUNK_BYTES, n)]
-                            f.write(chunk)
-                            h.update(chunk)
-                            with st.lock:
-                                st.snapshots[snap_id]["bytes_done"] += \
-                                    len(chunk)
-                        e["hash"] = h.hexdigest()
-                doc = {
-                    "schema": SNAPSHOT_SCHEMA,
-                    "service_schema": SCHEMA_VERSION,
-                    "snap_id": snap_id,
-                    "created_t": time.time(),
-                    "client_meta": job["client_meta"],
-                    "slices": job["entries"],
-                }
-                tmp = dest / "snapshot.json.tmp"
-                tmp.write_text(json.dumps(doc, indent=1))
-                tmp.rename(dest / "snapshot.json")
-                with st.lock:
-                    st.snapshots[snap_id]["state"] = "done"
-                    st.snapshots[snap_id]["slices"] = [
-                        {"id": e["id"], "logical_id": e["logical_id"],
-                         "dst": e["dst"], "hash": e["hash"]}
-                        for e in job["entries"]]
-                st.emit("snapshot_done", snap_id=snap_id,
-                        path=str(dest), bytes=job["bytes_total"])
-            except Exception as e:  # noqa: BLE001 — writer must survive
-                with st.lock:
-                    st.snapshots[snap_id]["state"] = "error"
-                    st.snapshots[snap_id]["error"] = \
-                        f"{type(e).__name__}: {e}"
-                st.emit("snapshot_error", snap_id=snap_id,
-                        error=f"{type(e).__name__}: {e}")
-            finally:
-                with st.lock:
-                    if snap_id in st.snapshots_in_flight:
-                        st.snapshots_in_flight.remove(snap_id)
-                store.release_leases(job["lease_ids"])
+            if job.get("kind") == "restore":
+                restore_job(self.server, job)
+            else:
+                snapshot_job(self.server, job)
 
 
 def install(server) -> None:
     store = server.store
     st = server.state
     st.snapshots = {}
+    st.restores = {}
+    st.restores_in_flight = []
     writer = SnapshotWriter(server)
     writer.start()
     server.snapshot_writer = writer
@@ -379,8 +452,8 @@ def install(server) -> None:
             validate_remap(remap)
         placements, required = resolve_placements(entries, remap)
 
-        # PASS 1 — validate every placement; nothing mutates yet
-        # (LEASED must precede any mutation: the park rule)
+        # ADMISSION PASS — validate every placement; nothing mutates
+        # yet (LEASED must precede any mutation: the park rule)
         with store.catalog_lock:
             for target, want in required.items():
                 rec = store.objects.get(target)
@@ -398,43 +471,54 @@ def install(server) -> None:
                         "COLLISION",
                         f"{target} resident; pass overwrite=True")
 
-        # PASS 2 — verify every payload hash; store still untouched
-        if verify:
-            verify_payload(path, entries)
+        # absent targets are created HERE (the dispatcher is the
+        # store's single writer); a failed restore rolls them back
+        created = []
+        for target, want in required.items():
+            if target not in store.objects:
+                store.put(target, None, size_bytes=want["size"],
+                          meta=want["meta"], writer="restore")
+                created.append(target)
+        rid = st.next_id("restore")
+        lease_ids = sorted(required)
+        try:
+            store.acquire_leases(lease_ids)
+        except Exception:
+            store.rollback_created(created)
+            raise
+        with st.lock:
+            st.restores_in_flight.append(rid)
+            st.restores[rid] = {
+                "restore_id": rid, "state": "restoring",
+                "path": str(path), "n_slices": len(entries),
+                "created_t": time.time(), "error": None,
+            }
+        try:
+            st.emit("restore_started", restore_id=rid, path=str(path),
+                    n_targets=len(required))
+        except Exception:
+            store.release_leases(lease_ids)
+            store.rollback_created(created)
+            raise
+        writer.submit({
+            "kind": "restore", "restore_id": rid,
+            "snap_id": snap.get("snap_id"), "path": str(path),
+            "entries": entries, "placements": placements,
+            "targets": sorted(required), "created": created,
+            "lease_ids": lease_ids, "verify": verify, "remap": remap,
+            "client_meta": snap.get("client_meta", {}),
+        })
+        return {"ok": True, "restore_id": rid}
 
-        # PASS 3 — place bytes, then identity metadata
-        restored = set()
-        with open(path / "payload.bin", "rb") as f:
-            for p in placements:
-                target = p["target"]
-                rec = store.objects.get(target)
-                if rec is None:
-                    want = required[target]
-                    rec = store.put(target, None,
-                                    size_bytes=want["size"],
-                                    meta=want["meta"], writer="restore")
-                mv = store.view(rec)
-                f.seek(p["file_offset"])
-                off = p["lo"]
-                while off < p["hi"]:
-                    n = f.readinto(mv[off:min(off + CHUNK_BYTES,
-                                              p["hi"])])
-                    if not n:
-                        raise ServiceError(
-                            "IO_ERROR", f"short payload read for {target}")
-                    off += n
-                rec.last_write = {"by": f"restore:{snap['snap_id']}",
-                                  "t": time.time()}
-                restored.add(target)
-        if remap is None:
-            for e in entries:
-                if identity_slice(e) and e["id"] in restored:
-                    rec = store.objects[e["id"]]
-                    rec.protected = bool(e.get("protected", False))
-        st.emit("restore_done", path=str(path), n_restored=len(restored))
-        return {"ok": True, "restored": sorted(restored),
-                "client_meta": snap.get("client_meta", {})}
+    # ------------------------------------------------ status (fast)
+    def restore_status(conn, args):
+        with st.lock:
+            rec = st.restores.get(args["restore_id"])
+            if rec is None:
+                raise ServiceError("UNKNOWN_RESTORE", args["restore_id"])
+            return dict(rec)
 
     server.dispatcher.handlers["snapshot"] = snapshot
     server.dispatcher.handlers["restore_snapshot"] = restore_snapshot
     server.fast_handlers["snapshot_status"] = snapshot_status
+    server.fast_handlers["restore_status"] = restore_status

@@ -305,16 +305,46 @@ class EngineClient:
             _t.sleep(poll)
 
     def restore_snapshot(self, path: str, *, overwrite=False,
-                         verify=True, remap=None, wait=True):
-        """Place a snapshot's slices back into the store. Hashes are
-        verified BEFORE any placement (``verify=False`` restores the
-        on-disk bytes unchecked). ``remap`` extracts logical ranges
-        into local objects instead of the default logical-named
-        placement: {logical_id: [{"logical": [c, d), "id": local_id,
-        "local": [x, y), "bytes": local_total}, ...]}."""
-        return self._call("restore_snapshot",
-                          {"path": str(path), "overwrite": overwrite,
-                           "verify": verify, "remap": remap}, wait=wait)
+                         verify=True, remap=None, block=True,
+                         wait=True):
+        """Place a snapshot's slices back into the store. Admission
+        validates every placement, creates absent targets and leases
+        them; the payload work (hash verify, then placement) runs on
+        the daemon's writer thread. ``block=True`` waits for
+        completion and returns the finished result (``restored`` ids
+        + ``client_meta``), re-raising the restore's error;
+        ``block=False`` returns the admission receipt whose
+        ``restore_id`` feeds ``restore_status``/``wait_restore``.
+        Hashes are verified BEFORE any placement (``verify=False``
+        restores the on-disk bytes unchecked). ``remap`` extracts
+        logical ranges into local objects instead of the default
+        logical-named placement: {logical_id: [{"logical": [c, d),
+        "id": local_id, "local": [x, y), "bytes": local_total}, ...]}."""
+        out = self._call("restore_snapshot",
+                         {"path": str(path), "overwrite": overwrite,
+                          "verify": verify, "remap": remap}, wait=wait)
+        if not wait or not block:
+            return out
+        return self.wait_restore(out["restore_id"])
+
+    def restore_status(self, restore_id: str):
+        return self._call("restore_status", {"restore_id": restore_id})
+
+    def wait_restore(self, restore_id: str, *, timeout=600.0, poll=0.05):
+        import time as _t
+
+        t0 = _t.monotonic()
+        while True:
+            s = self.restore_status(restore_id)
+            if s["state"] == "done":
+                return s
+            if s["state"] == "error":
+                err = s.get("error") or {}
+                raise ServiceError(err.get("code", "IO_ERROR"),
+                                   err.get("message", "restore failed"))
+            if _t.monotonic() - t0 > timeout:
+                raise TimeoutError(f"restore {restore_id} still running")
+            _t.sleep(poll)
 
     def register_program(self, program, *, resolver: dict,
                          name: str | None = None, wait=True):

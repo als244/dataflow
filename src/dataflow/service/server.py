@@ -406,6 +406,8 @@ class Server:
                          "connected_s": time.time() - s.connected_t}
                         for s in st.sessions.values()],
                     "snapshots_in_flight": list(st.snapshots_in_flight),
+                    "restores_in_flight": list(
+                        getattr(st, "restores_in_flight", ())),
                 }
 
         def session_status(conn, args):

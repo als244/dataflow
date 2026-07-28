@@ -9,7 +9,7 @@ distributed training layer drives it.
 
 ## The engine API
 
-Four verbs on `EngineClient`:
+The verbs on `EngineClient`:
 
 ```python
 out = client.snapshot(dest, slices=None,
@@ -17,6 +17,9 @@ out = client.snapshot(dest, slices=None,
 client.snapshot_status(snap_id)             # -> {"state", "bytes_done", ...}
 client.wait_snapshot(snap_id, timeout=...)  # poll until done/error
 client.restore_snapshot(path, overwrite=False, verify=True, remap=None)
+    # blocking by default; block=False -> {"restore_id": ...}
+client.restore_status(restore_id)
+client.wait_restore(restore_id, timeout=...)
 ```
 
 - `slices=None` saves every resident object whole. An explicit
@@ -118,7 +121,14 @@ training, which the leases already guarantee.
 `restore_snapshot(path, overwrite=True)` reads one snapshot and puts
 its slices back in three passes — validate every placement, verify
 every slice hash (`verify=False` opts out), then place — so any
-refusal leaves the store untouched. Identity slices overwrite (or
+refusal leaves the store untouched. Like snapshot, the payload work
+(verify + placement) runs on the writer thread behind leases on
+every target — a concurrent writer touching a target parks until
+the restore completes — while admission (validation, creation of
+absent targets, lease acquisition) stays on the dispatcher, so a
+large restore never freezes the daemon's other verbs. The blocking
+call returns the finished result; `block=False` returns a
+`restore_id` for `restore_status` / `wait_restore`. Identity slices overwrite (or
 create) their object whole; mapped slices land at `dst` in their
 logical object, creating it at `logical_bytes` if absent; an
 optional `remap` plan extracts logical ranges into local objects

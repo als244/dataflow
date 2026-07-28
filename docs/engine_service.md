@@ -168,12 +168,16 @@ plus `snapshot.json` (schema `dataflow-snapshot/v1`, written last as
 the completeness marker, one streaming blake2b-16 hash per slice)
 land at `dest`.
 `restore_snapshot` is three-pass — validate every placement, verify
-every slice hash (`verify=False` opts out), then place — so a
-refusal leaves the store untouched; identity slices recreate their
-stored objects exactly (metadata included), an optional `remap` plan
-extracts logical ranges into local objects instead, and your
-`client_meta` — whatever resume record the client stored — comes
-back in the same call.
+every slice hash (`verify=False` opts out), then place — with the
+payload work on the writer thread behind leases on every target
+(concurrent writers park; admission stays on the dispatcher), so a
+refusal leaves the store untouched and a large restore never
+freezes the daemon; identity slices recreate their stored objects
+exactly (metadata included), an optional `remap` plan extracts
+logical ranges into local objects instead, and your `client_meta` —
+whatever resume record the client stored — comes back in the same
+blocking call (`block=False` returns a `restore_id` for
+`restore_status` / `wait_restore`).
 
 ## The peer plane
 
