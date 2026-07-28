@@ -136,16 +136,29 @@ def fleet_loop(ranks, gspec, recipe, pipeline, steps, *, budgets, seed,
         if ck_record is not None:
             # RESUME: restore over the warm-up's mutated state (this
             # ordering makes the kernel warm-up harmless), then feed
-            # the START step's rounds. Restores the shared artifact
-            # (rank-0-deduped state, distributed to this host by the
-            # conductor) plus this rank's own artifact, if any.
-            from .checkpoint_record import artifacts_for_restore
+            # the START step's rounds. Under the simple policy each
+            # rank's snapshot is SELF-SUFFICIENT: one restore of its
+            # own snapshot brings back exactly its state, no
+            # cross-writer shipping.
+            policy = (ck_record.get("scheme") or {}).get(
+                "source_policy", "simple")
+            if policy != "simple":
+                raise RuntimeError(
+                    f"resume under the {policy!r} source policy goes "
+                    f"through the record loader "
+                    f"(checkpointing.load_checkpoint targets)")
+            from dataflow.checkpoint import resolve_targets
 
-            restored_step = None
             step_dir = Path(ck_record["_step_dir"])
-            for art in artifacts_for_restore(ck_record, i):
+            wanted = [o["id"]
+                      for o in rank.prog_dict["initial_objects"]
+                      if o.get("persistent")]
+            plan = resolve_targets(ck_record, {str(i): wanted})
+            restored_step = None
+            for restore in plan:
                 res = rank.client.restore_snapshot(
-                    str(step_dir / art), overwrite=True)
+                    str(step_dir / restore["path"]),
+                    remap=restore["remap"], overwrite=True)
                 restored_step = res["client_meta"]["step"]
             if restored_step != start_step:
                 raise RuntimeError(

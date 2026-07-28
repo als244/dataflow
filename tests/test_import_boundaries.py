@@ -15,12 +15,14 @@ are naturally fine):
   truth tree.
 - R2: modules under ``src/dataflow_training`` import ``dataflow`` only
   through its public surfaces: ``dataflow.core.*``,
-  ``dataflow.runtime.*`` (the ABIs), ``dataflow.service`` itself
+  ``dataflow.runtime.*`` (the ABIs), ``dataflow.checkpoint`` (the
+  record layer), ``dataflow.service`` itself
   (Server/EngineConfig/EngineClient for rigs), ``dataflow.service.client``,
   ``dataflow.service.registry`` (register_program_resolver), and
   ``dataflow.service.wire`` (ServiceError).
 - R3: files under ``tools/`` stay near package roots: ``dataflow``
-  itself, the ``dataflow.core``/``dataflow.runtime``/``dataflow.service``
+  itself, the ``dataflow.checkpoint``/``dataflow.core``/
+  ``dataflow.runtime``/``dataflow.service``
   subtrees, and ``dataflow_training`` at most two levels deep
   (``dataflow_training.x.y``) — deeper only inside
   ``dataflow_training.model_families`` (family packages) and
@@ -43,8 +45,8 @@ Tests:
 - test_runtime_never_imports_torch_or_sim: importing dataflow.runtime drags in none of torch/jax/dataflow_sim.
 - test_blocks_never_imports_sim: importing dataflow_training.blocks does not drag in dataflow_sim.
 - test_engine_never_imports_workload_or_twins: no module under src/dataflow imports dataflow_training or reference_models.
-- test_workload_uses_engine_public_surfaces_only: modules under src/dataflow_training reach dataflow only through the sanctioned core/runtime/service surfaces.
-- test_tools_stay_near_package_roots: files under tools/ import only the engine's three subtrees and dataflow_training at most two levels deep (deeper only under model_families/blocks).
+- test_workload_uses_engine_public_surfaces_only: modules under src/dataflow_training reach dataflow only through the sanctioned core/runtime/checkpoint/service surfaces.
+- test_tools_stay_near_package_roots: files under tools/ import only the engine's four subtrees and dataflow_training at most two levels deep (deeper only under model_families/blocks).
 - test_sim_required_only_under_lowering: a module-top-level dataflow_sim import appears only under dataflow_training.lowering; elsewhere in src/ it must be a lazy in-function import.
 """
 import ast
@@ -162,6 +164,7 @@ def test_engine_never_imports_workload_or_twins():
 
 
 R2_ALLOWED_SUBTREES = (
+    "dataflow.checkpoint",
     "dataflow.core",
     "dataflow.runtime",
     "dataflow.service.client",
@@ -190,7 +193,8 @@ def test_workload_uses_engine_public_surfaces_only():
 
 
 R3_DATAFLOW_EXACT = ("dataflow",)
-R3_DATAFLOW_SUBTREES = ("dataflow.core", "dataflow.runtime", "dataflow.service")
+R3_DATAFLOW_SUBTREES = ("dataflow.checkpoint", "dataflow.core",
+                        "dataflow.runtime", "dataflow.service")
 R3_TRAINING_DEEP_SUBTREES = (
     "dataflow_training.model_families",
     "dataflow_training.blocks",
@@ -210,7 +214,7 @@ def r3_allows(ref: str) -> bool:
 
 
 def test_tools_stay_near_package_roots():
-    """R3: tools import the engine's three subtrees and dataflow_training
+    """R3: tools import the engine's four subtrees and dataflow_training
     at most two levels deep (deeper only under model_families/blocks)."""
     offenders = [(path, lineno, ref)
                  for path, lineno, ref, top_level in scan_refs(TOOLS)

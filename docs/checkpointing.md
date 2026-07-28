@@ -161,40 +161,54 @@ client.snapshot(dest,
 
 ## The checkpoint record schema
 
-`checkpoint_record.json` (`read_record` refuses unknown formats
-loudly) is the one training-level file; everything else in a step
-directory is engine artifacts and program dumps. Annotated:
+`checkpoint_record.json` (`read_record` refuses foreign schemas
+loudly) is the one cross-writer file; everything else in a step
+directory is engine snapshots and program dumps. Annotated:
 
 ```jsonc
 {
-  "format": 2,
+  "schema": "dataflow-checkpoint/v1",
   "step": 420,                  // the step this state follows
   "seed": 11,
-  "world": 2,
-  "data_cursor": {...},         // pipeline position; resume restarts here
-  "losses": [...],              // per-step losses up to this checkpoint
-  "save_plan": {                // responsibility map: who saved what
-    "W_0": [{"rank": 0, "lo": 0, "hi": 1056512, "role": "responsible"},
-             {"rank": 1, "lo": 1056512, "hi": 2113024,
-              "role": "responsible"}]
+  "scheme": {...},              // OPAQUE caller scheme; training stores
+                                //   world, responsibility, source_policy
+  "logical_objects": {          // the record's namespace: named byte
+    "W_0": {"bytes": 2113024}   //   spans (+ field-schema digests)
   },
-  "artifacts": ["rank0", "rank1"],   // engine artifact dirs, rank order
+  "snapshots": [                // one engine snapshot per writer
+    {"path": "rank0", "writer": "0"}, {"path": "rank1", "writer": "1"}
+  ],
+  "slices": {                   // snapshot bytes -> logical bytes,
+    "W_0": [                    //   hashed, authoritative-flagged
+      {"snapshot": 0, "snapshot_range": [0, 2113024],
+       "object_range": [0, 2113024], "hash": "...",
+       "authoritative": true},
+      {"snapshot": 1, "snapshot_range": [0, 2113024],
+       "object_range": [0, 2113024], "hash": "..."}
+    ]
+  },
+  "engine_spec": {"0": {"backing_gib": 87.0}, ...},
+  "client_payload": {...},      // OPAQUE; training: losses, data cursor
   "launch": {
     "argv": [...],              // exact invocation
     "resolved": {"preset": ..., "seed": ..., "opt_shard": ...,
                   "world": ..., "rank_rounds": ..., "backend": ...},
     "data": {...},              // pipeline description
-    "git": {"rev": ..., "dirty": ...},
-    "env": {"torch": ..., "cuda": ..., "cudnn": ...},
+    "git": "...",
+    "env": {"torch": ..., "cuda": ...},
     "ranks": [{"host": "chicago", "device": 0}, ...],
     "programs": ["programs/rank0.json", ...]   // exact lowered programs
   }
 }
 ```
 
-`save_plan` is what restore trusts for reassembly; `launch` makes a
-checkpoint auditable and re-invocable without guessing; `losses` +
-`data_cursor` make the resumed curve continuous.
+The record is validated totally at write and at read: slices must
+union to each logical object's full span, overlapping bytes need an
+authoritative winner, identical-span copies must hash-equal (the
+replication drift certificate), and slice endpoints must land on
+element boundaries when field schemas are given. `launch` makes a
+checkpoint auditable and re-invocable without guessing; the client
+payload makes the resumed curve continuous.
 
 ## Resuming
 
@@ -228,9 +242,8 @@ slice-reassembly gates.
 
 There is deliberately one checkpoint format at every world size.
 A single-GPU run writes the same step directory with `world: 1`:
-one `rank0/` snapshot, a `save_plan` in which rank 0 owns every
-object whole, one program dump — and the same
-`read_record` / `artifacts_for_restore` / `restore_snapshot` path
+one `rank0/` snapshot whose slices cover every object whole, one
+program dump — and the same `read_record` / `load_checkpoint` path
 reads it back. Nothing about resume, validation, or the completeness
 marker is distributed-specific; the distributed composition below is
 the general case this degenerates from.
@@ -242,61 +255,67 @@ directory per saved step:
 
 ```
 checkpoints/<run_name>/step_000420/
-  rank0/  rank1/          one engine artifact per rank
+  rank0/  rank1/          one engine snapshot per rank
   programs/rankN.json     the exact lowered program each rank ran
   checkpoint_record.json  the checkpoint record — written LAST
 ```
 
 **Saving** (`save_checkpoint`, driven by the conductor at each
-checkpoint boundary)**.** Under partitioned optimizer responsibility each rank
-saves the parameter byte ranges it is responsible for plus its own
-optimizer shard; the record's `save_plan` is that map. Minimal form
-of what the training layer does at a step boundary:
+checkpoint boundary)**.** The configured source policy compiles the
+responsibility map into per-writer save sets — `simple` (the
+default) saves everything each writer holds, whole, for
+self-sufficient per-rank snapshots with writer 0 authoritative on
+replicated objects; `dedup` saves one copy of each replicated object
+as disjoint responsibility slices — and the composer fans out one
+snapshot per writer, waits for all of them, collects the per-slice
+hashes each daemon streamed, and runs the replication-drift
+certificate (identical-span copies must hash-equal; disagreement
+refuses the checkpoint naming both writers). Minimal form of what
+the training layer does at a step boundary:
 
 ```python
-ids, ranges = rank_save_args(save_plan, rank, own_objects=["O_0"])
-slices = [{"id": oid} if oid not in ranges
-          else {"id": oid, "src": list(ranges[oid])}
-          for oid in ids]
-out = client.snapshot(f"{step_dir}/rank{rank}", slices=slices,
-                      client_meta={"step": step, "rank": rank})
-# ... all ranks' copies overlap each other; then:
-client.wait_snapshot(out["snap_id"], timeout=600.0)
-write_record(step_dir, step=step, save_plan=save_plan,
-             artifacts=["rank0", "rank1"], ...)   # completeness marker
+logical, per_writer = compile_source_policy(
+    policy="simple", world=world, writer_specs=writer_specs,
+    plan=responsibility, opt_slices=opt_slices)
+save_checkpoint(writers, step_dir, step=step, seed=seed,
+                logical_objects=logical, scheme=scheme,
+                client_payload={"losses": losses})   # record LAST
 ```
 
-`checkpoint_record.json` is written only after every rank reports
-done, so its presence means the checkpoint is whole; it also carries
-the seed, world, data cursor, loss history, and a full launch record
-(argv, git and torch/cuda identity, per-rank host/device, program
-paths). Readers open it first — `read_record` refuses unknown
-formats loudly.
+`checkpoint_record.json` is written only after every writer reports
+done and the drift certificate passes, so its presence means the
+checkpoint is whole and certified; it also carries the seed, the
+opaque scheme and client payload (data cursor, loss history), and a
+full launch record (argv, git and torch/cuda identity, per-rank
+host/device, program paths). Readers open it first — `read_record`
+refuses foreign schemas loudly.
 
-**Restoring.** Each rank replays every artifact the record lists,
-**its own last**, so its own optimizer shard and ranges win any
-overlap; complete objects reassemble bitwise from the slices:
+**Restoring.** Targets resolve against the record into per-snapshot
+restore plans in the engine's remap shape — every requested byte
+sourced exactly once, authoritative slices preferred where coverage
+overlaps:
 
 ```python
-record = read_record(step_dir)
-for artifact in artifacts_for_restore(record, rank):
-    client.restore_snapshot(str(step_dir / artifact), overwrite=True)
+record, client = load_checkpoint(step_dir, targets=["W_0"])  # weights
+record, client = load_checkpoint(step_dir, targets="all")    # logical
+record, client = load_checkpoint(step_dir,
+                                 targets={"1": ["W_0", "O_0"]})  # rank
 ```
 
-For programmatic consumers there is a one-call form:
-`load_checkpoint(step_dir, ...)` returns the record and a client
-holding the restored objects (a scratch engine when none is passed).
-Two views: `rank=r` restores exactly the state that rank held when
-the checkpoint was written — full weights plus its optimizer shard,
-the same artifact order resume feeds it; the default aggregate view
-reassembles full weights from every rank's ranges, and since
-optimizer state is rank-partitioned at world>1 it requires
-`include_opt=False` there (the evaluation case). The checkpoint
-evaluation tool is exactly this helper plus a forward pass.
+A weights-only load simply targets the parameter objects — optimizer
+bytes never enter the store, so there is nothing to release. The
+logical view (`"all"`, or bare id lists) reassembles complete
+objects from every writer's slices; a writer key restores that
+rank's own view, with logical slices remapped into its local shard
+geometry. Resume under the simple policy is the keyed form against
+the rank's own snapshot — self-sufficient, no cross-writer bytes.
+The checkpoint evaluation tool is exactly the weights-only helper
+plus a forward pass.
 
-Cross-box runs add one move: artifacts stay on the box that wrote
-them until resume, when the conductor pulls each writer's artifacts
-and fans the completed step directory out to every member.
+Cross-box runs add one move: snapshots stay on the box that wrote
+them until a resume needs foreign slices (a remapped topology, or a
+logical load of another box's shards), when the conductor pulls and
+fans them out.
 
 **From the training tool** all of this is two flags:
 

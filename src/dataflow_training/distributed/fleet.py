@@ -14,8 +14,8 @@ The machinery lives in single-purpose components; import from here:
     ../run/checkpointing.py checkpoint save / resume orchestration
     sharding.py         layout-geometry shard math (unchanged)
     responsibility.py   who steps, saves (the save-plan derivation)
-    ../run/checkpoint_record.py the per-checkpoint record (v2):
-                        contents + save plan + launch provenance
+    ../run/checkpoint_record.py launch provenance for the record
+                        (the record itself is dataflow.checkpoint)
 """
 from ..run.checkpointing import (  # noqa: F401
     save_checkpoint,

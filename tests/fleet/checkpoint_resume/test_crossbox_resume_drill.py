@@ -91,15 +91,17 @@ def test_crossbox_zero1rs_resume_matches_uninterrupted_tail(tmp_path,
                            STEPS, launch_argv=["unit", "crossbox-drill"],
                            resume="auto", **common)
 
-    # high-level loader over the distributed step dir (artifacts were
+    # high-level loader over the distributed step dir (snapshots were
     # pulled to the conductor box at resume): rank views agree on the
-    # replicated weights; aggregate weight view matches them
+    # replicated weights; the logical view matches them
     from dataflow_training.run.checkpointing import load_checkpoint
 
     step_dir = manifests[-1].parent
-    r0rec, c0 = load_checkpoint(step_dir, rank=0, include_opt=True)
-    r1rec, c1 = load_checkpoint(step_dir, rank=1, include_opt=True)
-    agg_rec, ca = load_checkpoint(step_dir)
+    r0rec, c0 = load_checkpoint(step_dir,
+                                targets={"0": ["W_0", "O_0"]})
+    r1rec, c1 = load_checkpoint(step_dir,
+                                targets={"1": ["W_0", "O_0"]})
+    agg_rec, ca = load_checkpoint(step_dir, targets="all")
     w0 = bytes(c0.get_object("W_0"))
     assert w0 == bytes(c1.get_object("W_0")) == bytes(ca.get_object("W_0"))
     for c in (c0, c1, ca):

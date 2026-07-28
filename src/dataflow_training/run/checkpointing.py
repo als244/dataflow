@@ -1,20 +1,33 @@
-"""Fleet checkpointing: checkpoint-record (v2) write/resume orchestration —
-responsibility-driven ranged saves, artifact distribution, ordered
-restore. Split from the conductor (fleet.py) at phase close; fleet
-re-exports these names."""
+"""Fleet checkpointing: the training layer's orchestration over the
+checkpoint record — WHEN to save, policy compilation, snapshot
+distribution, resume location — with all byte- and record-level work
+delegated to ``dataflow.checkpoint``.
+
+Saving compiles the configured source policy (``simple`` by default:
+every writer saves everything it holds, self-sufficient per-rank
+snapshots; ``dedup`` opt-in: one copy of each replicated object as
+disjoint responsibility slices) and hands the writers to the
+composer, which fans out snapshots, runs the replication-drift
+certificate over the streamed hashes, and lands
+``checkpoint_record.json`` atomically LAST — the completeness marker.
+
+Loading resolves targets against the record: a rank's own view for
+resume, the logical view for evaluation and inspection. Weights-only
+loads simply target the parameter objects — optimizer bytes never
+enter the store, there is nothing to release afterwards.
+"""
 from pathlib import Path
 
 from ..distributed.hosts import repo_path, run_on
 
+
 def resolve_resume(run_dir: Path, resume: str, log) -> dict:
     """Locate the resume checkpoint record. ``resume`` is a step
     directory path or "auto" (newest COMPLETE checkpoint wins —
-    checkpoint_record.json is written LAST by the conductor, so its presence is
-    the completeness marker; a crash mid-snapshot leaves no marker
-    and auto skips that step)."""
-    import json
-
-    from .checkpoint_record import read_record
+    checkpoint_record.json is written LAST by the composer, so its
+    presence is the completeness marker; a crash mid-snapshot leaves
+    no marker and auto skips that step)."""
+    from dataflow.checkpoint import read_record
 
     if resume != "auto":
         record = read_record(Path(resume))
@@ -32,10 +45,10 @@ def resolve_resume(run_dir: Path, resume: str, log) -> dict:
 
 
 def push_dir(host, src_dir: str, dest_dir: str) -> None:
-    """Ship a checkpoint artifact directory to a remote host (scp -r;
-    local hosts are a no-op — the artifact is already there).
-    ``dest_dir`` may be repo-relative; it lands under the host's
-    repo, mirroring how the daemon resolves it at restore."""
+    """Ship a snapshot directory to a remote host (scp -r; local
+    hosts are a no-op). ``dest_dir`` may be repo-relative; it lands
+    under the host's repo, mirroring how the daemon resolves it at
+    restore."""
     import subprocess
 
     if host.is_local():
@@ -47,34 +60,36 @@ def push_dir(host, src_dir: str, dest_dir: str) -> None:
 
 
 def distribute_artifacts(record: dict, hosts, log) -> None:
-    """Make EVERY rank artifact locally available on every resuming
-    host (each rank replays all artifacts — parameter ranges compose
-    across them). Same path layout on every host; hosts that already
-    hold an artifact (its writer, or a same-box peer) skip the push."""
+    """Make every writer snapshot locally available on every resuming
+    host. Under the simple policy a same-mapping resume never needs
+    this — each rank's snapshot is already on its box — so hosts that
+    hold a snapshot skip the push; the function earns its keep on
+    REMAPPED resumes and logical loads of another box's shards."""
     import subprocess
 
     step_dir = Path(record["_step_dir"])
     by_name = {h.name: h for h in hosts}
-    writers = [r["host"] for r in record["launch"]["ranks"]]
-    for i, art in enumerate(record["artifacts"]):
-        src = step_dir / art
+    writer_hosts = [r["host"] for r in record["launch"]["ranks"]]
+    for i, snap in enumerate(record["snapshots"]):
+        src = step_dir / snap["path"]
         if not src.is_dir():
             # written on a REMOTE rank's box — pull it to the
-            # conductor first (the record names each writer host)
-            writer = by_name.get(writers[i])
+            # conductor first (the launch names each writer host)
+            writer = by_name.get(writer_hosts[i])
             if writer is None or writer.is_local():
                 raise RuntimeError(
-                    f"checkpoint artifact missing at {src} and its "
-                    f"writer {writers[i]!r} is not reachable")
+                    f"snapshot {snap['path']} missing at {src} and "
+                    f"its writer {writer_hosts[i]!r} is not reachable")
             subprocess.run(
                 ["scp", "-q", "-r",
                  f"{writer.ssh}:{repo_path(writer, str(src))}",
                  str(step_dir)], check=True)
-            log(f"[fleet] artifact {art} pulled from {writer.name}")
+            log(f"[fleet] snapshot {snap['path']} pulled from "
+                f"{writer.name}")
             if not src.is_dir():
                 raise RuntimeError(
-                    f"artifact {art} unavailable after pull from "
-                    f"{writer.name}")
+                    f"snapshot {snap['path']} unavailable after pull "
+                    f"from {writer.name}")
         for host in hosts:
             if host.is_local():
                 continue
@@ -82,55 +97,47 @@ def distribute_artifacts(record: dict, hosts, log) -> None:
                                  f"&& echo yes || echo no").strip()
             if probe != "yes":
                 push_dir(host, str(src), str(step_dir))
-                log(f"[fleet] artifact {art} -> {host.name}")
+                log(f"[fleet] snapshot {snap['path']} -> {host.name}")
+
+
+def persisted_writer_specs(ranks) -> dict:
+    """{writer_index: [(id, size_bytes), ...]} — each rank's
+    persistent objects at its resident sizes, read off the marker in
+    its serialized program."""
+    specs = {}
+    for i, rank in enumerate(ranks):
+        specs[i] = [(o["id"], int(o["size_bytes"]))
+                    for o in rank.prog_dict["initial_objects"]
+                    if o.get("persistent")]
+    return specs
 
 
 def save_checkpoint(ranks, ck: dict, step_next: int, meta: dict,
-                     losses_so_far: list, log) -> None:
-    """Conductor-driven checkpoint at a step boundary. CONTRACT:
-
-    Inputs: the conductor's checkpoint config dict ``ck`` (dir/run
-    name, the responsibility save plan, launch argv + resolved
-    settings, data description, hosts), the live ``ranks``
-    (RankState: client + persist_ids + program), the 0-indexed step
-    just completed, the loss history, and run meta (seed, world,
-    rank_rounds, backend, data cursor). Effects: each rank snapshots
-    ITS save-plan slice (param byte ranges it is responsible for +
-    its own optimizer shard) beside per-rank program dumps, and
-    ``checkpoint_record.json`` is written LAST as the completeness
-    marker. The step directory then satisfies load_checkpoint's
-    input contract on any box holding it."""
+                    losses_so_far: list, log) -> None:
+    """Conductor-driven checkpoint at a step boundary: compile the
+    source policy, hand the writers to the composer, prune old
+    steps. The record lands LAST or not at all."""
     import os
 
-    from .checkpoint_record import launch_record, save_programs, write_record
-    from ..distributed.responsibility import rank_save_args
+    from dataflow.checkpoint import save_checkpoint as compose_checkpoint
+    from ..distributed.source_policy import compile_source_policy
+    from .checkpoint_record import launch_record, save_programs
 
     step_dir = ck["dir"] / f"step_{step_next:06d}"
-    os.makedirs(step_dir, exist_ok=True)   # conductor side (checkpoint_record.json)
-    plan = ck["responsibility"]
-    snaps = []
+    os.makedirs(step_dir, exist_ok=True)
+    policy = ck.get("source_policy") or "simple"
+    logical, per_writer = compile_source_policy(
+        policy=policy, world=len(ranks),
+        writer_specs=persisted_writer_specs(ranks),
+        plan=ck["responsibility"], opt_slices=ck.get("opt_slices"))
+    writers = {}
     for i, rank in enumerate(ranks):
-        persist = set(rank.persist_ids)
-        own = sorted(oid for oid in persist if oid.startswith("O_"))
-        ids, ranges = rank_save_args(plan, i, own_objects=own)
-        ids = [oid for oid in ids if oid in persist]
-        ranges = {oid: rng for oid, rng in ranges.items()
-                  if oid in persist}
-        dest = str(step_dir / f"rank{i}")
-        slices = [{"id": oid} if oid not in ranges
-                  else {"id": oid, "src": [int(ranges[oid][0]),
-                                           int(ranges[oid][1])]}
-                  for oid in ids]
-        out = rank.client.snapshot(
-            dest, slices=slices,
-            client_meta={"step": step_next, "rank": i, **meta})
-        snaps.append((rank, out["snap_id"]))
-    for rank, snap_id in snaps:
-        s = rank.client.wait_snapshot(snap_id, timeout=600.0)
-        if s["state"] != "done":
-            raise RuntimeError(f"{rank.name} snapshot failed: {s}")
-    progs = save_programs(step_dir,
-                          [rank.prog_dict for rank in ranks])
+        writers[i] = {"client": rank.client, "path": f"rank{i}",
+                      "slices": per_writer[i]["slices"],
+                      "record": per_writer[i]["record"],
+                      "client_meta": {"step": step_next, "rank": i,
+                                      **meta}}
+    progs = save_programs(step_dir, [r.prog_dict for r in ranks])
     launch = launch_record(
         argv=ck.get("argv"),
         resolved=dict(ck.get("resolved") or {},
@@ -143,13 +150,19 @@ def save_checkpoint(ranks, ck: dict, step_next: int, meta: dict,
                 "device": ck["hosts_by_name"][r.name].device}
                for r in ranks],
         repo=Path.cwd(), programs=progs)
-    write_record(step_dir, step=step_next, seed=meta["seed"],
-                   world=len(ranks), data_cursor=meta.get("data_cursor"),
-                   losses=losses_so_far, save_plan=plan,
-                   artifacts=[f"rank{i}" for i in range(len(ranks))],
-                   launch=launch)
+    compose_checkpoint(
+        writers, step_dir, step=step_next, seed=meta["seed"],
+        logical_objects=logical,
+        scheme={"world": len(ranks),
+                "responsibility": ck["responsibility"],
+                "rank_rounds": meta.get("rank_rounds"),
+                "source_policy": policy},
+        client_payload={"losses": list(losses_so_far),
+                        "data_cursor": meta.get("data_cursor"),
+                        "seed": meta["seed"]},
+        launch=launch)
     log(f"[fleet] checkpoint @ step {step_next} -> {step_dir} "
-        f"(v2, {len(ranks)} artifact(s))")
+        f"({policy}, {len(ranks)} snapshot(s))")
     keep = ck.get("keep_last", 0)
     if keep > 0:
         import shutil
@@ -165,53 +178,23 @@ def save_checkpoint(ranks, ck: dict, step_next: int, meta: dict,
             log(f"[fleet] pruned checkpoint {old_dir.name}")
 
 
+def load_checkpoint(step_dir, *, targets, client=None,
+                    backing_gib: float = 1.0):
+    """Restore a checkpoint's TARGETS into an engine and return
+    ``(record, client)``.
 
+    ``targets`` is anything the record resolver takes: ``"all"`` for
+    the logical view (complete objects reassembled from every
+    writer's slices), a list of ids for a subset — weights-only
+    evaluation simply targets the parameter objects, so optimizer
+    bytes never enter the store — or ``{writer_key: ids-or-Program}``
+    for a rank's own view. ``client=None`` boots a scratch in-process
+    fake engine sized by ``backing_gib``."""
+    from dataflow.checkpoint import read_record, resolve_targets
 
-def load_checkpoint(step_dir, *, rank=None, client=None,
-                    include_opt: bool = False, backing_gib: float = 1.0):
-    """HIGH-LEVEL restore. CONTRACT:
-
-    Inputs:
-    - ``step_dir``: a checkpoint step directory containing
-      ``checkpoint_record.json`` (raises loudly otherwise) and every
-      artifact the record lists, locally readable.
-    - ``rank``: None for the AGGREGATE view, or an int in
-      [0, record world) for the RANK view.
-    - ``client``: an EngineClient to restore into; None boots a
-      scratch in-process fake engine sized by ``backing_gib``.
-    - ``include_opt``: also load optimizer state (default False —
-      evaluation/inspection). Orthogonal to the view choice.
-    Returns ``(record, client)``.
-
-    RANK VIEW (``rank=r``): exactly the state rank r held when the
-    checkpoint was written, restored in the same artifact order
-    resume feeds that rank. What that state IS follows the scheme
-    that saved it: full replicated weights + r's optimizer shard
-    under today's data-parallel schemes; under future partitioning
-    schemes (tensor/expert), r's weight SHARDS — this function
-    promises "r's objects", never "full weights".
-
-    AGGREGATE VIEW (``rank=None``): complete objects reassembled
-    from every rank's saved ranges. ``include_opt=True`` here is
-    honored when the optimizer state is aggregatable (world 1, or
-    co-replicated saves); with rank-partitioned optimizer shards it
-    raises — per-rank shard objects share ids, so no aggregate
-    exists; use a rank view for optimizer state."""
-    from pathlib import Path as _Path
-
-    from .checkpoint_record import artifacts_for_restore, read_record
-
-    step_dir = _Path(step_dir)
+    step_dir = Path(step_dir)
     record = read_record(step_dir)
-    if rank is None and include_opt and record["world"] > 1:
-        partitioned = any(
-            len(entries) > 1
-            for entries in record.get("save_plan", {}).values())
-        if partitioned:
-            raise ValueError(
-                "no aggregate exists for rank-partitioned optimizer "
-                "shards (per-rank objects share ids): use a rank "
-                "view for optimizer state, or include_opt=False")
+    plan = resolve_targets(record, targets)
     if client is None:
         import tempfile
         import threading
@@ -219,10 +202,11 @@ def load_checkpoint(step_dir, *, rank=None, client=None,
 
         from dataflow.service import EngineClient, EngineConfig, Server
 
-        sock = str(_Path(tempfile.mkdtemp()) / "ckload.sock")
+        sock = str(Path(tempfile.mkdtemp()) / "ckload.sock")
         server = Server(EngineConfig(socket_path=sock, fake=True,
                                      slab_backing_gib=backing_gib))
-        threading.Thread(target=server.serve_forever, daemon=True).start()
+        threading.Thread(target=server.serve_forever,
+                         daemon=True).start()
         for _ in range(600):
             try:
                 EngineClient(sock, client_name="probe").close()
@@ -230,15 +214,7 @@ def load_checkpoint(step_dir, *, rank=None, client=None,
             except OSError:
                 time.sleep(0.01)
         client = EngineClient(sock, client_name="ckload")
-    ranks = [rank] if rank is not None else list(range(record["world"]))
-    for r in ranks:
-        for art in artifacts_for_restore(record, r):
-            client.restore_snapshot(str(step_dir / art), overwrite=True)
-    if not include_opt:
-        for oid in record.get("save_plan", {}):
-            if oid.startswith("O_"):
-                try:
-                    client.release_object(oid, force=True)
-                except Exception:
-                    pass
+    for step in plan:
+        client.restore_snapshot(str(step_dir / step["path"]),
+                                remap=step["remap"], overwrite=True)
     return record, client

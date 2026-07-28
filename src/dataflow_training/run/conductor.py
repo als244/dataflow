@@ -114,6 +114,7 @@ def run(global_cfg, recipe: Recipe, pipeline, steps: int, *,
         checkpoint_dir: str = "results/pretrain/checkpoints",
         checkpoint_redundancy: int = 1,
         checkpoint_keep_last: int = 0,
+        source_policy: str = "simple",
         run_name: str = "run",
         resume: str | None = None,
         prof_dir: str = "results/pretrain/logs") -> RunResult:
@@ -205,20 +206,24 @@ def run(global_cfg, recipe: Recipe, pipeline, steps: int, *,
 
         from ..distributed.responsibility import responsibility_map
 
+        shard_params = None
         if world == 1:
             resp = responsibility_map(global_cfg, 1)
         elif opt_shard == "zero1rs":
             fam0 = resolve_family(global_cfg)
             dims0, _ = fam0.family_layouts(global_cfg)
+            shard_params = zero1rs_block_params(
+                layer_fields_by_root(global_cfg), dims0, world)
             resp = responsibility_map(
                 global_cfg, world, mode="zero1rs",
-                shard_params=zero1rs_block_params(
-                    layer_fields_by_root(global_cfg), dims0, world))
+                shard_params=shard_params)
         else:
             resp = responsibility_map(global_cfg, world, mode="co")
         ck = {"every": int(checkpoint_every),
               "dir": Path(checkpoint_dir) / run_name, "run": run_name,
               "responsibility": resp,
+              "opt_slices": shard_params,
+              "source_policy": source_policy,
               "argv": launch_argv,
               "resolved": {"preset": getattr(global_cfg, "preset", None),
                            "seed": seed,
@@ -234,7 +239,7 @@ def run(global_cfg, recipe: Recipe, pipeline, steps: int, *,
             Path(checkpoint_dir) / run_name, resume, log)
         distribute_artifacts(ck_record, hosts, log)
         resolved = ck_record["launch"]["resolved"]
-        expect = {"world": (ck_record["world"], world),
+        expect = {"world": (ck_record["scheme"].get("world"), world),
                   "seed": (ck_record["seed"], seed),
                   "rank_rounds": (resolved.get("rank_rounds"),
                                   [len(m) for m in round_map]),

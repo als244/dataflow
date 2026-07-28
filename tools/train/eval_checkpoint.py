@@ -30,14 +30,23 @@ CKPTS = _ROOT / "results" / "pretrain" / "checkpoints"
 
 class CheckpointPayload:
     """get_bytes over a checkpoint step directory, via the high-level
-    load_checkpoint helper (scratch engine, optimizer state skipped —
-    evaluation only needs weights)."""
+    load_checkpoint helper (scratch engine). Evaluation only needs
+    weights, so the targets are the persistent PARAMETER objects read
+    off the checkpoint's own saved program — optimizer bytes never
+    enter the store."""
 
     def __init__(self, ckpt_dir: Path):
+        from dataflow.checkpoint import read_record
         from dataflow_training.run.checkpointing import load_checkpoint
 
+        record = read_record(ckpt_dir)
+        prog_rel = record["launch"]["programs"][0]
+        prog = json.loads((Path(ckpt_dir) / prog_rel).read_text())
+        weight_ids = [o["id"] for o in prog["initial_objects"]
+                      if o.get("persistent")
+                      and o.get("role") == "parameter"]
         record, self.client = load_checkpoint(ckpt_dir,
-                                              include_opt=False)
+                                              targets=weight_ids)
         self.step = int(record["step"])
 
     def __call__(self, oid: str) -> "torch.Tensor":

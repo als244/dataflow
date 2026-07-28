@@ -51,7 +51,7 @@ def responsibility_map(cfg, world: int, *, mode: str = "zero1rs",
     sizes = _root_sizes(cfg)
     roots = sorted(sizes)
     if world == 1:
-        # O objects ride their owner's artifact wholesale (rank_save_args)
+        # O objects ride their owner's snapshot wholesale
         return {root: [_full(0, sizes[root])] for root in roots}
     if mode == "zero1rs":
         if not shard_params:
@@ -92,21 +92,3 @@ def responsibility_map(cfg, world: int, *, mode: str = "zero1rs",
     raise ValueError(f"unknown responsibility mode {mode!r}")
 
 
-def rank_save_args(plan: dict, rank: int, own_objects) -> tuple:
-    """What THIS rank snapshots: (ids, ranges). Param ranges come from
-    the plan; the rank's own per-rank objects (its O shards, listed in
-    ``own_objects``) ride wholesale."""
-    ids, ranges = [], {}
-    for oid, entries in plan.items():
-        size = max(e["hi"] for e in entries)
-        for e in entries:
-            if e["rank"] == rank and e["role"] == "responsible":
-                ids.append(oid)
-                if not (e["lo"] == 0 and e["hi"] == size):
-                    # partial responsibility -> ranged save; full-object
-                    # responsibility snapshots whole (dedup-eligible)
-                    ranges[oid] = (e["lo"], e["hi"])
-    for oid in own_objects:
-        if oid not in ids:
-            ids.append(oid)
-    return sorted(ids), ranges

@@ -1,34 +1,55 @@
-"""Checkpoint-record (v2) gates (CPU, fake engines): the end-to-end checkpoint
-shape without the conductor — two daemons save per a zero1rs-shaped
-responsibility plan (ranged params + whole own shards), the record
-writes LAST, and restore-by-artifact-order reassembles every object
-BITWISE on a fresh daemon pair. Plus: format guard (loud on v1/absent),
-completeness marker (no checkpoint_record.json = no checkpoint), launch record
-round-trip, programs saved beside artifacts.
+"""Conductor-shaped checkpoint flow over the record: the training
+save path compiles its policy and lands checkpoint_record.json LAST;
+resume locates the newest COMPLETE step and each rank restores its
+own self-sufficient snapshot; the loader resolves targets — including
+the weights-only load, where optimizer bytes never enter the store.
+CPU-only (fake engines).
 
 Tests:
-- test_checkpoint_record_v2_roundtrip_two_ranks: two daemons save a zero1rs-shaped plan, the record refuses reads until it is written last, and a fresh pair restores by artifact order to bitwise-identical objects with rank and aggregate loader views agreeing.
-- test_format_guard_is_loud: read_record raises on a record missing the v2 format field.
+- test_conductor_save_resume_round_trip: the conductor save path writes a v1 record; resolve_resume(auto) picks the newest complete step and skips a step dir without a record; each rank's own-snapshot restore is bitwise and reports the saved step.
+- test_load_checkpoint_targets: weights-only targets leave ZERO optimizer bytes resident; "all" reassembles the aggregate optimizer object; a writer key restores that rank's shard view.
 """
 import threading
 import time
+from dataclasses import dataclass, field
 
-import pytest
+import numpy as np
 
-np = pytest.importorskip("numpy")
-
+from dataflow.checkpoint import RECORD_NAME
+from dataflow.core.jsonio import program_to_dict
+from dataflow.core.program import ObjectSpec, Program
 from dataflow.service import EngineClient, EngineConfig, Server
-from dataflow_training.run.checkpoint_record import (
-    artifacts_for_restore,
-    launch_record,
-    read_record,
-    save_programs,
-    write_record,
-)
-from dataflow_training.distributed.responsibility import rank_save_args
+from dataflow_training.run.checkpointing import (load_checkpoint,
+                                                 resolve_resume,
+                                                 save_checkpoint)
 
-N = 1 << 18                      # 256 KiB params
-O_N = N // 2                     # per-rank opt shard
+W_BYTES = 8192
+N_ELEMS = 512
+O_LOCAL = 2 * N_ELEMS * 4
+OPT_SLICES = {"W_0": {"n_slice": N_ELEMS, "n_tail": 0,
+                      "opt_dtype": "fp32"}}
+PLAN = {"W_0": [
+    {"rank": 0, "lo": 0, "hi": W_BYTES // 2, "role": "responsible"},
+    {"rank": 1, "lo": W_BYTES // 2, "hi": W_BYTES,
+     "role": "responsible"},
+]}
+
+
+@dataclass
+class StubHost:
+    name: str
+    device: int = 0
+
+    def is_local(self) -> bool:
+        return True
+
+
+@dataclass
+class StubRank:
+    name: str
+    client: object
+    prog_dict: dict
+    persist_ids: list = field(default_factory=list)
 
 
 def boot(tmp, name):
@@ -45,112 +66,129 @@ def boot(tmp, name):
     return server, EngineClient(sock, client_name=name)
 
 
-def wait_snap(client, out):
-    for _ in range(600):
-        s = client.snapshot_status(out["snap_id"])
-        if s["state"] == "done":
-            return
-        if s["state"] == "error":
-            raise AssertionError(s)
-        time.sleep(0.01)
-    raise AssertionError("snapshot timeout")
+def rng_bytes(seed, n):
+    rng = np.random.default_rng(seed)
+    return rng.integers(0, 256, n, dtype=np.uint8).tobytes()
 
 
-def test_checkpoint_record_v2_roundtrip_two_ranks(tmp_path):
-    rng = np.random.default_rng(3)
-    w = rng.integers(0, 256, N, dtype=np.uint8).tobytes()
-    o0 = rng.integers(0, 256, O_N, dtype=np.uint8).tobytes()
-    o1 = rng.integers(0, 256, O_N, dtype=np.uint8).tobytes()
+def rank_program() -> dict:
+    return program_to_dict(Program(
+        name="drill",
+        initial_objects=(
+            ObjectSpec("W_0", W_BYTES, persistent=True),
+            ObjectSpec("O_0", O_LOCAL, persistent=True),
+            ObjectSpec("tokens_0_0", 128, role="input"),
+        )))
 
-    # zero1rs-shaped plan: W partitioned at the halfway boundary,
-    # each rank's O shard its own (same object id, different bytes —
-    # per-rank stores, exactly the zero1rs situation)
-    plan = {"W_0": [
-        {"rank": 0, "lo": 0, "hi": N // 2, "role": "responsible"},
-        {"rank": 1, "lo": N // 2, "hi": N, "role": "responsible"},
-    ]}
-    step_dir = tmp_path / "step_000004"
-    step_dir.mkdir()
 
+def fleet(tmp_path, w, o):
     daemons = []
-    for r, o_bytes in ((0, o0), (1, o1)):
-        server, c = boot(tmp_path, f"m2-r{r}")
-        daemons.append((server, c))
-        c.put_object("W_0", w)
-        c.put_object("O_0", o_bytes)
-        ids, ranges = rank_save_args(plan, r, own_objects=["O_0"])
-        assert ids == ["O_0", "W_0"]
-        assert ("W_0" in ranges) and ("O_0" not in ranges)
-        slices = [{"id": oid} if oid not in ranges
-                  else {"id": oid, "src": [int(ranges[oid][0]),
-                                           int(ranges[oid][1])]}
-                  for oid in ids]
-        wait_snap(c, c.snapshot(str(step_dir / f"rank{r}"),
-                                slices=slices,
-                                client_meta={"rank": r, "step": 4}))
+    ranks = []
+    for r in (0, 1):
+        server, client = boot(tmp_path, f"r{r}")
+        daemons.append((server, client))
+        client.put_object("W_0", w)
+        client.put_object("O_0", o[r])
+        ranks.append(StubRank(name=f"host{r}", client=client,
+                              prog_dict=rank_program(),
+                              persist_ids=["O_0", "W_0"]))
+    ck = {"dir": tmp_path / "run", "run": "drill",
+          "responsibility": PLAN, "opt_slices": OPT_SLICES,
+          "source_policy": "simple", "keep_last": 0,
+          "argv": ["train.py"], "resolved": {"preset": "drill"},
+          "data_meta": {},
+          "hosts_by_name": {f"host{r}": StubHost(f"host{r}")
+                            for r in (0, 1)}}
+    return daemons, ranks, ck
 
-    progs = save_programs(step_dir, [{"tasks": ["t0"]}, {"tasks": ["t1"]}])
-    launch = launch_record(argv=["train.py", "train"],
-                           resolved={"preset": "unit", "world": 2},
-                           data={"scheme": "unit"},
-                           ranks=[{"host": "local", "device": 0},
-                                  {"host": "local", "device": 0}],
-                           repo=tmp_path, programs=progs)
-    # completeness marker: BEFORE checkpoint_record.json, read must refuse
-    with pytest.raises(RuntimeError):
-        read_record(step_dir)
-    write_record(step_dir, step=4, seed=11, world=2,
-                   data_cursor={"doc": 9}, losses=[5.0, 4.0],
-                   save_plan=plan, artifacts=["rank0", "rank1"],
-                   launch=launch)
-    m = read_record(step_dir)
-    assert m["format"] == 2
-    assert m["data_cursor"] == {"doc": 9}
-    assert m["launch"]["argv"] == ["train.py", "train"]
-    assert m["launch"]["programs"] == ["programs/rank0.json",
-                                       "programs/rank1.json"]
-    assert (step_dir / "programs" / "rank1.json").is_file()
 
-    # fresh pair restores by artifact order -> bitwise reassembly
-    for r, want_o in ((0, o0), (1, o1)):
-        server, c = boot(tmp_path, f"m2-fresh{r}")
-        daemons.append((server, c))
-        for art in artifacts_for_restore(m, r):
-            c.restore_snapshot(str(step_dir / art), overwrite=True)
-        assert bytes(c.get_object("W_0")) == w, f"rank {r} W diverged"
-        assert bytes(c.get_object("O_0")) == want_o, \
-            f"rank {r} O shard clobbered"
+def quiet(_msg):
+    return None
 
-    # high-level loader: rank view == that rank's checkpointed state
-    from dataflow_training.run.checkpointing import load_checkpoint
 
-    for r, want_o in ((0, o0), (1, o1)):
-        rec2, lc = load_checkpoint(step_dir, rank=r, include_opt=True)
-        assert bytes(lc.get_object("W_0")) == w
-        assert bytes(lc.get_object("O_0")) == want_o
-        lc.shutdown()
-        rec2b, lcb = load_checkpoint(step_dir, rank=r)  # opt off default
-        assert bytes(lcb.get_object("W_0")) == w
-        lcb.shutdown()
-    # aggregate: weights reassemble; partitioned opt has no aggregate
-    rec3, lc = load_checkpoint(step_dir)
-    assert bytes(lc.get_object("W_0")) == w
-    lc.shutdown()
-    with pytest.raises(ValueError, match="no aggregate"):
-        load_checkpoint(step_dir, include_opt=True)
+def test_conductor_save_resume_round_trip(tmp_path):
+    w = rng_bytes(7, W_BYTES)
+    o = {r: rng_bytes(100 + r, O_LOCAL) for r in (0, 1)}
+    daemons, ranks, ck = fleet(tmp_path, w, o)
+    ck["dir"].mkdir(parents=True, exist_ok=True)
+    try:
+        meta = {"seed": 11, "rank_rounds": [1, 1], "backend": "fake",
+                "hosts": ["host0", "host1"], "data_cursor": {"doc": 9}}
+        save_checkpoint(ranks, ck, 4, meta, [5.0, 4.0], quiet)
+        save_checkpoint(ranks, ck, 8, meta, [5.0, 4.0, 3.0], quiet)
+        (ck["dir"] / "step_000012" / "rank0").mkdir(parents=True)
 
-    for server, c in daemons:
-        try:
+        record = resolve_resume(ck["dir"], "auto", quiet)
+        assert record["step"] == 8, \
+            "auto must pick the newest COMPLETE step (12 has no record)"
+        assert record["client_payload"]["losses"] == [5.0, 4.0, 3.0]
+        assert record["client_payload"]["data_cursor"] == {"doc": 9}
+        assert record["scheme"]["source_policy"] == "simple"
+        assert record["launch"]["resolved"]["world"] == 2
+
+        # each rank restores its OWN snapshot through the keyed plan
+        # (the rank view: logical slices remapped to local geometry)
+        from dataflow.checkpoint import resolve_targets
+
+        step_dir = ck["dir"] / "step_000008"
+        for r in (0, 1):
+            server_f, fresh = boot(tmp_path, f"fresh{r}")
+            try:
+                plan = resolve_targets(record,
+                                       {str(r): ["W_0", "O_0"]})
+                assert len(plan) == 1, \
+                    "the simple policy resumes from ONE own snapshot"
+                res = fresh.restore_snapshot(
+                    str(step_dir / plan[0]["path"]),
+                    remap=plan[0]["remap"])
+                assert res["client_meta"]["step"] == 8
+                assert bytes(fresh.get_object("W_0")) == w
+                assert bytes(fresh.get_object("O_0")) == o[r]
+            finally:
+                fresh.shutdown()
+        assert (step_dir / RECORD_NAME).is_file()
+        assert (step_dir / "programs" / "rank1.json").is_file()
+    finally:
+        for _server, c in daemons:
             c.shutdown()
-        except Exception:
-            pass
 
 
-def test_format_guard_is_loud(tmp_path):
-    import json
+def test_load_checkpoint_targets(tmp_path):
+    w = rng_bytes(13, W_BYTES)
+    o = {r: rng_bytes(200 + r, O_LOCAL) for r in (0, 1)}
+    daemons, ranks, ck = fleet(tmp_path, w, o)
+    ck["dir"].mkdir(parents=True, exist_ok=True)
+    try:
+        meta = {"seed": 11, "rank_rounds": [1, 1], "backend": "fake",
+                "hosts": ["host0", "host1"], "data_cursor": None}
+        save_checkpoint(ranks, ck, 4, meta, [5.0], quiet)
+        step_dir = ck["dir"] / "step_000004"
 
-    step_dir = tmp_path / "step_000002"
-    step_dir.mkdir()
-    (step_dir / "checkpoint_record.json").write_text(json.dumps({"step": 2}))
-    with pytest.raises(RuntimeError, match="format"):
-        read_record(step_dir)
+        # weights-only: optimizer bytes never enter the store
+        record, client = load_checkpoint(step_dir, targets=["W_0"])
+        try:
+            assert bytes(client.get_object("W_0")) == w
+            assert client.query_object("O_0") is None, \
+                "weights-only targets must leave ZERO optimizer bytes"
+        finally:
+            client.shutdown()
+
+        # the logical view reassembles the aggregate [m_all | v_all]
+        half = O_LOCAL // 2
+        expect = o[0][:half] + o[1][:half] + o[0][half:] + o[1][half:]
+        record, client = load_checkpoint(step_dir, targets="all")
+        try:
+            assert bytes(client.get_object("O_0")) == expect
+        finally:
+            client.shutdown()
+
+        # a writer key restores that rank's shard view
+        record, client = load_checkpoint(step_dir,
+                                         targets={"1": ["O_0"]})
+        try:
+            assert bytes(client.get_object("O_0")) == o[1]
+        finally:
+            client.shutdown()
+    finally:
+        for _server, c in daemons:
+            c.shutdown()

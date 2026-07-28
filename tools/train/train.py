@@ -336,7 +336,9 @@ def cmd_peek(args) -> int:
     manifests = sorted(run_dir.glob("step_*/checkpoint_record.json"))
     if manifests:
         manifest = json.loads(manifests[-1].read_text())
-        losses = [float(x) for x in manifest.get("losses", [])]
+        payload = manifest.get("client_payload", {})
+        losses = [float(x) for x in
+                  payload.get("losses", manifest.get("losses", []))]
         step = manifest["step"]
         source = str(manifests[-1])
     else:

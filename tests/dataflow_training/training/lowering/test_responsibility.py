@@ -1,5 +1,6 @@
 """Responsibility-map gates (CPU): the save plan is a pure derivation
-— partition exactness, mode semantics, and the save-args projection.
+— partition exactness, mode semantics, and the source-policy
+projection built on it.
 
 Invariants per mode:
 - world 1: rank 0 responsible for every byte of every root.
@@ -14,7 +15,7 @@ Tests:
 - test_world1_full_coverage: at world 1 rank 0 is the sole responsible owner of every root's full byte range.
 - test_zero1rs_partitions_at_step_boundaries: zero1rs byte ranges partition each root disjointly and completely at the optimizer's own slice boundaries, in rank order.
 - test_co_mode_single_primary_with_backups: co mode assigns exactly one primary and one backup per root, with primaries byte-balanced within the largest object.
-- test_rank_save_args_projection: rank_save_args returns owned shards wholesale and partitioned params as per-rank ranges whose union covers the object.
+- test_dedup_policy_projection: the dedup source policy saves owned zero1 shards as slot slices and partitioned params as per-rank authoritative ranges whose union covers the object.
 - test_run_lock_refuses_second_same_name: a held per-run flock makes a second same-name claim raise BlockingIOError, and the lock is reclaimable once released.
 """
 from dataclasses import replace
@@ -22,7 +23,6 @@ from dataclasses import replace
 import pytest
 
 from dataflow_training.distributed.responsibility import (
-    rank_save_args,
     responsibility_map,
 )
 
@@ -90,18 +90,44 @@ def test_co_mode_single_primary_with_backups():
     assert abs(loads[0] - loads[1]) <= max(sizes)
 
 
-def test_rank_save_args_projection():
+def test_dedup_policy_projection():
+    from dataflow_training.distributed.source_policy import \
+        compile_source_policy
+
     cfg = tiny_cfg()
     sp = zero1rs_inputs(cfg, 2)
     plan = responsibility_map(cfg, 2, mode="zero1rs", shard_params=sp)
-    ids0, ranges0 = rank_save_args(plan, 0, own_objects=["O_0"])
-    ids1, ranges1 = rank_save_args(plan, 1, own_objects=["O_0"])
-    assert "O_0" in ids0 and "O_0" in ids1        # own shards wholesale
-    assert "O_0" not in ranges0
-    # partitioned params are ranged on both ranks; the union covers
-    for oid, (lo, hi) in ranges0.items():
-        assert lo == 0
-        assert ranges1[oid][0] == hi
+    root = sorted(sp)[0]
+    w_bytes = max(e["hi"] for e in plan[root])
+    esize = {"fp32": 4, "bf16": 2}[sp[root]["opt_dtype"]]
+    total = sp[root]["n_slice"] * 2 + sp[root]["n_tail"]
+    o_id = "O_" + root[2:]
+    writer_specs = {
+        r: [(root, w_bytes),
+            (o_id, 2 * esize * (sp[root]["n_slice"]
+                                + (sp[root]["n_tail"] if r == 1 else 0)))]
+        for r in (0, 1)}
+    logical, per_writer = compile_source_policy(
+        policy="dedup", world=2, writer_specs=writer_specs,
+        plan=plan, opt_slices=sp)
+
+    # owned zero1 shards become slot slices into the aggregate object
+    assert logical[o_id]["bytes"] == 2 * esize * total
+    for r in (0, 1):
+        o_slices = [s for s in per_writer[r]["slices"]
+                    if s["id"] == o_id]
+        assert len(o_slices) == 2                 # m slice + v slice
+    # partitioned params: authoritative per-rank ranges whose union
+    # covers the object, in rank order
+    spans = []
+    for r in (0, 1):
+        for e in per_writer[r]["record"]:
+            if e["logical"] == root:
+                assert e["authoritative"]
+                spans.append(tuple(e["object_range"]))
+    spans.sort()
+    assert spans[0][0] == 0 and spans[-1][1] == w_bytes
+    assert spans[0][1] == spans[1][0]
 
 
 def test_run_lock_refuses_second_same_name(tmp_path):
