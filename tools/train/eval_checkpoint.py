@@ -58,6 +58,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("run", help="run name under results/pretrain/checkpoints/")
     ap.add_argument("--preset", required=True)
+    ap.add_argument("--max-seq-len", type=int, default=None)
     ap.add_argument("--step", type=int, default=None,
                     help="checkpoint step (default: newest complete)")
     ap.add_argument("--val-tokens", type=int, default=10_485_760)
@@ -78,6 +79,15 @@ def main() -> int:
         ck = marks[-1].parent
 
     cfg = P.resolve_preset(args.preset)
+    if args.max_seq_len:
+        from dataclasses import replace
+        overrides = {}
+        if hasattr(cfg, "seq_len"):
+            overrides["seq_len"] = args.max_seq_len
+        if hasattr(cfg, "max_seq_len"):
+            overrides["max_seq_len"] = max(getattr(cfg, "max_seq_len"),
+                                           args.max_seq_len)
+        cfg = replace(cfg, **overrides)
     payload = CheckpointPayload(ck)
     from dataflow_training.model_families.families import resolve_family
 

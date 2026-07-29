@@ -93,6 +93,16 @@ def cfg_with_overrides(args):
         overrides["grad_accum_rounds"] = args.ga_rounds
     if getattr(args, "batch", None):
         overrides["batch"] = args.batch
+    if getattr(args, "max_seq_len", None):
+        # llama-shaped configs carry seq_len; gpt2 carries BOTH a data
+        # seq_len and an architectural max_seq_len (learned position
+        # table) — raise every field present so packing and architecture
+        # agree
+        if hasattr(cfg, "seq_len"):
+            overrides["seq_len"] = args.max_seq_len
+        if hasattr(cfg, "max_seq_len"):
+            overrides["max_seq_len"] = max(
+                getattr(cfg, "max_seq_len"), args.max_seq_len)
     return replace(cfg, **overrides) if overrides else cfg
 
 
@@ -398,6 +408,7 @@ def main() -> int:
     t.add_argument("--opt", choices=["adamw", "muon"], default=None)
     t.add_argument("--ga-rounds", type=int, default=None)
     t.add_argument("--batch", type=int, default=None)
+    t.add_argument("--max-seq-len", type=int, default=None)
     t.add_argument("--seed", type=int, default=11)
     t.add_argument("--fast-budget", default="8",
                    help="device fast GiB, comma per rank")
@@ -437,6 +448,8 @@ def main() -> int:
     r.add_argument("--peak-lr", type=float, default=3e-4)
     r.add_argument("--opt", choices=["adamw", "muon"], default=None)
     r.add_argument("--ga-rounds", type=int, default=None)
+    r.add_argument("--batch", type=int, default=None)
+    r.add_argument("--max-seq-len", type=int, default=None)
     r.add_argument("--grad-checkpoint", action="store_true")
     r.add_argument("--checkpoint-every", type=int, default=None)
     r.add_argument("--resume", action="store_true")
