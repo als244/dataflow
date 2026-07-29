@@ -2,6 +2,8 @@
 
 Measured at commit `886c041` on chicago (RTX 5090), single serial run of the canonical suite invocation (`python -m pytest -q --durations=0`, `dataflow` conda env, box otherwise idle). Use it as the expectation baseline for how long suite tasks take at this commit; re-measure after structural suite changes.
 
+Stack: torch 2.13.0+cu130 / triton 3.7.1.
+
 ## Summary
 
 - **Wall time: 13:24** (804s) — 1334 passed, 1 skipped.
@@ -46,10 +48,10 @@ Sorted by total attributed time (call + setup + teardown of every test in the fi
 | file | tests | total | slowest test | its total |
 |---|---|---|---|---|
 | `tests/dataflow_training/pretrain/test_engine_parity_families.py` | 22 | 242.3s | `test_underfull_engine_vs_reference[qwen35moe_smoke_preset]` | 32.5s |
-| `tests/dataflow_training/models/test_model_families.py` | 110 | 119.8s | `test_poison_on_free_changes_nothing[qwen35moe]` | 5.7s |
+| `tests/dataflow_training/models/test_model_families.py` | 110 | 119.8s | `test_poison_on_free_changes_nothing[glm52]` | 5.7s |
 | `tests/dataflow_training/training/surfaces/test_world2_resume_bitwise.py` | 3 | 74.5s | `test_world2_resume_reproduces_tail_bitwise` | 25.6s |
 | `tests/dataflow_training/models/test_engine_vs_reference.py` | 20 | 61.9s | `test_engine_matches_reference_uniform[qwen35moe]` | 9.7s |
-| `tests/dataflow_training/tasks/test_kernel_audit.py` | 371 | 55.1s | `test_write_coverage_poison_invariance[moe_sort:aten:all_one_expert_rest_empty]` | 0.2s |
+| `tests/dataflow_training/tasks/test_kernel_audit.py` | 371 | 55.1s | `test_write_coverage_poison_invariance[ce_loss_fwd_bwd:triton:all_ignored]` | 0.2s |
 | `tests/examples/test_rl_training.py` | 6 | 27.1s | `test_rl_training_parity_ppo[qwen35]` | 4.9s |
 | `tests/dataflow_training/data/test_data_pipeline.py` | 22 | 22.6s | `test_checkpoint_resume_tail_matches_uninterrupted_run` | 9.3s |
 | `tests/dataflow_training/pretrain/test_client_model_step.py` | 4 | 19.6s | `test_client_model_step_matches_in_process_olmoe` | 6.2s |
@@ -59,10 +61,10 @@ Sorted by total attributed time (call + setup + teardown of every test in the fi
 | `tests/dataflow/service/test_shared_server_self_heal.py` | 1 | 5.2s | `test_self_heal_respawns_after_illegal_access` | 5.2s |
 | `tests/dataflow_training/tasks/test_kernels.py` | 21 | 4.8s | `test_swiglu_fused[4099-14336]` | 1.0s |
 | `tests/dataflow_sim/engine/test_simulator.py` | 38 | 4.0s | `test_repeated_transfers_of_same_object_get_unique_task_ids` | 0.1s |
-| `tests/dataflow_sim/planning/policies/test_auto_policy.py` | 36 | 3.9s | `test_auto_policy_L10_works_down_to_cap_500[600]` | 0.1s |
+| `tests/dataflow_sim/planning/policies/test_auto_policy.py` | 36 | 3.9s | `test_auto_policy_L10_works_down_to_cap_500[500]` | 0.1s |
 | `tests/dataflow/service/test_slice_snapshots.py` | 12 | 3.8s | `test_slice_roundtrip_and_compose` | 0.6s |
 | `tests/dataflow/service/test_daemon_relaunch.py` | 1 | 3.7s | `test_relaunched_daemon_same_program_reruns_clean_and_reproduces_losses` | 3.7s |
-| `tests/dataflow_training/modules/test_moe.py` | 24 | 3.1s | `test_topk_sigmoid_noaux_kernel_vs_reference_and_semantics` | 0.1s |
+| `tests/dataflow_training/modules/test_moe.py` | 24 | 3.1s | `test_moe_tail_fwd_bwd_vs_reference[True-0.001-topk_then_softmax]` | 0.1s |
 | `tests/dataflow_training/training/lowering/test_layout_registry.py` | 21 | 3.1s | `test_registry_covers_external_family` | 0.2s |
 | `tests/dataflow/service/test_service_skeleton.py` | 10 | 3.1s | `test_fast_path_answers_while_dispatcher_held` | 0.8s |
 | `tests/dataflow_sim/core/test_validate_chain.py` | 29 | 3.0s | `test_invalid_chain_rejected[make_invalid_release_mutation_dirty_with_later_use-make_invalid_release_mutation_dirty_with_later_use]` | 0.1s |
@@ -76,20 +78,20 @@ Sorted by total attributed time (call + setup + teardown of every test in the fi
 | `tests/dataflow_training/training/surfaces/test_solo_resume_bitwise.py` | 1 | 2.5s | `test_solo_resume_reproduces_tail_bitwise` | 2.5s |
 | `tests/dataflow_training/training/planning/test_planning.py` | 9 | 2.4s | `test_backing_capacity_drives_recompute` | 0.5s |
 | `tests/dataflow_training/pretrain/test_presets.py` | 16 | 2.3s | `test_preset_lowers[l3_760m]` | 0.2s |
-| `tests/dataflow_sim/planning/policies/test_min_grow.py` | 22 | 2.3s | `test_infeasible_raises_with_forced_footprint_exceeding_cap` | 0.1s |
+| `tests/dataflow_sim/planning/policies/test_min_grow.py` | 22 | 2.3s | `test_derive_schedule_pre_places_backing_init_with_a_minus_1` | 0.1s |
 | `tests/dataflow_training/pretrain/test_flops.py` | 15 | 2.1s | `test_every_family_walks[llama3]` | 0.1s |
 | `tests/dataflow/runtime/test_engine_stress.py` | 3 | 2.1s | `test_measured_costs_replan_still_golden` | 1.5s |
 | `tests/dataflow_sim/workloads/test_dataflow_schema.py` | 18 | 2.0s | `test_metrics_preview_and_summary_metadata` | 0.1s |
-| `tests/dataflow_training/pretrain/test_sharding.py` | 13 | 1.9s | `test_tp_mlp_shards_plan_and_views` | 0.1s |
+| `tests/dataflow_training/pretrain/test_sharding.py` | 13 | 1.9s | `test_real_llama3_layouts_shard` | 0.1s |
 | `tests/dataflow_training/pretrain/test_parity_smoke.py` | 1 | 1.8s | `test_reference_vs_service_parity_smoke` | 1.8s |
 | `tests/dataflow_training/training/e2e/test_lbl_modes.py` | 8 | 1.8s | `test_retained_router_delta_is_ga_invariant_per_round_is_not` | 0.4s |
 | `tests/dataflow/service/test_pinned_slab.py` | 3 | 1.8s | `test_slab_costs_what_it_asks_for` | 0.8s |
-| `tests/dataflow/service/test_peer_protocol.py` | 17 | 1.7s | `test_collective_queue_fifo` | 0.1s |
-| `tests/dataflow_training/tasks/test_optim.py` | 11 | 1.7s | `test_muon_recipe_string_model_step_vs_hand_replica` | 0.2s |
+| `tests/dataflow/service/test_peer_protocol.py` | 17 | 1.7s | `test_eager_happy_path` | 0.1s |
+| `tests/dataflow_training/tasks/test_optim.py` | 11 | 1.7s | `test_mixed_policy_model_step_vs_hand_replica` | 0.2s |
 | `tests/test_import_boundaries.py` | 7 | 1.7s | `test_sim_required_only_under_lowering` | 0.4s |
 | `tests/dataflow_training/training/e2e/test_dtype_policy_e2e.py` | 7 | 1.7s | `test_qwen35_model_step_mixed_policy` | 0.4s |
 | `tests/dataflow/service/test_engine_determinism.py` | 1 | 1.5s | `test_same_daemon_rerun_bitwise` | 1.5s |
-| `tests/dataflow_training/models/test_gpt2.py` | 10 | 1.5s | `test_model_step_ragged` | 0.2s |
+| `tests/dataflow_training/models/test_gpt2.py` | 10 | 1.5s | `test_qkv_bias_grad_sections` | 0.2s |
 | `tests/dataflow_training/modules/test_dsa.py` | 10 | 1.5s | `test_index_scores_vs_hand_loop` | 0.2s |
 | `tests/dataflow_training/models/test_glm52.py` | 7 | 1.5s | `test_glm52_dense_warmup_model_step` | 0.3s |
 | `tests/dataflow/service/test_service_snapshot.py` | 3 | 1.4s | `test_checkpoint_roundtrip_bit_continuity` | 0.8s |
@@ -103,34 +105,34 @@ Sorted by total attributed time (call + setup + teardown of every test in the fi
 | `tests/dataflow_sim/planning/policies/test_pressurefit.py` | 12 | 1.2s | `test_pressurefit_runs_training_chain_at_moderate_cap` | 0.1s |
 | `tests/dataflow_training/data/test_packing.py` | 10 | 1.2s | `test_token_conservation_multiset_identity` | 0.1s |
 | `tests/dataflow_training/models/test_llama3.py` | 9 | 1.2s | `test_model_step_muon_policy_golden_parity` | 0.2s |
-| `tests/dataflow/runtime/test_engine_semantics.py` | 12 | 1.2s | `test_deferred_prefetch_waits_for_offload` | 0.1s |
+| `tests/dataflow/runtime/test_engine_semantics.py` | 12 | 1.2s | `test_stale_final_location_detected` | 0.1s |
 | `tests/dataflow_training/models/test_qwen35.py` | 6 | 1.1s | `test_qwen35_tied_model_step_vs_golden` | 0.4s |
-| `tests/dataflow/core/test_ir_validate.py` | 11 | 1.1s | `test_errors_collected` | 0.1s |
+| `tests/dataflow/core/test_ir_validate.py` | 11 | 1.1s | `test_tensor_size_mismatch_rejected` | 0.1s |
 | `tests/test_program_hashes.py` | 1 | 1.0s | `test_lowered_program_hashes_stable` | 1.0s |
 | `tests/dataflow/runtime/test_run_contract.py` | 10 | 1.0s | `test_task_raise_no_crash_on_cuda` | 0.1s |
 | `tests/dataflow/runtime/test_cuda_backend.py` | 5 | 1.0s | `test_mini_program_execution_matches_plan` | 0.4s |
 | `tests/dataflow_training/modules/test_mla.py` | 7 | 0.9s | `test_dsv3_block_fwd_recompute_bwd_accum_match_autograd_golden[moe]` | 0.1s |
 | `tests/dataflow_training/training/e2e/test_ga_invariance.py` | 4 | 0.9s | `test_sgd_rounds_are_memory_optimization` | 0.3s |
-| `tests/dataflow_training/training/lowering/test_responsibility.py` | 6 | 0.9s | `test_co_mode_single_primary_with_backups` | 0.1s |
-| `tests/dataflow_training/tasks/test_varlen_attention.py` | 6 | 0.9s | `test_bwd_matches_ragged_fallback` | 0.1s |
-| `tests/dataflow/checkpoint/test_record_layer.py` | 9 | 0.9s | `test_replica_twins_must_hash_equal` | 0.1s |
+| `tests/dataflow_training/training/lowering/test_responsibility.py` | 6 | 0.9s | `test_world1_full_coverage` | 0.1s |
+| `tests/dataflow_training/tasks/test_varlen_attention.py` | 6 | 0.9s | `test_no_hidden_syncs` | 0.1s |
+| `tests/dataflow/checkpoint/test_record_layer.py` | 9 | 0.9s | `test_slice_reference_bounds` | 0.1s |
 | `tests/dataflow_sim/planning/test_recompute.py` | 8 | 0.9s | `test_zero_runtime_recompute_placeholders_are_schedule_neutral` | 0.1s |
 | `tests/dataflow/service/test_nccl_binding.py` | 2 | 0.8s | `test_binding_world1_roundtrip` | 0.7s |
 | `tests/dataflow/runtime/test_placement.py` | 7 | 0.8s | `test_parity_with_placement_8b` | 0.2s |
 | `tests/dataflow_training/pretrain/test_reference_muon.py` | 5 | 0.8s | `test_tiny_muon_reference_trains` | 0.2s |
 | `tests/dataflow_training/pretrain/test_sharding_lowering.py` | 5 | 0.8s | `test_programs_json_serializable_and_plain_unchanged` | 0.2s |
-| `tests/dataflow_training/models/test_qwen3moe.py` | 5 | 0.8s | `test_qwen3moe_aux_zero_model_step_vs_golden` | 0.2s |
+| `tests/dataflow_training/models/test_qwen3moe.py` | 5 | 0.8s | `test_qwen3moe_grad_accum_two_rounds_matches_reference` | 0.2s |
 | `tests/dataflow/runtime/test_vmm.py` | 7 | 0.7s | `test_e2e_mini_vmm_matches_static` | 0.1s |
-| `tests/dataflow_training/tasks/test_dtype_policy.py` | 5 | 0.7s | `test_first_matching_override_wins_else_default` | 0.1s |
+| `tests/dataflow_training/tasks/test_dtype_policy.py` | 5 | 0.7s | `test_mixed_roles_carry_independently` | 0.1s |
 | `tests/dataflow_training/pretrain/test_topology.py` | 3 | 0.7s | `test_daemonize_detach_and_group_kill` | 0.4s |
 | `tests/dataflow_training/models/test_glm52_lowering.py` | 5 | 0.6s | `test_full_scale_presets_lower` | 0.1s |
 | `tests/dataflow/service/test_service_packed_args.py` | 1 | 0.6s | `test_daemon_packed_args_bit_equal` | 0.6s |
 | `tests/dataflow_training/models/test_dsv3.py` | 4 | 0.6s | `test_dsv3_aux_zero_model_step_vs_golden` | 0.2s |
 | `tests/dataflow_training/models/test_olmoe.py` | 4 | 0.6s | `test_olmoe_aux_zero_model_step_vs_golden` | 0.2s |
-| `tests/dataflow_training/training/lowering/test_parallelism_scheme.py` | 4 | 0.6s | `test_tensor_scheme_has_no_responsibility` | 0.1s |
-| `tests/dataflow_training/training/surfaces/test_plugins.py` | 4 | 0.6s | `test_register_family_rejects_duplicates` | 0.1s |
+| `tests/dataflow_training/training/lowering/test_parallelism_scheme.py` | 4 | 0.6s | `test_data_parallel_axis_views` | 0.1s |
+| `tests/dataflow_training/training/surfaces/test_plugins.py` | 4 | 0.6s | `test_validate_family_reports_broken_surface` | 0.1s |
 | `tests/dataflow_training/pretrain/test_schedule.py` | 4 | 0.6s | `test_matches_engine_lrschedule_exactly` | 0.1s |
-| `tests/dataflow/core/test_sim_convert.py` | 6 | 0.6s | `test_from_sim_chain_roundtrip` | 0.1s |
+| `tests/dataflow/core/test_sim_convert.py` | 6 | 0.6s | `test_annotated_chain_validates` | 0.1s |
 | `tests/test_docstring_index.py` | 2 | 0.6s | `test_index_matches_test_functions` | 0.3s |
 | `tests/dataflow_training/tasks/test_ignore_index_ce.py` | 4 | 0.6s | `test_no_ignore_rows_matches_torch_ce_and_rerun_is_bitwise[triton]` | 0.1s |
 | `tests/dataflow_training/models/test_qwen3.py` | 4 | 0.5s | `test_qwen3_block_backward` | 0.1s |
@@ -138,17 +140,17 @@ Sorted by total attributed time (call + setup + teardown of every test in the fi
 | `tests/dataflow/checkpoint/test_record_targets.py` | 5 | 0.5s | `test_all_targets_resolve_each_byte_once` | 0.1s |
 | `tests/dataflow/core/test_json_roundtrip.py` | 5 | 0.5s | `test_recompute_variant_roundtrips` | 0.1s |
 | `tests/dataflow_training/training/lowering/test_round_prologue.py` | 3 | 0.5s | `test_round_prologue_publishes_round_index_via_run_values_and_object` | 0.2s |
-| `tests/dataflow_training/training/lowering/test_group_annotation.py` | 3 | 0.4s | `test_dp_annotation_matches_builder` | 0.1s |
+| `tests/dataflow_training/training/lowering/test_group_annotation.py` | 3 | 0.4s | `test_zero1rs_annotation_matches_builder` | 0.1s |
 | `tests/dataflow/checkpoint/test_persistent_targets.py` | 4 | 0.4s | `test_marker_default_and_emit_when_true` | 0.1s |
 | `tests/dataflow/service/test_service_events.py` | 2 | 0.4s | `test_event_coverage_and_reattach` | 0.2s |
 | `tests/dataflow/service/test_peer_groups.py` | 2 | 0.4s | `test_group_lifecycle_and_error_fanout` | 0.2s |
 | `tests/dataflow/service/test_error_codes.py` | 1 | 0.4s | `test_every_raised_error_code_is_registered` | 0.4s |
 | `tests/dataflow_training/training/e2e/test_batch_ga.py` | 2 | 0.4s | `test_batch_ga_model_step_matches_reference` | 0.2s |
-| `tests/dataflow_training/data/test_shard_corpus.py` | 3 | 0.3s | `test_read_spans_shard_boundary` | 0.1s |
+| `tests/dataflow_training/data/test_shard_corpus.py` | 3 | 0.3s | `test_header_parse` | 0.1s |
 | `tests/dataflow_training/training/surfaces/test_webapp_upload.py` | 2 | 0.3s | `test_simulate_schema_upload` | 0.2s |
 | `tests/dataflow/runtime/test_reserve_inversion.py` | 2 | 0.3s | `test_caller_priority_prevents_poke_starvation` | 0.2s |
-| `tests/dataflow/runtime/test_backing_free.py` | 3 | 0.3s | `test_final_location_backing_survives` | 0.1s |
-| `tests/test_external_family.py` | 2 | 0.3s | `test_external_family_registers_lowers_and_validates` | 0.1s |
+| `tests/dataflow/runtime/test_backing_free.py` | 3 | 0.3s | `test_backing_freed_after_last_use` | 0.1s |
+| `tests/test_external_family.py` | 2 | 0.3s | `test_external_family_composes_with_service_path` | 0.1s |
 | `tests/dataflow_training/training/lowering/test_persist_marker.py` | 2 | 0.3s | `test_moe_aux_rides_the_marker` | 0.1s |
 | `tests/dataflow_training/tasks/test_staged_blocks.py` | 2 | 0.3s | `test_stage_context_completeness` | 0.1s |
 | `tests/dataflow_training/pretrain/test_tp_layouts.py` | 2 | 0.3s | `test_per_rank_layout_shapes_and_sizes` | 0.1s |
@@ -156,7 +158,7 @@ Sorted by total attributed time (call + setup + teardown of every test in the fi
 | `tests/dataflow/service/test_hostbw.py` | 2 | 0.2s | `test_probe_reports_positive_lanes` | 0.1s |
 | `tests/dataflow_training/test_client_only.py` | 1 | 0.2s | `test_workload_tests_are_client_only` | 0.2s |
 | `tests/dataflow/service/test_active_pools.py` | 2 | 0.2s | `test_active_pools_reports_live_pools_scoped_to_a_daemon` | 0.1s |
-| `tests/dataflow/runtime/test_view_lifetime.py` | 2 | 0.2s | `test_invalidate_evicts_cached_views` | 0.1s |
+| `tests/dataflow/runtime/test_view_lifetime.py` | 2 | 0.2s | `test_free_evicts_cache_no_stale_view` | 0.1s |
 | `tests/dataflow_training/training/lowering/test_lowering_stability.py` | 1 | 0.2s | `test_lowered_programs_bit_identical` | 0.2s |
 | `tests/dataflow/test_workload_blind.py` | 1 | 0.1s | `test_engine_tests_are_workload_blind` | 0.1s |
 | `tests/dataflow_training/models/test_qwen35moe.py` | 1 | 0.1s | `test_qwen35moe_stage_context_completeness` | 0.1s |
@@ -199,16 +201,16 @@ Grouped by file, slowest first within each. Tests under 1.0s are covered by the 
 
 | test | call | setup | teardown | total |
 |---|---|---|---|---|
-| `test_poison_on_free_changes_nothing[qwen35moe]` | 5.53s | 0.00s | 0.13s | 5.66s |
 | `test_poison_on_free_changes_nothing[glm52]` | 5.53s | 0.00s | 0.13s | 5.66s |
+| `test_poison_on_free_changes_nothing[qwen35moe]` | 5.53s | 0.00s | 0.13s | 5.66s |
 | `test_poison_on_free_changes_nothing[dsv32]` | 5.50s | 0.00s | 0.13s | 5.63s |
 | `test_poison_on_free_changes_nothing[qwen3moe]` | 5.48s | 0.00s | 0.13s | 5.61s |
 | `test_poison_on_free_changes_nothing[llama3]` | 5.46s | 0.00s | 0.13s | 5.59s |
 | `test_poison_on_free_changes_nothing[olmoe]` | 5.43s | 0.00s | 0.13s | 5.56s |
 | `test_poison_on_free_changes_nothing[qwen3]` | 5.38s | 0.01s | 0.13s | 5.52s |
 | `test_poison_on_free_changes_nothing[gpt2]` | 5.32s | 0.00s | 0.13s | 5.45s |
-| `test_poison_on_free_changes_nothing[qwen35]` | 5.17s | 0.08s | 0.13s | 5.38s |
 | `test_poison_on_free_changes_nothing[dsv3]` | 5.25s | 0.00s | 0.13s | 5.38s |
+| `test_poison_on_free_changes_nothing[qwen35]` | 5.17s | 0.08s | 0.13s | 5.38s |
 | `test_golden_model_step[dsv3]` | 2.86s | 2.06s | 0.13s | 5.05s |
 | `test_golden_model_step[qwen35moe]` | 1.29s | 0.00s | 0.13s | 1.42s |
 | `test_golden_model_step[qwen35]` | 1.27s | 0.00s | 0.13s | 1.40s |
@@ -235,12 +237,12 @@ Grouped by file, slowest first within each. Tests under 1.0s are covered by the 
 | `test_engine_matches_reference_ragged[qwen35]` | 5.35s | 0.00s | 0.13s | 5.48s |
 | `test_engine_matches_reference_ragged[glm52]` | 2.15s | 0.00s | 0.13s | 2.28s |
 | `test_engine_matches_reference_uniform[glm52]` | 2.07s | 0.00s | 0.13s | 2.20s |
-| `test_engine_matches_reference_ragged[olmoe]` | 1.94s | 0.00s | 0.13s | 2.07s |
 | `test_engine_matches_reference_ragged[dsv32]` | 1.93s | 0.00s | 0.14s | 2.07s |
+| `test_engine_matches_reference_ragged[olmoe]` | 1.94s | 0.00s | 0.13s | 2.07s |
 | `test_engine_matches_reference_uniform[olmoe]` | 1.91s | 0.00s | 0.13s | 2.04s |
 | `test_engine_matches_reference_uniform[dsv32]` | 1.91s | 0.00s | 0.12s | 2.03s |
-| `test_engine_matches_reference_ragged[dsv3]` | 1.85s | 0.00s | 0.14s | 1.99s |
 | `test_engine_matches_reference_ragged[qwen3moe]` | 1.86s | 0.00s | 0.13s | 1.99s |
+| `test_engine_matches_reference_ragged[dsv3]` | 1.85s | 0.00s | 0.14s | 1.99s |
 | `test_engine_matches_reference_uniform[qwen3moe]` | 1.83s | 0.00s | 0.13s | 1.96s |
 | `test_engine_matches_reference_uniform[dsv3]` | 1.80s | 0.00s | 0.13s | 1.93s |
 | `test_engine_matches_reference_uniform[gpt2]` | 1.67s | 0.00s | 0.13s | 1.80s |
@@ -255,8 +257,8 @@ Grouped by file, slowest first within each. Tests under 1.0s are covered by the 
 | test | call | setup | teardown | total |
 |---|---|---|---|---|
 | `test_rl_training_parity_ppo[qwen35]` | 4.82s | 0.00s | 0.10s | 4.92s |
-| `test_rl_training_parity_reinforce` | 4.43s | 0.00s | 0.10s | 4.53s |
 | `test_rl_training_parity_ppo[glm52]` | 4.43s | 0.00s | 0.10s | 4.53s |
+| `test_rl_training_parity_reinforce` | 4.43s | 0.00s | 0.10s | 4.53s |
 | `test_rl_training_parity_ppo[dsv32]` | 4.39s | 0.00s | 0.11s | 4.50s |
 | `test_rl_training_parity_ppo[qwen3moe]` | 4.23s | 0.00s | 0.10s | 4.33s |
 | `test_rl_training_parity_ppo[llama3]` | 4.17s | 0.00s | 0.10s | 4.27s |
