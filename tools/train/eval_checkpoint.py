@@ -7,7 +7,7 @@ straight from a snapshot payload into the family's pure-torch
 reference twin and evaluates val CE, so an in-flight or finished run
 can be placed on the published axis at any checkpoint.
 
-    python tools/eval_checkpoint.py l3_1b_engine_t512k_adamw --preset l3_1b
+    python tools/train/eval_checkpoint.py l3_1b_engine_t512k_adamw --preset l3_1b
 """
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ from dataflow_training.model_families import bridges
 from dataflow_training.run import presets as P
 from dataflow_training.data.pipeline import DataPipeline
 
-CKPTS = _ROOT / "results" / "pretrain" / "checkpoints"
+CKPTS = _ROOT / "model_ckpts"
 
 
 class CheckpointPayload:
@@ -56,7 +56,7 @@ class CheckpointPayload:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("run", help="run name under results/pretrain/checkpoints/")
+    ap.add_argument("run", help="run name (subdirectory of the checkpoint root)")
     ap.add_argument("--preset", required=True)
     ap.add_argument("--max-seq-len", type=int, default=None)
     ap.add_argument("--step", type=int, default=None,

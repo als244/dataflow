@@ -17,7 +17,10 @@ original_plans/
 refs/
 docs/notes/
 results/
-datasets/
+# slash-less: on cluster boxes these are symlinks into scratch storage,
+# and dir-only patterns do not match symlinks
+datasets
+model_ckpts
 
 # per-setup fleet topology (see topology.example.toml)
 topology.toml
@@ -26,3 +29,4 @@ topology.toml
 tools/bench/internal/
 # retired training tools parked for comparison/revert (train.py replaced them)
 tools/train/internal/
+reproducibility/fidelity_investigations/

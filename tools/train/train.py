@@ -53,7 +53,9 @@ from dataflow_training.run.driver import (  # noqa: E402
 from dataflow_training.run.recipe import Recipe  # noqa: E402
 
 RESULTS = ROOT / "results" / "pretrain"
-CKPTS = RESULTS / "checkpoints"
+# Default checkpoint root: repo-level model_ckpts/ (on the cluster this
+# is the cold-storage symlink). --checkpoint-dir overrides per run.
+CKPTS = ROOT / "model_ckpts"
 
 
 def log_line(msg: str) -> None:
@@ -167,7 +169,7 @@ def cmd_train(args) -> int:
         launch_argv=sys.argv,
         prof_dir=args.prof_dir,
         checkpoint_every=args.checkpoint_every,
-        checkpoint_dir=str(CKPTS), run_name=run_name,
+        checkpoint_dir=args.checkpoint_dir or str(CKPTS), run_name=run_name,
         checkpoint_redundancy=args.checkpoint_redundancy,
         checkpoint_keep_last=args.checkpoint_keep_last,
         resume=args.resume)
@@ -188,7 +190,8 @@ def cmd_reference(args) -> int:
     ck_dir = None
     partial = None
     if args.checkpoint_every:
-        ck_dir = CKPTS / out.stem
+        ck_root = Path(args.checkpoint_dir) if args.checkpoint_dir else CKPTS
+        ck_dir = ck_root / out.stem
         ck_dir.mkdir(parents=True, exist_ok=True)
         partial = out.with_name(out.stem + "_partial.json")
     log_line(f"REFERENCE: {args.preset} "
@@ -434,6 +437,9 @@ def main() -> int:
     t.add_argument("--prof-dir", default="results/pretrain/logs",
                    help="directory for nsys reports from --profile")
     t.add_argument("--checkpoint-every", type=int, default=None)
+    t.add_argument("--checkpoint-dir", default=None,
+                   help="root for the run's checkpoint dir "
+                        "(default: model_ckpts/ under the repo)")
     t.add_argument("--checkpoint-redundancy", type=int, default=1)
     t.add_argument("--checkpoint-keep-last", type=int, default=0)
     t.add_argument("--resume", default=None,
@@ -452,6 +458,9 @@ def main() -> int:
     r.add_argument("--max-seq-len", type=int, default=None)
     r.add_argument("--grad-checkpoint", action="store_true")
     r.add_argument("--checkpoint-every", type=int, default=None)
+    r.add_argument("--checkpoint-dir", default=None,
+                   help="root for the run's checkpoint dir "
+                        "(default: model_ckpts/ under the repo)")
     r.add_argument("--resume", action="store_true")
     add_data_flags(r)
     r.add_argument("--out", required=True)

@@ -41,8 +41,7 @@ Stages (each resumable; ``--stages`` to run a subset):
                training legs stress genuinely different plan behavior
     reference  the pure-torch twin at the same recipe -> the anchor curve
     engine     one training leg per budget (sequential; checkpoints land
-               under results/pretrain/checkpoints — symlink that to cold
-               storage when disk is tight)
+               under --ckpt-root, one subdir per leg)
     report     per-leg verdicts (engine-vs-reference and engine-vs-engine
                pairwise) using the same drift metrics the parity gates
                use: step0 / max / final / EMA deltas -> REPORT.md
@@ -107,6 +106,11 @@ class Config:
     def metrics(self) -> Path:
         return self.results / "metrics"
 
+    # One root for all leg checkpoints: passed explicitly to every leg
+    # and read back by the resume guards and the val ladder, so writer
+    # and resumer can never disagree.
+    ckpt_root: Path = field(default_factory=lambda: REPO / "model_ckpts")
+
     def leg_name(self, kind: str, budget: float | None = None) -> str:
         base = f"{self.preset}_{self.opt}"
         if kind == "reference":
@@ -133,6 +137,58 @@ METRICS_SCHEMA = {
 }
 
 
+def campaign_record(cfg: Config) -> dict:
+    """The campaign constants as one comparable dict: what the manifest
+    records at first launch and what a resume must reproduce."""
+    return {
+        "preset": cfg.preset, "opt": cfg.opt, "steps": cfg.steps,
+        "t_step": cfg.t_step, "max_seq_len": cfg.max_seq_len,
+        "peak_lr": cfg.peak_lr, "seed": cfg.seed,
+        "data": cfg.data or "pipeline default (fixed windows)",
+        "ckpt_every": cfg.ckpt_every,
+        "grad_checkpoint": cfg.grad_checkpoint,
+    }
+
+
+def check_recorded_campaign(cfg: Config) -> None:
+    """--resume must reproduce the recorded campaign. Any field this
+    invocation resolves differently from the manifest's campaign block
+    is a relaunch mistake — without this check it surfaces (at best)
+    deep inside a leg as an opaque tensor-shape mismatch, or (worse)
+    silently trains a different model. Refuse with the exact drift and
+    a copy-pasteable fix."""
+    path = cfg.results / "manifest.json"
+    if not path.exists():
+        return
+    try:
+        recorded = json.load(open(path)).get("campaign") or {}
+    except ValueError:
+        say(f"  manifest {path} is unreadable — campaign drift check "
+            f"skipped")
+        return
+    current = campaign_record(cfg)
+    drifted = []
+    for key, was in recorded.items():
+        if key in current and current[key] != was:
+            drifted.append((key, was, current[key]))
+    if not drifted:
+        return
+    say("resume REFUSED — this invocation drifts from the recorded "
+        "campaign:")
+    fix = []
+    for key, was, now in drifted:
+        flag = "--" + key.replace("_", "-")
+        say(f"  {flag}: recorded {was!r}, this launch resolves {now!r}")
+        if was is True:
+            fix.append(flag)
+        elif was is not None and was is not False:
+            fix.append(f"{flag} {was}")
+    raise SystemExit(
+        "either relaunch with the recorded values"
+        + (f" ({' '.join(fix)})" if fix else "")
+        + " or start a fresh campaign under a different --results root")
+
+
 def update_manifest(cfg: Config, **patch) -> None:
     """results_accuracy/manifest.json — THE structured index: campaign
     config, chosen (budget, t_round) pairs, per-leg status and files,
@@ -144,14 +200,10 @@ def update_manifest(cfg: Config, **patch) -> None:
         try:
             m = json.load(open(path))
         except ValueError:
+            say(f"  manifest {path} was unreadable — rebuilding it from "
+                f"this stage on (leg history before this point is lost)")
             m = {}
-    m.setdefault("campaign", {
-        "preset": cfg.preset, "opt": cfg.opt, "steps": cfg.steps,
-        "t_step": cfg.t_step, "max_seq_len": cfg.max_seq_len,
-        "peak_lr": cfg.peak_lr, "seed": cfg.seed,
-        "data": cfg.data or "pipeline default (fixed windows)",
-        "ckpt_every": cfg.ckpt_every,
-    })
+    m.setdefault("campaign", campaign_record(cfg))
     for k, v in patch.items():
         if isinstance(v, dict) and isinstance(m.get(k), dict):
             m[k].update(v)
@@ -398,7 +450,9 @@ def curve_complete(path: Path, steps: int) -> bool:
         return False
     try:
         return len(json.load(open(path)).get("losses", [])) >= steps
-    except (ValueError, OSError):
+    except (ValueError, OSError) as exc:
+        say(f"  {path.name} exists but is unreadable ({exc}) — "
+            f"treating the leg as incomplete")
         return False
 
 
@@ -466,6 +520,13 @@ def run_leg(cfg: Config, name: str, cmd: list[str]) -> None:
     if child.returncode != 0:
         update_manifest(cfg, legs={name: {"status": "FAILED",
                                           "log": str(log)}})
+        # Surface the leg's ACTUAL error inline — the exception lives in
+        # the log, and a bare exit code masks trivially-diagnosable
+        # faults (a missing checkpoint, an argparse typo, an OOM).
+        tail = log.read_text().splitlines()[-12:]
+        say(f"  [{name}] last log lines:")
+        for line in tail:
+            say(f"  | {line[:140]}")
         raise SystemExit(
             f"leg {name} FAILED (exit {child.returncode}) — see {log}; "
             f"a failed leg is a fault, not a fidelity result")
@@ -514,12 +575,17 @@ def stage_reference(cfg: Config, budgets) -> None:
            "--preset", cfg.preset, "--steps", str(cfg.steps),
            "--peak-lr", f"{cfg.peak_lr:g}", "--opt", cfg.opt,
            "--checkpoint-every", str(cfg.ckpt_every),
+           "--checkpoint-dir", str(cfg.ckpt_root),
            "--out", str(out)] + geometry_flags(cfg, t_round) + data_flags(cfg)
     if cfg.grad_checkpoint:
         cmd.append("--grad-checkpoint")
-    ck = REPO / "results" / "pretrain" / "checkpoints" / out.stem
-    if cfg.resume and ck.exists() and any(ck.iterdir()):
-        cmd.append("--resume")
+    ck = cfg.ckpt_root / out.stem
+    if cfg.resume:
+        if (ck / "reference_ckpt.pt").exists():
+            cmd.append("--resume")
+        else:
+            say(f"  resume requested but no {ck / 'reference_ckpt.pt'} — "
+                f"reference restarts from step 0")
     run_leg(cfg, cfg.leg_name("reference"), cmd)
 
 
@@ -540,11 +606,16 @@ def stage_engine(cfg: Config, budgets) -> None:
                "--fast-budget", f"{b:g}",
                "--backing-budget", f"{cfg.backing_gib:g}",
                "--checkpoint-every", str(cfg.ckpt_every),
+               "--checkpoint-dir", str(cfg.ckpt_root),
                "--out", str(out)] + geometry_flags(cfg, t_round) \
             + data_flags(cfg)
-        ck = REPO / "results" / "pretrain" / "checkpoints" / out.stem
-        if cfg.resume and ck.exists() and any(ck.iterdir()):
-            cmd += ["--resume", "auto"]
+        ck = cfg.ckpt_root / out.stem
+        if cfg.resume:
+            if ck.exists() and any(ck.glob("step_*")):
+                cmd += ["--resume", "auto"]
+            else:
+                say(f"  resume requested but no step_* dirs under {ck} "
+                    f"— leg restarts from step 0")
         run_leg(cfg, cfg.leg_name("engine", b), cmd)
 
 
@@ -619,7 +690,7 @@ def val_ladder(cfg: Config, budgets) -> dict:
     they are produced, so an interrupted ladder resumes where it
     stopped."""
     eval_tool = REPO / "tools" / "train" / "eval_checkpoint.py"
-    ck_root = REPO / "results" / "pretrain" / "checkpoints"
+    ck_root = cfg.ckpt_root
     out: dict = {}
     names = [cfg.leg_name("reference")] + \
         [cfg.leg_name("engine", b) for b, _tr in budgets]
@@ -651,7 +722,12 @@ def val_ladder(cfg: Config, budgets) -> dict:
             m = re.search(r"val[ _-]?loss[ =:]+([0-9.]+)",
                           r.stdout + r.stderr, re.I)
             if not m:
-                say(f"  [val {name} step {s}] UNPARSED — see eval output")
+                # surface the eval tool's actual output — a captured
+                # child error with nothing printed is a masked fault
+                say(f"  [val {name} step {s}] no val loss in eval "
+                    f"output (exit {r.returncode}) — output tail:")
+                for line in (r.stdout + r.stderr).splitlines()[-8:]:
+                    say(f"  | {line[:140]}")
                 continue
             v = float(m.group(1))
             rows[s] = v
@@ -702,9 +778,11 @@ def parse_args(argv=None) -> Config:
                         "backward — only for models whose twin cannot "
                         "otherwise fit the device (slows the leg)")
     p.add_argument("--ckpt-every", type=int, default=1000,
-                   help="sparse checkpoints for leg resume; they land under "
-                        "results/pretrain/checkpoints (symlink to cold "
-                        "storage when disk is tight); 0 disables")
+                   help="checkpoint cadence in steps for leg resume; "
+                        "0 disables")
+    p.add_argument("--ckpt-root", type=Path,
+                   default=REPO / "model_ckpts",
+                   help="root for per-leg checkpoint dirs")
     p.add_argument("--stages", default=",".join(ALL_STAGES))
     p.add_argument("--resume", action="store_true",
                    help="keep finished curves, resume interrupted legs "
@@ -727,13 +805,16 @@ def parse_args(argv=None) -> Config:
         budgets=tuple(float(x) for x in a.budgets.split(",")) if a.budgets
         else (),
         auto_budgets=a.auto_budgets, backing_gib=a.backing_gib,
-        ckpt_every=a.ckpt_every, grad_checkpoint=a.grad_checkpoint,
+        ckpt_every=a.ckpt_every, ckpt_root=a.ckpt_root.resolve(),
+        grad_checkpoint=a.grad_checkpoint,
         stages=stages, resume=a.resume,
         **({"results": Path(a.results).resolve()} if a.results else {}))
 
 
 def main(argv=None) -> int:
     cfg = parse_args(argv)
+    if cfg.resume:
+        check_recorded_campaign(cfg)
     cfg.results.mkdir(parents=True, exist_ok=True)
     sys.path.insert(0, str(REPO / "src"))
     head = subprocess.run(["git", "-C", str(REPO), "rev-parse", "--short",
