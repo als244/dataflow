@@ -59,6 +59,7 @@ import argparse
 import json
 import re
 import shlex
+import statistics
 import subprocess
 import sys
 import time
@@ -476,6 +477,7 @@ def run_leg(cfg: Config, name: str, cmd: list[str]) -> None:
         "log": str(log)}})
     t0 = time.time()
     peak_mib = 0
+    rates: list[float] = []
     offset = log.stat().st_size if log.exists() else 0
     with open(log, "a") as fh, open(met, "a") as mh:
         fh.write(f"\n$ {shlex.join(cmd)}\n")
@@ -499,6 +501,9 @@ def run_leg(cfg: Config, name: str, cmd: list[str]) -> None:
                     # reference lines carry no wall suffix — derive it
                     step_s = cfg.t_step / max(int(tok_s), 1)
                 last_line = (int(step), int(total), float(step_s))
+                rates.append(float(step_s))
+                if len(rates) > 20:
+                    rates.pop(0)
                 mh.write(json.dumps({
                     "ts": round(time.time(), 1), "step": int(step),
                     "loss": float(loss), "lr": float(lr),
@@ -511,11 +516,21 @@ def run_leg(cfg: Config, name: str, cmd: list[str]) -> None:
             first = last_report == 0.0 and last_line
             if (first or time.time() - last_report >= 120) and last_line:
                 last_report = time.time()
-                step, total, rate = last_line
-                remain = (total - step) * rate
-                say(f"  [{name}] step {step}/{total} "
-                    f"({100 * step / total:.0f}%)  {rate:.2f}s/step  "
-                    f"peak mem {peak_mib} MiB  eta {remain / 3600:.1f}h")
+                step, total = last_line[0], last_line[1]
+                # median of recent lines, not the newest one: the first
+                # steps of a (re)start carry compilation/warmup time and
+                # a single line's rate is noisy
+                rate = statistics.median(rates[-20:])
+                if len(rates) < 3:
+                    say(f"  [{name}] step {step}/{total} "
+                        f"({100 * step / total:.0f}%)  {rate:.2f}s/step "
+                        f"(warmup)  peak mem {peak_mib} MiB  eta follows "
+                        f"once the rate settles")
+                else:
+                    remain = (total - step) * rate
+                    say(f"  [{name}] step {step}/{total} "
+                        f"({100 * step / total:.0f}%)  {rate:.2f}s/step  "
+                        f"peak mem {peak_mib} MiB  eta {remain / 3600:.1f}h")
             time.sleep(10)
     if child.returncode != 0:
         update_manifest(cfg, legs={name: {"status": "FAILED",
