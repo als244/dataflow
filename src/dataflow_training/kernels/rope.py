@@ -72,7 +72,7 @@ except Exception:  # pragma: no cover
 if triton is not None:
 
     @triton.jit
-    def _rope_kernel(
+    def rope_kernel(
         x_ptr, out_ptr, positions_ptr, n_pairs, width, head_dim,
         row_stride, head_stride, col_base,
         base, SIN_SIGN: tl.constexpr, BLOCK: tl.constexpr,
@@ -120,7 +120,7 @@ if triton is not None:
         assert positions.is_contiguous() and positions.shape[0] == x.shape[0]
         width = n_heads * head_dim
         n_pairs = x.shape[0] * (width // 2)
-        _rope_kernel[(triton.cdiv(n_pairs, _BLOCK),)](
+        rope_kernel[(triton.cdiv(n_pairs, _BLOCK),)](
             x, out, positions, n_pairs, width, head_dim,
             row_stride, head_stride, col_base,
             float(base), SIN_SIGN=sign, BLOCK=_BLOCK,

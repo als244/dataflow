@@ -178,7 +178,7 @@ except Exception:  # pragma: no cover - CPU-only environments
 if triton is not None:
 
     @triton.jit
-    def _topk_softmax_kernel(
+    def moe_topk_softmax_kernel(
         logits_ptr, w_ptr, ids_ptr,
         t,
         E: tl.constexpr, K: tl.constexpr,
@@ -240,7 +240,7 @@ if triton is not None:
                          pk.to(w_ptr.dtype.element_ty), mask=tmask)
 
     @triton.jit
-    def _router_bwd_kernel(
+    def moe_router_bwd_kernel(
         dprob_ptr, route_w_ptr, ids_ptr, logits_ptr, dlogits_ptr,
         t,
         E: tl.constexpr, K: tl.constexpr,
@@ -278,7 +278,7 @@ if triton is not None:
         tl.store(dlogits_ptr + pid * E + eoff, dz_full, mask=emask)
 
     @triton.jit
-    def _aux_lb_kernel(
+    def moe_aux_lb_kernel(
         logits_ptr, counts_ptr, dlogits_ptr,
         t, scale, denom,
         E: tl.constexpr, BLOCK_E: tl.constexpr,
@@ -316,7 +316,7 @@ if triton is not None:
     def _topk_softmax(kctx, logits, route_w_out, route_ids_out, *, top_k, mode):
         t, e = _check_router(logits, route_w_out, route_ids_out)
         block_t = 8
-        _topk_softmax_kernel[(triton.cdiv(t, block_t),)](
+        moe_topk_softmax_kernel[(triton.cdiv(t, block_t),)](
             logits, route_w_out, route_ids_out, t,
             E=e, K=top_k, BLOCK_E=_pow2(e), BLOCK_T=block_t,
             MODE=_MODE_ID[mode],
@@ -327,7 +327,7 @@ if triton is not None:
     def _router_bwd(kctx, dprob, route_w, route_ids, logits, dlogits_out, *, mode):
         t, e = _check_router(logits, dprob, route_w, route_ids, dlogits_out)
         k = route_ids.shape[1]
-        _router_bwd_kernel[(t,)](
+        moe_router_bwd_kernel[(t,)](
             dprob, route_w, route_ids, logits, dlogits_out, t,
             E=e, K=k, BLOCK_E=_pow2(e), BLOCK_K=_pow2(k),
             MODE=_MODE_ID[mode],
@@ -337,7 +337,7 @@ if triton is not None:
               workspace=none(), requires=lambda c: c.get("triton"), priority=10)
     def _aux_lb(kctx, logits, counts, dlogits, *, alpha, top_k):
         t, e = _check_router(logits, counts, dlogits)
-        _aux_lb_kernel[(t,)](
+        moe_aux_lb_kernel[(t,)](
             logits, counts, dlogits, t,
             float(alpha) * e / t, float(t * top_k),
             E=e, BLOCK_E=_pow2(e),

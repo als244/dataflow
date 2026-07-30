@@ -80,7 +80,7 @@ except Exception:  # pragma: no cover - CPU-only environments
 if triton is not None:
 
     @triton.jit
-    def _fwd_kernel(x1_ptr, x3_ptr, out_ptr, n, BLOCK: tl.constexpr):
+    def swiglu_fwd_kernel(x1_ptr, x3_ptr, out_ptr, n, BLOCK: tl.constexpr):
         offs = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
         mask = offs < n
         x1 = tl.load(x1_ptr + offs, mask=mask, other=0).to(tl.float32)
@@ -91,7 +91,7 @@ if triton is not None:
         tl.store(out_ptr + offs, (silu * x3).to(out_ptr.dtype.element_ty), mask=mask)
 
     @triton.jit
-    def _bwd_kernel(ds_ptr, x1_ptr, x3_ptr, dx1_ptr, dx3_ptr, n, BLOCK: tl.constexpr):
+    def swiglu_bwd_kernel(ds_ptr, x1_ptr, x3_ptr, dx1_ptr, dx3_ptr, n, BLOCK: tl.constexpr):
         offs = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
         mask = offs < n
         x1 = tl.load(x1_ptr + offs, mask=mask, other=0).to(tl.float32)
@@ -113,13 +113,13 @@ if triton is not None:
               workspace=none(), requires=lambda c: c.get("triton"), priority=10)
     def _fwd(kctx, x1, x3, out):
         n = _check(x1, x3, out)
-        _fwd_kernel[(triton.cdiv(n, _BLOCK),)](x1, x3, out, n, BLOCK=_BLOCK)
+        swiglu_fwd_kernel[(triton.cdiv(n, _BLOCK),)](x1, x3, out, n, BLOCK=_BLOCK)
 
     @register("swiglu_bwd", "triton", deterministic=True,
               workspace=none(), requires=lambda c: c.get("triton"), priority=10)
     def _bwd(kctx, ds, x1, x3, dx1_out, dx3_out):
         n = _check(ds, x1, x3, dx1_out, dx3_out)
-        _bwd_kernel[(triton.cdiv(n, _BLOCK),)](
+        swiglu_bwd_kernel[(triton.cdiv(n, _BLOCK),)](
             ds, x1, x3, dx1_out, dx3_out, n, BLOCK=_BLOCK
         )
 
@@ -128,7 +128,7 @@ if triton is not None:
     # (row stride 2F, halves at column offsets 0 and F).
 
     @triton.jit
-    def _packed_fwd_kernel(h_ptr, out_ptr, rows, f, BLOCK_F: tl.constexpr):
+    def swiglu_packed_fwd_kernel(h_ptr, out_ptr, rows, f, BLOCK_F: tl.constexpr):
         pid_r = tl.program_id(0).to(tl.int64)
         pid_f = tl.program_id(1).to(tl.int64)
         offs_f = pid_f * BLOCK_F + tl.arange(0, BLOCK_F).to(tl.int64)
@@ -143,7 +143,7 @@ if triton is not None:
                  (silu * x3).to(out_ptr.dtype.element_ty), mask=mask)
 
     @triton.jit
-    def _packed_bwd_kernel(ds_ptr, h_ptr, dh_ptr, rows, f, BLOCK_F: tl.constexpr):
+    def swiglu_packed_bwd_kernel(ds_ptr, h_ptr, dh_ptr, rows, f, BLOCK_F: tl.constexpr):
         pid_r = tl.program_id(0).to(tl.int64)
         pid_f = tl.program_id(1).to(tl.int64)
         offs_f = pid_f * BLOCK_F + tl.arange(0, BLOCK_F).to(tl.int64)
@@ -172,7 +172,7 @@ if triton is not None:
               workspace=none(), requires=lambda c: c.get("triton"), priority=10)
     def _packed_fwd(kctx, h13, out):
         rows, f = _check_packed(h13, out)
-        _packed_fwd_kernel[(rows, triton.cdiv(f, _BLOCK))](
+        swiglu_packed_fwd_kernel[(rows, triton.cdiv(f, _BLOCK))](
             h13, out, rows, f, BLOCK_F=_BLOCK
         )
 
@@ -180,6 +180,6 @@ if triton is not None:
               workspace=none(), requires=lambda c: c.get("triton"), priority=10)
     def _packed_bwd(kctx, ds, h13, dh13_out):
         rows, f = _check_packed(h13, ds, dh13_out)
-        _packed_bwd_kernel[(rows, triton.cdiv(f, _BLOCK))](
+        swiglu_packed_bwd_kernel[(rows, triton.cdiv(f, _BLOCK))](
             ds, h13, dh13_out, rows, f, BLOCK_F=_BLOCK
         )

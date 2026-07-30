@@ -151,7 +151,7 @@ except Exception:  # pragma: no cover - CPU-only environments
 if triton is not None:
 
     @triton.jit
-    def _gather_sum_kernel(
+    def moe_gather_sum_kernel(
         src_ptr, slot_ptr, w_ptr, res_ptr, out_ptr,
         t, d, rows,
         K: tl.constexpr, BLOCK_M: tl.constexpr, BLOCK_D: tl.constexpr,
@@ -206,7 +206,7 @@ if triton is not None:
               workspace=none(), requires=lambda c: c.get("triton"), priority=10)
     def _dispatch_bwd(kctx, dxp, slot_of, out):
         t, k, rows, d = _check_gather(dxp, slot_of, out)
-        _gather_sum_kernel[(triton.cdiv(t, _BM), triton.cdiv(d, _BD))](
+        moe_gather_sum_kernel[(triton.cdiv(t, _BM), triton.cdiv(d, _BD))](
             dxp, slot_of, dxp, dxp, out, t, d, rows,
             K=k, BLOCK_M=_BM, BLOCK_D=_BD, USE_W=False, HAS_RES=False,
         )
@@ -217,13 +217,13 @@ if triton is not None:
         t, k, rows, d = _check_gather(yp, slot_of, out)
         assert route_w.shape == (t, k) and route_w.is_contiguous()
         assert resid.shape == out.shape and resid.is_contiguous()
-        _gather_sum_kernel[(triton.cdiv(t, _BM), triton.cdiv(d, _BD))](
+        moe_gather_sum_kernel[(triton.cdiv(t, _BM), triton.cdiv(d, _BD))](
             yp, slot_of, route_w, resid, out, t, d, rows,
             K=k, BLOCK_M=_BM, BLOCK_D=_BD, USE_W=True, HAS_RES=True,
         )
 
     @triton.jit
-    def _scale_rows_kernel(x_ptr, s_ptr, total, n, BLOCK: tl.constexpr):
+    def moe_scale_rows_kernel(x_ptr, s_ptr, total, n, BLOCK: tl.constexpr):
         offs = (tl.program_id(0).to(tl.int64) * BLOCK + tl.arange(0, BLOCK).to(tl.int64))
         mask = offs < total
         row = offs // n
@@ -232,7 +232,7 @@ if triton is not None:
         tl.store(x_ptr + offs, (x * s).to(x_ptr.dtype.element_ty), mask=mask)
 
     @triton.jit
-    def _rowdot_kernel(a_ptr, b_ptr, out_ptr, n, BLOCK_N: tl.constexpr):
+    def moe_rowdot_kernel(a_ptr, b_ptr, out_ptr, n, BLOCK_N: tl.constexpr):
         row = tl.program_id(0).to(tl.int64)
         acc = tl.zeros((BLOCK_N,), dtype=tl.float32)
         for off in range(0, n, BLOCK_N):
@@ -249,7 +249,7 @@ if triton is not None:
         assert x.is_cuda and x.is_contiguous() and x.dim() == 2
         assert srw.is_contiguous() and srw.numel() == x.shape[0]
         total = x.numel()
-        _scale_rows_kernel[(triton.cdiv(total, 1024),)](
+        moe_scale_rows_kernel[(triton.cdiv(total, 1024),)](
             x, srw, total, x.shape[1], BLOCK=1024
         )
 
@@ -258,4 +258,4 @@ if triton is not None:
     def _rowdot(kctx, a, b, out):
         assert a.shape == b.shape and a.is_contiguous() and b.is_contiguous()
         assert out.numel() == a.shape[0] and out.dtype == torch.float32
-        _rowdot_kernel[(a.shape[0],)](a, b, out, a.shape[1], BLOCK_N=1024)
+        moe_rowdot_kernel[(a.shape[0],)](a, b, out, a.shape[1], BLOCK_N=1024)

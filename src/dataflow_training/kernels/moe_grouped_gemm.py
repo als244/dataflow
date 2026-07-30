@@ -197,7 +197,7 @@ if triton is not None:
         return tp
 
     @triton.jit
-    def _grouped_mm_kernel(
+    def moe_grouped_mm_kernel(
         a_ptr, b_ptr, c_ptr, offs_ptr, tp_ptr,
         n_dim, k_dim, n_experts,
         sam, sak, sbe, sbk, sbn, scm, scn,
@@ -250,7 +250,7 @@ if triton is not None:
         )
 
     @triton.jit
-    def _grouped_wgrad_kernel(
+    def moe_grouped_wgrad_kernel(
         a_ptr, g_ptr, d_ptr, offs_ptr,
         k_dim, n_dim,
         sam, sak, sgm, sgn, sde, sdk, sdn,
@@ -307,7 +307,7 @@ if triton is not None:
         if out is None:
             out = torch.empty(m, n, dtype=x.dtype, device=x.device)
         tp = _tile_prefix(offsets)
-        _grouped_mm_kernel[(_grid0(m, w.shape[0]), (n + _BN - 1) // _BN)](
+        moe_grouped_mm_kernel[(_grid0(m, w.shape[0]), (n + _BN - 1) // _BN)](
             x, w, out, offsets, tp, n, w.shape[1], w.shape[0],
             x.stride(0), x.stride(1), w.stride(0), w.stride(1), w.stride(2),
             out.stride(0), out.stride(1),
@@ -325,7 +325,7 @@ if triton is not None:
         if dx_out is None:
             dx_out = torch.empty(m, kd, dtype=dy.dtype, device=dy.device)
         tp = _tile_prefix(offsets)
-        _grouped_mm_kernel[(_grid0(m, w.shape[0]), (kd + _BN - 1) // _BN)](
+        moe_grouped_mm_kernel[(_grid0(m, w.shape[0]), (kd + _BN - 1) // _BN)](
             dy, w, dx_out, offsets, tp, kd, w.shape[2], w.shape[0],
             dy.stride(0), dy.stride(1), w.stride(0), w.stride(2), w.stride(1),
             dx_out.stride(0), dx_out.stride(1),
@@ -340,7 +340,7 @@ if triton is not None:
         assert x.is_cuda and dy.is_cuda and dw.is_cuda and dw.dim() == 3
         kd, n = dw.shape[1], dw.shape[2]
         assert x.shape[1] == kd and dy.shape[1] == n
-        _grouped_wgrad_kernel[(
+        moe_grouped_wgrad_kernel[(
             dw.shape[0], (kd + _BM - 1) // _BM, (n + _BN - 1) // _BN,
         )](
             x, dy, dw, offsets, kd, n,

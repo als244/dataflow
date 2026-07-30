@@ -65,7 +65,7 @@ except Exception:  # pragma: no cover
 if triton is not None:
 
     @triton.jit
-    def _ln_fwd_kernel(
+    def layernorm_fwd_kernel(
         x_ptr, w_ptr, b_ptr, out_ptr, mean_ptr, rstd_ptr, d, eps,
         HAS_B: tl.constexpr, SAVED_STATS: tl.constexpr, BLOCK: tl.constexpr,
     ):
@@ -108,7 +108,7 @@ if triton is not None:
                      y.to(out_ptr.dtype.element_ty), mask=mask)
 
     @triton.jit
-    def _ln_bwd_kernel(
+    def layernorm_bwd_kernel(
         dy_ptr, x_ptr, mean_ptr, rstd_ptr, w_ptr, dx_ptr,
         dw_partial_ptr, db_partial_ptr,
         n_rows, d, ROWS_PER_PROG: tl.constexpr, BLOCK: tl.constexpr,
@@ -159,7 +159,7 @@ if triton is not None:
 
     def _fused_ln_fwd(x, w, b, out, mean_out, rstd_out, saved):
         d = x.shape[-1]
-        _ln_fwd_kernel[(x.shape[0],)](
+        layernorm_fwd_kernel[(x.shape[0],)](
             x, w, b if b is not None else x, out, mean_out, rstd_out,
             d, ops.LN_EPS,
             HAS_B=b is not None, SAVED_STATS=saved, BLOCK=_BLOCK,
@@ -188,7 +188,7 @@ if triton is not None:
         n_progs = -(-n_rows // _ROWS_PER_PROG)
         partials = torch.zeros((2, n_progs, d), device=dy.device,
                                dtype=torch.float32)
-        _ln_bwd_kernel[(n_progs,)](
+        layernorm_bwd_kernel[(n_progs,)](
             dy, x, mean, rstd, w, dx_out, partials[0], partials[1],
             n_rows, d, ROWS_PER_PROG=_ROWS_PER_PROG, BLOCK=_BLOCK,
         )

@@ -45,7 +45,7 @@ except Exception:  # pragma: no cover
 if triton is not None:
 
     @triton.jit
-    def _ce_kernel(
+    def cross_entropy_kernel(
         logits_ptr, targets_ptr, dlogits_ptr, nll_ptr,
         total_rows, vocab, BLOCK: tl.constexpr,
     ):
@@ -99,7 +99,7 @@ if triton is not None:
         total = int(total_rows) if total_rows is not None else n_rows
         assert logits.is_contiguous() and dlogits_out.is_contiguous()
         nll = torch.empty(n_rows, device=logits.device, dtype=torch.float32)
-        _ce_kernel[(n_rows,)](
+        cross_entropy_kernel[(n_rows,)](
             logits, targets.int(), dlogits_out, nll, total, vocab, BLOCK=_BLOCK,
         )
         loss_out.copy_((nll.sum() / total).reshape(loss_out.shape))

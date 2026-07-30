@@ -48,7 +48,7 @@ register("embed_bwd_accum", "eager", deterministic=True,
 if triton is not None:
 
     @triton.jit
-    def _embed_seg_kernel(st_ptr, order_ptr, dy_ptr, dw_ptr,
+    def embed_seg_kernel(st_ptr, order_ptr, dy_ptr, dw_ptr,
                           T, D, dy_stride, dw_stride,
                           ITERS: tl.constexpr, BD: tl.constexpr):
         i = tl.program_id(0)
@@ -101,7 +101,7 @@ if triton is not None:
         order = torch.argsort(tokens.long(), stable=True)
         st = tokens.long()[order].contiguous()
         iters = max(1, (t - 1).bit_length() + 1)
-        _embed_seg_kernel[(t,)](
+        embed_seg_kernel[(t,)](
             st, order, dy, dw_embed,
             t, d, dy.stride(0), dw_embed.stride(0),
             ITERS=iters, BD=1024, num_warps=4, num_stages=2,

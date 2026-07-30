@@ -43,7 +43,7 @@ except Exception:  # pragma: no cover
 if triton is not None:
 
     @triton.jit
-    def _adamw_kernel(
+    def adamw_kernel(
         w_ptr, g_ptr, m_ptr, v_ptr, n,
         lr, beta1, beta2, eps, weight_decay, bc1, bc2,
         BLOCK: tl.constexpr,
@@ -74,7 +74,7 @@ if triton is not None:
     def _fused(kctx, w, g, m, v, *, lr, beta1, beta2, eps, weight_decay, step):
         n = w.numel()
         assert g.numel() == n and m.numel() == n and v.numel() == n
-        _adamw_kernel[(triton.cdiv(n, _BLOCK),)](
+        adamw_kernel[(triton.cdiv(n, _BLOCK),)](
             w, g, m, v, n,
             lr, beta1, beta2, eps, weight_decay,
             1 - beta1 ** step, 1 - beta2 ** step,  # host-side python floats

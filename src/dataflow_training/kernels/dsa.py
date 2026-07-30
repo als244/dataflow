@@ -274,7 +274,7 @@ if triton is not None:
         return width
 
     @triton.jit
-    def _mf_fwd_kernel(q_ptr, k_ptr, v_ptr, bits_ptr, o_ptr, lse_ptr,
+    def dsa_mf_fwd_kernel(q_ptr, k_ptr, v_ptr, bits_ptr, o_ptr, lse_ptr,
                        L, n_words, scale,
                        sqt, sqh, skt, skh, svt, svh, sot, soh, slh, slt,
                        H: tl.constexpr, D: tl.constexpr,
@@ -332,7 +332,7 @@ if triton is not None:
         tl.store(lse_ptr + pid_h * slh + rm * slt, lse, mask=mmask)
 
     @triton.jit
-    def _mf_bwd_dq_kernel(do_ptr, q_ptr, k_ptr, v_ptr, o_ptr, bits_ptr,
+    def dsa_mf_bwd_dq_kernel(do_ptr, q_ptr, k_ptr, v_ptr, o_ptr, bits_ptr,
                           lse_ptr, dq_ptr, delta_ptr,
                           L, n_words, scale,
                           sqt, sqh, skt, skh, svt, svh, sot, soh, slh, slt,
@@ -383,7 +383,7 @@ if triton is not None:
                  mask=mmask[:, None] & dmask[None, :])
 
     @triton.jit
-    def _mf_bwd_dkv_kernel(do_ptr, q_ptr, k_ptr, v_ptr, bits_ptr,
+    def dsa_mf_bwd_dkv_kernel(do_ptr, q_ptr, k_ptr, v_ptr, bits_ptr,
                            lse_ptr, dk_ptr, dv_ptr, delta_ptr,
                            L, n_words, scale,
                            sqt, sqh, skt, skh, svt, svh, sot, soh, slh, slt,
@@ -458,7 +458,7 @@ if triton is not None:
                                    device=q.device)
                 _pack_local_bits(idx[lo:hi], lo, length, bits)
             grid = ((length + BM - 1) // BM, n_heads)
-            _mf_fwd_kernel[grid](
+            dsa_mf_fwd_kernel[grid](
                 q[lo:hi], kf[lo:hi], vp[lo:hi], bits, out[lo:hi],
                 lse_out[:, lo:hi],
                 length, words, head_dim ** -0.5,
@@ -520,7 +520,7 @@ if triton is not None:
             delta = torch.empty(n_heads, length, dtype=torch.float32,
                                 device=q.device)
             grid_m = ((length + 31) // 32, n_heads)
-            _mf_bwd_dq_kernel[grid_m](
+            dsa_mf_bwd_dq_kernel[grid_m](
                 d_attn[lo:hi], q[lo:hi], kf[lo:hi], vp[lo:hi], out[lo:hi],
                 bits, lse[:, lo:hi], dq_out[lo:hi], delta,
                 length, words, head_dim ** -0.5,
@@ -533,7 +533,7 @@ if triton is not None:
                 num_warps=4, num_stages=3,
             )
             grid_n = ((length + BN - 1) // BN, n_heads)
-            _mf_bwd_dkv_kernel[grid_n](
+            dsa_mf_bwd_dkv_kernel[grid_n](
                 d_attn[lo:hi], q[lo:hi], kf[lo:hi], vp[lo:hi],
                 bits, lse[:, lo:hi], dk_out[lo:hi], dv_out[lo:hi],
                 delta,
@@ -548,7 +548,7 @@ if triton is not None:
             )
 
     @triton.jit
-    def _idx_scores_kernel(q_ptr, k_ptr, w_ptr, s_ptr,
+    def dsa_idx_scores_kernel(q_ptr, k_ptr, w_ptr, s_ptr,
                            L, s_stride,
                            HI: tl.constexpr, DI: tl.constexpr,
                            DIP: tl.constexpr,
@@ -605,7 +605,7 @@ if triton is not None:
             s_slice = scores_out[lo:hi, lo:hi] if scores_out.shape[0] != length \
                 else scores_out
             grid = ((length + BM - 1) // BM, (length + BN - 1) // BN)
-            _idx_scores_kernel[grid](
+            dsa_idx_scores_kernel[grid](
                 q_idx[lo:hi], k_idx[lo:hi], wts[lo:hi], s_slice,
                 length, s_slice.stride(0),
                 HI=n_heads, DI=head_dim,
@@ -617,7 +617,7 @@ if triton is not None:
 if triton is not None:
 
     @triton.jit
-    def _idx_bwd_dq_kernel(ds_ptr, q_ptr, k_ptr, w_ptr, dq_ptr, dw_ptr,
+    def dsa_idx_bwd_dq_kernel(ds_ptr, q_ptr, k_ptr, w_ptr, dq_ptr, dw_ptr,
                            L, s_stride,
                            HI: tl.constexpr, DI: tl.constexpr,
                            DIP: tl.constexpr,
@@ -653,7 +653,7 @@ if triton is not None:
             tl.store(dw_ptr + rm * HI + h, dw_acc, mask=mmask)
 
     @triton.jit
-    def _idx_bwd_dk_kernel(ds_ptr, q_ptr, k_ptr, w_ptr, dk_ptr,
+    def dsa_idx_bwd_dk_kernel(ds_ptr, q_ptr, k_ptr, w_ptr, dk_ptr,
                            L, s_stride,
                            HI: tl.constexpr, DI: tl.constexpr,
                            DIP: tl.constexpr,
@@ -699,7 +699,7 @@ if triton is not None:
             # 0.31 -> 0.62 combined vs 1.52 shared-config; small fp32-dI
             # tiles pipeline far better than square ones)
             grid_m = ((length + 31) // 32,)
-            _idx_bwd_dq_kernel[grid_m](
+            dsa_idx_bwd_dq_kernel[grid_m](
                 ds, q_idx[lo:hi], k_idx[lo:hi], wts[lo:hi],
                 dq_out[lo:hi], dwts_out[lo:hi],
                 length, ds.stride(0),
@@ -708,7 +708,7 @@ if triton is not None:
                 num_warps=4, num_stages=4,
             )
             grid_n = ((length + 31) // 32,)
-            _idx_bwd_dk_kernel[grid_n](
+            dsa_idx_bwd_dk_kernel[grid_n](
                 ds, q_idx[lo:hi], k_idx[lo:hi], wts[lo:hi], dk_out[lo:hi],
                 length, ds.stride(0),
                 HI=n_heads, DI=head_dim,
@@ -717,7 +717,7 @@ if triton is not None:
             )
 
     @triton.jit
-    def _probs_sum_kernel(q_ptr, k_ptr, bits_ptr, lse_ptr, p_ptr,
+    def dsa_probs_sum_kernel(q_ptr, k_ptr, bits_ptr, lse_ptr, p_ptr,
                           L, n_words, p_stride, scale,
                           sqt, sqh, skt, skh, slh, slt,
                           H: tl.constexpr, D: tl.constexpr,
@@ -774,7 +774,7 @@ if triton is not None:
                 _pack_local_bits(idx[lo:hi], lo, length, bits)
             p_slice = p_out[lo:hi, lo:hi] if p_out.shape[0] != length else p_out
             grid = ((length + BM - 1) // BM, (length + BN - 1) // BN)
-            _probs_sum_kernel[grid](
+            dsa_probs_sum_kernel[grid](
                 q[lo:hi], kf[lo:hi], bits, lse[:, lo:hi], p_slice,
                 length, words, p_slice.stride(0), head_dim ** -0.5,
                 q.stride(0), head_dim, kf.stride(0), head_dim,
