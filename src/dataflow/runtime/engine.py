@@ -38,7 +38,7 @@ from .pool import BufferPool
 from .placement import PlacementError
 from .slab import SlabError
 from .device.annotate import NoopAnnotator
-from .trace import Interval, RunTrace, TraceEvent
+from .trace import DispatchRecord, Interval, RunTrace, TraceEvent
 from .transfers import TransferDone, TransferEngine, TransferError, TransferJob
 
 
@@ -603,6 +603,16 @@ class Engine:
             stats["token_detect_lat"] = 0.0
             stats["token_detect_n"] = 0
             state.stats = stats
+        # function-level attribution of dispatcher host time (the phase
+        # stats above say WHICH phase; this says which python): profiles
+        # the whole dispatch loop incl. token handlers, dumps pstats to
+        # the given path at drain (last run wins)
+        profiler = None
+        profile_out = _os.environ.get("DATAFLOW_DISPATCH_PROFILE")
+        if profile_out:
+            import cProfile
+            profiler = cProfile.Profile()
+            profiler.enable()
         # run_args are fully OPAQUE to the engine (its contract): any
         # structured values (e.g. the workload's packed-round segments)
         # are interpreted, converted, and materialized by the consuming
@@ -644,9 +654,11 @@ class Engine:
             if stats is not None:
                 stats["prev_token_wait"] += _time.perf_counter() - _t
                 stats["tasks"] += 1
+            t_pacing = self.backend.host_now_us()
 
             # 1. inputs host-observed live in fast memory
             _t = _time.perf_counter() if stats is not None else 0.0
+            stalled_inputs: tuple[str, ...] = ()
             while True:
                 waiting = [
                     obj for obj in task.inputs
@@ -654,15 +666,19 @@ class Engine:
                 ]
                 if not waiting:
                     break
+                stalled_inputs = tuple(waiting)
                 state.step(f"task {task.id!r} waiting for inputs {waiting} to be live in fast memory",
                            exclude=protected)
             if stats is not None:
                 stats["input_wait"] += _time.perf_counter() - _t
+            t_inputs = self.backend.host_now_us()
 
             # 2. fast capacity for outputs (the simulator's task stall) —
             # assigned mode adds per-offset availability to the same condition
             escaped_outputs: set[str] = set()
             was_reserve_blocked = False
+            stalled_outputs: tuple[str, ...] = ()
+            ledger_blocked = False
             _t = _time.perf_counter() if stats is not None else 0.0
             while True:
                 can_res = ledger.can_reserve("fast", fast_out)
@@ -671,6 +687,10 @@ class Engine:
                     if o.location == "fast" and o.id not in escaped_outputs
                     and not pool.can_get(o.location, o.size_bytes, tag=o.id)
                 ]
+                if not can_res:
+                    ledger_blocked = True
+                if busy:
+                    stalled_outputs = tuple(busy)
                 if can_res and not busy:
                     if stats is not None:
                         stats["reserve_wait"] += _time.perf_counter() - _t
@@ -732,6 +752,7 @@ class Engine:
 
             if stats is not None:
                 stats["reserve_bookkeeping"] += _time.perf_counter() - _t
+            t_reserved = self.backend.host_now_us()
             if was_reserve_blocked:
                 # the lane was suppressed while this reserve accumulated
                 # its bytes — restart the parked head now that outputs are
@@ -763,6 +784,14 @@ class Engine:
             )
             if stats is not None:
                 stats["launch_enqueue"] += _time.perf_counter() - _t
+            trace.dispatch.append(DispatchRecord(
+                task_id=task.id, pacing_done=t_pacing, inputs_live=t_inputs,
+                outputs_reserved=t_reserved,
+                launched=self.backend.host_now_us(),
+                stalled_inputs=stalled_inputs,
+                stalled_outputs=stalled_outputs,
+                ledger_blocked=ledger_blocked,
+            ))
             state.outstanding_task = task.id
 
         # --- drain -------------------------------------------------------------
@@ -785,6 +814,10 @@ class Engine:
                 "can never admit them. " + "; ".join(stuck)
             )
 
+        if profiler is not None:
+            profiler.disable()
+            profiler.dump_stats(profile_out)
+            print(f"dispatch profile written to {profile_out}")
         if stats is not None:
             n = max(stats["tasks"], 1)
             print("dispatch stats (per task, us):")

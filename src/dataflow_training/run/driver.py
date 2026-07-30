@@ -823,7 +823,8 @@ def run_engine(client, cfg, recipe: Recipe, pipeline, steps: int, *,
         sm = steps_meta.pop(step)
         run_args = {"step": step, "valid_rows": sm["valid"],
                     "seq_lens": sm["lens"]}
-        out = client.run(prog_id, args=run_args, fetch=fetch)
+        out = client.run(prog_id, args=run_args, fetch=fetch,
+                         label=f"s{step}")
         dt = time.perf_counter() - t0
         if out.get("state") != "done":
             raise RuntimeError(f"run step {step} state={out.get('state')}: {out}")

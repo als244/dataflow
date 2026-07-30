@@ -198,6 +198,7 @@ def install(server) -> None:
         args = a.get("args") or {}
         rebind = a.get("rebind") or {}
         fetch = a.get("fetch") or []
+        label = a.get("label")
 
         # lease pre-pass BEFORE any handler-visible mutation: LEASED
         # parks this call for retry, so nothing (RunRecord, counters)
@@ -255,11 +256,10 @@ def install(server) -> None:
 
         import os as _os
         if _os.environ.get("DATAFLOW_SVC_DEBUG"):
-            tok = next((s.size_bytes for s in program.initial_objects
-                        if s.id == "tokens_0_0"), None)
+            n_init = len(program.initial_objects)
             with open("/tmp/svc_debug.log", "a") as f:
                 f.write(f"RUN {run_id} prog={entry.prog_id} "
-                        f"entry_id={id(entry)} prog_tokens={tok} "
+                        f"entry_id={id(entry)} initial_objects={n_init} "
                         f"n_progs={len(programs)}\n")
 
         rec.state = "running"
@@ -292,7 +292,8 @@ def install(server) -> None:
                 placement=entry.placement, pool_demand=entry.pool_demand,
                 run_args=run_args, cancel_event=active_cancel,
                 groups=group_handles,
-                poison_on_free=st.config.poison_on_free)
+                poison_on_free=st.config.poison_on_free,
+                annotate_label=label)
 
         rec.finished = time.time()
         entry.runs += 1

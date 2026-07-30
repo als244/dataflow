@@ -213,9 +213,24 @@ def prepare_placement(program, values):
     return placement, demand
 
 
+class DisplayPrefix:
+    """NVTX display renamer built from the run's caller-provided label:
+    every task/transfer display name gets the label as a prefix. The
+    service stays blind to what the label MEANS — a workload that
+    replays one program many times labels each run in its own
+    vocabulary and its profiles become distinguishable. Display-only;
+    trace and plan ids are untouched."""
+
+    def __init__(self, label: str):
+        self.label = label
+
+    def __call__(self, name: str) -> str:
+        return f"{self.label} {name}"
+
+
 def execute_run(program, resolver, values, *, prog_id, store=None,
                 placement, pool_demand, run_args, cancel_event,
-                groups=None, poison_on_free=False):
+                groups=None, poison_on_free=False, annotate_label=None):
     """One engine run over store-backed buffers. Returns (result,
     error_kind, outcome); the caller owns result.close().
 
@@ -245,6 +260,8 @@ def execute_run(program, resolver, values, *, prog_id, store=None,
             program, resolver=resolver, initial_buffers=values,
             pool_prewarm=pool_demand, placement=placement,
             run_args=run_args, cancel_event=cancel_event, groups=groups,
+            annotate_rename=(DisplayPrefix(annotate_label)
+                             if annotate_label else None),
         )
     except (ExecutionError, DeadlockError) as e:
         # engine-invariant violation (a bug): the ordered abort-cleanup already
