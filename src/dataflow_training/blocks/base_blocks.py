@@ -164,6 +164,40 @@ class _Base:
         slices = self.tp_slices(task)
         return sliced_layout(wl, slices) if slices else wl
 
+    def profile_weight_layouts(self, task) -> dict:
+        """The weight objects this task reads, each with its PRODUCTION
+        layout, so the profiler can seed them per FIELD exactly the way
+        training initializes them (lowering/emit.fill_weight_fields:
+        N(0, 0.02) matrix draws, ``*_norm_w`` fields ones) instead of
+        the blanket N(0,1) fill_realistic gives every float input.
+
+        Operand SCALE decides cost, not only shape. Measured on H100:
+        under N(0,1) weights the head's logits come out ~50x too wide
+        (std 63.3 vs production's 1.28 — both sigma*sqrt(d_model)), its
+        CE softmax saturates, 99.9% of dlogits are exactly zero, and the
+        two vocab-scale GEMMs downstream read an almost entirely zero
+        matrix: they barely switch the datapath and hold a boost clock
+        the real step never reaches under the same power cap. That
+        under-priced head_loss by ~20% (155 ms profiled vs 187 ms
+        in-run). Every weight-carrying task is seeded from the same rule
+        here, per field, because every one of them was getting operands
+        of the wrong scale with randomized norm gains.
+
+        Per-layer dtype sub-policies and tensor-parallel shard slices
+        ride along: ``task_weight_layout`` already resolves both, and
+        field NAMES (which select the init rule) survive slicing."""
+        out = {}
+        for oid in tuple(task.inputs) + tuple(task.mutates):
+            if oid in out:
+                continue
+            if oid == "W_head":
+                out[oid] = head_weight_layout(self.dims)
+            elif oid == "W_embed":
+                out[oid] = embed_weight_layout(self.dims)
+            elif oid.startswith("W_"):
+                out[oid] = self.task_weight_layout(task)
+        return out
+
     # matrix-parameter fields this executable applies through the linear
     # seam (blocks/linear.py) — plain class attr, not a dataclass field;
     # family block classes declare their own list

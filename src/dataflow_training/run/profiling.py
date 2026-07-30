@@ -20,7 +20,13 @@ The plan's measurement-over-estimation principle, mechanized:
   contexts, packed weight layouts) carry NO element type and are the biggest
   buffers a block reads, so they are seeded as bf16; integer payloads stay
   deterministic and any discrete field is restored by the executable's own
-  `profile_fill` hook.
+  `profile_fill` hook. WEIGHT objects then get a second, per-FIELD pass with
+  the init PRODUCTION uses (`fill_weight_fields`: N(0, 0.02) matrices,
+  `*_norm_w` ones), because "real-scale" is a per-field property and a
+  blanket N(0,1) is ~50x off for weights: it widened the head's logits from
+  std 1.28 to 63.3, saturated its CE softmax, left 99.9% of dlogits exactly
+  zero, and under-priced head_loss ~20% on H100 (155 ms profiled vs 187 ms in
+  a real step) — a near-idle datapath holding a clock the run never sees.
 - **Workspace**: the torch caching-allocator peak delta around one launch —
   exactly the scratch-lane bytes the executable used beyond runtime-owned
   buffers (runtime buffers come from our pool, invisible to torch's
@@ -121,6 +127,15 @@ def _signature(task: TaskSpec, sizes: dict[str, int],
 
 
 PROFILE_FILL_SEED = 20260724
+
+
+def fill_weight_fields(buffer, layout, generator) -> None:
+    """Production per-FIELD weight init (lowering/emit) applied to a
+    profiling buffer — re-exported here so the profile loop states its
+    dependency on the init policy explicitly."""
+    from dataflow_training.lowering.emit import fill_weight_fields as impl
+
+    impl(buffer, layout, generator)
 
 
 def fill_realistic(buffer, size_bytes: int, dtype_name: str, generator) -> bool:
@@ -302,6 +317,7 @@ def profile_program(
     # + materialize a uniform descriptor once here (from any block
     # executable's dims — all tasks share dims)
     _run_args = None
+    _run_values = None
     for _t in program.tasks:
         _d = getattr(resolver(_t), "dims", None)
         if _d is not None:
@@ -313,6 +329,15 @@ def profile_program(
                     f"cuda:{backend.device}")
                 segs = {r: one for r in segs}
             _run_args = {"segments": segs}
+            # production publishes each round's CONTENT token count via
+            # the prologue into run_values; profiled launches must read
+            # the SAME channel with the SAME numbers (uniform segments
+            # = full rounds), not the max_tokens fallback — for full
+            # rounds the value is identical, but the channel divergence
+            # would silently overprice num_tokens consumers on any
+            # under-filled round profiled in the future
+            _run_values = {"num_tokens_by_round":
+                           {str(r): _d.max_tokens for r in segs}}
             break
 
     for task in program.tasks:
@@ -360,9 +385,26 @@ def profile_program(
             out_buffers = {o.id: buf(o.size_bytes) for o in task.outputs}
             mut_buffers = {m: in_buffers[m] for m in task.mutates}
             executable = resolver(task)
+
+            # WEIGHT objects are then re-seeded per FIELD with the init
+            # PRODUCTION uses (N(0, 0.02) matrices, *_norm_w ones): the
+            # blanket N(0,1) above is right for activations but wrong for
+            # weights by ~50x, and operand scale decides cost. It made
+            # the head's softmax saturate, zeroed 99.9% of its dlogits,
+            # and under-priced it 20% against a real step (see
+            # _Base.profile_weight_layouts). Fixed seed: profiles must be
+            # reproducible across cache refreshes.
+            layouts = getattr(executable, "profile_weight_layouts", None)
+            if layouts is not None:
+                weight_gen = torch.Generator().manual_seed(0)
+                for oid, layout in layouts(task).items():
+                    wbuf = in_buffers.get(oid)
+                    if wbuf is not None:
+                        fill_weight_fields(wbuf, layout, weight_gen)
             ctx = TaskContext(
                 task=task, stream=stream, inputs=in_buffers, outputs=out_buffers,
                 mutates=mut_buffers, backend=backend, run_args=_run_args,
+                run_values=_run_values,
             )
 
             # Executables may declare a deterministic buffer-seeding hook
@@ -386,15 +428,23 @@ def profile_program(
             workspace = max(0, torch.cuda.max_memory_allocated() - base)
 
             if contender is not None:
-                contender.cover(float(task.runtime_us) * (warmup + repeats))
+                # initial guess only — topped up per repeat below from
+                # MEASURED durations, so neither the plan's estimate nor
+                # the contender's assumed drain rate can starve the bus
+                # mid-bench (an exhausted contender made a ~187 ms head
+                # measure ~155: the tail repeats ran on an idle bus)
+                contender.cover(float(task.runtime_us) * (warmup + 2))
             times = []
             for i in range(warmup + repeats):
                 a = backend.record_event(stream)
                 executable.launch(ctx)
                 b = backend.record_event(stream)
                 _check(cudart.cudaEventSynchronize(b.raw))
+                took = backend.event_time_us(b) - backend.event_time_us(a)
                 if i >= warmup:
-                    times.append(backend.event_time_us(b) - backend.event_time_us(a))
+                    times.append(took)
+                if contender is not None:
+                    contender.cover(took * 2.0)
             profiles[sig] = TaskProfile(
                 runtime_us=statistics.median(times),
                 workspace_bytes=workspace,
@@ -603,6 +653,9 @@ def impl_fingerprint() -> str:
         for f in sorted((base / sub).rglob("*.py")):
             h.update(str(f.relative_to(base)).encode())
             h.update(hashlib.sha256(f.read_bytes()).digest())
+    # the measurement code itself shapes the numbers (the contender
+    # starvation fix changed a head profile 20%): fingerprint this file
+    h.update(hashlib.sha256(Path(__file__).resolve().read_bytes()).digest())
     return h.hexdigest()[:16]
 #   "3": float inputs seeded with real-scale values (fill_realistic) — every
 #        earlier profile timed zero-valued operands and ran ~1.25x optimistic
