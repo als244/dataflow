@@ -195,7 +195,17 @@ class CudaBackend:
     physical: bool = True
     device: int = 0
     completion_mode: str = "poll"  # "poll" | "hostfn"
-    poll_yield: bool = True        # sleep(0) between poll sweeps
+    poll_yield: bool = True        # GIL yield during poll waits
+    # Yield cadence: a bare per-iteration sleep(0) hands the GIL to the
+    # daemon's other threads on EVERY sweep, and each re-acquisition can
+    # wait up to the interpreter switch interval — measured ~54 us per
+    # yield, ~115 yields per task boundary = milliseconds of dispatch
+    # latency. Yielding at most once per this many seconds keeps service
+    # threads responsive at ms granularity without the per-sweep GIL
+    # roulette (the event-query C call also drops the GIL briefly each
+    # sweep, so other threads are never fully starved between yields).
+    poll_yield_interval_s: float = 0.001
+    last_poll_yield_s: float = 0.0
 
     _streams: list[Stream] = field(default_factory=list)
     _pending: dict[str, deque[_Pending]] = field(default_factory=dict)
@@ -445,7 +455,10 @@ class CudaBackend:
             if best is not None:
                 return self._pending[best[2]].popleft().token
             if self.poll_yield:
-                time.sleep(0)
+                now = time.perf_counter()
+                if now - self.last_poll_yield_s >= self.poll_yield_interval_s:
+                    self.last_poll_yield_s = now
+                    time.sleep(0)
 
     def measure_pcie(self, nbytes: int = 512 * 1024 * 1024) -> "PcieBandwidth":
         """Measure pinned-copy bandwidth in both regimes (bytes/us ints).
