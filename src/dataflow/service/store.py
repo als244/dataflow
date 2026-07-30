@@ -140,9 +140,14 @@ class Store:
         — plain bytearray; identical allocator/catalog behavior)."""
         import threading
 
+        import os
+
         self.catalog_lock = threading.Lock()
         self.allocator = SlabAllocator(capacity_bytes)
         self.objects: dict[str, ObjectRecord] = {}
+        # catalogue diagnostics ride the allocator-trace switch: one
+        # daemon-log line per catalogue mutation, off by default
+        self.trace_catalog = bool(os.environ.get("DATAFLOW_ALLOC_TRACE"))
         self.slab = slab
         self._bytes = bytearray(capacity_bytes) if slab is None else None
         self._transients: dict[str, tuple] = {}   # token -> (owner, Extent)
@@ -199,6 +204,10 @@ class Store:
                 ext = self.allocator.alloc(size_bytes)
                 rec = ObjectRecord(oid, size_bytes, meta or {}, ext)
                 self.objects[oid] = rec
+            if self.trace_catalog:
+                print(f"[catalog] {time.time():.6f} carve {oid} "
+                      f"{size_bytes}B off={ext.offset} "
+                      f"n={len(self.objects)}", flush=True)
         if meta:
             rec.meta = meta
         if data is not None:
@@ -248,6 +257,9 @@ class Store:
         with self.catalog_lock:
             self.allocator.release(rec.extent)
             del self.objects[oid]
+        if self.trace_catalog:
+            print(f"[catalog] {time.time():.6f} release {oid} "
+                  f"{rec.size_bytes}B n={len(self.objects)}", flush=True)
         return True
 
     def protect(self, oid: str, value: bool) -> None:

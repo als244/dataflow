@@ -690,6 +690,9 @@ class Engine:
             import cProfile
             profiler = cProfile.Profile()
             profiler.enable()
+        alloc_trace_out = _os.environ.get("DATAFLOW_ALLOC_TRACE")
+        if alloc_trace_out:
+            pool.alloc_log = []
         calltrace = None
         calltrace_out = _os.environ.get("DATAFLOW_DISPATCH_CALLTRACE")
         if calltrace_out:
@@ -915,6 +918,13 @@ class Engine:
                 "can never admit them. " + "; ".join(stuck)
             )
 
+        if alloc_trace_out and pool.alloc_log is not None:
+            with open(alloc_trace_out, "w") as fh:
+                for t, ev, tag, loc, size, off in pool.alloc_log:
+                    fh.write(f"{t:.0f} {ev} {tag} {loc} {size} {off}\n")
+            print(f"alloc trace written to {alloc_trace_out} "
+                  f"({len(pool.alloc_log)} events)")
+            pool.alloc_log = None
         if boundary is not None:
             b = boundary
             print("boundary stats (us): "

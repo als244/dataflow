@@ -49,6 +49,20 @@ class BufferPool:
     # (location, size) -> total buffers ever created: a completed run's map is
     # the exact prewarm demand for a repeat run (direct regime only).
     allocated_by_key: dict[tuple[str, int], int] = field(default_factory=dict)
+    # optional allocator diagnostics (DATAFLOW_ALLOC_TRACE): rows of
+    # (host_us, event, tag, location, size, offset) appended on every
+    # get/put/blocked/escape; None (the default) costs one is-None
+    # check per site. The engine enables it per run and dumps at drain.
+    alloc_log: list | None = None
+
+    def note_alloc(self, event, tag, location, size_bytes, offset=-1):
+        # collapse repeats: a stalled reserve re-polls can_get every
+        # sweep — one "blocked" row per episode, not thousands
+        if self.alloc_log and self.alloc_log[-1][1] == event \
+                and self.alloc_log[-1][2] == str(tag):
+            return
+        self.alloc_log.append((self.backend.host_now_us(), event,
+                               str(tag), location, size_bytes, offset))
     # location -> (alloc_fn(size)->Buffer, free_fn(Buffer)): dynamic
     # allocations for that location draw from an EXTERNAL owner (the
     # engine-service store slab) instead of the vendor allocator. The
@@ -118,6 +132,9 @@ class BufferPool:
         end = offset + size_bytes
         for lo, hi in self._live_ranges.values():
             if lo < end and offset < hi:
+                if self.alloc_log is not None:
+                    self.note_alloc("blocked", tag, location, size_bytes,
+                                    offset)
                 return False
         return True
 
@@ -131,6 +148,8 @@ class BufferPool:
         key = self._next_key(tag)
         self._incarnations[tag] = key[1] + 1
         self.placement_escapes += 1
+        if self.alloc_log is not None:
+            self.note_alloc("escape", tag, location, size_bytes)
         return self._get_dynamic(location, size_bytes)
 
     def get(self, location: Location, size_bytes: int, tag: str | None = None) -> Buffer:
@@ -162,6 +181,8 @@ class BufferPool:
                 )
                 self._incarnations[tag] = key[1] + 1
                 self._live_ranges[key] = (offset, offset + size_bytes)
+                if self.alloc_log is not None:
+                    self.note_alloc("get", key, location, size_bytes, offset)
                 self._seq += 1
                 buf = Buffer(
                     id=f"placed:{key[0]}:{key[1]}",
@@ -253,6 +274,9 @@ class BufferPool:
         return slab.make_buffer(offset, size_bytes, self._seq)
 
     def put(self, buffer: Buffer) -> None:
+        if self.alloc_log is not None:
+            self.note_alloc("put", buffer.tag or buffer.id, buffer.location,
+                            buffer.size_bytes)
         if isinstance(buffer.raw, tuple) and buffer.raw and buffer.raw[0] == "vmm":
             self.vmm.put(buffer)
             return
