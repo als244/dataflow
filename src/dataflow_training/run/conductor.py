@@ -111,7 +111,7 @@ def run(global_cfg, recipe: Recipe, pipeline, steps: int, *,
         execute_padding: bool = False,
         launch_argv=None,
         checkpoint_every: int | None = None,
-        checkpoint_dir: str = "results/pretrain/checkpoints",
+        checkpoint_dir: str = "model_ckpts",
         checkpoint_redundancy: int = 1,
         checkpoint_keep_last: int = 0,
         source_policy: str = "simple",
@@ -301,9 +301,9 @@ def run(global_cfg, recipe: Recipe, pipeline, steps: int, *,
                 if profile is not None:
                     if host.is_local():
                         rig.prof_out = str(Path(prof_dir).resolve()
-                                           / f"dp_prof_{host.name}")
+                                           / f"prof_{host.name}")
                     else:
-                        rig.prof_out = f"/tmp/dp_prof_{host.name}"
+                        rig.prof_out = f"/tmp/prof_{host.name}"
                     os.makedirs(prof_dir, exist_ok=True)
                     wrap = daemons.nsys_command(host, rig.prof_out)
                 daemons.kill(host)
@@ -376,7 +376,7 @@ def run(global_cfg, recipe: Recipe, pipeline, steps: int, *,
                 daemons.wait_exit(rig.host, timeout_s=180.0)
                 if rig.prof_out is not None and not rig.host.is_local():
                     dest = str(Path(prof_dir)
-                               / f"dp_prof_{rig.host.name}.nsys-rep")
+                               / f"prof_{rig.host.name}.nsys-rep")
                     if fetch_file(rig.host, rig.prof_out + ".nsys-rep",
                                   dest):
                         log(f"[fleet] fetched {dest}")
