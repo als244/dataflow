@@ -33,7 +33,7 @@ from .device.base import (
 from .ledger import Ledger
 from .objects import ObjectTable, Slot
 from .pool import BufferPool
-from .trace import Interval, RunTrace, TraceEvent
+from .trace import RunTrace
 
 Direction = Literal["from_slow", "to_slow"]
 
@@ -74,6 +74,9 @@ class TransferEngine:
     poison: object = None  # optional debug hook: poison(buffer) before pooling
     annotate_rename: object = None  # NVTX display names only (see Engine.execute)
     queue: deque[TransferJob] = field(default_factory=deque)
+    # (interval_name, start_event, done_event, track): event-time reads
+    # deferred to drain so completion handling stays off the CUDA API
+    pending_intervals: list = field(default_factory=list)
     inflight: TransferJob | None = None
     _name_seq: dict[str, int] = field(default_factory=dict)
 
@@ -93,15 +96,9 @@ class TransferEngine:
 
     def enqueue(self, job: TransferJob) -> None:
         self.queue.append(job)
-        self.trace.events.append(
-            TraceEvent(
-                t=self.backend.host_now_us(),
-                kind="transfer_enqueue",
-                object_id=job.object_id,
-                task_id=job.fired_by_task,
-                detail=self.direction,
-            )
-        )
+        self.trace.add_event(
+            self.backend.host_now_us(), "transfer_enqueue",
+            job.object_id, job.fired_by_task, self.direction)
 
     def _interval_name(self, object_id: str) -> str:
         seq = self._name_seq.get(object_id, 0)
@@ -148,10 +145,9 @@ class TransferEngine:
             # the DESTINATION RESERVATION — the transfer-lane twin of a
             # task-output reserve; its order vs blocked task reserves is
             # the reserve-order-inversion diagnostic
-            self.trace.events.append(TraceEvent(
-                t=self.backend.host_now_us(), kind="transfer_reserve",
-                object_id=job.object_id, detail=self.direction,
-            ))
+            self.trace.add_event(
+                self.backend.host_now_us(), "transfer_reserve",
+                job.object_id, None, self.direction)
             if blocked:
                 dst_buffer = self.pool.get_escaped("fast", job.size_bytes, tag=job.object_id)
             else:
@@ -239,19 +235,10 @@ class TransferEngine:
             backing.ready_event = job.done_event
         self.inflight = None
         assert job.start_event is not None and job.done_event is not None
-        self.trace.intervals.append(
-            Interval(
-                task_id=job.interval_name,
-                start=self.backend.event_time_us(job.start_event),
-                end=self.backend.event_time_us(job.done_event),
-                track=self.direction,
-            )
-        )
-        self.trace.events.append(
-            TraceEvent(
-                t=self.backend.host_now_us(),
-                kind="transfer_end",
-                object_id=job.object_id,
-                detail=self.direction,
-            )
+        self.pending_intervals.append(
+            (job.interval_name, job.start_event, job.done_event,
+             self.direction))
+        self.trace.add_event(
+            self.backend.host_now_us(), "transfer_end",
+            job.object_id, None, self.direction
         )

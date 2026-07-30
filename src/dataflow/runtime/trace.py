@@ -51,14 +51,41 @@ class DispatchRecord:
 
 @dataclass
 class RunTrace:
-    intervals: list[Interval] = field(default_factory=list)
-    events: list[TraceEvent] = field(default_factory=list)
+    """Events and intervals are appended as PLAIN TUPLES on the hot
+    dispatch path (add_event/add_interval) and materialized into their
+    dataclasses lazily on first read — reading implies the run is over;
+    appends after a read leave the materialized view stale."""
+    raw_intervals: list[tuple] = field(default_factory=list)  # Interval field order
+    raw_events: list[tuple] = field(default_factory=list)     # TraceEvent field order
     memory_trace: list[tuple[float, int]] = field(default_factory=list)  # (t_us, used_fast)
     peak_fast_bytes: int = 0
     dispatch: list[DispatchRecord] = field(default_factory=list)
+    intervals_cache: "list[Interval] | None" = field(default=None, repr=False)
+    events_cache: "list[TraceEvent] | None" = field(default=None, repr=False)
+
+    def add_interval(self, task_id, start, end, track) -> None:
+        self.raw_intervals.append((task_id, start, end, track))
+
+    def add_event(self, t, kind, object_id=None, task_id=None,
+                  detail="") -> None:
+        self.raw_events.append((t, kind, object_id, task_id, detail))
+
+    @property
+    def intervals(self) -> list[Interval]:
+        if self.intervals_cache is None or \
+                len(self.intervals_cache) != len(self.raw_intervals):
+            self.intervals_cache = [Interval(*r) for r in self.raw_intervals]
+        return self.intervals_cache
+
+    @property
+    def events(self) -> list[TraceEvent]:
+        if self.events_cache is None or \
+                len(self.events_cache) != len(self.raw_events):
+            self.events_cache = [TraceEvent(*r) for r in self.raw_events]
+        return self.events_cache
 
     def makespan_us(self) -> float:
-        return max((iv.end for iv in self.intervals), default=0.0)
+        return max((r[2] for r in self.raw_intervals), default=0.0)
 
 
 @dataclass(frozen=True)

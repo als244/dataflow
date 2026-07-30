@@ -38,7 +38,7 @@ from .pool import BufferPool
 from .placement import PlacementError
 from .slab import SlabError
 from .device.annotate import NoopAnnotator
-from .trace import DispatchRecord, Interval, RunTrace, TraceEvent
+from .trace import DispatchRecord, RunTrace
 from .transfers import TransferDone, TransferEngine, TransferError, TransferJob
 
 
@@ -613,17 +613,20 @@ class Engine:
                 self.backend.memset_async(buffer, 0xFF, compute)
                 buffer.guard_event = self.backend.record_event(compute)
 
+        pending_intervals: list = []  # resolved to trace intervals at drain
         h2d = TransferEngine(
             direction="from_slow", backend=self.backend, stream=h2d_stream,
             ledger=ledger, pool=pool, table=table, trace=trace,
             bandwidth=program.bandwidth_from_slow, poison=poison,
             annotate_rename=annotate_rename,
+            pending_intervals=pending_intervals,
         )
         d2h = TransferEngine(
             direction="to_slow", backend=self.backend, stream=d2h_stream,
             ledger=ledger, pool=pool, table=table, trace=trace,
             bandwidth=program.bandwidth_to_slow, poison=poison,
             annotate_rename=annotate_rename,
+            pending_intervals=pending_intervals,
         )
         deferred_prefetches: dict[str, list[TransferJob]] = {}
 
@@ -649,6 +652,7 @@ class Engine:
         state = _RunState(
             engine=self, table=table, ledger=ledger, pool=pool, trace=trace,
             h2d=h2d, d2h=d2h, deferred=deferred_prefetches, poison=poison,
+            pending_intervals=pending_intervals,
             last_ref=chain.last_ref, task_index=chain.task_index,
             uses_by_obj=chain.uses_by_obj,
             directives_by_obj=chain.directives_by_obj,
@@ -735,7 +739,7 @@ class Engine:
             if stats is not None:
                 stats["prev_token_wait"] += _time.perf_counter() - _t
                 stats["tasks"] += 1
-            t_pacing = self.backend.host_now_us()
+            t_pacing = self.backend.host_now_us() if stats is not None else 0.0
 
             # 1. inputs host-observed live in fast memory
             _t = _time.perf_counter() if stats is not None else 0.0
@@ -752,7 +756,7 @@ class Engine:
                            exclude=protected)
             if stats is not None:
                 stats["input_wait"] += _time.perf_counter() - _t
-            t_inputs = self.backend.host_now_us()
+            t_inputs = self.backend.host_now_us() if stats is not None else 0.0
 
             # 2. fast capacity for outputs (the simulator's task stall) —
             # assigned mode adds per-offset availability to the same condition
@@ -789,10 +793,9 @@ class Engine:
                 if can_res and busy:
                     for oid in busy:
                         escaped_outputs.add(oid)
-                        trace.events.append(TraceEvent(
-                            t=self.backend.host_now_us(), kind="placement_escape",
-                            object_id=oid, task_id=task.id,
-                        ))
+                        trace.add_event(
+                            self.backend.host_now_us(), "placement_escape",
+                            oid, task.id)
                     continue
                 state.step(
                     f"task {task.id!r} waiting to reserve {fast_out} fast bytes "
@@ -827,13 +830,12 @@ class Engine:
                     )
                 rec.set_slot(out.location, Slot(buffer=buf, state="reserved", version=rec.version))
                 out_buffers[out.id] = buf
-                trace.events.append(TraceEvent(
-                    t=self.backend.host_now_us(), kind="reserve", object_id=out.id, task_id=task.id,
-                ))
+                trace.add_event(self.backend.host_now_us(), "reserve",
+                                out.id, task.id)
 
             if stats is not None:
                 stats["reserve_bookkeeping"] += _time.perf_counter() - _t
-            t_reserved = self.backend.host_now_us()
+            t_reserved = self.backend.host_now_us() if stats is not None else 0.0
             if was_reserve_blocked:
                 # the lane was suppressed while this reserve accumulated
                 # its bytes — restart the parked head now that outputs are
@@ -848,8 +850,12 @@ class Engine:
             mut_buffers = {obj: in_buffers[obj] for obj in task.mutates}
             self.backend.align_stream_to_host(compute)
             start_ev = self.backend.record_event(compute)
+            # rename only when ranges are live: outside a capture the
+            # annotator no-ops and the Pattern.sub would be pure waste
             annotator.range_push(annotate_rename(task.id, "task")
-                                 if annotate_rename else task.id)
+                                 if annotate_rename is not None
+                                 and getattr(annotator, "enabled", True)
+                                 else task.id)
             try:
                 resolver(task).launch(TaskContext(
                     task=task, stream=compute, inputs=in_buffers, outputs=out_buffers,
@@ -866,14 +872,17 @@ class Engine:
             )
             if stats is not None:
                 stats["launch_enqueue"] += _time.perf_counter() - _t
-            trace.dispatch.append(DispatchRecord(
-                task_id=task.id, pacing_done=t_pacing, inputs_live=t_inputs,
-                outputs_reserved=t_reserved,
-                launched=self.backend.host_now_us(),
-                stalled_inputs=stalled_inputs,
-                stalled_outputs=stalled_outputs,
-                ledger_blocked=ledger_blocked,
-            ))
+            if stats is not None:
+                # dispatch records ride the stats switch: zero hot-path
+                # instrumentation cost unless an investigation asks for it
+                trace.dispatch.append(DispatchRecord(
+                    task_id=task.id, pacing_done=t_pacing,
+                    inputs_live=t_inputs, outputs_reserved=t_reserved,
+                    launched=self.backend.host_now_us(),
+                    stalled_inputs=stalled_inputs,
+                    stalled_outputs=stalled_outputs,
+                    ledger_blocked=ledger_blocked,
+                ))
             state.outstanding_task = task.id
 
         # --- drain -------------------------------------------------------------
@@ -882,6 +891,16 @@ class Engine:
             if token is None:
                 break
             state.handle(token)
+
+        # deferred event-time reads: intervals materialize HERE, once,
+        # off the per-task hot path (events are kept alive by the
+        # pending tuples until this point)
+        for name, start_ev, done_ev, track in pending_intervals:
+            trace.add_interval(name,
+                               self.backend.event_time_us(start_ev),
+                               self.backend.event_time_us(done_ev),
+                               track)
+        pending_intervals.clear()
 
         stuck: list[str] = []
         if h2d.queue:
@@ -1020,6 +1039,7 @@ class _RunState:
     d2h: TransferEngine
     deferred: dict[str, list[TransferJob]]
     poison: object = None
+    pending_intervals: list = None  # type: ignore[assignment]
     last_ref: dict[str, int] = None  # type: ignore[assignment]
     task_index: dict[str, int] = None  # type: ignore[assignment]
     final_locations: dict[str, str] = None  # type: ignore[assignment]
@@ -1050,11 +1070,10 @@ class _RunState:
             # quiescent: a prefetch head blocked only by a placed-offset
             # conflict is the same lifetime inversion — escape it and retry
             if self.h2d.escape_blocked_head():
-                self.trace.events.append(TraceEvent(
-                    t=self.engine.backend.host_now_us(), kind="placement_escape",
-                    object_id=self.h2d.inflight.object_id if self.h2d.inflight else None,
-                    detail="from_slow head",
-                ))
+                self.trace.add_event(
+                    self.engine.backend.host_now_us(), "placement_escape",
+                    self.h2d.inflight.object_id if self.h2d.inflight else None,
+                    None, "from_slow head")
                 return
             # ledger inversion: real transfer/compute timing let admitted
             # prefetches race ahead of the release frontier and strand the
@@ -1130,10 +1149,9 @@ class _RunState:
         rec.fast = None
         self.pressure_evictions += 1
         now = self.engine.backend.host_now_us()
-        self.trace.events.append(TraceEvent(
-            t=now, kind="pressure_evict", object_id=oid,
-            task_id=self.current_task_id, detail=f"next_use_task={nxt}",
-        ))
+        self.trace.add_event(now, "pressure_evict", oid,
+                             self.current_task_id,
+                             f"next_use_task={nxt}")
         # reload before its next use; anchor is already-complete by construction;
         # duration mirrors the object's own prefetch trigger (bandwidth fallback)
         override = (self.prefetch_override or {}).get(oid)
@@ -1161,13 +1179,17 @@ class _RunState:
 
     def _on_task_done(self, tok: _TaskDone) -> None:
         task = tok.task
+        # hot handler: these locals are read once per loop iteration
+        # below — attribute-chain walks priced off the retire path
+        table_get = self.table.get
+        trace_add_event = self.trace.add_event
         now = self.engine.backend.host_now_us()
         if self.outstanding_task == task.id:
             self.outstanding_task = None
 
         # outputs become live
         for out in task.outputs:
-            rec = self.table.get(out.id)
+            rec = table_get(out.id)
             slot = rec.slot(out.location)
             assert slot is not None and slot.state == "reserved"
             slot.state = "live"
@@ -1175,25 +1197,19 @@ class _RunState:
 
         # mutations advance versions; backing copies go stale
         for obj in task.mutates:
-            rec = self.table.get(obj)
+            rec = table_get(obj)
             rec.version += 1
             assert rec.fast is not None
             rec.fast.version = rec.version
             rec.fast.ready_event = tok.done_event
-            self.trace.events.append(TraceEvent(t=now, kind="mutate", object_id=obj, task_id=task.id))
+            trace_add_event(now, "mutate", obj, task.id)
 
-        self.trace.intervals.append(
-            Interval(
-                task_id=task.id,
-                start=self.engine.backend.event_time_us(tok.start_event),
-                end=self.engine.backend.event_time_us(tok.done_event),
-                track="compute",
-            )
-        )
+        self.pending_intervals.append(
+            (task.id, tok.start_event, tok.done_event, "compute"))
 
         # releases: instantaneous at task end; state must be live
         for obj in task.releases_after:
-            rec = self.table.get(obj)
+            rec = table_get(obj)
             slot = rec.fast
             if slot is None or slot.state != "live":
                 state = "absent" if slot is None else slot.state
@@ -1220,11 +1236,11 @@ class _RunState:
                 # dropping the slot suffices, ownership stays with the caller
                 if id(backing_buf) not in self.provided_buffer_ids:
                     self.pool.put(backing_buf)
-            self.trace.events.append(TraceEvent(t=now, kind="release", object_id=obj, task_id=task.id))
+            trace_add_event(now, "release", obj, task.id)
 
         # offloads: enqueue to_slow (no backing bytes charged until start)
         for trig in task.offload_after:
-            rec = self.table.get(trig.object_id)
+            rec = table_get(trig.object_id)
             src = rec.fast
             if src is None or src.state != "live":
                 state = "absent" if src is None else src.state
@@ -1273,9 +1289,8 @@ class _RunState:
             self.prefetch_override[trig.object_id] = trig.runtime_us
             if offload_in_flight:
                 self.deferred.setdefault(trig.object_id, []).append(job)
-                self.trace.events.append(TraceEvent(
-                    t=now, kind="transfer_deferred", object_id=trig.object_id, task_id=task.id,
-                ))
+                self.trace.add_event(now, "transfer_deferred",
+                                     trig.object_id, task.id)
             elif src is None or src.state != "live":
                 state = "absent" if src is None else src.state
                 raise ExecutionError(

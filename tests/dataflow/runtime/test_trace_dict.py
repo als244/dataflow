@@ -45,7 +45,9 @@ def test_trace_to_dict_covers_every_task_interval():
     result.close()
 
 
-def test_dispatch_records_cover_every_task_in_order():
+def test_dispatch_records_cover_every_task_in_order(monkeypatch):
+    monkeypatch.setenv("DATAFLOW_DISPATCH_STATS", "1")  # records ride
+    # the stats switch (off by default: zero hot-path cost)
     cfg = ShapedLlamaConfig(
         n_layers=2, d_model=64, n_heads=4, n_kv_heads=2, d_ff=160,
         vocab_size=256, seq_len=32, batch=1)
