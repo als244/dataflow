@@ -78,13 +78,17 @@ def test_crossbox_dp_matches_solo_curve(family_name):
     solo = run(cfg, recipe, legacy_block_pipeline(cfg), STEPS,
                topology=local_topology(budget_gib=4.0, backing_gib=4.0),
                group="local", seed=SEED, log=quiet,
-               launch_argv=["unit", "xparity-solo"])
+               launch_argv=["unit", "xparity-solo"],
+               warm_profiles=True,  # tiny geometry, seconds; a cold cache HARD-FAILS
+    )
 
     fleet = run(cfg, recipe, legacy_block_pipeline(cfg), STEPS,
                 scheme=ParallelismScheme.data_parallel((1, 1)),
                 budgets=(4.0, 4.0), backing=(4.0, 4.0),
                 topology=TOPO, group="dp", seed=SEED, log=quiet,
-                launch_argv=["unit", "xparity-dp"])
+                launch_argv=["unit", "xparity-dp"],
+                warm_profiles=True,  # tiny geometry, seconds; a cold cache HARD-FAILS
+    )
 
     assert all(math.isfinite(x) for x in fleet.losses)
     assert len(fleet.losses) == len(solo.losses) == STEPS

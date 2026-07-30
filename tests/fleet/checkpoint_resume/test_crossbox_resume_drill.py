@@ -78,7 +78,9 @@ def test_crossbox_zero1rs_resume_matches_uninterrupted_tail(tmp_path,
 
     truth = run(cfg, recipe, legacy_block_pipeline(cfg), STEPS,
                          launch_argv=["unit", "crossbox-drill"],
-                         **common)
+                         **common,
+                         warm_profiles=True,  # tiny geometry, seconds; a cold cache HARD-FAILS
+    )
 
     manifests = sorted((ck_dir / "xdrill").glob("step_*/checkpoint_record.json"))
     assert manifests, "no checkpoints written"
@@ -91,7 +93,9 @@ def test_crossbox_zero1rs_resume_matches_uninterrupted_tail(tmp_path,
 
     resumed = run(cfg, recipe, legacy_block_pipeline(cfg),
                            STEPS, launch_argv=["unit", "crossbox-drill"],
-                           resume="auto", **common)
+                           resume="auto", **common,
+                           warm_profiles=True,  # tiny geometry, seconds; a cold cache HARD-FAILS
+    )
 
     # high-level loader over the distributed step dir (snapshots were
     # pulled to the conductor box at resume): rank views agree on the

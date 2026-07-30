@@ -399,8 +399,25 @@ def profile_program(
                 weight_gen = torch.Generator().manual_seed(0)
                 for oid, layout in layouts(task).items():
                     wbuf = in_buffers.get(oid)
-                    if wbuf is not None:
-                        fill_weight_fields(wbuf, layout, weight_gen)
+                    if wbuf is None:
+                        continue
+                    extent = max((f.offset_bytes + f.nbytes)
+                                 for f in layout.fields)
+                    if extent > wbuf.size_bytes:
+                        # A FAMILY-NEUTRAL executable (the shared optimizer
+                        # step) inherits the GENERIC weight layout, which
+                        # does not describe every family's packing: gpt2
+                        # fuses qkv and carries biases, so the inherited
+                        # llama-shaped layout addresses 18.9 MB of a 14.2 MB
+                        # object. The program's object size is the truth
+                        # (packed layouts = size truth), so a layout that
+                        # does not fit is the wrong description of this
+                        # buffer — writing it would run off the end. The
+                        # generic real-scale fill above stands for it; the
+                        # optimizer measures 0.0% fill-sensitive anyway
+                        # (task_values_probe).
+                        continue
+                    fill_weight_fields(wbuf, layout, weight_gen)
             ctx = TaskContext(
                 task=task, stream=stream, inputs=in_buffers, outputs=out_buffers,
                 mutates=mut_buffers, backend=backend, run_args=_run_args,

@@ -64,7 +64,9 @@ def test_world1_fleet_matches_solo_engine():
               budgets=(4.0,), backing=(4.0,),
                        topology=local_topology(budget_gib=4.0,
                                                backing_gib=4.0),
-                       group="local", seed=SEED, log=quiet)
+                       group="local", seed=SEED, log=quiet,
+              warm_profiles=True,  # tiny geometry, seconds; a cold cache HARD-FAILS
+    )
 
     assert len(res.losses) == STEPS
     assert all(math.isfinite(x) for x in res.losses)

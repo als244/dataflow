@@ -66,7 +66,9 @@ def test_world1_checkpoint_resume_drill(tmp_path, family_name):
                          topology=local_topology(budget_gib=4.0,
                                                  backing_gib=4.0),
                          launch_argv=["unit", "world1-drill"],
-                         checkpoint_every=2, **common)
+                         checkpoint_every=2, **common,
+                         warm_profiles=True,  # tiny geometry, seconds; a cold cache HARD-FAILS
+    )
 
     # v1 record surface at the newest checkpoint
     manifests = sorted((ck_dir / "drill").glob("step_*/checkpoint_record.json"))
@@ -91,7 +93,9 @@ def test_world1_checkpoint_resume_drill(tmp_path, family_name):
                            topology=local_topology(budget_gib=4.0,
                                                    backing_gib=4.0),
                            launch_argv=["unit", "world1-drill"],
-                           checkpoint_every=2, resume="auto", **common)
+                           checkpoint_every=2, resume="auto", **common,
+                           warm_profiles=True,  # tiny geometry, seconds; a cold cache HARD-FAILS
+    )
 
     assert all(math.isfinite(x) for x in resumed.losses)
     tail_truth = truth.losses[ck_step:]

@@ -75,7 +75,9 @@ def test_world2_zero1rs_checkpoint_resume_drill(tmp_path, family_name):
 
     truth = run(cfg, recipe, legacy_block_pipeline(cfg), STEPS,
                          topology=pair_topo(),
-                         launch_argv=["unit", "world2-drill"], **common)
+                         launch_argv=["unit", "world2-drill"], **common,
+                         warm_profiles=True,  # tiny geometry, seconds; a cold cache HARD-FAILS
+    )
 
     manifests = sorted((ck_dir / "drill2").glob("step_*/checkpoint_record.json"))
     assert manifests, "no checkpoints written"
@@ -101,7 +103,9 @@ def test_world2_zero1rs_checkpoint_resume_drill(tmp_path, family_name):
     resumed = run(cfg, recipe, legacy_block_pipeline(cfg),
                            STEPS, topology=pair_topo(),
                            launch_argv=["unit", "world2-drill"],
-                           resume="auto", **common)
+                           resume="auto", **common,
+                           warm_profiles=True,  # tiny geometry, seconds; a cold cache HARD-FAILS
+    )
 
     assert all(math.isfinite(x) for x in resumed.losses)
     tail_truth = truth.losses[ck_step:]

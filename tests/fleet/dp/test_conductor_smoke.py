@@ -48,7 +48,9 @@ def test_fleet_dp_125m_smoke():
     res = run(cfg, recipe, legacy_block_pipeline(cfg), steps,
               scheme=ParallelismScheme.data_parallel((6, 2)),
               budgets=(4.0, 4.0),
-              backing=(12.0, 10.0), topology=TOPO, log=quiet)
+              backing=(12.0, 10.0), topology=TOPO, log=quiet,
+              warm_profiles=True,  # tiny geometry, seconds; a cold cache HARD-FAILS
+    )
     assert len(res.losses) == steps
     assert all(math.isfinite(x) for x in res.losses)
     assert res.losses[0] > 10.5           # ~ln(50304) at init
