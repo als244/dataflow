@@ -18,6 +18,7 @@ Tests:
 - test_ledger_inversion_eviction_valve: under distorted timing the valve evicts the farthest-next-use resident, reloads it, and completes within budget.
 - test_ledger_inversion_without_valve_deadlocks: disabling the valve under the same distorted timing deadlocks (negative control).
 - test_annotate_rename_rewrites_nvtx_only: the annotate_rename callback rewrites only NVTX push names, leaving trace and plan ids plan-relative.
+- test_cached_chain_index_matches_derived_across_repeat_runs: a ChainIndex built once and shared across repeat runs is behaviorally identical to per-run derivation (sim-parity on both runs).
 """
 import pytest
 
@@ -319,3 +320,38 @@ def test_annotate_rename_rewrites_nvtx_only():
     # trace keeps plan-relative ids
     trace_ids = {iv.task_id for iv in result.trace.intervals}
     assert {"t_0_1", "t_0_2", "from_slow:x"} <= trace_ids
+
+
+def test_cached_chain_index_matches_derived_across_repeat_runs():
+    """A ChainIndex built once and passed to repeated execute() calls
+    must be behaviorally identical to per-run derivation (it is shared
+    READ-ONLY): both runs of the deferred-prefetch chain match the sim
+    event log, proving the second run saw uncorrupted indices."""
+    from dataflow.runtime.engine import build_chain_index
+    from dataflow_sim.engine.simulator import run as sim_run
+
+    program = Program(
+        name="chain-reuse",
+        initial_objects=(ObjectSpec(id="x", size_bytes=100,
+                                    location="fast"),),
+        tasks=(
+            TaskSpec(
+                id="t0", inputs=("x",), runtime_us=10.0,
+                offload_after=(TransferDirective(object_id="x",
+                                                 runtime_us=50.0),),
+            ),
+            TaskSpec(
+                id="t1", runtime_us=5.0,
+                prefetch_after=(TransferDirective(object_id="x",
+                                                  runtime_us=7.0),),
+            ),
+            TaskSpec(id="t2", inputs=("x",), runtime_us=3.0),
+        ),
+        fast_memory_capacity=1_000,
+    )
+    chain = build_chain_index(program)
+    log = sim_run(to_sim_chain(program), snapshots=False)
+    for _ in range(2):
+        result = Engine(FakeBackend()).execute(program, chain=chain)
+        diff = compare_to_sim_eventlog(result.trace, log)
+        assert diff.ok, f"missing={diff.missing}, extra={diff.extra}"

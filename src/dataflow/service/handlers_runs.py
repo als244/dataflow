@@ -28,6 +28,7 @@ class RegisteredProgram:
     registered_t: float
     placement: object | None = None      # cached on first run
     pool_demand: dict | None = None
+    chain: object | None = None          # runtime ChainIndex, same lifecycle
     runs: int = 0
 
 
@@ -251,7 +252,8 @@ def install(server) -> None:
                                    else execution.store_buffer(store, robj))
 
         if not host_program and entry.placement is None:
-            entry.placement, entry.pool_demand = execution.prepare_placement(
+            entry.placement, entry.pool_demand, entry.chain = \
+                execution.prepare_placement(
                 program, values)
 
         import os as _os
@@ -290,6 +292,7 @@ def install(server) -> None:
                 program, resolver, values,
                 prog_id=entry.prog_id, store=store,
                 placement=entry.placement, pool_demand=entry.pool_demand,
+                chain=entry.chain,
                 run_args=run_args, cancel_event=active_cancel,
                 groups=group_handles,
                 poison_on_free=st.config.poison_on_free,

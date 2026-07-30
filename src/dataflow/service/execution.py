@@ -200,10 +200,13 @@ def host_task_buffer(store, rec):
 
 
 def prepare_placement(program, values):
-    """Placement + pool demand, computed once per registered program
-    and cached per prog_id."""
+    """Placement + pool demand + chain index, computed once per
+    registered program and cached per prog_id. The dry run executes
+    with full validation, so a program with cached artifacts has
+    passed validate_program — real runs skip re-validating it."""
     from dataflow.runtime import Engine
     from dataflow.runtime.device.fake import FakeBackend
+    from dataflow.runtime.engine import build_chain_index
     from dataflow.runtime.placement import PlacementRecorder, compute_placement
 
     recorder = PlacementRecorder()
@@ -221,7 +224,7 @@ def prepare_placement(program, values):
     placement = compute_placement(recorder, physical_limit_bytes=2**62)
     demand = dict(dry.pool_demand)
     dry.close()
-    return placement, demand
+    return placement, demand, build_chain_index(program)
 
 
 class DisplayPrefix:
@@ -268,7 +271,8 @@ def display_renamer(label):
 
 def execute_run(program, resolver, values, *, prog_id, store=None,
                 placement, pool_demand, run_args, cancel_event,
-                groups=None, poison_on_free=False, annotate_label=None):
+                groups=None, poison_on_free=False, annotate_label=None,
+                chain=None):
     """One engine run over store-backed buffers. Returns (result,
     error_kind, outcome); the caller owns result.close().
 
@@ -292,13 +296,18 @@ def execute_run(program, resolver, values, *, prog_id, store=None,
         DeadlockError, ExecutionError, RunOutcome, RunOutcomeKind)
 
     try:
+        # validate=False: every program reaching here carried cached
+        # placement artifacts, and prepare_placement's dry run already
+        # validated it once — re-checking per run is pure boundary cost
         result = Engine(get_backend(store),
+                        validate=False,
                         session=get_session(prog_id, store=store),
                         poison_on_free=poison_on_free).execute(
             program, resolver=resolver, initial_buffers=values,
             pool_prewarm=pool_demand, placement=placement,
             run_args=run_args, cancel_event=cancel_event, groups=groups,
             annotate_rename=display_renamer(annotate_label),
+            chain=chain,
         )
     except (ExecutionError, DeadlockError) as e:
         # engine-invariant violation (a bug): the ordered abort-cleanup already

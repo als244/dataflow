@@ -355,6 +355,46 @@ class RunScope:
                     self.pool.put(slot.buffer)
 
 
+@dataclass(frozen=True)
+class ChainIndex:
+    """Dispatch indices derived purely from an immutable Program — safe
+    to build once per program and share across its runs. Consumed
+    READ-ONLY by the run (eviction valve, dead-everywhere release);
+    adding a mutating consumer requires a per-run copy here."""
+    last_ref: dict[str, int]
+    task_index: dict[str, int]
+    uses_by_obj: dict[str, list[int]]
+    directives_by_obj: dict[str, list[int]]
+
+
+def build_chain_index(program: Program) -> ChainIndex:
+    """Last chain position referencing each object (inputs or transfer
+    directives): a release at-or-after it, for an object with no
+    final_locations entry, frees the BACKING copy too — mirroring the
+    simulator's dead-everywhere rule (essential at high grad-accum where
+    per-round context would otherwise pile up dead pinned copies)."""
+    last_ref: dict[str, int] = {}
+    task_index: dict[str, int] = {}
+    uses_by_obj: dict[str, list[int]] = {}  # input positions (eviction valve)
+    directives_by_obj: dict[str, list[int]] = {}  # any release/offload/prefetch
+    for idx, t in enumerate(program.tasks):
+        task_index[t.id] = idx
+        for obj_id in t.inputs:
+            last_ref[obj_id] = idx
+            uses_by_obj.setdefault(obj_id, []).append(idx)
+        for obj_id in t.releases_after:
+            directives_by_obj.setdefault(obj_id, []).append(idx)
+        for trig in t.offload_after:
+            last_ref[trig.object_id] = idx
+            directives_by_obj.setdefault(trig.object_id, []).append(idx)
+        for trig in t.prefetch_after:
+            last_ref[trig.object_id] = idx
+            directives_by_obj.setdefault(trig.object_id, []).append(idx)
+    return ChainIndex(last_ref=last_ref, task_index=task_index,
+                      uses_by_obj=uses_by_obj,
+                      directives_by_obj=directives_by_obj)
+
+
 @dataclass
 class Engine:
     backend: DeviceBackend
@@ -382,6 +422,7 @@ class Engine:
         groups: Mapping[str, dict] | None = None,
         cancel_event=None,
         annotate_rename=None,
+        chain: ChainIndex | None = None,
     ) -> RunResult:
         """Run ``program`` to a terminal outcome — the engine failure-mode
         boundary.
@@ -408,7 +449,8 @@ class Engine:
                 initial_buffers=initial_buffers, pool_prewarm=pool_prewarm,
                 placement=placement, record_placement=record_placement,
                 vmm=vmm, run_args=run_args, groups=groups,
-                cancel_event=cancel_event, annotate_rename=annotate_rename)
+                cancel_event=cancel_event, annotate_rename=annotate_rename,
+                chain=chain)
         except CancelledRun as exc:
             self.finish_failed(holder)
             return self.make_failed_result(
@@ -481,6 +523,9 @@ class Engine:
                                   # (a replayed 1-step plan bakes step 0 into every
                                   # id; the caller knows the GLOBAL step and rewrites
                                   # names for the profiler — trace/plan ids untouched)
+        chain: ChainIndex | None = None,  # per-program dispatch indices; None
+                                  # derives them here (a repeat caller passes the
+                                  # cached build_chain_index of this exact program)
     ) -> RunResult:
         boundary = None
         if _os_env_boundary():
@@ -598,34 +643,15 @@ class Engine:
             boundary["load_initial"] = _time.perf_counter()
 
         # --- dispatch loop -----------------------------------------------------
-        # Last chain position referencing each object (inputs or transfer
-        # directives): a release at-or-after it, for an object with no
-        # final_locations entry, frees the BACKING copy too — mirroring the
-        # simulator's dead-everywhere rule (essential at high grad-accum where
-        # per-round context would otherwise pile up dead pinned copies).
-        last_ref: dict[str, int] = {}
-        task_index: dict[str, int] = {}
-        uses_by_obj: dict[str, list[int]] = {}  # input positions (eviction valve)
-        directives_by_obj: dict[str, list[int]] = {}  # any release/offload/prefetch
-        for idx, t in enumerate(program.tasks):
-            task_index[t.id] = idx
-            for obj_id in t.inputs:
-                last_ref[obj_id] = idx
-                uses_by_obj.setdefault(obj_id, []).append(idx)
-            for obj_id in t.releases_after:
-                directives_by_obj.setdefault(obj_id, []).append(idx)
-            for trig in t.offload_after:
-                last_ref[trig.object_id] = idx
-                directives_by_obj.setdefault(trig.object_id, []).append(idx)
-            for trig in t.prefetch_after:
-                last_ref[trig.object_id] = idx
-                directives_by_obj.setdefault(trig.object_id, []).append(idx)
+        if chain is None:
+            chain = build_chain_index(program)
 
         state = _RunState(
             engine=self, table=table, ledger=ledger, pool=pool, trace=trace,
             h2d=h2d, d2h=d2h, deferred=deferred_prefetches, poison=poison,
-            last_ref=last_ref, task_index=task_index, uses_by_obj=uses_by_obj,
-            directives_by_obj=directives_by_obj,
+            last_ref=chain.last_ref, task_index=chain.task_index,
+            uses_by_obj=chain.uses_by_obj,
+            directives_by_obj=chain.directives_by_obj,
             final_locations=dict(program.final_locations),
             provided_buffer_ids={id(b) for b in initial_buffers.values()},
         )
