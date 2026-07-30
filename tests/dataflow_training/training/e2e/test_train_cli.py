@@ -38,6 +38,7 @@ def test_train_cli_world1_writes_record_and_peek_reads_it(tmp_path):
     run = subprocess.run(
         [sys.executable, str(TRAIN), "train", "--preset", "gpt2",
          "--steps", "4", "--fast-budget", "4", "--backing-budget", "4",
+         "--warm-profiles",
          "--checkpoint-every", "2", "--out", str(out)],
         capture_output=True, text=True, timeout=600, cwd=REPO)
     assert run.returncode == 0, run.stderr[-2000:]

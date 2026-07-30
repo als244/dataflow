@@ -14,9 +14,37 @@ from dataflow_training.lowering.planning import plan_program
 from .driver import RunResult, init_model
 from .presets import cfg_dict, tokens_per_step
 from .checkpointing import save_checkpoint
-from ..distributed.grouped_lowering import GroupedBuildVariant, lower_with_group
 from ..distributed.ranks import StepRun, put_rank_rounds
 from ..distributed.sharding import ALL_RANKS, tp_view
+
+class MeasuredGroupedVariant:
+    """plan_program's recompute rebuilder for grouped lowerings, priced
+    by MEASURED task profiles + the box's measured PCIe — the single
+    production pricing path for any world size. A shard/tp task whose
+    cost signature the profile table never measured raises
+    MissingProfileError (profile that variant; never estimate)."""
+
+    def __init__(self, cfg, dp_group, *, parallel, zero1rs_world,
+                 resolver, pcie, backend, require_cached):
+        self.cfg = cfg
+        self.dp_group = dp_group
+        self.parallel = parallel
+        self.zero1rs_world = zero1rs_world
+        self.resolver = resolver
+        self.pcie = pcie
+        self.backend = backend
+        self.require_cached = require_cached
+
+    def __call__(self, levels=None):
+        from dataflow_training.run.profiling import (
+            measured_grouped_program)
+
+        return measured_grouped_program(
+            self.cfg, self.dp_group, self.resolver, self.pcie,
+            self.backend, require_cached=self.require_cached,
+            levels=levels, parallel=self.parallel,
+            zero1rs_world=self.zero1rs_world)
+
 
 def fleet_loop(ranks, gspec, recipe, pipeline, steps, *, budgets, seed,
                log, log_every, tokens_step, r_global,
@@ -26,7 +54,9 @@ def fleet_loop(ranks, gspec, recipe, pipeline, steps, *, budgets, seed,
                ck_record: dict | None = None,
                zero1rs_world: int | None = None,
                execute_padding: bool = False,
-               tp_mlp: bool = False) -> RunResult:
+               tp_mlp: bool = False,
+               warm_profiles_ok: bool = False,
+               profile_tables: dict | None = None) -> RunResult:
     world = len(ranks)
     start_step = int(ck_record["step"]) if ck_record else 0
 
@@ -42,6 +72,8 @@ def fleet_loop(ranks, gspec, recipe, pipeline, steps, *, budgets, seed,
             log(f"[fleet] checkpoint has no data cursor — fast-"
                 f"forwarding the pipeline {start_step} steps (CPU)")
             fast_forward(stepper, start_step)
+    if profile_tables is None:
+        profile_tables = {}
     tokens_per_round = ranks[0].cfg.max_tokens
     step_packed = stepper.next_step()      # the START step's rounds
     step_lens_by_rank: dict[int, dict] = {}
@@ -58,14 +90,32 @@ def fleet_loop(ranks, gspec, recipe, pipeline, steps, *, budgets, seed,
         # buffers, silently training junk every iteration (THE
         # solo-vs-DP divergence root cause).
         step_cfg = replace(rank.cfg, num_steps=1)
+        # ONE pricing path, any world: profiled task costs at the real
+        # shapes plus the box's measured PCIe (doctrine 2026-07-30:
+        # roofline is never a default or a reference). A cold profile
+        # cache HARD-FAILS naming the warm stage (train.py
+        # --warm-profiles) unless this run warmed explicitly. Grouped
+        # variants whose shard/tp tasks change cost signatures fail
+        # loudly via MissingProfileError until profiled — never priced
+        # by estimate.
+        from dataflow_training.run.driver import measured_pricing_inputs
+
+        profiles, presolver, pcie = measured_pricing_inputs(
+            step_cfg, recompute=True, profile_cache=profile_tables,
+            require_cached=not warm_profiles_ok)
+        variant = MeasuredGroupedVariant(
+            step_cfg, rank_group, parallel=par,
+            zero1rs_world=zero1rs_world, resolver=presolver, pcie=pcie,
+            backend=profile_tables["_backend"],
+            require_cached=not warm_profiles_ok)
+        backing_bytes = rank.client.query_backing().get(
+            "capacity_bytes", 0)
         planned = plan_program(
-            lower_with_group(step_cfg, rank_group,
-                             parallel=par, zero1rs_world=zero1rs_world),
+            variant(),
             fast_memory_capacity=int(budgets[i] * 1024 ** 3),
+            backing_capacity=backing_bytes or None,
             recompute=True,
-            build_variant=GroupedBuildVariant(step_cfg, rank_group,
-                                              parallel=par,
-                                              zero1rs_world=zero1rs_world))
+            build_variant=variant)
         extra_slots = [s.id for s in planned.program.initial_objects
                        if s.id.startswith("tokens_") and
                        not s.id.startswith("tokens_0_")]

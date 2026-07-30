@@ -101,6 +101,7 @@ def test_world2_resume_reproduces_tail_bitwise(tmp_path):
                   checkpoint_every=2)
 
     truth = run(cfg, recipe, legacy_block_pipeline(cfg), STEPS,
+        warm_profiles=True,
                 topology=pair_topo(),
                 launch_argv=["unit", "bitwise-drill"], **common)
 
@@ -132,6 +133,7 @@ def test_world2_resume_reproduces_tail_bitwise(tmp_path):
         "world-2 zero1 O = two [m|v] slices per source"
 
     resumed = run(cfg, recipe, legacy_block_pipeline(cfg), STEPS,
+        warm_profiles=True,
                   topology=pair_topo(),
                   launch_argv=["unit", "bitwise-drill"],
                   resume="auto", **common)
@@ -166,6 +168,7 @@ def test_world2_moe_persistent_set_round_trips(tmp_path):
                   checkpoint_every=2)
 
     truth = run(cfg, recipe, legacy_block_pipeline(cfg), STEPS,
+        warm_profiles=True,
                 topology=moe_pair_topo(),
                 launch_argv=["unit", "moe-drill"], **common)
 
@@ -207,6 +210,7 @@ def test_world2_moe_persistent_set_round_trips(tmp_path):
         assert private[0]["object_range"] == [0, aux_bytes]
 
     resumed = run(cfg, recipe, legacy_block_pipeline(cfg), STEPS,
+        warm_profiles=True,
                   topology=moe_pair_topo(),
                   launch_argv=["unit", "moe-drill"],
                   resume="auto", **common)
@@ -238,6 +242,7 @@ def test_world2_remapped_resume_bitwise(tmp_path):
                   checkpoint_every=2)
 
     truth = run(cfg, recipe, legacy_block_pipeline(cfg), STEPS,
+        warm_profiles=True,
                 topology=remap_pair_topo(),
                 launch_argv=["unit", "remap-drill"], **common)
 
@@ -253,6 +258,7 @@ def test_world2_remapped_resume_bitwise(tmp_path):
     # resume with the mapping SWAPPED: hosts may move — each rank
     # still restores its OWN source's snapshot, capability-checked
     resumed = run(cfg, recipe, legacy_block_pipeline(cfg), STEPS,
+        warm_profiles=True,
                   topology=swapped_pair_topo(),
                   launch_argv=["unit", "remap-drill"],
                   resume="auto", **common)

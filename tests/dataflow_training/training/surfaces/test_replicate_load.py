@@ -53,6 +53,7 @@ def test_world1_replicate_steps_once_bitwise(tmp_path):
     ck_dir = tmp_path / "ck"
 
     truth = run(cfg, recipe, legacy_block_pipeline(cfg), STEPS,
+                warm_profiles=True,  # explicit: tiny geometry, seconds, disk-cached
                 topology=local_topology(budget_gib=4.0,
                                         backing_gib=4.0,
                                         peer_port=PORT),

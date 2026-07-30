@@ -3,7 +3,7 @@ program — blind family lowering, group annotation, exact sizes with
 the narrowed rank view. Split from the conductor (fleet.py) at phase
 close; fleet re-exports these names."""
 from dataflow_training.lowering.planning import plan_program  # noqa: F401
-from dataflow_training.lowering.shaped_program import ShapedHardware, resolve_hardware
+
 
 from .sharding import (
     ALL_RANKS,
@@ -26,7 +26,6 @@ def lower_with_group(cfg, dp_group: str, recompute_levels=None,
     A/O objects take their sizes from the per-rank sliced layouts,
     and the optimizer runs in replica-grads mode (no reduce; local
     update; owner broadcast)."""
-    hw = resolve_hardware()
     shard_params = None
     tp_params = None
     opt_regions = None

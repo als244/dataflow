@@ -53,12 +53,16 @@ def current_hashes() -> dict:
     from dataflow_training.run import presets
     from dataflow_training.model_families.families import resolve_family
     from dataflow_training.lowering.planning import plan_program
+    from dataflow_training.lowering.shaped_program import hardware_preset
 
     out = {}
     for name, preset_fn in SMOKE_PRESETS.items():
         cfg = getattr(presets, preset_fn)()
         fam = resolve_family(cfg)
-        bare = fam.lower(cfg)
+        # fixture pricing: hashes must be machine-independent, so
+        # the lowering gets an explicitly named preset (never a
+        # resolved device — content stability is the contract here)
+        bare = fam.lower(cfg, hw=hardware_preset("rtx 5090"))
         planned = plan_program(bare, fast_memory_capacity=PLAN_BUDGET)
         out[name] = {"bare": program_hash(bare),
                      "planned": program_hash(planned.program)}

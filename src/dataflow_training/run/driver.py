@@ -554,6 +554,42 @@ def warm_profiles(cfg, *, recompute: bool = True,
                       resolver)
 
 
+def measured_pricing_inputs(cfg, *, recompute: bool = True,
+                            profile_cache: dict,
+                            require_cached: bool = False):
+    """(profiles, resolver, pcie) for measured pricing of ``cfg``'s
+    lowerings — THE cache fill every measured consumer shares.
+    repr(cfg) keys the WHOLE config (preset, geometry, opt_policy...):
+    a shared cache across a sweep can never serve one config's table
+    to another; ``recompute`` belongs in the key because the
+    recompute-enabled table covers variants the save-everything one
+    never contains. ``require_cached`` turns a cold disk cache into a
+    loud failure naming the warm stage instead of silent GPU work."""
+    from dataflow.runtime.device.cuda import CudaBackend
+    from dataflow_training.model_families.families import resolve_family
+    from dataflow_training.run.profiling import (cached_pcie,
+                                                 measured_profile_table)
+
+    fam = resolve_family(cfg)
+    backend = profile_cache.get("_backend")
+    if backend is None:
+        backend = profile_cache.setdefault("_backend", CudaBackend())
+    pcie = profile_cache.get("_pcie")
+    if pcie is None:
+        pcie = profile_cache.setdefault("_pcie", cached_pcie(backend))
+    key = (repr(cfg), recompute)
+    if key not in profile_cache:
+        dims = fam.derive_dims(cfg)
+        resolver = fam.build_resolver(dims)
+        profile_cache[key] = (
+            measured_profile_table(fam, cfg, resolver, backend,
+                                   recompute=recompute,
+                                   require_cached=require_cached),
+            resolver)
+    profiles, resolver = profile_cache[key]
+    return profiles, resolver, pcie
+
+
 def plan_at_budget(cfg, budget_gib: float, *, recompute: bool = True,
                    measured: bool = False, backing_gib: float | None = None,
                    hw=None, profile_cache: dict | None = None,
@@ -602,33 +638,14 @@ def plan_at_budget(cfg, budget_gib: float, *, recompute: bool = True,
                             fast_memory_capacity=int(budget_gib * 1024 ** 3),
                             backing_capacity=backing_cap,
                             recompute=recompute, build_variant=variant)
-    from dataflow.runtime.device.cuda import CudaBackend
-    from dataflow_training.run.profiling import (cached_pcie,
-                                                 measured_profile_table,
-                                                 measured_program)
-
-    backend = cache.get("_backend")
-    if backend is None:
-        backend = cache.setdefault("_backend", CudaBackend())
-    pcie = cache.get("_pcie")
-    if pcie is None:
-        pcie = cache.setdefault("_pcie", cached_pcie(backend))
-    # repr(cfg) keys the WHOLE config (preset, geometry, opt_policy...):
-    # a shared cache across a sweep can never serve one config's table
-    # to another. `recompute` belongs in the key: the recompute-enabled
-    # table covers variants the save-everything one never contains.
-    key = (repr(cfg), recompute)
-    if key not in cache:
-        dims = fam.derive_dims(cfg)
-        resolver = fam.build_resolver(dims)
-        cache[key] = (measured_profile_table(fam, cfg, resolver, backend,
-                                             recompute=recompute,
-                                             require_cached=require_cached),
-                      resolver)
-    profiles, resolver = cache[key]
+    profiles, resolver, pcie = measured_pricing_inputs(
+        cfg, recompute=recompute, profile_cache=cache,
+        require_cached=require_cached)
     variant = (functools.partial(measured_variant, fam, cfg, profiles,
                                  resolver, pcie)
                if recompute else None)
+    from dataflow_training.run.profiling import measured_program
+
     base = measured_program(fam, cfg, profiles, resolver, pcie)
     return plan_program(base,
                         fast_memory_capacity=int(budget_gib * 1024 ** 3),

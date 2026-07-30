@@ -172,7 +172,9 @@ def cmd_train(args) -> int:
         checkpoint_dir=args.checkpoint_dir or str(CKPTS), run_name=run_name,
         checkpoint_redundancy=args.checkpoint_redundancy,
         checkpoint_keep_last=args.checkpoint_keep_last,
-        resume=args.resume)
+        resume=args.resume,
+        warm_profiles=args.warm_profiles,
+        refresh_profiles=args.refresh_profiles)
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     res.save(out)
@@ -405,6 +407,12 @@ def main() -> int:
 
     t = sub.add_parser("train", help="engine training, any world size")
     t.add_argument("--preset", default="gpt2_124m")
+    t.add_argument("--warm-profiles", action="store_true",
+                   help="measure (or verify) task profiles for this "
+                        "geometry before training; without it a cold "
+                        "profile cache fails loudly")
+    t.add_argument("--refresh-profiles", action="store_true",
+                   help="re-measure task profiles from scratch")
     t.add_argument("--steps", type=int, default=1000)
     t.add_argument("--peak-lr", type=float, default=3e-4)
     t.add_argument("--muon-lr", type=float, default=None)

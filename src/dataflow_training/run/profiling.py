@@ -483,6 +483,31 @@ def measured_program(fam, cfg, profiles, resolver, pcie, levels=None) -> Program
                    bandwidth_to_slow=pcie.bidi_d2h)
 
 
+def measured_grouped_program(cfg, dp_group, resolver, pcie, backend,
+                             *, require_cached: bool,
+                             levels=None, parallel=None,
+                             zero1rs_world=None) -> Program:
+    """Grouped twin of measured_program: the SAME both-halves contract
+    (profiled task costs + this box's measured link bandwidths) over a
+    lower_with_group lowering — the single production pricing path for
+    any world size. Coverage is ENSURED here, not assumed: the grouped
+    lowering runs through load_or_profile, so shard/tp tasks whose
+    cost signatures the store never measured are measured NOW when the
+    caller warmed explicitly (require_cached=False), and refuse loudly
+    otherwise. Nothing is ever priced by estimate."""
+    from dataflow_training.distributed.grouped_lowering import (
+        lower_with_group)
+
+    program = lower_with_group(cfg, dp_group, recompute_levels=levels,
+                               parallel=parallel,
+                               zero1rs_world=zero1rs_world)
+    profiles = load_or_profile(program, resolver, backend,
+                               require_cached=require_cached)
+    return replace(apply_measured_costs(program, profiles, resolver),
+                   bandwidth_from_slow=pcie.bidi_h2d,
+                   bandwidth_to_slow=pcie.bidi_d2h)
+
+
 class MissingProfileError(LookupError):
     """A task was priced against a profile table that never measured it.
 

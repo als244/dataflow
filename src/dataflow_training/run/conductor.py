@@ -117,6 +117,8 @@ def run(global_cfg, recipe: Recipe, pipeline, steps: int, *,
         source_policy: str = "simple",
         run_name: str = "run",
         resume: str | None = None,
+        warm_profiles: bool = False,
+        refresh_profiles: bool = False,
         prof_dir: str = "results/pretrain/logs") -> RunResult:
     """Train ``global_cfg``'s step batch across the group's hosts;
     returns the conductor's RunResult (losses = GLOBAL step means).
@@ -147,6 +149,19 @@ def run(global_cfg, recipe: Recipe, pipeline, steps: int, *,
         scheme = ParallelismScheme.solo()
     r_global = global_cfg.grad_accum_rounds
     scheme.validate(world=world, ga_rounds=r_global)
+    profile_tables: dict = {}
+    if warm_profiles or refresh_profiles:
+        # explicit measurement stage, BEFORE any daemon owns the
+        # device: profiles the real lowered task set at the real
+        # shapes, disk-cached per geometry+kernel-set+device
+        from dataflow_training.run.driver import (
+            warm_profiles as warm_profiles_fn)
+
+        log(f"[conductor] warming task profiles "
+            f"(refresh={bool(refresh_profiles)})")
+        warm_profiles_fn(replace(global_cfg, num_steps=1),
+                         recompute=True, profile_cache=profile_tables,
+                         refresh=bool(refresh_profiles))
     if world > 2 and gspec.backend == "hostmem":
         raise ValueError(
             "the hostmem lane is pairwise (world-2 CI); groups with "
@@ -345,6 +360,9 @@ def run(global_cfg, recipe: Recipe, pipeline, steps: int, *,
             log(f"[fleet] link {rigs[0].host.name}<->{other.host.name}"
                 f" peak Gbit/s: {peak or 'unmeasured'}")
         return fleet_loop(ranks, gspec, recipe, pipeline, steps,
+                          warm_profiles_ok=bool(warm_profiles
+                                                or refresh_profiles),
+                          profile_tables=profile_tables,
                           budgets=budgets, seed=seed, log=log,
                           log_every=log_every,
                           tokens_step=tokens_per_step(global_cfg),
