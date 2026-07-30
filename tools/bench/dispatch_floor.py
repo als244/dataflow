@@ -35,14 +35,21 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 def build_program(n_tasks, size_bytes, shape):
     """minimal: 1 in / 1 out / 1 release — the machinery floor.
     block: 3 in (chain + 2 persistent weights) / 2 out / 2 releases —
-    the width of a real gpt2 block's bookkeeping (transfer directives
-    excluded on purpose: lanes idle => the gap is pure dispatcher)."""
-    from dataflow.core import ObjectSpec, OutputSpec, Program, TaskSpec
+    real bookkeeping width, transfer lanes idle.
+    production: block PLUS the transfer machinery — each task offloads
+    its just-used weight and prefetches one four ahead (period-8 cycle
+    over real backing copies), so every inter-task window carries
+    TransferJob builds, both lane scans, and interleaved transfer
+    completion tokens — the engine-pure work list of a production
+    block boundary (resolver/kernel-mix costs stay cell-attributed)."""
+    from dataflow.core import (ObjectSpec, OutputSpec, Program, TaskSpec,
+                               TransferDirective)
 
     n_weights = 8
+    lead = 4
     tasks = []
     initial = [ObjectSpec(id="x0", size_bytes=size_bytes, location="fast")]
-    if shape == "block":
+    if shape in ("block", "production"):
         initial += [ObjectSpec(id=f"w{j}", size_bytes=size_bytes,
                                location="fast") for j in range(n_weights)]
     for i in range(n_tasks):
@@ -59,9 +66,24 @@ def build_program(n_tasks, size_bytes, shape):
                        OutputSpec(id=f"a{i}", size_bytes=size_bytes,
                                   location="fast"))
             releases = (f"x{i}",) if i == 0 else (f"x{i}", f"a{i - 1}")
+        offloads = ()
+        prefetches = ()
+        if shape == "production":
+            # inputs use w_{i%8} but NOT w_{(i+1)%8} as second weight —
+            # the second weight input must be resident: use the chain
+            # neighbor that is never in transfer flight at use time
+            inputs = (f"x{i}", f"w{i % n_weights}")
+            if i + n_weights - lead < n_tasks:
+                offloads = (TransferDirective(object_id=f"w{i % n_weights}",
+                                              runtime_us=5.0),)
+            if i >= lead and i - lead + n_weights < n_tasks:
+                prefetches = (TransferDirective(
+                    object_id=f"w{(i - lead) % n_weights}",
+                    runtime_us=5.0),)
         tasks.append(TaskSpec(
             id=f"t{i}", inputs=inputs, outputs=outputs,
             releases_after=releases, runtime_us=1.0,
+            offload_after=offloads, prefetch_after=prefetches,
         ))
     return Program(
         name="dispatch-floor",
@@ -69,6 +91,8 @@ def build_program(n_tasks, size_bytes, shape):
         tasks=tuple(tasks),
         fast_memory_capacity=max(64 * 1024 * 1024,
                                  8 * n_tasks * size_bytes),
+        backing_memory_capacity=max(64 * 1024 * 1024,
+                                    4 * n_weights * size_bytes),
     )
 
 
@@ -183,7 +207,7 @@ def main():
     ap.add_argument("--tasks", type=int, default=400)
     ap.add_argument("--size", type=int, default=4096)
     ap.add_argument("--repeats", type=int, default=3)
-    ap.add_argument("--shape", choices=("minimal", "block"),
+    ap.add_argument("--shape", choices=("minimal", "block", "production"),
                     default="block")
     ap.add_argument("--enqueues", type=int, default=24,
                     help="kernel enqueues per task (block-launch tail)")
