@@ -62,17 +62,26 @@ def main():
                      "family": resolver_family(cfg),
                      "cfg": cfg_dict(cfg)}
 
+    # the lowered program declares one tokens/targets pair per round —
+    # feed every round the plan expects, same shapes the driver puts
+    round_ids = sorted(
+        (o.id for o in planned.program.initial_objects
+         if o.id.startswith("tokens_0_")),
+        key=lambda oid: int(oid.rsplit("_", 1)[1]))
+    n_rounds = len(round_ids)
+    per_round = args.batch * args.seq
     g = torch.Generator().manual_seed(11)
-    tokens = torch.randint(0, cfg.vocab_size, (args.batch * args.seq,),
-                           generator=g, dtype=torch.int32)
-    targets = tokens.clone()
     boundaries = [i * args.seq for i in range(args.batch + 1)]
+    lens_wire = {str(r): boundaries for r in range(n_rounds)}
 
     per_step = []
     with out_of_process_server(backing_gib=args.backing_gib) as client:
         init_model(client, resolver_family(cfg), cfg_dict(cfg), seed=11)
-        client.put_object("tokens_0_0", tokens.numpy().tobytes())
-        client.put_object("targets_0_0", targets.numpy().tobytes())
+        for r in range(n_rounds):
+            tokens = torch.randint(0, cfg.vocab_size, (per_round,),
+                                   generator=g, dtype=torch.int32)
+            client.put_object(f"tokens_0_{r}", tokens.numpy().tobytes())
+            client.put_object(f"targets_0_{r}", tokens.numpy().tobytes())
         reg = client.register_program(program_to_dict(planned.program),
                                       resolver=resolver_spec)
         if reg["bindings"]["missing_inputs"]:
@@ -81,8 +90,8 @@ def main():
             out = client.run(
                 reg["prog_id"],
                 args={"step": step,
-                      "valid_rows": int((targets >= 0).sum()),
-                      "seq_lens": {"0": boundaries}},
+                      "valid_rows": per_round * n_rounds,
+                      "seq_lens": lens_wire},
                 trace=True)
             if out.get("state") != "done":
                 raise RuntimeError(f"step {step}: {out.get('state')}: "
