@@ -96,6 +96,23 @@ class AdamWHyper:
     schedule: object = None
 
 
+def layout_cache_of(executable) -> dict:
+    """Launch-time layout memo pinned onto the executable itself
+    (object.__setattr__ bypasses frozen; executables and their
+    programs' tasks share a registration lifetime). Executables and
+    tasks are NOT hashed anywhere — both are frozen dataclasses whose
+    field trees may contain dicts, so generated __hash__ can raise.
+    Entries key by ("kind", id(task), ...) and PIN the task object in
+    the value, so an id is never reused while its entry lives. Task
+    identity (not task.id) is the collision-free key: ids repeat
+    across program variants with different block_params."""
+    cache = getattr(executable, "layout_cache", None)
+    if cache is None:
+        cache = {}
+        object.__setattr__(executable, "layout_cache", cache)
+    return cache
+
+
 @dataclass(frozen=True)
 class _Base:
     dims: LlamaDims
@@ -177,15 +194,23 @@ class _Base:
     def task_context_layout(self, task) -> PackedLayout:
         """The task's saved-context layout: under a tensor-parallel
         block param the activations tied to sharded weights narrow to
-        the same slice."""
+        the same slice. Memoized per task — the derivation is pure in
+        (task, dims)."""
+        cache = layout_cache_of(self)
+        hit = cache.get(("context_layout", id(task)))
+        if hit is not None:
+            return hit[1]
         slices = self.tp_slices(task)
         if not slices:
-            return self.cl
-        act = {}
-        for weight_field, act_field in self.TP_ACT_OF_WEIGHT.items():
-            if weight_field in slices:
-                act[act_field] = slices[weight_field]
-        return sliced_layout(self.cl, act) if act else self.cl
+            out = self.cl
+        else:
+            act = {}
+            for weight_field, act_field in self.TP_ACT_OF_WEIGHT.items():
+                if weight_field in slices:
+                    act[act_field] = slices[weight_field]
+            out = sliced_layout(self.cl, act) if act else self.cl
+        cache[("context_layout", id(task))] = (task, out)
+        return out
 
     def _stream_ctx(self, ctx: TaskContext):
         es = external_stream(ctx.stream)
@@ -576,6 +601,10 @@ class AdamWStep(_Base):  # name kept for resolver back-compat; see OptimizerStep
     update_specials: object = None
 
     def _layouts(self, task, w_size: int):
+        cache = layout_cache_of(self)
+        hit = cache.get(("layouts", id(task), w_size))
+        if hit is not None:
+            return hit[1]
         d = self.dims
         layer = self.parse_layer(task)
         if self.resolve_layout is not None:
@@ -607,18 +636,22 @@ class AdamWStep(_Base):  # name kept for resolver back-compat; see OptimizerStep
             ol_ = opt_state_slice_layout(int(sh["n_slice"]),
                                          int(sh["n_tail"]),
                                          sh["opt_dtype"])
-            return (wl_,
-                    grad_layout(wl_, p, ns=ns, layer=layer,
-                                opt_policy=op),
-                    ol_, ns)
+            out = (wl_,
+                   grad_layout(wl_, p, ns=ns, layer=layer,
+                               opt_policy=op),
+                   ol_, ns)
+            cache[("layouts", id(task), w_size)] = (task, out)
+            return out
         regions = None
         if sh is not None:
             regions = {name: (tuple(rows) if rows else None)
                        for name, rows in sh["update"].items()}
-        return (wl_, grad_layout(wl_, p, ns=ns, layer=layer, opt_policy=op),
-                opt_state_layout(wl_, p, ns=ns, layer=layer, opt_policy=op,
-                                 update_regions=regions),
-                ns)
+        out = (wl_, grad_layout(wl_, p, ns=ns, layer=layer, opt_policy=op),
+               opt_state_layout(wl_, p, ns=ns, layer=layer, opt_policy=op,
+                                update_regions=regions),
+               ns)
+        cache[("layouts", id(task), w_size)] = (task, out)
+        return out
 
     def launch(self, ctx: TaskContext) -> None:
         from .adamw import dp, rs, shards
