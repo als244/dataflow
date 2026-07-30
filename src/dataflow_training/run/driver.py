@@ -122,9 +122,9 @@ MUON_ADAMW_FRAGMENTS = ("norm", "embed", "head", "router", "idx")
 
 def ns_orthogonalize(x: "torch.Tensor", *, eps: float = 1e-8,
                      iters: int = NS_ITERS) -> "torch.Tensor":
-    """(..., r, c) fp32 -> per-matrix approximate UV^T. The reference
-    twin of kernels/muon.py: transpose-to-wide, Frobenius normalize
-    with eps inside the add, quintic iteration."""
+    """(..., r, c) -> per-matrix approximate UV^T in the input's dtype.
+    The reference twin of kernels/muon.py: transpose-to-wide, Frobenius
+    normalize with eps inside the add, quintic iteration."""
     transposed = x.shape[-2] > x.shape[-1]
     if transposed:
         x = x.mT
@@ -141,8 +141,8 @@ class ReferenceMuon:
     the engine end to end: matrix params (rank 2, and rank-3 expert
     stacks) run nesterov momentum + quintic Newton-Schulz with the
     Moonshot 0.2*sqrt(max(r, c)) scale and decoupled weight decay —
-    momentum arithmetic in the (bf16) momentum buffer's dtype, NS in
-    fp32 (kernels/muon.py semantics); embed/head tables, norms, and
+    momentum arithmetic AND Newton-Schulz in the (bf16) momentum
+    buffer's dtype (kernels/muon.py semantics); embed/head tables, norms, and
     every other param take the exact ReferenceAdamW step. ``muon_lr``
     None means muon shares the scheduled adamw lr (the Moonshot scale
     is designed for that); when set it rides the same schedule via
@@ -203,7 +203,7 @@ class ReferenceMuon:
             eff = gm.add(m, alpha=self.momentum)      # nesterov
             if eff.ndim == 2:
                 eff = eff.unsqueeze(0)
-            o = ns_orthogonalize(eff.float(), eps=r.eps)
+            o = ns_orthogonalize(eff, eps=r.eps)
             if r.weight_decay:
                 w32 = par.data.float().mul_(1.0 - mlr * r.weight_decay)
                 par.data.copy_(w32.to(par.dtype))

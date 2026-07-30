@@ -51,7 +51,7 @@ def _muon_step_aten(kctx, w, g, m, *, shape, lr, beta, eps,
     m.mul_(beta).add_(gm)
     eff = gm.add(m, alpha=beta)             # nesterov
     eff3 = eff.view(shape if len(shape) == 3 else (1, *shape))
-    o = ns_orthogonalize_batched(eff3.float(), eps=eps)
+    o = ns_orthogonalize_batched(eff3, eps=eps)
     if weight_decay:
         w32 = w.float().mul_(1.0 - lr * weight_decay)
         w.copy_(w32.to(w.dtype))
