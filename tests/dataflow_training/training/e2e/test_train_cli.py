@@ -44,7 +44,7 @@ def test_train_cli_world1_writes_record_and_peek_reads_it(tmp_path):
     curve = json.loads(out.read_text())
     assert len(curve["losses"]) == 4
 
-    ck = REPO / "results" / "pretrain" / "checkpoints" / "cli_smoke"
+    ck = REPO / "model_ckpts" / "cli_smoke"
     try:
         manifests = sorted(ck.glob("step_*/checkpoint_record.json"))
         assert manifests, "no checkpoint record written"
