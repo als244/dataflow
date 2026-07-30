@@ -62,6 +62,7 @@ from dataflow_training.blocks.modules.moe.spec import MoESpec, moe_aux_layout
 
 from ...lowering.emit import FamilyLayouts, LayerLayout, apply_exact_sizes, initial_values_from_layouts, object_size_factory
 from ...lowering.shaped_program import (
+    resolve_hardware,
     optimizer_cost_seed,
     BF16,
     LayerKindSpec,
@@ -463,7 +464,7 @@ def build_shaped_glm52(
     recompute_levels=None,
     name: str | None = None,
 ):
-    hw = hw or ShapedHardware()
+    hw = hw if hw is not None else resolve_hardware()
     dims = derive_dims(cfg)
     shares = [
         AuxShare(producer=ld, consumers=dims.group_members(ld)[1:],

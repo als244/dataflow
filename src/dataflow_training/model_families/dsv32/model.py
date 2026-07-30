@@ -43,7 +43,7 @@ from dataflow_training.blocks.layouts import (
 from dataflow_training.blocks.modules.moe.spec import MoESpec, moe_aux_layout
 
 from ...lowering.emit import FamilyLayouts, LayerLayout, apply_exact_sizes, initial_values_from_layouts, object_size_factory
-from ...lowering.shaped_program import optimizer_cost_seed, BF16, LayerKindSpec, ShapedHardware, build_shaped_program
+from ...lowering.shaped_program import optimizer_cost_seed, BF16, LayerKindSpec, ShapedHardware, build_shaped_program, resolve_hardware
 
 _DSV32_DTYPES = DTypePolicy(overrides=(
     ("w_router_bias", ParamDTypes("fp32", "fp32", "fp32")),
@@ -401,7 +401,7 @@ def build_shaped_dsv32(
     recompute_levels=None,
     name: str | None = None,
 ):
-    hw = hw or ShapedHardware()
+    hw = hw if hw is not None else resolve_hardware()
     dims = derive_dims(cfg)
     # each layer's metadata is self-contained (its own M object); no
     # cross-layer sharing — glm52 is the family that passes aux_shared

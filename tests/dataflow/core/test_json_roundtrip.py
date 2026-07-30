@@ -73,12 +73,12 @@ def test_comm_groups_roundtrip_and_validation():
                for td in program_to_dict(program)["tasks"])
 
     from dataflow_training.lowering.shaped_program import (
-        ShapedHardware,
+        ShapedHardware, hardware_preset,
         build_shaped_program,
         roofline_block_kind_spec,
     )
 
-    hw = ShapedHardware()
+    hw = hardware_preset("rtx 5090")
     fleet = build_shaped_program(
         cfg, hw=hw, family="llama3-shaped",
         kinds={"block": roofline_block_kind_spec(cfg, hw)},

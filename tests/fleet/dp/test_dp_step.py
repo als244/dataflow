@@ -41,7 +41,7 @@ from dataflow_training.model_families.llama3 import (  # noqa: E402
 )
 from dataflow_training.lowering.planning import plan_program  # noqa: E402
 from dataflow_training.lowering.shaped_program import (  # noqa: E402
-    ShapedHardware,
+    ShapedHardware, hardware_preset,
     build_shaped_program,
     roofline_block_kind_spec,
 )
@@ -66,7 +66,7 @@ def dp_cfg(ga: int, world: int = 1):
 
 
 def lower_with_group(cfg, dp_group):
-    hw = ShapedHardware()
+    hw = hardware_preset("rtx 5090")
     shaped = build_shaped_program(
         cfg, hw=hw, family="llama3-shaped",
         kinds={"block": roofline_block_kind_spec(cfg, hw)},

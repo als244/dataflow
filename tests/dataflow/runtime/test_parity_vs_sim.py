@@ -13,6 +13,7 @@ Tests:
 - test_parity_grad_accum_8b_scale: engine matches the sim on an 8B-scale two-round grad-accum config at long sequence.
 - test_buffer_reuse_happens_at_scale: on the 8B chain the engine actually reuses buffers.
 """
+from dataclasses import replace
 import pytest
 
 from dataflow.core.convert import to_sim_chain
@@ -20,7 +21,7 @@ from dataflow.runtime import Engine, compare_to_sim_eventlog
 from dataflow.runtime.device.fake import FakeBackend
 from dataflow_training.lowering.planning import plan_program
 from dataflow_training.model_families.llama3 import (
-    ShapedHardware,
+    ShapedHardware, hardware_preset,
     ShapedLlamaConfig,
     build_shaped_llama3,
 )
@@ -95,7 +96,7 @@ def test_parity_8b_starved_pcie_recompute():
     """Blocked heads + deferred prefetches under pressure, with recompute
     tasks spliced in — the busiest scheduling regime."""
     cfg = ShapedLlamaConfig.llama3_8b()
-    hw = ShapedHardware(pcie_gbs=10.0)
+    hw = replace(hardware_preset("rtx 5090"), pcie_gbs=10.0)
     run_both(plan(cfg, 8 * GIB, hw=hw, recompute=True))
 
 

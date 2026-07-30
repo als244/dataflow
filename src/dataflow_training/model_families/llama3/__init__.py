@@ -8,6 +8,7 @@ registry thunk in ``..families``.
 """
 from .model import (  # noqa: F401
     ShapedHardware,
+    hardware_preset,
     ShapedLlamaConfig,
     build_shaped_llama3,
     derive_dims,

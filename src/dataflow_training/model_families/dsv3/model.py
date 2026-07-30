@@ -47,7 +47,7 @@ from dataflow_training.blocks.optim import freeze
 from dataflow_training.blocks.modules.moe.spec import MoESpec, moe_aux_layout, moe_aux_temp_layout
 
 from ...lowering.emit import FamilyLayouts, LayerLayout, apply_exact_sizes, initial_values_from_layouts, object_size_factory
-from ...lowering.shaped_program import optimizer_cost_seed, BF16, LayerKindSpec, ShapedHardware, build_shaped_program
+from ...lowering.shaped_program import optimizer_cost_seed, BF16, LayerKindSpec, ShapedHardware, build_shaped_program, resolve_hardware
 
 _DSV3_DTYPES = DTypePolicy(overrides=(
     # the balance bias is fp32 end-to-end: bf16 ulp at bias ~0.1 is half
@@ -314,7 +314,7 @@ def build_shaped_dsv3(
     recompute_levels=None,
     name: str | None = None,
 ):
-    hw = hw or ShapedHardware()
+    hw = hw if hw is not None else resolve_hardware()
     dims = derive_dims(cfg)
     from ...lowering.freeze_plan import derive_freeze_plan
 

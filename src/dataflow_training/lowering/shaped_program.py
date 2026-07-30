@@ -43,14 +43,20 @@ BF16 = 2  # bytes
 
 @dataclass(frozen=True)
 class ShapedHardware:
-    """Roofline knobs for runtime estimates (plausible RTX 5090 defaults)."""
+    """Roofline knobs for runtime estimates. There are NO defaults:
+    pricing constants describe a physical machine, and a silent
+    default silently prices every plan as that machine (the WAR-stall
+    bug: 5090 constants priced H100 plans 4.5x slow and placement
+    froze the false event order into addresses — see poor_perf/
+    a_stalls/example_issue). Construct via hardware_preset(name) or
+    resolve_hardware(), or pass every field explicitly."""
 
-    peak_bf16_tflops: float = 200.0
-    matmul_eff: float = 0.75
-    attn_eff: float = 0.55
-    mem_bw_gbs: float = 1500.0
-    mem_eff: float = 0.8
-    pcie_gbs: float = 55.0
+    peak_bf16_tflops: float
+    matmul_eff: float
+    attn_eff: float
+    mem_bw_gbs: float
+    mem_eff: float
+    pcie_gbs: float
 
     def matmul_us(self, flops: float, bytes_: float) -> float:
         math_us = flops / (self.peak_bf16_tflops * self.matmul_eff * 1e12) * 1e6
@@ -68,6 +74,57 @@ class ShapedHardware:
     @property
     def pcie_bytes_per_us(self) -> int:
         return int(self.pcie_gbs * 1e9 / 1e6)
+
+
+# The single pricing-constant authority. Keys are lowercase substrings
+# of torch.cuda.get_device_name(); efficiencies are calibrated against
+# measured task profiles (H100: 662-740 TFLOPs sustained on 8B-class
+# GEMMs = ~0.70 of dense-bf16 peak, poor_perf/a_stalls/example_issue/
+# pricing_check_output.txt).
+HW_PRESETS: dict[str, dict] = {
+    "rtx 5090": dict(peak_bf16_tflops=200.0, matmul_eff=0.75,
+                     attn_eff=0.55, mem_bw_gbs=1500.0, mem_eff=0.8,
+                     pcie_gbs=55.0),
+    "rtx 3090": dict(peak_bf16_tflops=71.0, matmul_eff=0.75,
+                     attn_eff=0.55, mem_bw_gbs=936.0, mem_eff=0.8,
+                     pcie_gbs=25.0),
+    "h100": dict(peak_bf16_tflops=989.0, matmul_eff=0.70,
+                 attn_eff=0.55, mem_bw_gbs=3350.0, mem_eff=0.8,
+                 pcie_gbs=55.0),
+}
+
+
+def hardware_preset(name: str) -> ShapedHardware:
+    key = name.lower()
+    if key not in HW_PRESETS:
+        raise ValueError(
+            f"unknown hardware preset {name!r}; known: "
+            f"{sorted(HW_PRESETS)}")
+    return ShapedHardware(**HW_PRESETS[key])
+
+
+def resolve_hardware() -> ShapedHardware:
+    """The ONLY implicit pricing path: the preset matching the actual
+    CUDA device. Anything else raises — no device, or a device with
+    no preset — so a plan can never be priced for the wrong machine
+    silently. Callers that intend machine-independent pricing must
+    say so by passing hw=hardware_preset(...) explicitly."""
+    import torch
+
+    if not torch.cuda.is_available():
+        raise RuntimeError(
+            "pricing needs a hardware model and no CUDA device is "
+            "present to resolve one — pass hw=hardware_preset(name) "
+            f"explicitly (known: {sorted(HW_PRESETS)})")
+    device = torch.cuda.get_device_name(0)
+    lowered = device.lower()
+    for key in HW_PRESETS:
+        if key in lowered:
+            return ShapedHardware(**HW_PRESETS[key])
+    raise RuntimeError(
+        f"no hardware preset matches device {device!r}; add one to "
+        f"HW_PRESETS or pass hw=hardware_preset(name) explicitly "
+        f"(known: {sorted(HW_PRESETS)})")
 
 
 @dataclass(frozen=True)
@@ -345,7 +402,7 @@ def build_shaped_program(
     ``current_round_{s}_{r}`` value (emitted only for families that
     consume the round — dense chains stay byte-stable).
     """
-    hw = hw or ShapedHardware()
+    hw = hw if hw is not None else resolve_hardware()
     levels = dict(recompute_levels or {})
     aux_producer_of: dict[int, int] = {}
     aux_group_of: dict[int, tuple[int, ...]] = {}

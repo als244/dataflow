@@ -27,7 +27,7 @@ from dataflow.runtime.device.cuda import CudaBackend, _check
 from dataflow.runtime.device.cuda_spin import make_spin_resolver
 from dataflow_training.lowering.planning import plan_program
 from dataflow_training.model_families.llama3 import ShapedLlamaConfig, build_shaped_llama3
-from dataflow_training.lowering.shaped_program import ShapedHardware
+from dataflow_training.lowering.shaped_program import hardware_preset
 
 GIB = 1024**3
 
@@ -73,7 +73,7 @@ def main() -> None:
         h2d_bpus, d2h_bpus = pcie.uni_h2d, pcie.uni_d2h
 
     cfg = build_config(args.config)
-    hw = ShapedHardware()  # compute-cost knobs are irrelevant: spin makes runtimes true
+    hw = hardware_preset("rtx 5090")  # any preset works: spin makes runtimes true
 
     def build(levels=None):
         program = build_shaped_llama3(cfg, hw=hw, recompute_levels=levels)

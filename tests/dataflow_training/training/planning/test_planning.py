@@ -70,10 +70,11 @@ def test_recompute_fires_under_starved_interconnect():
     choose recompute and beat the save-all pressurefit plan. (At healthy
     PCIe the same config correctly chooses zero recompute — transfers hide
     under compute; verified in tools/export_program.py runs.)"""
-    from dataflow_training.lowering.shaped_program import ShapedHardware
+    from dataclasses import replace
+    from dataflow_training.lowering.shaped_program import ShapedHardware, hardware_preset
 
     cfg = ShapedLlamaConfig.llama3_8b()
-    hw = ShapedHardware(pcie_gbs=10.0)
+    hw = replace(hardware_preset("rtx 5090"), pcie_gbs=10.0)
     cap = 8 * 1024**3
     program = build_shaped_llama3(cfg, hw=hw)
 

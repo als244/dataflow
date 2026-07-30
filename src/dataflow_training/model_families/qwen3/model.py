@@ -20,7 +20,7 @@ from dataflow_training.blocks.layouts import (
     qwen3_weight_layout,
 )
 from ...lowering.emit import FamilyLayouts, LayerLayout, apply_exact_sizes, initial_values_from_layouts, object_size_factory
-from ...lowering.shaped_program import ShapedHardware, build_shaped_program, roofline_block_kind_spec
+from ...lowering.shaped_program import ShapedHardware, build_shaped_program, roofline_block_kind_spec, resolve_hardware
 
 
 @dataclass(frozen=True)
@@ -110,7 +110,7 @@ def build_shaped_qwen3(
     recompute_levels=None,
     name: str | None = None,
 ):
-    hw = hw or ShapedHardware()
+    hw = hw if hw is not None else resolve_hardware()
     from ...lowering.freeze_plan import derive_freeze_plan
 
     dims_fp, fl_fp = family_layouts(cfg)

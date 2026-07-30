@@ -25,7 +25,7 @@ from dataflow_training.blocks.layouts import (
     qwen35_lin_weight_layout,
 )
 from ...lowering.emit import FamilyLayouts, LayerLayout, apply_exact_sizes, initial_values_from_layouts, object_size_factory
-from ...lowering.shaped_program import LayerKindSpec, ShapedHardware, build_shaped_program
+from ...lowering.shaped_program import LayerKindSpec, ShapedHardware, build_shaped_program, resolve_hardware
 
 
 BF16 = 2
@@ -209,7 +209,7 @@ def build_shaped_qwen35(
     recompute_levels=None,
     name: str | None = None,
 ):
-    hw = hw or ShapedHardware()
+    hw = hw if hw is not None else resolve_hardware()
     dims = derive_dims(cfg)
     label = name or (
         f"qwen35-shaped-{cfg.n_layers}L-d{cfg.d_model}-s{cfg.seq_len}-b{cfg.batch}"

@@ -35,14 +35,14 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_ROOT))
 
-from dataflow_training.lowering.shaped_program import ShapedHardware
+from dataflow_training.lowering.shaped_program import hardware_preset
 
-# roofline profiles for the home fleet (bf16 dense peak, HBM/GDDR bw,
-# host link); efficiencies stay the calibrated defaults
+# roofline profiles by short name -> the central preset table
+# (shaped_program.HW_PRESETS is the single pricing authority)
 HW_PROFILES = {
-    "5090": ShapedHardware(),
-    "3090": ShapedHardware(peak_bf16_tflops=71.0, mem_bw_gbs=936.0,
-                           pcie_gbs=25.0),
+    "5090": hardware_preset("rtx 5090"),
+    "3090": hardware_preset("rtx 3090"),
+    "h100": hardware_preset("h100"),
 }
 
 

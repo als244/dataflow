@@ -36,7 +36,7 @@ from dataflow_training.blocks.modules.moe.spec import MoESpec, moe_aux_layout, m
 
 from ...lowering.emit import FamilyLayouts, LayerLayout, apply_exact_sizes, initial_values_from_layouts, object_size_factory
 from ..qwen35.model import _a_log_init, _dt_bias_init
-from ...lowering.shaped_program import optimizer_cost_seed, BF16, LayerKindSpec, ShapedHardware, build_shaped_program
+from ...lowering.shaped_program import optimizer_cost_seed, BF16, LayerKindSpec, ShapedHardware, build_shaped_program, resolve_hardware
 
 
 @dataclass(frozen=True)
@@ -249,7 +249,7 @@ def build_shaped_qwen35moe(
     recompute_levels=None,
     name: str | None = None,
 ):
-    hw = hw or ShapedHardware()
+    hw = hw if hw is not None else resolve_hardware()
     dims = derive_dims(cfg)
     label = name or (
         f"qwen35moe-shaped-{cfg.n_layers}L-d{cfg.d_model}-s{cfg.seq_len}-b{cfg.batch}"

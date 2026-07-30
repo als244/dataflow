@@ -19,7 +19,7 @@ import pytest
 from dataflow.core.validate import validate_program
 from dataflow_training.model_families.llama3 import ShapedLlamaConfig
 from dataflow_training.lowering.shaped_program import (
-    ShapedHardware,
+    ShapedHardware, hardware_preset,
     build_shaped_program,
     roofline_block_kind_spec,
 )
@@ -28,7 +28,7 @@ TINY = replace(ShapedLlamaConfig.tiny(), grad_accum_rounds=2)
 
 
 def build_with_prologue(cfg):
-    hw = ShapedHardware()
+    hw = hardware_preset("rtx 5090")
     return build_shaped_program(
         cfg, hw=hw, family="llama3-shaped",
         kinds={"block": roofline_block_kind_spec(cfg, hw)},
@@ -57,7 +57,7 @@ def test_flag_off_omits_prologues_and_default_adds_one_per_round():
     """round_prologue=False builds the bare chain — no prologue tasks —
     and the DEFAULT build opens every round with one (the universal-
     prologue contract; the hash tripwire pins the bytes)."""
-    hw = ShapedHardware()
+    hw = hardware_preset("rtx 5090")
     program = build_shaped_program(
         TINY, hw=hw, family="llama3-shaped",
         kinds={"block": roofline_block_kind_spec(TINY, hw)},

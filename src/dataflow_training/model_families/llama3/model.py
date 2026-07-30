@@ -37,7 +37,7 @@ from dataflow_training.blocks.layouts import (
     weight_layout,
 )
 from ...lowering.emit import FamilyLayouts, LayerLayout, apply_exact_sizes, initial_values_from_layouts, object_size_factory
-from ...lowering.shaped_program import ShapedHardware, build_shaped_program, roofline_block_kind_spec
+from ...lowering.shaped_program import ShapedHardware, build_shaped_program, hardware_preset, resolve_hardware, roofline_block_kind_spec
 
 
 @dataclass(frozen=True)
@@ -143,7 +143,7 @@ def build_shaped_llama3(
     name: str | None = None,
 ) -> Program:
     """Llama3 through the generic builder: one dense-transformer kind."""
-    hw = hw or ShapedHardware()
+    hw = hw if hw is not None else resolve_hardware()
     from ...lowering.freeze_plan import derive_freeze_plan
 
     d = derive_dims(cfg)
