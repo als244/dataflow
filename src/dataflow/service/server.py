@@ -197,6 +197,9 @@ class Dispatcher(threading.Thread):
                 call.reply_to.push_call_done(call.ticket, error=e.to_json())
                 status = e.code
             except Exception as e:  # noqa: BLE001 — daemon must survive
+                import traceback as tb_mod
+                print(f"[dataflowd] INTERNAL in op={call.op}:\n"
+                      f"{tb_mod.format_exc()}", flush=True)
                 err = ServiceError("INTERNAL", f"{type(e).__name__}: {e}")
                 call.reply_to.push_call_done(call.ticket, error=err.to_json())
                 status = "INTERNAL"

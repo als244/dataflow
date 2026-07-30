@@ -209,6 +209,15 @@ def prepare_placement(program, values):
     recorder = PlacementRecorder()
     dry = Engine(FakeBackend()).execute(program, initial_buffers=values,
                                         record_placement=recorder)
+    if dry.pool_demand is None:
+        # the dry run FAILED — surface its real error, never a
+        # downstream TypeError on the missing demand dict
+        msg = "placement dry-run failed"
+        if dry.outcome is not None:
+            msg = (f"placement dry-run failed: {dry.outcome.message}\n"
+                   f"{dry.outcome.traceback_text or ''}")
+        dry.close()
+        raise RuntimeError(msg)
     placement = compute_placement(recorder, physical_limit_bytes=2**62)
     demand = dict(dry.pool_demand)
     dry.close()

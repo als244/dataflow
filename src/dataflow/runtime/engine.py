@@ -640,8 +640,6 @@ class Engine:
         holder["trace"] = trace
         holder["pool"] = pool
         annotator = getattr(self.backend, "annotator", None) or _NOOP_ANNOTATOR
-        import os as _os
-        import time as _time
         stats = None
         if _os.environ.get("DATAFLOW_DISPATCH_STATS") == "1":
             stats = {k: 0.0 for k in (
