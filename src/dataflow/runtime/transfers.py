@@ -200,7 +200,7 @@ class TransferEngine:
         duration = self.transfer_runtime_us(job.size_bytes, job.runtime_override)
         annotator = getattr(self.backend, "annotator", None)
         if annotator is not None and annotator.enabled:
-            shown = (self.annotate_rename(job.object_id)  # type: ignore[operator]
+            shown = (self.annotate_rename(job.object_id, "transfer")  # type: ignore[operator]
                      if self.annotate_rename else job.object_id)
             annotator.range_push(f"{self.direction}:{shown}")
         self.backend.memcpy_async(

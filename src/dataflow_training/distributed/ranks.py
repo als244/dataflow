@@ -21,6 +21,16 @@ class RankState:
         self.error: str | None = None
 
 
+def step_display_sub(step: int) -> list:
+    """Display-substitution pair for one step's run: rewrites the step
+    slot every task id bakes in (the replayed one-step plan carries
+    step 0) to the GLOBAL step — block_fwd_0_0_3 shows as
+    block_fwd_17_0_3 in a profile of step 17. Applied service-side to
+    TASK display names only; the service treats the pair as opaque
+    data (object/transfer names pass through)."""
+    return [r"^([a-z_]+?)_\d+", f"\\g<1>_{step}"]
+
+
 class StepRun:
     def __init__(self, rank: RankState, step: int, valid: int,
                  seq_lens: dict | None = None):
@@ -40,7 +50,8 @@ class StepRun:
             if self.seq_lens is not None:
                 args["seq_lens"] = self.seq_lens
             out = self.rank.client.run(
-                self.rank.prog_id, args=args, fetch=fetch)
+                self.rank.prog_id, args=args, fetch=fetch,
+                label=step_display_sub(self.step))
             if out.get("state") != "done":
                 raise RuntimeError(f"{self.rank.name}: {out}")
             self.out = out

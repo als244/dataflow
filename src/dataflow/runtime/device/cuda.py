@@ -24,6 +24,7 @@ from __future__ import annotations
 import ctypes
 import queue
 import threading
+import os
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -458,7 +459,10 @@ class CudaBackend:
                 now = time.perf_counter()
                 if now - self.last_poll_yield_s >= self.poll_yield_interval_s:
                     self.last_poll_yield_s = now
-                    time.sleep(0)
+                    # sched_yield, not sleep(0): the sleep path maps to
+                    # clock_nanosleep whose timer slack costs ~50-60 us
+                    # per yield (traced); a bare yield is ~2 us
+                    os.sched_yield()
 
     def measure_pcie(self, nbytes: int = 512 * 1024 * 1024) -> "PcieBandwidth":
         """Measure pinned-copy bandwidth in both regimes (bytes/us ints).

@@ -310,7 +310,7 @@ def test_annotate_rename_rewrites_nvtx_only():
     backend.annotator = RecordingAnnotator()
     result = Engine(backend).execute(
         program,
-        annotate_rename=lambda name: name.replace("_0_", "_7_"),
+        annotate_rename=lambda name, kind="task": name.replace("_0_", "_7_"),
     )
     pushes = [n for kind, n in backend.annotator.events if kind == "push"]
     assert "t_7_1" in pushes and "t_7_2" in pushes

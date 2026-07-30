@@ -28,6 +28,7 @@ _ROOT = str(Path(__file__).resolve().parents[3])
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
+from ..distributed.ranks import step_display_sub
 from ..model_families import bridges
 from .presets import cfg_dict, resolver_family, tokens_per_step
 from .recipe import Recipe
@@ -824,7 +825,7 @@ def run_engine(client, cfg, recipe: Recipe, pipeline, steps: int, *,
         run_args = {"step": step, "valid_rows": sm["valid"],
                     "seq_lens": sm["lens"]}
         out = client.run(prog_id, args=run_args, fetch=fetch,
-                         label=f"s{step}")
+                         label=step_display_sub(step))
         dt = time.perf_counter() - t0
         if out.get("state") != "done":
             raise RuntimeError(f"run step {step} state={out.get('state')}: {out}")

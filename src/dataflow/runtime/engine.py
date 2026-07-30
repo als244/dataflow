@@ -54,6 +54,46 @@ class ExecutionError(RuntimeError):
 
 _NOOP_ANNOTATOR = NoopAnnotator()
 
+import os as _os
+import time as _time
+
+
+def _os_env_boundary() -> bool:
+    return _os.environ.get("DATAFLOW_BOUNDARY_STATS") == "1"
+
+
+class CallTraceRecorder:
+    """sys.setprofile recorder for the dispatch loop: every python
+    call/return on the dispatching thread with a nanosecond stamp, so
+    an inter-task gap reads as the literal source-level execution
+    record of the thread (which function ran, when, for how long).
+    Capped; text-dumped at drain. Heavy (~1-2 us per event) — a
+    mechanism instrument, not a timing benchmark."""
+
+    def __init__(self, cap: int = 2_000_000):
+        self.rows = []
+        self.cap = cap
+
+    def __call__(self, frame, event, arg):
+        if event not in ("call", "return", "c_call", "c_return"):
+            return
+        if len(self.rows) >= self.cap:
+            return
+        code = frame.f_code
+        if event.startswith("c_"):
+            name = getattr(arg, "__qualname__", repr(arg))
+            where = "C"
+        else:
+            name = code.co_qualname
+            where = f"{code.co_filename.rsplit('/', 1)[-1]}:{code.co_firstlineno}"
+        self.rows.append((_time.perf_counter_ns(), event, name, where))
+
+    def dump(self, path: str) -> None:
+        with open(path, "w") as fh:
+            for t_ns, event, name, where in self.rows:
+                fh.write(f"{t_ns} {event} {name} {where}\n")
+
+
 
 class DeadlockError(RuntimeError):
     """The engine is blocked and no in-flight work can unblock it."""
@@ -442,8 +482,13 @@ class Engine:
                                   # id; the caller knows the GLOBAL step and rewrites
                                   # names for the profiler — trace/plan ids untouched)
     ) -> RunResult:
+        boundary = None
+        if _os_env_boundary():
+            boundary = {"t0": _time.perf_counter()}
         if self.validate:
             validate_program(program)
+        if boundary is not None:
+            boundary["validate"] = _time.perf_counter()
         resolver = resolver or synthetic_resolver
         initial_buffers = dict(initial_buffers or {})
 
@@ -512,6 +557,8 @@ class Engine:
         elif pool.placement is not None:
             pool.reset_placement_epoch()
         table = ObjectTable()
+        if boundary is not None:
+            boundary["session_pool"] = _time.perf_counter()
 
         poison = None
         if self.poison_on_free:
@@ -547,6 +594,8 @@ class Engine:
                 self.backend.memcpy_async(dst, src, size, h2d_stream)
             self.backend.sync_all()
         self.backend.mark_origin()
+        if boundary is not None:
+            boundary["load_initial"] = _time.perf_counter()
 
         # --- dispatch loop -----------------------------------------------------
         # Last chain position referencing each object (inputs or transfer
@@ -613,6 +662,12 @@ class Engine:
             import cProfile
             profiler = cProfile.Profile()
             profiler.enable()
+        calltrace = None
+        calltrace_out = _os.environ.get("DATAFLOW_DISPATCH_CALLTRACE")
+        if calltrace_out:
+            import sys as _sys
+            calltrace = CallTraceRecorder()
+            _sys.setprofile(calltrace)
         # run_args are fully OPAQUE to the engine (its contract): any
         # structured values (e.g. the workload's packed-round segments)
         # are interpreted, converted, and materialized by the consuming
@@ -621,6 +676,8 @@ class Engine:
         # publish into it)
         run_values: dict = {}
         for task_pos, task in enumerate(program.tasks):
+            if boundary is not None and task_pos == 0:
+                boundary["prep"] = _time.perf_counter()
             # service boundary-cancel: observed ONLY here, between task
             # dispatches — in-flight work drains normally, the ledger
             # stays consistent, and the finally-path releases buffers
@@ -767,7 +824,8 @@ class Engine:
             mut_buffers = {obj: in_buffers[obj] for obj in task.mutates}
             self.backend.align_stream_to_host(compute)
             start_ev = self.backend.record_event(compute)
-            annotator.range_push(annotate_rename(task.id) if annotate_rename else task.id)
+            annotator.range_push(annotate_rename(task.id, "task")
+                                 if annotate_rename else task.id)
             try:
                 resolver(task).launch(TaskContext(
                     task=task, stream=compute, inputs=in_buffers, outputs=out_buffers,
@@ -814,6 +872,19 @@ class Engine:
                 "can never admit them. " + "; ".join(stuck)
             )
 
+        if boundary is not None:
+            b = boundary
+            print("boundary stats (us): "
+                  f"validate {(b['validate'] - b['t0']) * 1e6:.0f}  "
+                  f"session/pool {(b['session_pool'] - b['validate']) * 1e6:.0f}  "
+                  f"load_initial {(b['load_initial'] - b['session_pool']) * 1e6:.0f}  "
+                  f"prep {(b['prep'] - b['load_initial']) * 1e6:.0f}")
+        if calltrace is not None:
+            import sys as _sys
+            _sys.setprofile(None)
+            calltrace.dump(calltrace_out)
+            print(f"dispatch call trace written to {calltrace_out} "
+                  f"({len(calltrace.rows)} events)")
         if profiler is not None:
             profiler.disable()
             profiler.dump_stats(profile_out)

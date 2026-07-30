@@ -5,6 +5,8 @@ namespacing does the naming: daemons.launch(host), daemons.kill(host).
 Host plumbing (run_on, paths, files) lives in hosts.py."""
 from __future__ import annotations
 
+import os
+
 import time
 
 from .hosts import run_on
@@ -19,6 +21,11 @@ def nsys_command(host: HostSpec, out_path: str) -> str:
              "--gpu-metrics-devices=0"]
     if host.ib_dev:
         parts.append(f"--ib-net-info-devices={host.ib_dev}")
+    extra = os.environ.get("DATAFLOW_NSYS_EXTRA")
+    if extra:
+        # capture-variant escape hatch (e.g. python sampling flags)
+        # without touching the canonical command
+        parts.append(extra)
     parts.append(f"-o {out_path} --force-overwrite true")
     return " ".join(parts)
 

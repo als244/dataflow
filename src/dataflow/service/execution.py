@@ -5,6 +5,8 @@ the registry (service/registry.py), buffers are store extents.
 """
 from __future__ import annotations
 
+import re
+
 from .wire import ServiceError
 
 # Resolver/program/placement caches + the run path. Everything here
@@ -214,18 +216,45 @@ def prepare_placement(program, values):
 
 
 class DisplayPrefix:
-    """NVTX display renamer built from the run's caller-provided label:
-    every task/transfer display name gets the label as a prefix. The
-    service stays blind to what the label MEANS — a workload that
-    replays one program many times labels each run in its own
-    vocabulary and its profiles become distinguishable. Display-only;
-    trace and plan ids are untouched."""
+    """NVTX display renamer built from the run's caller-provided
+    string label: every display name gets the label as a prefix. The
+    service stays blind to what the label MEANS. Display-only; trace
+    and plan ids are untouched."""
 
     def __init__(self, label: str):
         self.label = label
 
-    def __call__(self, name: str) -> str:
+    def __call__(self, name: str, kind: str = "task") -> str:
         return f"{self.label} {name}"
+
+
+class DisplaySub:
+    """NVTX display renamer built from a caller-provided
+    [pattern, replacement] pair: task display names are rewritten by
+    that substitution (transfer/object names pass through untouched —
+    object identity is stable across a program's replays by design).
+    The service applies the pair as opaque data; what it rewrites is
+    entirely the caller's vocabulary."""
+
+    def __init__(self, pattern: str, repl: str):
+        self.pattern = re.compile(pattern)
+        self.repl = repl
+
+    def __call__(self, name: str, kind: str = "task") -> str:
+        if kind != "task":
+            return name
+        return self.pattern.sub(self.repl, name, count=1)
+
+
+def display_renamer(label):
+    """The run verb's label, resolved to a display renamer: a string
+    is a prefix; a [pattern, replacement] pair is a task-name
+    substitution; anything else (None) disables renaming."""
+    if isinstance(label, str) and label:
+        return DisplayPrefix(label)
+    if isinstance(label, (list, tuple)) and len(label) == 2:
+        return DisplaySub(str(label[0]), str(label[1]))
+    return None
 
 
 def execute_run(program, resolver, values, *, prog_id, store=None,
@@ -260,8 +289,7 @@ def execute_run(program, resolver, values, *, prog_id, store=None,
             program, resolver=resolver, initial_buffers=values,
             pool_prewarm=pool_demand, placement=placement,
             run_args=run_args, cancel_event=cancel_event, groups=groups,
-            annotate_rename=(DisplayPrefix(annotate_label)
-                             if annotate_label else None),
+            annotate_rename=display_renamer(annotate_label),
         )
     except (ExecutionError, DeadlockError) as e:
         # engine-invariant violation (a bug): the ordered abort-cleanup already
