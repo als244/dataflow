@@ -489,12 +489,16 @@ class HeadLoss(_Base):
                 )
                 loss_acc += part
                 if dwh is not None and "w" in dwh:
-                    dw_c = hw.wgrad(kctx, yn, dlogits)       # (V, d)
-                    if accum or lo > 0:
-                        dwh["w"].add_(dw_c.to(dwh["w"].dtype))
-                    else:
-                        dwh["w"].copy_(dw_c.to(dwh["w"].dtype))
-                    del dw_c
+                    # (V, d) at vocab scale: the generic grad-writer
+                    # pattern (materialize the wgrad value, cast, add)
+                    # costs three full-matrix passes here — accumulate
+                    # the GEMM straight into the storage-dtype buffer
+                    # instead (fp32 epilogue rounded once; no (V, d)
+                    # transient)
+                    beta = 1.0 if (accum or lo > 0) else 0.0
+                    dwh["w"].addmm_(
+                        dlogits.mT.to(dwh["w"].dtype),
+                        yn.to(dwh["w"].dtype), beta=beta, alpha=1.0)
                 dyn = hw.dgrad(kctx, dlogits, wh)            # (c, d)
                 del logits, dlogits
                 K.rmsnorm_bwd(kctx, dyn, y_c, rstd, wh["final_norm_w"], dy[lo:hi], dnorm_c)
