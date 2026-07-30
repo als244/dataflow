@@ -14,6 +14,7 @@ from dataflow.core.jsonio import program_to_dict
 from dataflow_training.distributed.fleet import lower_with_group
 from dataflow_training.distributed.group_annotation import annotate_groups
 from dataflow_training.lowering.emit import apply_exact_sizes, object_size_factory
+from dataflow_training.lowering.shaped_program import hardware_preset
 from dataflow_training.model_families.llama3 import (
     ShapedLlamaConfig,
     family_layouts,
@@ -22,6 +23,9 @@ from dataflow_training.model_families.llama3 import (
 
 TINY = dc_replace(ShapedLlamaConfig.tiny(), grad_accum_rounds=2)
 GROUP = "dp"
+
+# fixture pricing: pinned digests must be machine-independent
+HW = hardware_preset("rtx 5090")
 
 # Digests of the CERTIFIED grouped lowerings — the anti-tautology anchor: both
 # code paths share the pipeline, so these constants are what prove a rewire
@@ -54,7 +58,7 @@ def annotated(cfg, *, shard_params=None, tp_params=None,
     """The new pipeline: blind lower -> annotate -> narrow -> re-size."""
     from dataflow_training.lowering.emit import narrow_layouts
 
-    program = lower_llama3(cfg)
+    program = lower_llama3(cfg, hw=HW)
     program = annotate_groups(program, group=GROUP,
                               shard_params=shard_params,
                               tp_params=tp_params)
@@ -69,7 +73,7 @@ def annotated(cfg, *, shard_params=None, tp_params=None,
 
 
 def test_dp_annotation_matches_builder():
-    old = lower_with_group(TINY, GROUP)
+    old = lower_with_group(TINY, GROUP, hw=HW)
     assert digest(old) == PINNED["dp"]
     assert program_to_dict(old) == program_to_dict(annotated(TINY))
 
@@ -88,7 +92,7 @@ def test_zero1rs_annotation_matches_builder():
                          "n_tail": sh["n_tail"],
                          "opt_dtype": sh["opt_dtype"]}
                   for root, sh in shard_params.items()}
-    old = lower_with_group(TINY, GROUP, zero1rs_world=world)
+    old = lower_with_group(TINY, GROUP, zero1rs_world=world, hw=HW)
     assert digest(old) == PINNED["zero1rs"]
     assert program_to_dict(old) == program_to_dict(
         annotated(TINY, shard_params=shard_params, opt_slices=opt_slices))
@@ -114,7 +118,7 @@ def test_tp_annotation_matches_builder_both_ranks():
         shard_params = tp_opt_block_params(plan, rank)
         opt_regions = {root: dict(sh["update"])
                        for root, sh in shard_params.items()}
-        old = lower_with_group(TINY, GROUP, parallel=parallel)
+        old = lower_with_group(TINY, GROUP, parallel=parallel, hw=HW)
         assert digest(old) == PINNED[f"tp_r{rank}"]
         assert program_to_dict(old) == program_to_dict(
             annotated(TINY, shard_params=shard_params, tp_params=tp_params,

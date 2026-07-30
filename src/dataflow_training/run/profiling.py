@@ -582,7 +582,28 @@ def host_backing_cap_bytes(*, reserve_gib: float = 10.0) -> int:
     return int(max(0, avail - reserve_gib * 1024 ** 3))
 
 
-PROFILE_CACHE_REV = "6"  # bump whenever kernel/task costs change (invalidates all cached profiles)
+PROFILE_CACHE_REV = "7"  # manual override; impl_fingerprint() below
+# auto-invalidates on ANY kernel/block source change (the muon bf16
+# migration changed optimizer cost 11x without touching an impl_id or
+# this rev — a stale 414 ms profile priced a 37 ms task until the
+# plan-vs-measured check caught it)
+
+
+def impl_fingerprint() -> str:
+    """Hash of every kernel/block implementation source file. Costs are
+    measurements OF THIS CODE: any change re-measures (profiling is
+    cheap by doctrine; silent staleness is not). Over-invalidation on
+    comment edits is accepted for that guarantee."""
+    import hashlib
+    from pathlib import Path
+
+    base = Path(__file__).resolve().parent.parent
+    h = hashlib.sha256()
+    for sub in ("kernels", "blocks"):
+        for f in sorted((base / sub).rglob("*.py")):
+            h.update(str(f.relative_to(base)).encode())
+            h.update(hashlib.sha256(f.read_bytes()).digest())
+    return h.hexdigest()[:16]
 #   "3": float inputs seeded with real-scale values (fill_realistic) — every
 #        earlier profile timed zero-valued operands and ran ~1.25x optimistic
 #   "4": that seeding extended to COMPOSITE operands (saved-activation contexts,
@@ -637,6 +658,7 @@ def load_or_profile(
         "repeats": kwargs.get("repeats", 9),
         "torch": torch.__version__,
         "code_rev": PROFILE_CACHE_REV,
+        "impl": impl_fingerprint(),
     }
     key = hashlib.sha256(json.dumps(env, sort_keys=True).encode()).hexdigest()[:16]
     cache_dir = Path(cache_dir) if cache_dir is not None else Path("artifacts/profile-cache")

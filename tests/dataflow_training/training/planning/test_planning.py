@@ -19,6 +19,11 @@ import pytest
 
 from dataflow.core import validate_program
 from dataflow_training.lowering.planning import plan_program, simulate_program
+from dataflow_training.lowering.shaped_program import hardware_preset
+
+# fixture pricing: planner-BEHAVIOR assertions must be
+# machine-independent, so lowerings here price with a named preset
+HW = hardware_preset("rtx 5090")
 from dataflow_training.model_families.llama3 import ShapedLlamaConfig, build_shaped_llama3
 from dataflow_training.run.profiling import (MissingProfileError, _signature,
                                              apply_measured_costs,
@@ -28,7 +33,7 @@ TINY_CAP = 600_000  # bytes; tight enough to force movement on the tiny config
 
 
 def test_pressurefit_plan_tiny():
-    program = build_shaped_llama3(ShapedLlamaConfig.tiny())
+    program = build_shaped_llama3(ShapedLlamaConfig.tiny(), hw=HW)
     planned = plan_program(program, fast_memory_capacity=TINY_CAP)
 
     validate_program(planned.program)
@@ -44,7 +49,7 @@ def test_pressurefit_plan_tiny():
 
 def test_plan_with_recompute_tiny():
     cfg = ShapedLlamaConfig.tiny()
-    program = build_shaped_llama3(cfg)
+    program = build_shaped_llama3(cfg, hw=HW)
     build_variant = partial(build_shaped_llama3, cfg)
 
     planned = plan_program(
@@ -94,7 +99,7 @@ def test_recompute_fires_under_starved_interconnect():
 
 def test_capacity_sweep_monotone_tiny():
     """Looser budgets should never plan slower (sanity of the whole path)."""
-    program = build_shaped_llama3(ShapedLlamaConfig.tiny())
+    program = build_shaped_llama3(ShapedLlamaConfig.tiny(), hw=HW)
     caps = [500_000, 800_000, 2_000_000]
     makespans = [plan_program(program, fast_memory_capacity=c).makespan_us for c in caps]
     assert makespans[0] >= makespans[1] >= makespans[2]
@@ -116,7 +121,7 @@ def test_backing_capacity_drives_recompute():
 
     cfg = ShapedLlamaConfig.llama3_8b(batch=1, grad_accum_rounds=2)
     cap = 12 * 1024**3
-    program = build_shaped_llama3(cfg)
+    program = build_shaped_llama3(cfg, hw=HW)
     all_levels = {
         rw.object_id: rw.options[-1].level for rw in program.recompute_rewrites
     }
@@ -124,7 +129,7 @@ def test_backing_capacity_drives_recompute():
     def plan_at(backing: int | None):
         def variant(levels):
             return replace(
-                build_shaped_llama3(cfg, recompute_levels=levels),
+                build_shaped_llama3(cfg, recompute_levels=levels, hw=HW),
                 backing_memory_capacity=backing,
             )
 
@@ -154,7 +159,7 @@ def test_backing_capacity_drives_recompute():
     )
     save_peak = peak_backing(save_planned)
     rc_all_planned = plan_program(
-        replace(build_shaped_llama3(cfg, recompute_levels=all_levels),
+        replace(build_shaped_llama3(cfg, recompute_levels=all_levels, hw=HW),
                 backing_memory_capacity=None),
         fast_memory_capacity=cap,
     )
@@ -178,11 +183,11 @@ def test_level_pins_cover_every_variant_the_search_prices():
     indistinguishable, to the search, from a variant that does not fit. The
     pins the profiler is handed have to close that gap."""
     cfg = ShapedLlamaConfig.tiny()
-    program = build_shaped_llama3(cfg)
+    program = build_shaped_llama3(cfg, hw=HW)
 
     covered = set()
     for pins in recompute_level_pins(program):
-        variant = build_shaped_llama3(cfg, recompute_levels=pins)
+        variant = build_shaped_llama3(cfg, recompute_levels=pins, hw=HW)
         sizes = variant.object_sizes()
         covered |= {_signature(t, sizes, None) for t in variant.tasks}
 
@@ -193,7 +198,7 @@ def test_level_pins_cover_every_variant_the_search_prices():
                    top,
                    {obj: (lvl if n % 2 == 0 else 0)
                     for n, (obj, lvl) in enumerate(top.items())}):
-        variant = build_shaped_llama3(cfg, recompute_levels=levels)
+        variant = build_shaped_llama3(cfg, recompute_levels=levels, hw=HW)
         sizes = variant.object_sizes()
         missing = {_signature(t, sizes, None) for t in variant.tasks} - covered
         assert not missing, f"unpriceable tasks in variant: {sorted(missing)}"
@@ -206,7 +211,7 @@ def test_incomplete_cost_table_is_not_reported_as_infeasible():
     lookup that failed the same way would be recorded as a variant to discard,
     and a feasible plan would be reported as impossible."""
     cfg = ShapedLlamaConfig.tiny()
-    program = build_shaped_llama3(cfg)
+    program = build_shaped_llama3(cfg, hw=HW)
 
     with pytest.raises(MissingProfileError) as excinfo:
         apply_measured_costs(program, {}, None)
@@ -222,7 +227,7 @@ def test_recompute_never_plans_slower_than_saving_everything():
     holding, which is how a whole sweep once came back reporting feasible
     cells as impossible."""
     cfg = ShapedLlamaConfig.tiny()
-    program = build_shaped_llama3(cfg)
+    program = build_shaped_llama3(cfg, hw=HW)
 
     for cap in (500_000, 800_000, 2_000_000):
         saved = plan_program(program, fast_memory_capacity=cap)
@@ -238,7 +243,7 @@ def test_recompute_never_plans_slower_than_saving_everything():
 
 
 def build_variant_at(cfg, levels):
-    return build_shaped_llama3(cfg, recompute_levels=levels)
+    return build_shaped_llama3(cfg, recompute_levels=levels, hw=HW)
 
 
 def test_measured_programs_are_built_in_one_place():

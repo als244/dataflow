@@ -17,7 +17,8 @@ from .sharding import (
 
 def lower_with_group(cfg, dp_group: str, recompute_levels=None,
                      parallel=None,
-                     zero1rs_world: int | None = None):
+                     zero1rs_world: int | None = None,
+                     hw=None):
     """``parallel`` (sharding.ParallelConfig with a plan) makes this a
     PER-RANK lowering. An optimizer-consumable plan (zero1): optimizer
     tasks gain shard block_params and the rank's O objects shrink to
@@ -69,7 +70,9 @@ def lower_with_group(cfg, dp_group: str, recompute_levels=None,
     from .group_annotation import annotate_groups
 
     fam = resolve_family(cfg)
-    program = fam.lower(cfg, recompute_levels=recompute_levels)
+    program = (fam.lower(cfg, recompute_levels=recompute_levels, hw=hw)
+               if hw is not None
+               else fam.lower(cfg, recompute_levels=recompute_levels))
     if dp_group is None:
         # world-1: the solo program IS the rank program — no group
         # handles, no shard/tp (validated upstream)
