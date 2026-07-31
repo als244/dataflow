@@ -149,7 +149,7 @@ def print_table(rows, *, steps: int | None) -> None:
         line = (head +
                 f"{r['step_s']:>7.2f} {r['tok_s']:>8,.0f} "
                 f"{r['eff_tfs']:>8.1f} {r['hw_tfs']:>7.1f} "
-                f"{r['peak_gib']:>8.2f} {r['backing_gib']:>6.2f} "
+                f"{r['peak_gib']:>8.2f} {r['pred_peak_backing_gib']:>6.2f} "
                 f"{r['h2d_gb']:>6.1f} {r['h2d_pct']:>4.0f}% "
                 f"{r['d2h_gb']:>6.1f} {r['d2h_pct']:>4.0f}% "
                 f"{r['rc_pct']:>3.0f}% {r['idle_pct']:>4.0f}% "
@@ -279,7 +279,15 @@ def main() -> int:
     rows = []
     for seq in seqs:
         for ga, b in geometry(seq):
-            cfg = replace(base, seq_len=seq, grad_accum_rounds=ga, batch=b)
+            # raise an architectural max_seq_len to fit, exactly as
+            # tools/train/train.py does for --max-seq-len: families with
+            # LEARNED positions (gpt2) cap seq_len at max_seq_len, so
+            # predicting the cell the trainer actually runs means
+            # widening the same way instead of reporting it infeasible
+            over = {"seq_len": seq, "grad_accum_rounds": ga, "batch": b}
+            if getattr(base, "max_seq_len", 0) and seq > base.max_seq_len:
+                over["max_seq_len"] = seq
+            cfg = replace(base, **over)
             for budget in budgets:
                 try:
                     rows.append(combo_row(fam, cfg, hw, budget,
@@ -298,6 +306,12 @@ def main() -> int:
 
     if not sweep:
         r = rows[0]
+        if "infeasible" in r:
+            # the planner already said why; the detail block below needs a
+            # PLANNED program and there is none. Surface the reason instead
+            # of dying on the missing row key.
+            print(f"\nno plan at budget {r['budget']} GiB: {r['infeasible']}")
+            return 0
         planned = plan_combo(fam, replace(base,
                                           grad_accum_rounds=r["ga"],
                                           batch=r["batch"]),
