@@ -217,16 +217,26 @@ def run_profile(args) -> bool:
 def run_predict(args, measured):
     base = base_cfg(args.preset, args.opt)
     fam = resolve_family(base)
-    hw = PS.HW_PROFILES[args.hw]
-    ov = {}
-    if args.tflops:
-        ov["peak_bf16_tflops"] = args.tflops
-    if args.bw:
-        ov["mem_bw_gbs"] = args.bw
-    if args.pcie:
-        ov["pcie_gbs"] = args.pcie
-    if ov:
-        hw = replace(hw, **ov)
+    # MEASURED runs price from profiles and this box's measured link, and
+    # plan_combo drops hw entirely (hw=None if measured). Resolving a
+    # hardware preset here anyway made the campaign LOOK like it was priced
+    # against whatever --hw defaulted to; it never was. Roofline mode is the
+    # only consumer, and it must now SAY which box it is modelling.
+    hw = None
+    if not measured:
+        if not args.hw:
+            raise SystemExit("--mode predict needs --hw (it is the roofline "
+                             "seed); measured modes take no hardware preset")
+        hw = PS.HW_PROFILES[args.hw]
+        ov = {}
+        if args.tflops:
+            ov["peak_bf16_tflops"] = args.tflops
+        if args.bw:
+            ov["mem_bw_gbs"] = args.bw
+        if args.pcie:
+            ov["pcie_gbs"] = args.pcie
+        if ov:
+            hw = replace(hw, **ov)
     profile_cache: dict = {}
     seqs = [int(x) for x in args.seq.split(",")]
     trs = [int(x) for x in args.t_round.split(",")]
@@ -595,7 +605,11 @@ def main():
     ap.add_argument("--t-round", dest="t_round", default="8192,16384,32768,65536")
     ap.add_argument("--t-step", dest="t_step", default="65536,131072,262144")
     ap.add_argument("--budget", default="4,8,16,32,64")
-    ap.add_argument("--hw", default="5090")            # roofline seed base
+    # no default: only --mode predict (roofline) reads it, and a default
+    # silently attributes a campaign to hardware it never priced against
+    ap.add_argument("--hw", default=None,
+                    help="roofline seed preset; REQUIRED by --mode predict, "
+                         "rejected as meaningless by the measured modes")
     ap.add_argument("--tflops", type=float, default=None, help="roofline peak bf16 TF override")
     ap.add_argument("--bw", type=float, default=None, help="roofline mem bw GB/s override")
     ap.add_argument("--pcie", type=float, default=None, help="roofline host link GB/s override")
