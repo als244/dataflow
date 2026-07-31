@@ -72,6 +72,9 @@ class TaskProfile:
     runtime_us: float          # median of repeats
     workspace_bytes: int
     repeats: int
+    # total DEVICE time this signature was sampled over. A profile is only
+    # as good as the load it was taken under, so the number rides along.
+    sampled_us: float = 0.0
     mean_us: float = 0.0
     stdev_us: float = 0.0
     min_us: float = 0.0
@@ -186,6 +189,19 @@ def fill_realistic(buffer, size_bytes: int, dtype_name: str, generator) -> bool:
     return True
 
 
+# one timed bracket aims for this much device time, so a sub-ms task
+# amortizes its host sync over many back-to-back launches and a 170 ms
+# task still gets its own bracket
+BRACKET_US = 50_000.0
+# the inner cap only binds for VERY short tasks, and when it binds the
+# bracket falls short of BRACKET_US, so the budget runs out of brackets
+# before it runs out of time: an 8.5 us prologue capped at 512 launches
+# made 4.35 ms brackets and sampled 0.88 s against a 2.5 s ask. Sized so
+# a task down to ~12 us still fills a bracket.
+MAX_INNER = 4096
+MAX_BRACKETS = 400
+
+
 def thermal_soak(seconds: float = 1.0) -> None:
     # 1s default (was 10): with the PCIe contender on, profiling itself
     # keeps the die busy, so the soak only needs to lift clocks off idle
@@ -273,6 +289,7 @@ def profile_program(
     *,
     warmup: int = 2,
     repeats: int = 9,
+    min_sample_seconds: float = 2.5,
     soak_seconds: float = 1.0,
     contend_pcie: bool = True,
     int32_fill: int = 0,
@@ -451,21 +468,54 @@ def profile_program(
                 # mid-bench (an exhausted contender made a ~187 ms head
                 # measure ~155: the tail repeats ran on an idle bus)
                 contender.cover(float(task.runtime_us) * (warmup + 2))
-            times = []
-            for i in range(warmup + repeats):
+            # SAMPLE FOR A DURATION, not a count, and launch
+            # BACK-TO-BACK inside each timed bracket.
+            #
+            # A fixed repeat count benches a short task in a burst the
+            # real step never runs in: 11 launches of a 23 ms block is
+            # 0.25 s of load and the die holds boost clocks throughout.
+            # Measured on H100, block_fwd reads 22.16 ms that way against
+            # 23.56 ms under sustained load — and only the sustained
+            # figure matches what the engine does in a step (23.06-23.27
+            # ms). The one-shot thermal_soak lifts clocks before the
+            # FIRST signature and cannot hold them down through every
+            # later one; the PCIe contender is DMA, not compute (it moves
+            # the head 0.2%). So each signature generates its own load.
+            #
+            # Syncing per launch would defeat that (the die idles in every
+            # gap) and would cost thousands of syncs on sub-ms tasks, so
+            # each bracket runs `inner` launches with no host sync inside
+            # and divides. Profiling is cheap next to planning and
+            # measurement, which is what buys the extra seconds.
+            for _ in range(warmup):
                 a = backend.record_event(stream)
                 executable.launch(ctx)
                 b = backend.record_event(stream)
                 _check(cudart.cudaEventSynchronize(b.raw))
-                took = backend.event_time_us(b) - backend.event_time_us(a)
-                if i >= warmup:
-                    times.append(took)
+            one_us = max(backend.event_time_us(b) - backend.event_time_us(a),
+                         1.0)
+            inner = max(1, min(MAX_INNER, int(BRACKET_US / one_us)))
+            times = []
+            elapsed_us = 0.0
+            budget_us = float(min_sample_seconds) * 1e6
+            for _ in range(MAX_BRACKETS):
+                a = backend.record_event(stream)
+                for _ in range(inner):
+                    executable.launch(ctx)
+                b = backend.record_event(stream)
+                _check(cudart.cudaEventSynchronize(b.raw))
+                span = backend.event_time_us(b) - backend.event_time_us(a)
+                times.append(span / inner)
+                elapsed_us += span
                 if contender is not None:
-                    contender.cover(took * 2.0)
+                    contender.cover(span * 2.0)
+                if len(times) >= repeats and elapsed_us >= budget_us:
+                    break
             profiles[sig] = TaskProfile(
                 runtime_us=statistics.median(times),
                 workspace_bytes=workspace,
-                repeats=repeats,
+                repeats=len(times),          # ACTUAL brackets, not the ask
+                sampled_us=elapsed_us,       # how long this signature ran
                 mean_us=statistics.fmean(times),
                 stdev_us=statistics.stdev(times) if len(times) > 1 else 0.0,
                 min_us=min(times),
@@ -724,6 +774,7 @@ def load_or_profile(
         "kernel_set": kernel_set or {},
         "device": torch.cuda.get_device_name() if torch.cuda.is_available() else "cpu",
         "soak_seconds": kwargs.get("soak_seconds", 1.0),
+        "min_sample_seconds": kwargs.get("min_sample_seconds", 2.5),
         "contend_pcie": kwargs.get("contend_pcie", True),
         "repeats": kwargs.get("repeats", 9),
         "torch": torch.__version__,
