@@ -60,6 +60,7 @@ MEMORY LIFECYCLE CONTRACT (device):
 """
 from __future__ import annotations
 
+import os as _os
 import statistics
 from dataclasses import dataclass, replace
 from typing import Callable
@@ -300,7 +301,13 @@ class _PcieContender:
 # everywhere added ~9 min to the suite in two files that build cold tables.
 # Production pricing passes it EXPLICITLY — see driver.measured_pricing_inputs
 # and measured_grouped_program.
-PRODUCTION_SAMPLE_SECONDS = 2.5
+PRODUCTION_SAMPLE_SECONDS = float(_os.environ.get(
+    "DATAFLOW_SAMPLE_FLOOR_S", "2.5"))
+# ...overridable so the floor's WORTH can be measured rather than assumed:
+# profile a cell set at 2.5 / 1.0 / 0.0, plan from each, and compare both the
+# plans chosen and the sim-vs-real agreement. The floor is in the profile
+# cache key, so each setting keeps its own cache and cannot contaminate
+# another. Leave it unset for anything that ships a number.
 
 # The cheap default: stop as soon as `repeats` brackets are in hand. Callers
 # that need a defensible PRICE opt in to PRODUCTION_SAMPLE_SECONDS above.
