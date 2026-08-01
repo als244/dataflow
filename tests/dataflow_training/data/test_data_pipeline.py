@@ -8,6 +8,7 @@ Tests:
 - test_spec_parser: parse_spec splits scheme/main/key-values and resolve_data rejects an unknown scheme.
 - test_shard_doc_mode_tokens_in_range_and_cursor_resume: doc-mode ShardSource emits in-range non-delimiter tokens within max_seqlen and resumes piece-accurately from a cursor.
 - test_feed_requeue_leads_and_cursor_carries_content: a requeued sequence leads the feed and a still-pending requeue rides the cursor into a resumed feed.
+- test_cursor_to_json_matches_eager_and_is_json_clean: the deferred cursor converts to exactly the eager JSON form, stays json.dumps-able, and resumes identically from either form.
 - test_capture_roundtrip: a capture file replays its recorded sequences identically through read_capture and CaptureSource.
 - test_ffd_invariants_and_determinism: FFD packing fills rounds within budget with masked tails, high fill ratio, and deterministic bytes.
 - test_greedy_no_split_defers_and_underfills: the greedy no-split policy keeps sequences whole, underfills, and defers the overflow to lead the next step.
@@ -28,13 +29,16 @@ Tests:
 """
 from __future__ import annotations
 
+import json
+
 from pathlib import Path
 from dataflow_training.distributed.topology import repo_root
 
 import numpy as np
 import pytest
 
-from dataflow_training.data.feed import DataFeed, PrepackedFeed
+from dataflow_training.data.feed import (
+    DataFeed, PrepackedFeed, cursor_to_json, sequence_to_json)
 from dataflow_training.data.packer import Packer
 from dataflow_training.data.sequence import (
     PackedStep,
@@ -144,6 +148,27 @@ def test_feed_requeue_leads_and_cursor_carries_content():
                           feed.next_sequence().tokens)
 
 
+def test_cursor_to_json_matches_eager_and_is_json_clean():
+    feed = synthetic_feed()
+    a = feed.next_sequence()
+    b = feed.next_sequence()
+    feed.requeue([a, b])
+    cur = feed.cursor()
+    # what the cursor USED to build eagerly, every step, for a checkpoint
+    # that reads it once every checkpoint_every steps (or never)
+    eager = {"source": cur["source"],
+             "requeued": [sequence_to_json(s) for s in cur["requeued"]]}
+    assert cursor_to_json(cur) == eager
+    json.dumps(cursor_to_json(cur))      # client_meta must stay JSON-clean
+    assert cursor_to_json(None) is None
+    # a feed resumes identically from the live form or the checkpoint form
+    live = synthetic_feed(start_cursor=cur)
+    stored = synthetic_feed(start_cursor=cursor_to_json(cur))
+    for _ in range(3):
+        assert np.array_equal(live.next_sequence().tokens,
+                              stored.next_sequence().tokens)
+
+
 def test_capture_roundtrip(tmp_path):
     cap = tmp_path / "cap.bin"
     feed = synthetic_feed(capture=cap)
@@ -194,7 +219,8 @@ def test_greedy_no_split_defers_and_underfills():
     # the deferred sequence (if any) leads the next step's first round
     cur = step.cursor_after
     if cur["requeued"]:
-        lead = np.asarray(cur["requeued"][0]["tokens"], dtype=np.int32)
+        # cursor() carries Sequences; cursor_to_json() is the stored form
+        lead = np.asarray(cur["requeued"][0].tokens, dtype=np.int32)
         nxt = packer.next_step()
         first_len = nxt.rounds[0].seq_lens[0]
         assert np.array_equal(nxt.rounds[0].tokens[:first_len],

@@ -46,6 +46,69 @@ class MeasuredGroupedVariant:
             zero1rs_world=self.zero1rs_world)
 
 
+PACK_SETTLE_S = 0.005      # one GIL switch interval; see PackAhead.work
+
+
+class PackAhead:
+    """Packs the NEXT step's batch during the CURRENT step's GPU compute.
+
+    Packing has no data dependency on the step in flight, but the loop used
+    to do it between steps, where it is pure GPU-idle time: the boundary
+    trace shows both daemon threads blocked and zero kernels running for
+    the entire interval the client spends packing (step_boundary/FINDINGS.md).
+
+    Exactly ONE pack is ever in flight and it is joined before the next is
+    started, so ``stepper.next_step()`` is called the same number of times
+    in the same order and the byte stream is unchanged — only the wall-clock
+    position of the work moves. A pack that raises re-raises on take(), so a
+    data error still surfaces on the step that needed it rather than being
+    swallowed by a background thread.
+    """
+
+    def __init__(self, stepper):
+        self.stepper = stepper
+        self.thread = None
+        self.packed = None
+        self.error = None
+
+    def work(self):
+        # Let the run threads get their request onto the wire before this
+        # thread starts competing for the interpreter. Packing is
+        # compute-bound Python and CPython only releases the GIL every
+        # sys.getswitchinterval() (5 ms by default), which is an eternity
+        # next to the ~0.3 ms a dispatch needs — without this yield the
+        # pack lands ON the request it is meant to hide behind, and the
+        # boundary does not move (measured: the cost simply migrates from
+        # the CLIENT interval into rtt). The pack has the whole step's GPU
+        # compute to finish in, so waiting here is free.
+        time.sleep(PACK_SETTLE_S)
+        try:
+            self.packed = self.stepper.next_step()
+        except BaseException as exc:      # re-raised on take()
+            self.error = exc
+
+    def start(self):
+        if self.thread is not None:
+            raise RuntimeError("pack-ahead already in flight — the packer is "
+                               "a single-consumer stream and cannot be "
+                               "advanced twice concurrently")
+        self.thread = threading.Thread(target=self.work, name="pack-ahead",
+                                       daemon=True)
+        self.thread.start()
+
+    def take(self):
+        """The next step's batch: joins the prefetch, or packs inline if
+        none was started (the tail step, or a caller that never start()ed)."""
+        if self.thread is None:
+            return self.stepper.next_step()
+        self.thread.join()
+        self.thread = None
+        if self.error is not None:
+            raise self.error
+        out, self.packed = self.packed, None
+        return out
+
+
 def fleet_loop(ranks, gspec, recipe, pipeline, steps, *, budgets, seed,
                log, log_every, tokens_step, r_global,
                profile: dict | None = None,
@@ -78,6 +141,7 @@ def fleet_loop(ranks, gspec, recipe, pipeline, steps, *, budgets, seed,
     step_packed = stepper.next_step()      # the START step's rounds
     step_lens_by_rank: dict[int, dict] = {}
     last_cursor = step_packed.cursor_after
+    pack_ahead = PackAhead(stepper)
 
     # ---- per-rank register + warm-up ----------------------------------
     for i, rank in enumerate(ranks):
@@ -270,7 +334,7 @@ def fleet_loop(ranks, gspec, recipe, pipeline, steps, *, budgets, seed,
             log(f"[fleet] profiler capture STARTED before step {step}")
         t0 = time.perf_counter()
         if step > start_step:
-            step_packed = stepper.next_step()
+            step_packed = pack_ahead.take()
             last_cursor = step_packed.cursor_after
             for k, rank in enumerate(ranks):
                 step_lens_by_rank[k] = put_rank_rounds(
@@ -285,6 +349,16 @@ def fleet_loop(ranks, gspec, recipe, pipeline, steps, *, budgets, seed,
         threads = [threading.Thread(target=j) for j in jobs]
         for t in threads:
             t.start()
+        # the next step's batch depends on NOTHING this step computes, so
+        # pack it while the GPU runs instead of after it (the boundary
+        # trace shows the daemon blocked and zero kernels in flight for
+        # the whole time the client packs — step_boundary/FINDINGS.md).
+        # STARTED LAST, after the run threads are away: packing is
+        # compute-bound Python, and the GIL only switches every 5 ms, so
+        # a pack started any earlier holds the interpreter through the
+        # very dispatch it is supposed to be hiding behind.
+        if step + 1 < steps:
+            pack_ahead.start()
         for t in threads:
             t.join()
         for j in jobs:

@@ -18,6 +18,7 @@ enter the store, there is nothing to release afterwards.
 """
 from pathlib import Path
 
+from ..data.feed import cursor_to_json
 from ..distributed.hosts import repo_path, run_on
 
 
@@ -165,7 +166,7 @@ def save_checkpoint(ranks, ck: dict, step_next: int, meta: dict,
                 "rank_rounds": meta.get("rank_rounds"),
                 "source_policy": policy},
         client_payload={"losses": list(losses_so_far),
-                        "data_cursor": meta.get("data_cursor"),
+                        "data_cursor": cursor_to_json(meta.get("data_cursor")),
                         "seed": meta["seed"]},
         summary=({"last_loss": round(float(losses_so_far[-1]), 4),
                   "steps_recorded": len(losses_so_far)}

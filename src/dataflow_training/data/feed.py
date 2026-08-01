@@ -14,7 +14,9 @@ CONTRACT:
   (prefetched-but-unhanded items are re-derived on resume) plus the
   CONTENT of requeued sequences (already consumed from the source,
   so their bytes ride the cursor — small, bounded by the packer
-  lookahead, JSON-clean for client_meta).
+  lookahead). It carries those sequences as OBJECTS; ``cursor_to_json``
+  produces the JSON-clean form for client_meta and is called at
+  checkpoint-write time, not once per step.
 - Worker errors (source IO, tokenizer) surface on the next
   next_sequence() call, never silently.
 - Single consumer (the packer); not a general concurrent queue.
@@ -45,6 +47,33 @@ def sequence_from_json(d: dict) -> Sequence:
         tokens=np.asarray(d["tokens"], dtype=np.int32),
         targets=np.asarray(d["targets"], dtype=np.int32),
         extras={k: np.asarray(v) for k, v in d.get("extras", {}).items()})
+
+
+def cursor_to_json(cur: dict | None) -> dict | None:
+    """The JSON-clean form of a cursor, built at CHECKPOINT-WRITE time.
+
+    cursor() carries the requeued sequences as objects and this converts
+    them, because the packer takes a cursor every step while a checkpoint
+    reads one every ``checkpoint_every`` steps (or never). Converting
+    eagerly turned the requeue backlog — a steady ~197k tokens, 3x the
+    round budget — into ~394k throwaway Python ints per step, which cost
+    3-6 ms of GPU-idle time at the step boundary (step_boundary/FINDINGS.md).
+
+    Deferring is faithful because sequence CONTENT is immutable once
+    handed out: the packer slices via ascontiguousarray, which allocates,
+    so nothing mutates the arrays a snapshot points at. The deque mutates;
+    the Sequences in it do not.
+
+    Anything that is not a DataFeed cursor passes through untouched —
+    PrepackedFeed reports ``{"step": n}``, and a caller may carry its own
+    shape — so this keys off the presence of ``requeued`` rather than
+    assuming, and preserves every other key it finds.
+    """
+    if not isinstance(cur, dict) or "requeued" not in cur:
+        return cur
+    return {**cur,
+            "requeued": [s if isinstance(s, dict) else sequence_to_json(s)
+                         for s in cur["requeued"]]}
 
 
 class IngestWorker(threading.Thread):
@@ -85,7 +114,10 @@ class DataFeed:
         self.pending: deque[Sequence] = deque()
         if cursor and cursor.get("requeued"):
             for d in cursor["requeued"]:
-                self.pending.append(sequence_from_json(d))
+                # a cursor read back from a checkpoint carries dicts; one
+                # taken live (cursor()) carries Sequences already
+                self.pending.append(
+                    d if isinstance(d, Sequence) else sequence_from_json(d))
         source_cursor = cursor.get("source") if cursor else None
         self.source_cursor = source_cursor
         self.worker: IngestWorker | None = None
@@ -129,8 +161,12 @@ class DataFeed:
             self.pending.appendleft(seq)
 
     def cursor(self) -> dict:
+        """Resume point. The requeued sequences ride as OBJECTS; run them
+        through cursor_to_json() to get the JSON-clean form a checkpoint
+        stores. Snapshotting references costs microseconds where
+        serializing the backlog cost 3-6 ms of boundary idle EVERY step."""
         return {"source": self.source_cursor,
-                "requeued": [sequence_to_json(s) for s in self.pending]}
+                "requeued": tuple(self.pending)}
 
     def close(self) -> None:
         if self.worker is not None:

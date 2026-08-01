@@ -28,6 +28,7 @@ _ROOT = str(Path(__file__).resolve().parents[3])
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
+from ..data.feed import cursor_to_json
 from ..distributed.ranks import step_display_sub
 from ..model_families import bridges
 from .presets import cfg_dict, resolver_family, tokens_per_step
@@ -244,7 +245,7 @@ def save_reference_checkpoint(path, step: int, model, opt, res, *,
         "losses": list(res.losses),
         "step_wall_s": list(res.step_wall_s),
         "tok_per_s": list(res.tok_per_s),
-        "data_cursor": data_cursor,
+        "data_cursor": cursor_to_json(data_cursor),
     }, tmp)
     os.replace(tmp, path)
 
