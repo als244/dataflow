@@ -27,6 +27,11 @@ cd "$(git rev-parse --show-toplevel)" || exit 1
 
 PY=${PY:-python}
 HERE=reproducibility/throughput_fidelity
+if ! $PY -c "import dataflow_training" 2>/dev/null; then
+    echo "PY=$PY cannot import dataflow_training — set PY to the env's" \
+         "interpreter (e.g. PY=~/.conda/envs/dataflow/bin/python)"
+    exit 1
+fi
 SMOKE=0
 EXTRA=()
 for a in "$@"; do
@@ -36,8 +41,10 @@ done
 if [ "$SMOKE" = "1" ]; then
     # one sequence, two budgets, 2 steps: a shape test, not a measurement
     RESULTS=$HERE/results_smoke
+    # 4 is run_experiment's floor: the first 3 steps are warmup, so
+    # anything less is rejected before a single stage runs
     GRID=(--seqs 1024 --t-rounds 32768 --t-steps 65536
-          --budgets 18,35 --steps 2)
+          --budgets 18,35 --steps 4)
     echo "SMOKE run -> $RESULTS (shape test only; numbers are not results)"
 else
     RESULTS=$HERE/results_h100_fa3_corrected
@@ -58,8 +65,16 @@ rm -f /tmp/dataflow-test-*.sock
 sleep 2
 
 echo "commit: $(git log --oneline -1)"
+# --fresh-profiles is NOT the way to get clean numbers: load_or_profile
+# treats refresh as "empty the store on EVERY call", so each geometry
+# re-measures signatures the previous one already took — 66 geometries x
+# ~12 signatures instead of the few hundred that are actually distinct
+# (geometries differing only in t_step share ALL their signatures). It
+# cost ~1h40m per optimizer for nothing. To force fresh numbers, CLEAR
+# THE CACHE DIRECTORY once; then the run accumulates and reuses. FRESH=1
+# opts back in if you ever need per-call re-measurement.
 echo "profiles: $(ls artifacts/profile-cache/profiles-*.json 2>/dev/null | wc -l) cached \
-(--fresh-profiles re-measures regardless)"
+(clear artifacts/profile-cache to force fresh measurement)"
 
 set -x
 $PY $HERE/run_experiment.py \
@@ -68,7 +83,7 @@ $PY $HERE/run_experiment.py \
     "${GRID[@]}" \
     --backing-gib 128 \
     --all-frontier \
-    --fresh-profiles \
+    ${FRESH:+--fresh-profiles} \
     --results "$RESULTS" \
     "${EXTRA[@]}"
 RC=$?
