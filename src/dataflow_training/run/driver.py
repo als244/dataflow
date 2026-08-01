@@ -535,8 +535,8 @@ def warm_profiles(cfg, *, recompute: bool = True,
     overwriting what the disk cache held for these lowerings."""
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow_training.model_families.families import resolve_family
-    from dataflow_training.run.profiling import (cached_pcie,
-                                                 measured_profile_table)
+    from dataflow_training.run.profiling import (
+        PRODUCTION_SAMPLE_SECONDS, cached_pcie, measured_profile_table)
 
     fam = resolve_family(cfg)
     cache = profile_cache if profile_cache is not None else {}
@@ -549,9 +549,13 @@ def warm_profiles(cfg, *, recompute: bool = True,
     if key not in cache:
         dims = fam.derive_dims(cfg)
         resolver = fam.build_resolver(dims)
-        cache[key] = (measured_profile_table(fam, cfg, resolver, backend,
-                                             recompute=recompute,
-                                             refresh=refresh),
+        cache[key] = (measured_profile_table(
+                          fam, cfg, resolver, backend, recompute=recompute,
+                          refresh=refresh,
+                          # warm the key PRODUCTION reads: the sampling floor
+                          # is in the cache key, so warming without it fills a
+                          # different file and the run profiles anyway
+                          min_sample_seconds=PRODUCTION_SAMPLE_SECONDS),
                       resolver)
 
 
@@ -568,8 +572,8 @@ def measured_pricing_inputs(cfg, *, recompute: bool = True,
     loud failure naming the warm stage instead of silent GPU work."""
     from dataflow.runtime.device.cuda import CudaBackend
     from dataflow_training.model_families.families import resolve_family
-    from dataflow_training.run.profiling import (cached_pcie,
-                                                 measured_profile_table)
+    from dataflow_training.run.profiling import (
+        PRODUCTION_SAMPLE_SECONDS, cached_pcie, measured_profile_table)
 
     fam = resolve_family(cfg)
     backend = profile_cache.get("_backend")
@@ -585,7 +589,10 @@ def measured_pricing_inputs(cfg, *, recompute: bool = True,
         profile_cache[key] = (
             measured_profile_table(fam, cfg, resolver, backend,
                                    recompute=recompute,
-                                   require_cached=require_cached),
+                                   require_cached=require_cached,
+                                   # a PRICE, not just a cost table: sample
+                                   # under sustained load (profiling.py)
+                                   min_sample_seconds=PRODUCTION_SAMPLE_SECONDS),
             resolver)
     profiles, resolver = profile_cache[key]
     return profiles, resolver, pcie

@@ -10,6 +10,7 @@ Tests:
 - test_backing_capacity_drives_recompute: a backing cap between the save-all and recompute-all peaks forces more recomputation than the unbounded plan and still simulates green.
 - test_level_pins_cover_every_variant_the_search_prices: the programs the profiler is told to measure carry every cost signature the recompute search can encounter, including the seeds it starts from.
 - test_incomplete_cost_table_is_not_reported_as_infeasible: pricing a program against a table that never measured it raises MissingProfileError rather than being absorbed as a plan that does not fit.
+- test_burst_sampled_profiles_are_refused_as_a_production_price: pricing production work from profiles taken under less load than the production floor raises UnderSampledProfileError instead of planning on optimistic numbers.
 - test_recompute_never_plans_slower_than_saving_everything: offering recompute never yields a slower plan than the save-everything baseline it starts from, at any budget.
 - test_measured_programs_are_built_in_one_place: nothing outside the profiling module assembles a measured program itself, so profiled costs and measured bandwidths cannot be applied by halves.
 """
@@ -25,8 +26,10 @@ from dataflow_training.lowering.shaped_program import hardware_preset
 # machine-independent, so lowerings here price with a named preset
 HW = hardware_preset("rtx 5090")
 from dataflow_training.model_families.llama3 import ShapedLlamaConfig, build_shaped_llama3
-from dataflow_training.run.profiling import (MissingProfileError, _signature,
-                                             apply_measured_costs,
+from dataflow_training.run.profiling import (PRODUCTION_SAMPLE_SECONDS,
+                                             MissingProfileError, TaskProfile,
+                                             UnderSampledProfileError,
+                                             _signature, apply_measured_costs,
                                              recompute_level_pins)
 
 TINY_CAP = 600_000  # bytes; tight enough to force movement on the tiny config
@@ -216,6 +219,41 @@ def test_incomplete_cost_table_is_not_reported_as_infeasible():
     with pytest.raises(MissingProfileError) as excinfo:
         apply_measured_costs(program, {}, None)
     assert not isinstance(excinfo.value, ValueError)
+    assert program.tasks[0].id in str(excinfo.value)
+
+
+def test_burst_sampled_profiles_are_refused_as_a_production_price():
+    """The sampling floor is opt-in, so the guard has to be the thing that
+    catches a pricing path which forgot to ask for it. A signature timed in a
+    short burst reads several percent faster than the same work under
+    sustained load (block_fwd: 22.16 ms burst vs 23.56 ms sustained, and
+    production reproduces the sustained figure), so a plan built from burst
+    numbers is optimistic and entirely plausible-looking — exactly the kind of
+    silent wrongness MissingProfileError exists to prevent for absent costs."""
+    cfg = ShapedLlamaConfig.tiny()
+    program = build_shaped_llama3(cfg, hw=HW)
+    sizes = program.object_sizes()
+
+    def table(sampled_seconds):
+        return {_signature(t, sizes): TaskProfile(
+            runtime_us=100.0, workspace_bytes=0, repeats=9,
+            sampled_us=sampled_seconds * 1e6,
+            sample_floor_s=sampled_seconds) for t in program.tasks}
+
+    # a cost table is a legitimate use and demands no floor
+    apply_measured_costs(program, table(0.0))
+    # a profile from a cache predating the field is unknown, never refused
+    legacy = {_signature(t, program.object_sizes()): TaskProfile(
+        runtime_us=100.0, workspace_bytes=0, repeats=9) for t in program.tasks}
+    apply_measured_costs(program, legacy,
+                         require_sample_seconds=PRODUCTION_SAMPLE_SECONDS)
+    # so is a production price built from production-sampled sigs
+    apply_measured_costs(program, table(PRODUCTION_SAMPLE_SECONDS),
+                         require_sample_seconds=PRODUCTION_SAMPLE_SECONDS)
+
+    with pytest.raises(UnderSampledProfileError) as excinfo:
+        apply_measured_costs(program, table(0.05),
+                             require_sample_seconds=PRODUCTION_SAMPLE_SECONDS)
     assert program.tasks[0].id in str(excinfo.value)
 
 

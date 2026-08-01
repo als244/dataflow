@@ -75,6 +75,12 @@ class TaskProfile:
     # total DEVICE time this signature was sampled over. A profile is only
     # as good as the load it was taken under, so the number rides along.
     sampled_us: float = 0.0
+    # the sampling floor this profile was TAKEN UNDER, which is what makes it
+    # usable as a production price. Checking sampled_us instead would punish
+    # fast signatures: they exit on MAX_BRACKETS before the budget, so a
+    # legitimate production profile can show less elapsed time than the floor.
+    # -1.0 means "written before this field existed" and is never refused.
+    sample_floor_s: float = -1.0
     mean_us: float = 0.0
     stdev_us: float = 0.0
     min_us: float = 0.0
@@ -282,6 +288,25 @@ class _PcieContender:
             self.backend.free(b)
 
 
+# Sampling floor for PRODUCTION pricing. A task measured in a short burst
+# reads faster than the same task under sustained load — block_fwd times
+# 22.16 ms in a burst against 23.56 ms sustained, and the sustained figure is
+# the one production reproduces (23.06-23.27 ms). Clock and power settle over
+# roughly a second, so a price that feeds real planning samples for at least
+# this long per signature.
+#
+# It is NOT the default, because it costs 2.5 s x every unique signature and
+# most callers (tests, docs, probes) want a cost table, not a price: paying it
+# everywhere added ~9 min to the suite in two files that build cold tables.
+# Production pricing passes it EXPLICITLY — see driver.measured_pricing_inputs
+# and measured_grouped_program.
+PRODUCTION_SAMPLE_SECONDS = 2.5
+
+# The cheap default: stop as soon as `repeats` brackets are in hand. Callers
+# that need a defensible PRICE opt in to PRODUCTION_SAMPLE_SECONDS above.
+DEFAULT_SAMPLE_SECONDS = 0.0
+
+
 def profile_program(
     program: Program,
     resolver: Callable[[TaskSpec], object],
@@ -289,7 +314,7 @@ def profile_program(
     *,
     warmup: int = 2,
     repeats: int = 9,
-    min_sample_seconds: float = 2.5,
+    min_sample_seconds: float = DEFAULT_SAMPLE_SECONDS,
     soak_seconds: float = 1.0,
     contend_pcie: bool = True,
     int32_fill: int = 0,
@@ -516,6 +541,7 @@ def profile_program(
                 workspace_bytes=workspace,
                 repeats=len(times),          # ACTUAL brackets, not the ask
                 sampled_us=elapsed_us,       # how long this signature ran
+                sample_floor_s=float(min_sample_seconds),
                 mean_us=statistics.fmean(times),
                 stdev_us=statistics.stdev(times) if len(times) > 1 else 0.0,
                 min_us=min(times),
@@ -595,7 +621,9 @@ def measured_program(fam, cfg, profiles, resolver, pcie, levels=None) -> Program
     apply half the measurement."""
     program = (fam.lower(cfg) if levels is None
                else fam.lower(cfg, recompute_levels=levels))
-    return replace(apply_measured_costs(program, profiles, resolver),
+    return replace(apply_measured_costs(
+                       program, profiles, resolver,
+                       require_sample_seconds=PRODUCTION_SAMPLE_SECONDS),
                    bandwidth_from_slow=pcie.bidi_h2d,
                    bandwidth_to_slow=pcie.bidi_d2h)
 
@@ -618,11 +646,22 @@ def measured_grouped_program(cfg, dp_group, resolver, pcie, backend,
     program = lower_with_group(cfg, dp_group, recompute_levels=levels,
                                parallel=parallel,
                                zero1rs_world=zero1rs_world)
-    profiles = load_or_profile(program, resolver, backend,
-                               require_cached=require_cached)
-    return replace(apply_measured_costs(program, profiles, resolver),
+    profiles = load_or_profile(
+        program, resolver, backend, require_cached=require_cached,
+        min_sample_seconds=PRODUCTION_SAMPLE_SECONDS)
+    return replace(apply_measured_costs(
+                       program, profiles, resolver,
+                       require_sample_seconds=PRODUCTION_SAMPLE_SECONDS),
                    bandwidth_from_slow=pcie.bidi_h2d,
                    bandwidth_to_slow=pcie.bidi_d2h)
+
+
+class UnderSampledProfileError(ValueError):
+    """A production price was built from profiles taken under too little load.
+
+    Distinct from MissingProfileError (nothing measured this signature at
+    all): the measurement exists, it is just not defensible as a price.
+    """
 
 
 class MissingProfileError(LookupError):
@@ -636,7 +675,19 @@ class MissingProfileError(LookupError):
 
 
 def apply_measured_costs(program: Program, profiles: dict[tuple, TaskProfile],
-                         resolver=None) -> Program:
+                         resolver=None, *,
+                         require_sample_seconds: float = 0.0) -> Program:
+    """Price ``program`` from measured profiles.
+
+    ``require_sample_seconds`` is the production guard: a caller that plans
+    real work passes PRODUCTION_SAMPLE_SECONDS, and any profile taken under
+    less load than that is refused by name. Sampling floor is opt-in (most
+    callers want a cost table, not a price), so without this a pricing path
+    that forgot to ask for it would quietly plan on burst-timed numbers that
+    read several percent fast and look entirely plausible. Same doctrine as
+    MissingProfileError: a fault in what was MEASURED fails loudly rather
+    than being absorbed as a result.
+    """
     sizes = program.object_sizes()
     new_tasks = []
     for task in program.tasks:
@@ -647,6 +698,18 @@ def apply_measured_costs(program: Program, profiles: dict[tuple, TaskProfile],
                 f"{sig}. The profile table was built from a different program "
                 f"-- every variant that gets priced has to be profiled.")
         p = profiles[sig]
+        if 0.0 <= p.sample_floor_s < require_sample_seconds:
+            raise UnderSampledProfileError(
+                f"task {task.id!r} is priced from a profile taken under a "
+                f"{p.sample_floor_s:.2f} s sampling floor, under the "
+                f"{require_sample_seconds:.2f} s production floor "
+                f"(it ran {p.sampled_us / 1e6:.2f} s). "
+                f"A signature timed in a short burst reads "
+                f"faster than the same work under sustained load, so this "
+                f"price is optimistic. Profile through the production path "
+                f"(min_sample_seconds=PRODUCTION_SAMPLE_SECONDS) or drop "
+                f"require_sample_seconds if this caller only needs a cost "
+                f"table.")
         new_tasks.append(replace(
             task,
             runtime_us=p.runtime_us,
@@ -774,7 +837,8 @@ def load_or_profile(
         "kernel_set": kernel_set or {},
         "device": torch.cuda.get_device_name() if torch.cuda.is_available() else "cpu",
         "soak_seconds": kwargs.get("soak_seconds", 1.0),
-        "min_sample_seconds": kwargs.get("min_sample_seconds", 2.5),
+        "min_sample_seconds": kwargs.get("min_sample_seconds",
+                                 DEFAULT_SAMPLE_SECONDS),
         "contend_pcie": kwargs.get("contend_pcie", True),
         "repeats": kwargs.get("repeats", 9),
         "torch": torch.__version__,
