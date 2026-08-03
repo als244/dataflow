@@ -277,6 +277,7 @@ def load_checkpoint(step_dir, *, targets=None, client=None,
                 f"engine backing {capacity / 1024 ** 3:.2f} GiB "
                 f"cannot hold the {needed / 1024 ** 3:.2f} GiB the "
                 f"targets restore")
+    scratch_client = None
     if client is None:
         import tempfile
         import threading
@@ -286,21 +287,68 @@ def load_checkpoint(step_dir, *, targets=None, client=None,
 
         if backing_gib is None:
             backing_gib = max(0.25, 1.25 * needed / 1024 ** 3)
+        class _ScratchEngineClient(EngineClient):
+            """Client that owns and synchronously joins its scratch server."""
+
+            def __init__(self, socket_path, owner, owner_thread):
+                super().__init__(socket_path, client_name="ckload")
+                self._owner = owner
+                self._owner_thread = owner_thread
+
+            def _stop_owner(self):
+                if self._owner_thread is None:
+                    return
+                self.close()
+                self._owner.state.shutdown_requested.set()
+                if self._owner.dispatcher.is_alive():
+                    self._owner.dispatcher.stop()
+                owner_thread = self._owner_thread
+                owner_thread.join(timeout=30)
+                if owner_thread.is_alive():
+                    raise RuntimeError(
+                        "scratch checkpoint engine failed to stop")
+                self._owner_thread = None
+
+            def shutdown(self, *, force=False):
+                try:
+                    return super().shutdown(force=force)
+                finally:
+                    self._stop_owner()
+
         sock = str(Path(tempfile.mkdtemp()) / "ckload.sock")
         server = Server(EngineConfig(socket_path=sock, fake=True,
                                      slab_backing_gib=backing_gib))
-        threading.Thread(target=server.serve_forever,
-                         daemon=True).start()
-        for _ in range(600):
-            try:
-                EngineClient(sock, client_name="probe").close()
-                break
-            except OSError:
-                time.sleep(0.01)
-        client = EngineClient(sock, client_name="ckload")
-    for step in plan:
-        client.restore_snapshot(str(step_dir / step["path"]),
-                                remap=step["remap"], overwrite=True)
+        server_thread = threading.Thread(
+            target=server.serve_forever,
+            name=f"checkpoint-server:{sock}",
+            daemon=True,
+        )
+        server_thread.start()
+        try:
+            for _ in range(600):
+                try:
+                    EngineClient(sock, client_name="probe").close()
+                    break
+                except OSError:
+                    time.sleep(0.01)
+            else:
+                raise RuntimeError("scratch checkpoint engine did not start")
+            client = _ScratchEngineClient(sock, server, server_thread)
+            scratch_client = client
+        except BaseException:
+            server.state.shutdown_requested.set()
+            if server.dispatcher.is_alive():
+                server.dispatcher.stop()
+            server_thread.join(timeout=30)
+            raise
+    try:
+        for step in plan:
+            client.restore_snapshot(str(step_dir / step["path"]),
+                                    remap=step["remap"], overwrite=True)
+    except BaseException:
+        if scratch_client is not None:
+            scratch_client._stop_owner()
+        raise
     return record, client
 
 

@@ -13,7 +13,6 @@ Tests:
 - test_dedup_policy_covers_with_disjoint_slices: dedup saves W as disjoint responsibility slices — one copy total — and the logical view reassembles it bitwise.
 - test_replication_drift_refuses_before_record: diverged W bytes between sources make save_checkpoint refuse naming both sources, and NO record lands.
 """
-import threading
 import time
 
 import numpy as np
@@ -26,6 +25,7 @@ from dataflow.service import EngineClient, EngineConfig, Server
 from dataflow_training.blocks.layouts import opt_state_slice_layout
 from dataflow_training.distributed.source_policy import \
     compile_source_policy
+from tests.support.service import start_server_thread, shutdown_server_thread
 
 W_BYTES = 8192
 N_SLICE = 500              # 2000 B per slot: NOT 256-aligned
@@ -47,14 +47,25 @@ def boot(tmp, name):
     sock = str(tmp / f"{name}.sock")
     server = Server(EngineConfig(socket_path=sock, fake=True,
                                  slab_backing_gib=0.1))
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    for _ in range(300):
-        try:
-            with EngineClient(sock, client_name="probe"):
-                break
-        except (ConnectionError, FileNotFoundError, OSError):
-            time.sleep(0.01)
-    return server, EngineClient(sock, client_name=name)
+    thread = start_server_thread(server)
+    try:
+        for _ in range(300):
+            try:
+                with EngineClient(sock, client_name="probe"):
+                    break
+            except (ConnectionError, FileNotFoundError, OSError):
+                time.sleep(0.01)
+        else:
+            raise RuntimeError("daemon did not come up")
+        return server, thread, EngineClient(sock, client_name=name)
+    except BaseException:
+        shutdown_server_thread(server, thread)
+        raise
+
+
+def stop_daemons(daemons) -> None:
+    for server, thread, client in daemons:
+        shutdown_server_thread(server, thread, client)
 
 
 def rng_bytes(seed, n):
@@ -123,9 +134,11 @@ def restore_plan(client, step_dir, plan):
 def test_simple_policy_round_trip_world2(tmp_path):
     w = rng_bytes(7, W_BYTES)
     o = fleet_state(w)
-    daemons = [boot(tmp_path, f"w{r}") for r in (0, 1)]
-    clients = {r: daemons[r][1] for r in (0, 1)}
+    daemons = []
     try:
+        for r in (0, 1):
+            daemons.append(boot(tmp_path, f"w{r}"))
+        clients = {r: daemons[r][2] for r in (0, 1)}
         for r in (0, 1):
             clients[r].put_object("W_0", w)
             clients[r].put_object("O_0", o[r])
@@ -153,7 +166,7 @@ def test_simple_policy_round_trip_world2(tmp_path):
 
         # each rank restores from its OWN snapshot: the rank view
         for r in (0, 1):
-            server_f, fresh = boot(tmp_path, f"fresh{r}")
+            server_f, thread_f, fresh = boot(tmp_path, f"fresh{r}")
             try:
                 plan = resolve_targets(record, {str(r): ["W_0", "O_0"]})
                 restore_plan(fresh, step_dir, plan)
@@ -161,10 +174,10 @@ def test_simple_policy_round_trip_world2(tmp_path):
                 assert bytes(fresh.get_object("O_0")) == o[r], \
                     f"rank {r} O shard diverged"
             finally:
-                fresh.shutdown()
+                shutdown_server_thread(server_f, thread_f, fresh)
 
         # the logical view: assembled W + aggregate [m_all|v_all]
-        server_l, logical_client = boot(tmp_path, "logical")
+        server_l, thread_l, logical_client = boot(tmp_path, "logical")
         try:
             plan = resolve_targets(record, "all")
             restore_plan(logical_client, step_dir, plan)
@@ -172,18 +185,19 @@ def test_simple_policy_round_trip_world2(tmp_path):
             assert bytes(logical_client.get_object("O_0")) == \
                 aggregate_o(o)
         finally:
-            logical_client.shutdown()
+            shutdown_server_thread(server_l, thread_l, logical_client)
     finally:
-        for _server, c in daemons:
-            c.shutdown()
+        stop_daemons(daemons)
 
 
 def test_dedup_policy_covers_with_disjoint_slices(tmp_path):
     w = rng_bytes(13, W_BYTES)
     o = fleet_state(w)
-    daemons = [boot(tmp_path, f"d{r}") for r in (0, 1)]
-    clients = {r: daemons[r][1] for r in (0, 1)}
+    daemons = []
     try:
+        for r in (0, 1):
+            daemons.append(boot(tmp_path, f"d{r}"))
+        clients = {r: daemons[r][2] for r in (0, 1)}
         for r in (0, 1):
             clients[r].put_object("W_0", w)
             clients[r].put_object("O_0", o[r])
@@ -200,7 +214,7 @@ def test_dedup_policy_covers_with_disjoint_slices(tmp_path):
         assert spans == [(0, W_BYTES // 2), (W_BYTES // 2, W_BYTES)], \
             "dedup must save ONE copy as disjoint responsibility slices"
 
-        server_l, logical_client = boot(tmp_path, "dlogical")
+        server_l, thread_l, logical_client = boot(tmp_path, "dlogical")
         try:
             plan = resolve_targets(record, "all")
             restore_plan(logical_client, step_dir, plan)
@@ -208,17 +222,18 @@ def test_dedup_policy_covers_with_disjoint_slices(tmp_path):
             assert bytes(logical_client.get_object("O_0")) == \
                 aggregate_o(o)
         finally:
-            logical_client.shutdown()
+            shutdown_server_thread(server_l, thread_l, logical_client)
     finally:
-        for _server, c in daemons:
-            c.shutdown()
+        stop_daemons(daemons)
 
 
 def test_replication_drift_refuses_before_record(tmp_path):
     o = fleet_state(None)
-    daemons = [boot(tmp_path, f"x{r}") for r in (0, 1)]
-    clients = {r: daemons[r][1] for r in (0, 1)}
+    daemons = []
     try:
+        for r in (0, 1):
+            daemons.append(boot(tmp_path, f"x{r}"))
+        clients = {r: daemons[r][2] for r in (0, 1)}
         clients[0].put_object("W_0", rng_bytes(17, W_BYTES))
         clients[1].put_object("W_0", rng_bytes(19, W_BYTES))   # drift
         for r in (0, 1):
@@ -233,5 +248,4 @@ def test_replication_drift_refuses_before_record(tmp_path):
         assert not (step_dir / RECORD_NAME).is_file(), \
             "a drifted save must leave NO record"
     finally:
-        for _server, c in daemons:
-            c.shutdown()
+        stop_daemons(daemons)

@@ -477,7 +477,12 @@ def engine_client(backing_gib: float = 100.0, *, socket: str | None = None,
                                  device=device, fake=False,
                                  peer_name=peer_name,
                                  peer_listen=peer_listen))
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    server_thread = threading.Thread(
+        target=server.serve_forever,
+        name=f"engine-server:{sock}",
+        daemon=True,
+    )
+    server_thread.start()
     ok = False
     for _ in range(6000):              # up to ~60s for the pinned slab to arm
         try:
@@ -487,6 +492,10 @@ def engine_client(backing_gib: float = 100.0, *, socket: str | None = None,
         except (ConnectionError, FileNotFoundError, OSError):
             time.sleep(0.01)
     if not ok:
+        server.state.shutdown_requested.set()
+        if server.dispatcher.is_alive():
+            server.dispatcher.stop()
+        server_thread.join(timeout=30)
         raise RuntimeError("dataflowd did not accept connections")
     log(f"[daemon] up in {time.perf_counter() - t0:.1f}s ({sock})")
     c = EngineClient(sock, client_name="pretrain")
@@ -494,13 +503,13 @@ def engine_client(backing_gib: float = 100.0, *, socket: str | None = None,
         yield c
     finally:
         c.close()
-        try:
-            server.state.shutdown_requested.set()
+        server.state.shutdown_requested.set()
+        if server.dispatcher.is_alive():
             server.dispatcher.stop()
-            if getattr(server.store, "slab", None) is not None:
-                server.store.slab.free()
-        except Exception as e:            # best-effort teardown
-            log(f"[daemon] teardown warning: {e}")
+        server_thread.join(timeout=30)
+        if server_thread.is_alive():
+            raise RuntimeError(
+                f"in-process dataflowd failed to stop: {sock}")
 
 
 def measured_variant(fam, cfg, profiles, resolver, pcie, levels):

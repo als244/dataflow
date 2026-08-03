@@ -169,3 +169,20 @@ class Packer:
         if self.policy == "greedy":
             return self.greedy_step()
         return self.ffd_step()
+
+    def close(self) -> None:
+        close = getattr(self.feed, "close", None)
+        if close is not None:
+            close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass

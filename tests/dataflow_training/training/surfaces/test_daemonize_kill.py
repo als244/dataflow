@@ -56,17 +56,33 @@ def group_alive(pidfile_text: str) -> bool:
         return False
 
 
+def force_group_cleanup(pidfile_text: str) -> None:
+    """Kill a test-owned process group even when the assertion path fails."""
+    pgid = int(pidfile_text.split()[1])
+    try:
+        os.killpg(pgid, 9)
+    except ProcessLookupError:
+        return
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and group_alive(pidfile_text):
+        time.sleep(0.05)
+    assert not group_alive(pidfile_text), f"test process group {pgid} survived SIGKILL"
+
+
 def test_kill_terminates_and_verifies(tmp_path):
     pidfile = launch(tmp_path, "sleeper", "sleep", "600")
     txt = pidfile.read_text()
-    assert group_alive(txt)
-    out = kill(pidfile)
-    assert out.returncode == 0, out.stderr
-    assert not group_alive(txt)
-    assert not pidfile.is_file()          # consumed on success
-    again = kill(pidfile)
-    assert again.returncode == 0          # idempotent no-op
-    assert "nothing to do" in again.stdout
+    try:
+        assert group_alive(txt)
+        out = kill(pidfile)
+        assert out.returncode == 0, out.stderr
+        assert not group_alive(txt)
+        assert not pidfile.is_file()          # consumed on success
+        again = kill(pidfile)
+        assert again.returncode == 0          # idempotent no-op
+        assert "nothing to do" in again.stdout
+    finally:
+        force_group_cleanup(txt)
 
 
 def test_kill_escalates_past_sigterm(tmp_path):
@@ -78,7 +94,10 @@ def test_kill_escalates_past_sigterm(tmp_path):
     pidfile = launch(tmp_path, "stubborn", sys.executable, str(script))
     time.sleep(0.3)                        # let the handler install
     txt = pidfile.read_text()
-    out = kill(pidfile)
-    assert out.returncode == 0, (out.stdout, out.stderr)
-    assert "killed" in out.stdout          # escalation path taken
-    assert not group_alive(txt)
+    try:
+        out = kill(pidfile)
+        assert out.returncode == 0, (out.stdout, out.stderr)
+        assert "killed" in out.stdout          # escalation path taken
+        assert not group_alive(txt)
+    finally:
+        force_group_cleanup(txt)

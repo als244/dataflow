@@ -22,38 +22,42 @@ Tests:
 """
 from __future__ import annotations
 
-import threading
 import time
 
 import pytest
 
 from dataflow.service import EngineClient, EngineConfig, Server, ServiceError
 from dataflow.service.store import ALIGN, SlabAllocator, Store
+from tests.support.service import start_server_thread, stop_server_thread
 
 
 def _boot(tmp_path, name, **cfg):
     sock = str(tmp_path / f"{name}.sock")
     server = Server(EngineConfig(socket_path=sock, **cfg))
-    t = threading.Thread(target=server.serve_forever, daemon=True)
-    t.start()
-    for _ in range(300):
-        try:
-            with EngineClient(sock, client_name="probe"):
-                break
-        except (ConnectionError, FileNotFoundError, OSError):
-            time.sleep(0.01)
-    else:
-        raise RuntimeError("daemon did not come up")
-    return sock, server, t
+    thread = start_server_thread(server)
+    try:
+        for _ in range(300):
+            try:
+                with EngineClient(sock, client_name="probe"):
+                    break
+            except (ConnectionError, FileNotFoundError, OSError):
+                time.sleep(0.01)
+        else:
+            raise RuntimeError("daemon did not come up")
+    except BaseException:
+        stop_server_thread(server, thread)
+        raise
+    return sock, server, thread
 
 
 @pytest.fixture()
 def daemon(tmp_path):
-    sock, server, _ = _boot(tmp_path, "store", fake=True,
-                            slab_backing_gib=0.0625)   # 64 MiB
-    yield sock, server
-    server.state.shutdown_requested.set()
-    server.dispatcher.stop()
+    sock, server, thread = _boot(tmp_path, "store", fake=True,
+                                 slab_backing_gib=0.0625)   # 64 MiB
+    try:
+        yield sock, server
+    finally:
+        stop_server_thread(server, thread)
 
 
 # ------------------------------------------------------------- allocator
@@ -373,8 +377,8 @@ def test_real_boot_family_init_byte_identity(tmp_path):
     from dataflow_training.register import register_all
 
     register_all()      # in-process Server shares this registry
-    sock, server, _ = _boot(tmp_path, "real", fake=False,
-                            slab_backing_gib=2.0)
+    sock, server, thread = _boot(tmp_path, "real", fake=False,
+                                 slab_backing_gib=2.0)
     try:
         from dataflow.runtime.device.cuda import CudaBackend
         from dataflow.runtime.interop import torch_view
@@ -410,10 +414,7 @@ def test_real_boot_family_init_byte_identity(tmp_path):
                 s.size_bytes for s in prog.initial_objects
                 if s.role != "input")
     finally:
-        server.state.shutdown_requested.set()
-        server.dispatcher.stop()
-        if server.store.slab is not None:
-            server.store.slab.free()
+        stop_server_thread(server, thread)
 
 
 @pytest.mark.gpu
@@ -436,8 +437,8 @@ def test_real_boot_init_fits_tight_slab(tmp_path):
     need = sum(s.size_bytes for s in prog.initial_objects
                if s.role != "input")
     slab_gib = need * 1.3 / 2 ** 30      # NO floor: the tightness is the test
-    sock, server, _ = _boot(tmp_path, "tight", fake=False,
-                            slab_backing_gib=slab_gib)
+    sock, server, thread = _boot(tmp_path, "tight", fake=False,
+                                 slab_backing_gib=slab_gib)
     try:
         from dataflow_training.run.driver import init_model
 
@@ -448,7 +449,4 @@ def test_real_boot_init_fits_tight_slab(tmp_path):
             # ALIGN rounding pads each extent a little; 10% covers it
             assert need <= u["used_bytes"] <= need * 1.1
     finally:
-        server.state.shutdown_requested.set()
-        server.dispatcher.stop()
-        if server.store.slab is not None:
-            server.store.slab.free()
+        stop_server_thread(server, thread)

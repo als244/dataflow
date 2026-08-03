@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import dataclasses
 import struct
-import threading
 import time
 
 import numpy as np
@@ -35,6 +34,7 @@ from dataflow.core.jsonio import program_to_dict
 from dataflow.service import EngineClient, EngineConfig, Server, ServiceError
 from dataflow_training.register import register_all
 from dataflow_training.run.driver import init_model
+from tests.support.service import start_server_thread, stop_server_thread
 
 
 def _cfg_dict(cfg):
@@ -58,31 +58,30 @@ def rig(tmp_path_factory):
     register_all()      # in-process Server shares this registry
     server = Server(EngineConfig(socket_path=sock, fake=False,
                                  slab_backing_gib=2.0))
-    t = threading.Thread(target=server.serve_forever, daemon=True)
-    t.start()
-    for _ in range(300):
-        try:
-            with EngineClient(sock, client_name="probe"):
-                break
-        except (ConnectionError, FileNotFoundError, OSError):
-            time.sleep(0.01)
+    thread = start_server_thread(server)
+    try:
+        for _ in range(300):
+            try:
+                with EngineClient(sock, client_name="probe"):
+                    break
+            except (ConnectionError, FileNotFoundError, OSError):
+                time.sleep(0.01)
+        else:
+            raise RuntimeError("daemon did not come up")
 
-    cfg = ShapedLlamaConfig.tiny()
-    fam = resolve_family(cfg)
-    planned = plan_program(fam.lower(cfg),
-                           fast_memory_capacity=2 * 1024**3)
-    prog_dict = program_to_dict(planned.program)
-    resolver_spec = {"kind": "model_family", "family": "llama3",
-                     "cfg": _cfg_dict(cfg)}
+        cfg = ShapedLlamaConfig.tiny()
+        fam = resolve_family(cfg)
+        planned = plan_program(fam.lower(cfg),
+                               fast_memory_capacity=2 * 1024**3)
+        prog_dict = program_to_dict(planned.program)
+        resolver_spec = {"kind": "model_family", "family": "llama3",
+                         "cfg": _cfg_dict(cfg)}
 
-    yield {"sock": sock, "server": server, "cfg": cfg, "fam": fam,
-           "planned": planned, "prog_dict": prog_dict,
-           "resolver": resolver_spec, "tmp": tmp}
-
-    server.state.shutdown_requested.set()
-    server.dispatcher.stop()
-    if server.store.slab is not None:
-        server.store.slab.free()
+        yield {"sock": sock, "server": server, "cfg": cfg, "fam": fam,
+               "planned": planned, "prog_dict": prog_dict,
+               "resolver": resolver_spec, "tmp": tmp}
+    finally:
+        stop_server_thread(server, thread)
 
 
 def _tokens(cfg, seed):

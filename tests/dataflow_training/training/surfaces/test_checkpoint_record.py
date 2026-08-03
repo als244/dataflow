@@ -11,7 +11,6 @@ Tests:
 - test_load_checkpoint_refuses_small_engine: a supplied engine whose backing cannot hold the targets refuses loudly BEFORE any restore call (capability, never placement).
 - test_load_checkpoint_engines_mapping: an engines mapping restores every source's FULL rank view bitwise into the caller's engines; a mapping missing a source refuses, and a too-small engine in the mapping refuses on capability before any restore.
 """
-import threading
 import time
 from dataclasses import dataclass
 
@@ -26,6 +25,7 @@ from dataflow_training.blocks.layouts import opt_state_slice_layout
 from dataflow_training.run.checkpointing import (load_checkpoint,
                                                  resolve_resume,
                                                  save_checkpoint)
+from tests.support.service import start_server_thread, stop_server_thread
 
 W_BYTES = 8192
 N_SLICE = 500              # 2000 B per slot: NOT 256-aligned
@@ -60,15 +60,20 @@ def boot(tmp, name):
     sock = str(tmp / f"{name}.sock")
     server = Server(EngineConfig(socket_path=sock, fake=True,
                                  slab_backing_gib=0.1))
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    for _ in range(300):
-        try:
-            with EngineClient(sock, client_name="probe"):
-                break
-        except (ConnectionError, FileNotFoundError, OSError):
-            time.sleep(0.01)
-    return server, thread, EngineClient(sock, client_name=name)
+    thread = start_server_thread(server)
+    try:
+        for _ in range(300):
+            try:
+                with EngineClient(sock, client_name="probe"):
+                    break
+            except (ConnectionError, FileNotFoundError, OSError):
+                time.sleep(0.01)
+        else:
+            raise RuntimeError("daemon did not come up")
+        return server, thread, EngineClient(sock, client_name=name)
+    except BaseException:
+        stop_server_thread(server, thread)
+        raise
 
 
 def stop_daemons(daemons):
@@ -87,9 +92,10 @@ def stop_daemons(daemons):
             c.shutdown()
         except (ConnectionError, OSError):
             pass                        # test already shut this one down
-    for _server, thread, c in daemons:
-        thread.join(timeout=30)
-        assert not thread.is_alive(), "in-process server failed to stop"
+        finally:
+            c.close()
+    for server, thread, _c in daemons:
+        stop_server_thread(server, thread)
 
 
 def rng_bytes(seed, n):

@@ -12,12 +12,12 @@ Tests:
 """
 from __future__ import annotations
 
-import threading
 import time
 
 import pytest
 
 from dataflow.service import EngineClient, EngineConfig, Server
+from tests.support.service import start_server_thread, stop_server_thread
 
 
 @pytest.fixture()
@@ -25,17 +25,19 @@ def fake_rig(tmp_path):
     sock = str(tmp_path / "ev.sock")
     server = Server(EngineConfig(socket_path=sock, fake=True,
                                  slab_backing_gib=0.01))
-    t = threading.Thread(target=server.serve_forever, daemon=True)
-    t.start()
-    for _ in range(300):
-        try:
-            with EngineClient(sock, client_name="probe"):
-                break
-        except (ConnectionError, FileNotFoundError, OSError):
-            time.sleep(0.01)
-    yield {"sock": sock, "server": server, "tmp": tmp_path}
-    server.state.shutdown_requested.set()
-    server.dispatcher.stop()
+    thread = start_server_thread(server)
+    try:
+        for _ in range(300):
+            try:
+                with EngineClient(sock, client_name="probe"):
+                    break
+            except (ConnectionError, FileNotFoundError, OSError):
+                time.sleep(0.01)
+        else:
+            raise RuntimeError("daemon did not come up")
+        yield {"sock": sock, "server": server, "tmp": tmp_path}
+    finally:
+        stop_server_thread(server, thread)
 
 
 def test_event_coverage_and_reattach(fake_rig):

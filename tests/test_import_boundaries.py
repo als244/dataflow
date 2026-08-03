@@ -73,7 +73,12 @@ def _check(module: str, forbidden: tuple[str, ...]) -> None:
         f"bad = [m for m in sys.modules if m.split('.')[0] in {forbidden!r}]\n"
         "assert not bad, f'forbidden modules imported: {bad}'\n"
     )
-    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
     assert result.returncode == 0, f"{module}: {result.stderr}"
 
 

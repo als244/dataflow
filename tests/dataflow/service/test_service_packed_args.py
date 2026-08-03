@@ -7,7 +7,6 @@ Tests:
 """
 from __future__ import annotations
 
-import threading
 import time
 
 import numpy as np
@@ -24,6 +23,7 @@ pytestmark = [
 
 from dataflow.core.jsonio import program_to_dict
 from dataflow.service import EngineClient, EngineConfig, Server
+from tests.support.service import start_server_thread, stop_server_thread
 
 T, VOCAB = 128, 512
 STEPS = [((73, 38, 17), T), ((50, 41, 37), T), ((60, 31), 91)]
@@ -108,7 +108,7 @@ def test_daemon_packed_args_bit_equal(tmp_path):
     sock = str(tmp_path / "pa.sock")
     server = Server(EngineConfig(socket_path=sock, fake=False,
                                  slab_backing_gib=1.0))
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    thread = start_server_thread(server)
     for _ in range(300):
         try:
             with EngineClient(sock, client_name="probe"):
@@ -134,10 +134,7 @@ def test_daemon_packed_args_bit_equal(tmp_path):
                 daemon.append(r["fetched"]["loss_0_0"])
             c.unregister_program(reg["prog_id"])
     finally:
-        server.state.shutdown_requested.set()
-        server.dispatcher.stop()
-        if server.store.slab is not None:
-            server.store.slab.free()
+        stop_server_thread(server, thread)
 
     assert [round(x, 10) for x in daemon] == \
         [round(x, 10) for x in inproc], (daemon, inproc)

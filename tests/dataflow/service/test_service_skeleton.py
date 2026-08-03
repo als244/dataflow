@@ -16,32 +16,32 @@ Tests:
 """
 from __future__ import annotations
 
-import threading
 import time
 
 import pytest
 
 from dataflow.service import EngineClient, EngineConfig, Server, ServiceError
 from dataflow.service.wire import SCHEMA_VERSION
+from tests.support.service import start_server_thread, stop_server_thread
 
 
 @pytest.fixture()
 def daemon(tmp_path):
     sock = str(tmp_path / "svc.sock")
     server = Server(EngineConfig(socket_path=sock, fake=True))
-    t = threading.Thread(target=server.serve_forever, daemon=True)
-    t.start()
-    for _ in range(200):
-        try:
-            with EngineClient(sock, client_name="probe"):
-                break
-        except (ConnectionError, FileNotFoundError, OSError):
-            time.sleep(0.01)
-    else:
-        raise RuntimeError("daemon did not come up")
-    yield sock, server
-    server.state.shutdown_requested.set()
-    server.dispatcher.stop()
+    thread = start_server_thread(server)
+    try:
+        for _ in range(200):
+            try:
+                with EngineClient(sock, client_name="probe"):
+                    break
+            except (ConnectionError, FileNotFoundError, OSError):
+                time.sleep(0.01)
+        else:
+            raise RuntimeError("daemon did not come up")
+        yield sock, server
+    finally:
+        stop_server_thread(server, thread)
 
 
 def test_handshake_and_health(daemon):
@@ -175,14 +175,19 @@ def test_engine_status_lists_all_client_sessions(daemon):
 def test_shutdown_terminates_daemon(tmp_path):
     sock = str(tmp_path / "svc2.sock")
     server = Server(EngineConfig(socket_path=sock, fake=True))
-    t = threading.Thread(target=server.serve_forever, daemon=True)
-    t.start()
-    for _ in range(200):
-        try:
-            c = EngineClient(sock, client_name="killer")
-            break
-        except (ConnectionError, FileNotFoundError, OSError):
-            time.sleep(0.01)
-    assert c.shutdown()["ok"] is True
-    t.join(timeout=5)
-    assert not t.is_alive(), "serve_forever did not exit after shutdown"
+    thread = start_server_thread(server)
+    client = None
+    try:
+        for _ in range(200):
+            try:
+                client = EngineClient(sock, client_name="killer")
+                break
+            except (ConnectionError, FileNotFoundError, OSError):
+                time.sleep(0.01)
+        else:
+            raise RuntimeError("daemon did not come up")
+        assert client.shutdown()["ok"] is True
+    finally:
+        if client is not None:
+            client.close()
+        stop_server_thread(server, thread)

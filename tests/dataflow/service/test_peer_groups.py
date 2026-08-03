@@ -8,11 +8,11 @@ Tests:
 - test_group_lifecycle_and_error_fanout: creating a three-member group on the coordinator gives each daemon its own rank and a ready handle, rejects non-rank-0 creation and duplicate names, and propagates a member's group_error two hops to a peer with no direct link while dropping the errored group from the handle table.
 - test_world_one_group_is_immediately_ready: a single-member group reports world 1 and is ready immediately.
 """
-import threading
 import time
 
 from dataflow.service import EngineClient, EngineConfig, Server
 from dataflow.service.wire import ServiceError
+from tests.support.service import start_server_thread, shutdown_server_thread
 
 PORTS = {"g-a": 29491, "g-b": 29492, "g-c": 29493, "g-solo": 29494}
 
@@ -22,14 +22,20 @@ def boot(tmp, name):
     server = Server(EngineConfig(
         socket_path=sock, fake=True, slab_backing_gib=0.05,
         peer_name=name, peer_listen=f"127.0.0.1:{PORTS[name]}"))
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    for _ in range(600):
-        try:
-            EngineClient(sock, client_name="probe").close()
-            break
-        except OSError:
-            time.sleep(0.01)
-    return server, EngineClient(sock, client_name=name)
+    thread = start_server_thread(server)
+    try:
+        for _ in range(600):
+            try:
+                EngineClient(sock, client_name="probe").close()
+                break
+            except OSError:
+                time.sleep(0.01)
+        else:
+            raise RuntimeError("daemon did not come up")
+        return server, thread, EngineClient(sock, client_name=name)
+    except BaseException:
+        shutdown_server_thread(server, thread)
+        raise
 
 
 def wait_for(cond, timeout=10.0):
@@ -42,11 +48,14 @@ def wait_for(cond, timeout=10.0):
 
 
 def test_group_lifecycle_and_error_fanout(tmp_path):
-    daemons = {n: boot(tmp_path, n) for n in ("g-a", "g-b", "g-c")}
-    sa, ca = daemons["g-a"]
-    sb, cb = daemons["g-b"]
-    sc, cc = daemons["g-c"]
+    daemons = {}
     try:
+        for name in ("g-a", "g-b", "g-c"):
+            daemons[name] = boot(tmp_path, name)
+        sa, _ta, ca = daemons["g-a"]
+        sb, _tb, cb = daemons["g-b"]
+        sc, _tc, cc = daemons["g-c"]
+
         # conductor: coordinator star only (a->b, a->c; b-c NOT linked)
         ca.peer_connect("g-b", f"127.0.0.1:{PORTS['g-b']}")
         ca.peer_connect("g-c", f"127.0.0.1:{PORTS['g-c']}")
@@ -96,15 +105,12 @@ def test_group_lifecycle_and_error_fanout(tmp_path):
         # errored groups vanish from the TaskContext handle table
         assert "dp" not in sc.nm.group_handles()
     finally:
-        for _, cli in daemons.values():
-            try:
-                cli.shutdown()
-            except Exception:
-                pass
+        for server, thread, client in daemons.values():
+            shutdown_server_thread(server, thread, client)
 
 
 def test_world_one_group_is_immediately_ready(tmp_path):
-    server, client = boot(tmp_path, "g-solo")
+    server, thread, client = boot(tmp_path, "g-solo")
     try:
         out = client._call("create_peer_group",
                            {"name": "solo", "members": ["g-solo"]})
@@ -112,7 +118,4 @@ def test_world_one_group_is_immediately_ready(tmp_path):
         infos = client._call("list_peer_groups", {})
         assert infos[0]["ready"] and infos[0]["world"] == 1
     finally:
-        try:
-            client.shutdown()
-        except Exception:
-            pass
+        shutdown_server_thread(server, thread, client)

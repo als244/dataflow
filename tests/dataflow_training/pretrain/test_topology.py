@@ -116,35 +116,43 @@ def test_daemonize_detach_and_group_kill(tmp_path):
     pidfile = str(tmp_path / "d.pid")
     logfile = str(tmp_path / "d.log")
     script = str(repo_root() / "tools" / "train" / "daemonize.py")
-    t0 = time.monotonic()
-    out = subprocess.run(
-        [sys.executable, script, "--pidfile", pidfile,
-         "--logfile", logfile, "--cwd", str(tmp_path), "--",
-         "bash", "-c", "echo started; sleep 300 & sleep 300"],
-        capture_output=True, text=True, timeout=15)
-    launch_s = time.monotonic() - t0
-    assert out.returncode == 0, out.stderr
-    assert launch_s < 5.0, f"launcher blocked {launch_s:.1f}s"
-    pid, pgid = read_pidfile(pidfile)
-    assert int(out.stdout.strip()) == pid
-    assert os.getpgid(pid) == pgid        # pidfile's pgid IS its group
-    deadline = time.time() + 10
-    while time.time() < deadline:
-        if "started" in Path(logfile).read_text():
-            break
-        time.sleep(0.1)
-    assert "started" in Path(logfile).read_text()
+    pid = pgid = None
+    try:
+        t0 = time.monotonic()
+        out = subprocess.run(
+            [sys.executable, script, "--pidfile", pidfile,
+             "--logfile", logfile, "--cwd", str(tmp_path), "--",
+             "bash", "-c", "echo started; sleep 300 & sleep 300"],
+            capture_output=True, text=True, timeout=15)
+        launch_s = time.monotonic() - t0
+        assert out.returncode == 0, out.stderr
+        assert launch_s < 5.0, f"launcher blocked {launch_s:.1f}s"
+        pid, pgid = read_pidfile(pidfile)
+        assert int(out.stdout.strip()) == pid
+        assert os.getpgid(pid) == pgid        # pidfile's pgid IS its group
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            if "started" in Path(logfile).read_text():
+                break
+            time.sleep(0.1)
+        assert "started" in Path(logfile).read_text()
 
-    os.killpg(pgid, 15)
-    deadline = time.time() + 10
-    while time.time() < deadline:
-        try:
+        os.killpg(pgid, 15)
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            try:
+                os.kill(pid, 0)
+                time.sleep(0.2)
+            except ProcessLookupError:
+                break
+        with pytest.raises(ProcessLookupError):
             os.kill(pid, 0)
-            time.sleep(0.2)
-        except ProcessLookupError:
-            break
-    with pytest.raises(ProcessLookupError):
-        os.kill(pid, 0)
-    # the backgrounded sibling died with the group too
-    with pytest.raises(ProcessLookupError):
-        os.killpg(pgid, 0)
+        # the backgrounded sibling died with the group too
+        with pytest.raises(ProcessLookupError):
+            os.killpg(pgid, 0)
+    finally:
+        if pgid is not None:
+            try:
+                os.killpg(pgid, 9)
+            except ProcessLookupError:
+                pass

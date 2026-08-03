@@ -99,10 +99,31 @@ class IngestWorker(threading.Thread):
                         break
                     except queue_mod.Full:
                         continue
-            self.out.put(STOP)          # finite source exhausted
+            self._publish_stop()         # finite source exhausted
         except BaseException as exc:
             self.error = exc
-            self.out.put(STOP)
+            self._publish_stop()
+
+    def _publish_stop(self) -> None:
+        """Publish EOF/error unless the owner is shutting the worker down."""
+        while not self.stop_event.is_set():
+            try:
+                self.out.put(STOP, timeout=0.2)
+                return
+            except queue_mod.Full:
+                continue
+
+    def stop(self, *, timeout: float = 5.0) -> None:
+        """Stop a producer blocked by backpressure and wait for its exit."""
+        self.stop_event.set()
+        while True:
+            try:
+                self.out.get_nowait()
+            except queue_mod.Empty:
+                break
+        self.join(timeout=timeout)
+        if self.is_alive():
+            raise RuntimeError("datafeed ingest worker failed to stop")
 
 
 class DataFeed:
@@ -170,13 +191,7 @@ class DataFeed:
 
     def close(self) -> None:
         if self.worker is not None:
-            self.worker.stop_event.set()
-            while True:                 # unblock a full queue
-                try:
-                    self.worker.out.get_nowait()
-                except queue_mod.Empty:
-                    break
-            self.worker.join(timeout=5.0)
+            self.worker.stop()
             self.worker = None
         if self.capture_fh is not None:
             self.capture_fh.close()
@@ -187,6 +202,15 @@ class DataFeed:
 
     def __exit__(self, *exc):
         self.close()
+
+    def __del__(self):
+        # Explicit close/context management is the contract. This is a
+        # last-resort guard for a partially constructed pipeline or an
+        # exception path that drops its final owner.
+        try:
+            self.close()
+        except Exception:
+            pass
 
 
 class PrepackedFeed:
@@ -205,3 +229,6 @@ class PrepackedFeed:
 
     def cursor(self) -> dict:
         return {"step": self.at}
+
+    def close(self) -> None:
+        pass

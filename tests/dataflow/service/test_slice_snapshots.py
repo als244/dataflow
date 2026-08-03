@@ -19,13 +19,15 @@ Tests:
 """
 import hashlib
 import json
-import threading
 import time
 
 import numpy as np
 import pytest
 
 from dataflow.service import EngineClient, EngineConfig, Server, ServiceError
+from tests.support.service import (shutdown_server_thread,
+                                   start_server_thread,
+                                   stop_server_thread)
 
 N = 1 << 20          # 1 MiB object
 HALF = N // 2
@@ -36,14 +38,20 @@ def boot(tmp, name):
     sock = str(tmp / f"{name}.sock")
     server = Server(EngineConfig(socket_path=sock, fake=True,
                                  slab_backing_gib=0.2))
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    for _ in range(300):
-        try:
-            with EngineClient(sock, client_name="probe"):
-                break
-        except (ConnectionError, FileNotFoundError, OSError):
-            time.sleep(0.01)
-    return server, EngineClient(sock, client_name=name)
+    thread = start_server_thread(server)
+    try:
+        for _ in range(300):
+            try:
+                with EngineClient(sock, client_name="probe"):
+                    break
+            except (ConnectionError, FileNotFoundError, OSError):
+                time.sleep(0.01)
+        else:
+            raise RuntimeError("daemon did not come up")
+        return server, thread, EngineClient(sock, client_name=name)
+    except BaseException:
+        stop_server_thread(server, thread)
+        raise
 
 
 def wait_snap(client, out):
@@ -69,7 +77,7 @@ def snapshot_json(dest):
 
 def test_slice_roundtrip_and_compose(tmp_path):
     payload = rng_bytes(7, N)
-    server, c = boot(tmp_path, "slice-a")
+    server, thread, c = boot(tmp_path, "slice-a")
     try:
         c.put_object("W_demo", payload)
         a = tmp_path / "slice_lo"
@@ -91,31 +99,31 @@ def test_slice_roundtrip_and_compose(tmp_path):
         assert got == payload, "in-place slice compose diverged"
 
         # (2)+(3) fresh daemon: absent object -> create + partial fills
-        server2, c2 = boot(tmp_path, "slice-b")
+        server2, thread2, c2 = boot(tmp_path, "slice-b")
         try:
             c2.restore_snapshot(str(a))
             c2.restore_snapshot(str(b), overwrite=True)
             fresh = bytes(c2.get_object("W_demo"))
             assert fresh == payload, "fresh-daemon slice compose diverged"
 
-            server3, c3 = boot(tmp_path, "slice-c")
+            server3, thread3, c3 = boot(tmp_path, "slice-c")
             try:
                 c3.restore_snapshot(str(whole))
                 assert bytes(c3.get_object("W_demo")) == fresh, \
                     "slice compose != bulk whole-store snapshot"
             finally:
-                c3.shutdown()
+                shutdown_server_thread(server3, thread3, c3)
         finally:
-            c2.shutdown()
+            shutdown_server_thread(server2, thread2, c2)
     finally:
-        c.shutdown()
+        shutdown_server_thread(server, thread, c)
 
 
 def test_shifted_dst_recompose(tmp_path):
     shard0 = rng_bytes(11, SMALL)
     shard1 = rng_bytes(13, SMALL)
     stored = rng_bytes(17, 2 * SMALL)
-    server, c = boot(tmp_path, "shift-a")
+    server, thread, c = boot(tmp_path, "shift-a")
     try:
         c.put_object("O_r0", shard0)
         c.put_object("O_r1", shard1)
@@ -135,9 +143,9 @@ def test_shifted_dst_recompose(tmp_path):
              "logical_id": "W_shift", "dst": [0, SMALL],
              "logical_bytes": SMALL}]))
     finally:
-        c.shutdown()
+        shutdown_server_thread(server, thread, c)
 
-    server2, c2 = boot(tmp_path, "shift-b")
+    server2, thread2, c2 = boot(tmp_path, "shift-b")
     try:
         c2.restore_snapshot(str(s0))               # creates logical O
         c2.restore_snapshot(str(s1), overwrite=True)
@@ -150,21 +158,21 @@ def test_shifted_dst_recompose(tmp_path):
         assert bytes(c2.get_object("W_shift")) == stored[SMALL:], \
             "src range did not relocate to dst in the logical object"
     finally:
-        c2.shutdown()
+        shutdown_server_thread(server2, thread2, c2)
 
 
 def test_remap_extraction_restore(tmp_path):
     payload = rng_bytes(19, 2 * SMALL)
-    server, c = boot(tmp_path, "remap-a")
+    server, thread, c = boot(tmp_path, "remap-a")
     try:
         c.put_object("O", payload)
         dest = tmp_path / "identity"
         wait_snap(c, c.snapshot(str(dest), slices=[{"id": "O"}]))
     finally:
-        c.shutdown()
+        shutdown_server_thread(server, thread, c)
 
     # full split: logical O extracted into two shard-local objects
-    server2, c2 = boot(tmp_path, "remap-b")
+    server2, thread2, c2 = boot(tmp_path, "remap-b")
     try:
         res = c2.restore_snapshot(str(dest), remap={"O": [
             {"logical": [0, SMALL], "id": "O_shard0",
@@ -177,10 +185,10 @@ def test_remap_extraction_restore(tmp_path):
         assert c2.query_object("O") is None, \
             "remap restore must not create the logical name"
     finally:
-        c2.shutdown()
+        shutdown_server_thread(server2, thread2, c2)
 
     # partial window: only the mid-range is extracted, rest skipped
-    server3, c3 = boot(tmp_path, "remap-c")
+    server3, thread3, c3 = boot(tmp_path, "remap-c")
     try:
         c3.restore_snapshot(str(dest), remap={"O": [
             {"logical": [SMALL // 2, SMALL // 2 + SMALL],
@@ -190,24 +198,24 @@ def test_remap_extraction_restore(tmp_path):
         assert c3.query_object("O") is None
         assert c3.query_object("O_shard0") is None
     finally:
-        c3.shutdown()
+        shutdown_server_thread(server3, thread3, c3)
 
 
 def test_corrupt_payload_refused_store_untouched(tmp_path):
     payload = rng_bytes(23, N)
-    server, c = boot(tmp_path, "corrupt-a")
+    server, thread, c = boot(tmp_path, "corrupt-a")
     try:
         c.put_object("W_demo", payload)
         dest = tmp_path / "ck"
         wait_snap(c, c.snapshot(str(dest)))
     finally:
-        c.shutdown()
+        shutdown_server_thread(server, thread, c)
 
     blob = bytearray((dest / "payload.bin").read_bytes())
     blob[10] ^= 0xFF
     (dest / "payload.bin").write_bytes(bytes(blob))
 
-    server2, c2 = boot(tmp_path, "corrupt-b")
+    server2, thread2, c2 = boot(tmp_path, "corrupt-b")
     try:
         with pytest.raises(ServiceError) as ei:
             c2.restore_snapshot(str(dest))
@@ -221,20 +229,20 @@ def test_corrupt_payload_refused_store_untouched(tmp_path):
         assert got[:10] == payload[:10] and got[11:] == payload[11:], \
             "verify=False must restore exactly the on-disk bytes"
     finally:
-        c2.shutdown()
+        shutdown_server_thread(server2, thread2, c2)
 
 
 def test_refusal_mid_list_leaves_store_untouched(tmp_path):
-    server, c = boot(tmp_path, "midlist-a")
+    server, thread, c = boot(tmp_path, "midlist-a")
     try:
         c.put_object("A_one", rng_bytes(29, SMALL))
         c.put_object("B_two", rng_bytes(31, SMALL))
         dest = tmp_path / "pair"
         wait_snap(c, c.snapshot(str(dest)))
     finally:
-        c.shutdown()
+        shutdown_server_thread(server, thread, c)
 
-    server2, c2 = boot(tmp_path, "midlist-b")
+    server2, thread2, c2 = boot(tmp_path, "midlist-b")
     try:
         filler = rng_bytes(37, 2 * SMALL)
         c2.put_object("B_two", filler)        # wrong-size resident target
@@ -245,18 +253,18 @@ def test_refusal_mid_list_leaves_store_untouched(tmp_path):
             "validation refusal must reject the WHOLE restore"
         assert bytes(c2.get_object("B_two")) == filler
     finally:
-        c2.shutdown()
+        shutdown_server_thread(server2, thread2, c2)
 
 
 def test_snapshot_json_schema_and_hashes(tmp_path):
     payload = rng_bytes(41, N)
-    server, c = boot(tmp_path, "schema-a")
+    server, thread, c = boot(tmp_path, "schema-a")
     try:
         c.put_object("W_demo", payload)
         dest = tmp_path / "ck"
         wait_snap(c, c.snapshot(str(dest)))
     finally:
-        c.shutdown()
+        shutdown_server_thread(server, thread, c)
 
     m = snapshot_json(dest)
     assert m["schema"] == "dataflow-snapshot/v1"
@@ -275,7 +283,7 @@ def test_snapshot_json_schema_and_hashes(tmp_path):
     tampered = dict(m)
     tampered["schema"] = "dataflow-snap/s1"
     (dest / "snapshot.json").write_text(json.dumps(tampered))
-    server2, c2 = boot(tmp_path, "schema-b")
+    server2, thread2, c2 = boot(tmp_path, "schema-b")
     try:
         with pytest.raises(ServiceError) as ei:
             c2.restore_snapshot(str(dest))
@@ -287,11 +295,11 @@ def test_snapshot_json_schema_and_hashes(tmp_path):
             c2.restore_snapshot(str(empty))
         assert ei.value.code == "IO_ERROR"
     finally:
-        c2.shutdown()
+        shutdown_server_thread(server2, thread2, c2)
 
 
 def test_slice_validation_refusals(tmp_path):
-    server, c = boot(tmp_path, "refuse")
+    server, thread, c = boot(tmp_path, "refuse")
     try:
         c.put_object("W_demo", rng_bytes(43, N))
         dest = str(tmp_path / "bad")
@@ -328,12 +336,12 @@ def test_slice_validation_refusals(tmp_path):
             c.snapshot(dest, slices=[])
         assert ei.value.code == "BAD_REQUEST"
     finally:
-        c.shutdown()
+        shutdown_server_thread(server, thread, c)
 
 
 def test_duplicate_snapshots_full_and_independent(tmp_path):
     payload = rng_bytes(47, SMALL)
-    server, c = boot(tmp_path, "dup-a")
+    server, thread, c = boot(tmp_path, "dup-a")
     try:
         c.put_object("W_root", payload)
         c.duplicate_object("W_root", "W_root@ck")
@@ -342,7 +350,7 @@ def test_duplicate_snapshots_full_and_independent(tmp_path):
         assert "n_deduped" not in out
         wait_snap(c, out)
     finally:
-        c.shutdown()
+        shutdown_server_thread(server, thread, c)
 
     m = snapshot_json(dest)
     assert len(m["slices"]) == 2
@@ -350,17 +358,17 @@ def test_duplicate_snapshots_full_and_independent(tmp_path):
         assert "ref" not in entry["payload"], \
             "duplicates must store their own full payload"
         assert "lineage" not in entry and "version" not in entry
-    server2, c2 = boot(tmp_path, "dup-b")
+    server2, thread2, c2 = boot(tmp_path, "dup-b")
     try:
         c2.restore_snapshot(str(dest))
         assert bytes(c2.get_object("W_root")) == payload
         assert bytes(c2.get_object("W_root@ck")) == payload
     finally:
-        c2.shutdown()
+        shutdown_server_thread(server2, thread2, c2)
 
 
 def test_snapshot_has_no_group_concept(tmp_path):
-    server, c = boot(tmp_path, "nogroup")
+    server, thread, c = boot(tmp_path, "nogroup")
     try:
         assert not hasattr(c, "create_object_group")
         assert not hasattr(c, "duplicate_object_group")
@@ -374,12 +382,12 @@ def test_snapshot_has_no_group_concept(tmp_path):
         with pytest.raises(TypeError):
             c.restore_snapshot(str(dest), duplicates="recreate")
     finally:
-        c.shutdown()
+        shutdown_server_thread(server, thread, c)
 
 
 def test_restore_runs_in_background_and_parks_writers(tmp_path):
     payload = rng_bytes(61, SMALL)
-    server, c = boot(tmp_path, "bg-a")
+    server, thread, c = boot(tmp_path, "bg-a")
     try:
         c.put_object("W_small", payload)
         dest = tmp_path / "bg"
@@ -413,11 +421,11 @@ def test_restore_runs_in_background_and_parks_writers(tmp_path):
         assert bytes(c.get_object("W_small")) == replacement, \
             "the parked write must land AFTER the restore"
     finally:
-        c.shutdown()
+        shutdown_server_thread(server, thread, c)
 
 
 def test_restore_status_lifecycle(tmp_path):
-    server, c = boot(tmp_path, "lifecycle")
+    server, thread, c = boot(tmp_path, "lifecycle")
     try:
         c.put_object("W_demo", rng_bytes(59, SMALL))
         dest = tmp_path / "lc"
@@ -435,14 +443,14 @@ def test_restore_status_lifecycle(tmp_path):
             c.restore_status("restore-999999")
         assert ei.value.code == "UNKNOWN_RESTORE"
     finally:
-        c.shutdown()
+        shutdown_server_thread(server, thread, c)
 
 
 def test_second_daemon_on_live_socket_refuses(tmp_path):
     """The double-launch door is closed: a second Server on a LIVE
     socket refuses loudly instead of silently unlinking it (the
     two-runs-on-one-GPU class); a stale socket file is reclaimed."""
-    server, c = boot(tmp_path, "solo")
+    server, thread, c = boot(tmp_path, "solo")
     try:
         sock = str(tmp_path / "solo.sock")
         second = Server(EngineConfig(socket_path=sock, fake=True,
@@ -450,7 +458,7 @@ def test_second_daemon_on_live_socket_refuses(tmp_path):
         with pytest.raises(RuntimeError, match="already serving"):
             second.serve_forever()
     finally:
-        c.shutdown()
+        shutdown_server_thread(server, thread, c)
     # stale socket (daemon gone): wait until nothing accepts, then a
     # fresh server reclaims the leftover file cleanly
     import socket as _socket
@@ -467,5 +475,5 @@ def test_second_daemon_on_live_socket_refuses(tmp_path):
         except OSError:
             probe.close()
             break
-    server3, c3 = boot(tmp_path, "solo")
-    c3.shutdown()
+    server3, thread3, c3 = boot(tmp_path, "solo")
+    shutdown_server_thread(server3, thread3, c3)
