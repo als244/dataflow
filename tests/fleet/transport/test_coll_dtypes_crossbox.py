@@ -119,7 +119,8 @@ def rig(request, tmp_path_factory, daemon_lanes, fleet_forwarders):
     remote_sock = daemons.paths(REMOTE, LANE)["sock"]
     tmp = tmp_path_factory.mktemp(LANE)
     fwd_sock = str(tmp / "r.sock")
-    fwd = fleet_forwarders.own(uds_forward(REMOTE, remote_sock, fwd_sock))
+    fwd = fleet_forwarders.own(
+        uds_forward(REMOTE, remote_sock, fwd_sock), fwd_sock)
     deadline = time.time() + 120
     client = None
     while time.time() < deadline:

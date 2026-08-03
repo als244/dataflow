@@ -274,8 +274,11 @@ def test_tp_mlp_crossbox_auto_matches_reference_within_ulp(
         import tempfile
 
         fwd_sock = tempfile.mktemp(suffix=".sock", prefix="tpfwd-")
-        fwd = fleet_forwarders.own(uds_forward(
-            remote, daemons.paths(remote, lane)["sock"], fwd_sock))
+        fwd = fleet_forwarders.own(
+            uds_forward(
+                remote, daemons.paths(remote, lane)["sock"], fwd_sock),
+            fwd_sock,
+        )
         deadline = time.time() + 120
         ca = cb = None
         while time.time() < deadline:

@@ -14,6 +14,7 @@ a test pass is not this file's decision to make.
 import subprocess
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -112,17 +113,17 @@ class _Forwarders:
     def __init__(self):
         self._processes = []
 
-    def own(self, process):
-        self._processes.append(process)
+    def own(self, process, local_socket):
+        self._processes.append((process, Path(local_socket)))
         return process
 
     def close(self):
-        for process in self._processes:
+        for process, _socket in self._processes:
             if process.poll() is None:
                 process.terminate()
         deadline = time.monotonic() + 10.0
         alive = []
-        for process in self._processes:
+        for process, socket in self._processes:
             try:
                 process.wait(timeout=max(0.0, deadline - time.monotonic()))
             except subprocess.TimeoutExpired:
@@ -130,6 +131,7 @@ class _Forwarders:
                 process.wait(timeout=5)
             if process.poll() is None:
                 alive.append(str(process.pid))
+            socket.unlink(missing_ok=True)
         if alive:
             pytest.fail("SSH forwarder cleanup failed for pid(s): "
                         + ", ".join(alive))
