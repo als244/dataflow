@@ -1,0 +1,47 @@
+\documentclass[10pt]{article}
+
+\usepackage[paperwidth=8.5in,paperheight=6.5in,margin=0.3in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{float}
+
+\pagestyle{empty}
+
+\begin{document}
+\begin{algorithm}[H]
+\caption{Event-driven simulation subroutine}
+\label{alg:simulate}
+\small
+\begin{algorithmic}[1]
+\Require $\Gamma$: ordered tasks, runtimes, object sizes/locations, and movement triggers
+\Statex \hspace{\algorithmicindent}$\mathcal H$: memory capacities,
+  directional bandwidths, and deterministic event semantics
+\Ensure Validity $v\in\{\mathsf{false},\mathsf{true}\}$ and makespan
+  $m\in\mathbb R_{\ge 0}\cup\{\infty\}$
+\If{$\neg\mathsf{StaticValid}(\Gamma)$}
+  \State \Return $(\mathsf{false},\infty)$ \Comment{Reject malformed plans}
+\EndIf
+\State $\Sigma\gets\mathsf{Initialize}(\Gamma,\mathcal H)$
+\ForAll{tasks $\tau_i$ in declared order}
+  \While{$\neg\mathsf{Ready}(\Sigma,\tau_i)$}
+    \If{$\neg\mathsf{AdvanceNextEvent}(\Sigma,\mathcal H)$}
+      \State \Return $(\mathsf{false},\infty)$
+    \EndIf
+  \EndWhile
+  \State $\Sigma\gets\mathsf{ExecuteTask}(\Sigma,\tau_i,\mathcal H)$
+    \Comment{Reserve outputs; overlap transfers}
+\EndFor
+\While{$\mathsf{TransfersPending}(\Sigma)$}
+  \If{$\neg\mathsf{AdvanceNextEvent}(\Sigma,\mathcal H)$}
+    \State \Return $(\mathsf{false},\infty)$
+  \EndIf
+\EndWhile
+\If{$\neg\mathsf{FinalStateValid}(\Sigma)$}
+  \State \Return $(\mathsf{false},\infty)$
+\EndIf
+\State \Return $(\mathsf{true},\mathsf{Makespan}(\Sigma))$
+  \Comment{All required final copies are current}
+\end{algorithmic}
+\end{algorithm}
+\end{document}

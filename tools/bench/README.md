@@ -54,3 +54,38 @@ EVERY launched daemon in the canonical nsys command (cudaProfilerApi
 capture range; brackets ride the daemon's `profiler_control`) — one
 flag, any world size; per-rank reports are fetched back for fleets.
 See [tools/train/README.md](../train/README.md).
+
+## compare_pressurefit_quality.py — planner quality gate (CPU)
+
+Runs two PressureFit source versions in isolated subprocesses on identical
+serialized chains, then replays both plans through one common simulator oracle.
+It reports feasibility changes, selected makespan, peaks, and transfer counts
+across canary, synthetic, and model/hardware/budget suites.
+
+```bash
+conda run -n dataflow python tools/bench/compare_pressurefit_quality.py \
+  --baseline HEAD --candidate WORKTREE --suite all \
+  --output-dir results/pressurefit-quality/head-vs-worktree
+```
+
+See
+[pressurefit-quality.md](../../docs/dataflow_sim/policy/pressurefit-quality.md)
+for the isolation protocol, classifications, CLI controls, report schema, and
+current validation evidence.
+
+## pressurefit_exact_oracle.py — tiny-chain optimality oracle (CPU)
+
+Exhaustively enumerates release/offload/prefetch annotations for a tiny bare
+`TaskChain`, validates every candidate, and reports the simulator-optimal plan.
+The search is exponential and fixes initial placement exactly as supplied; it
+is development evidence, not a production planner.
+
+```bash
+conda run -n dataflow python tools/bench/pressurefit_exact_oracle.py \
+  path/to/tiny-chain.json --max-assignments 1000000 \
+  --output results/pressurefit-exact/tiny.json
+```
+
+Use it to measure PressureFit's approximation gap or to prove that a proposed
+portfolio simplification preserves tiny-chain optima. It intentionally contains
+no workload/model semantics.

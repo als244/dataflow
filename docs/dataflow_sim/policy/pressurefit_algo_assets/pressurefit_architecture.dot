@@ -1,0 +1,195 @@
+digraph PressureFit {
+  graph [
+    rankdir=TB,
+    newrank=true,
+    splines=polyline,
+    bgcolor="white",
+    pad=0.08,
+    nodesep=0.38,
+    ranksep=0.58,
+    fontname="Lato",
+    fontsize=22
+  ];
+  node [
+    shape=box,
+    style="rounded,filled",
+    color="#4D4D4D",
+    fillcolor="#F7F7F7",
+    fontname="Lato",
+    fontsize=20,
+    penwidth=1.3,
+    margin="0.18,0.12",
+    width=2.55,
+    height=0.72
+  ];
+  edge [
+    color="#4D4D4D",
+    fontname="Lato Bold",
+    fontsize=16,
+    penwidth=1.4,
+    arrowsize=0.8
+  ];
+
+  subgraph cluster_core {
+    label="Candidate residency construction";
+    labelloc=t;
+    labeljust=l;
+    color="#6B6B6B";
+    style="rounded,dashed";
+    penwidth=1.2;
+    margin=18;
+
+    input [
+      label="Inputs W, H, Θ\nworkload, machine,\nheuristic configurations",
+      color="#3B6EA8",
+      fillcolor="#E8F1FF"
+    ];
+    analyze [label="Analyze workload\nanchors and task-reserved\nfast-memory bytes"];
+    candidate [
+      label="Take next configuration\nθ = (CutScoreθ,\nPrefetchRuleθ)",
+      color="#3B6EA8",
+      fillcolor="#E8F1FF"
+    ];
+    seed [label="Initialize continuous\nresidency intervals P"];
+    pressure [label="Compute required fast bytes\nat every task boundary"];
+    fits [
+      label="All boundaries\nfit?",
+      shape=diamond,
+      color="#A97800",
+      fillcolor="#FFF4D6",
+      width=1.75,
+      height=0.92,
+      margin=0.04
+    ];
+    legal [
+      label="Legal cut at highest-\npressure boundary?",
+      shape=diamond,
+      color="#A97800",
+      fillcolor="#FFF4D6",
+      width=2.15,
+      height=1.02,
+      margin=0.04
+    ];
+    cut [label="Choose cut with lowest\nCutScore and update\nresidency P"];
+    ready [
+      label="Pressure-fit\nresidency P",
+      color="#32834A",
+      fillcolor="#E8F7EC"
+    ];
+
+    { rank=same; input; analyze; candidate; }
+    { rank=same; seed; pressure; fits; }
+    { rank=same; cut; legal; ready; }
+
+    input -> analyze;
+    analyze -> candidate;
+    candidate -> seed;
+    seed -> pressure;
+    pressure -> fits;
+    fits -> ready [label="yes"];
+    fits -> legal [label="no"];
+    legal -> cut [label="yes"];
+    cut -> pressure [constraint=false];
+  }
+
+  subgraph cluster_realization {
+    label="Transition realization and exact validation";
+    labelloc=t;
+    labeljust=l;
+    color="#6B6B6B";
+    style="rounded,dashed";
+    penwidth=1.2;
+    margin=18;
+
+    transitions [label="Derive transitions\nrelease / offload /\nprefetch windows"];
+    schedule [label="Choose one legal\nenqueue boundary\nper prefetch"];
+    emit [label="Emit annotated tasks\nwith release / offload /\nprefetch triggers"];
+    simulate [
+      label="Simulate exact\nfeasibility and makespan",
+      color="#3B6EA8",
+      fillcolor="#E8F1FF"
+    ];
+    valid [
+      label="Candidate plan Γθ\nvalid?",
+      shape=diamond,
+      color="#A97800",
+      fillcolor="#FFF4D6",
+      width=1.7,
+      height=0.9,
+      margin=0.04
+    ];
+    record [
+      label="Record valid result\n(Γ, makespan)",
+      color="#32834A",
+      fillcolor="#E8F7EC"
+    ];
+    reject [
+      label="Reject this\ncandidate plan",
+      color="#AA3333",
+      fillcolor="#FDE8E8"
+    ];
+
+    { rank=same; transitions; schedule; emit; }
+    { rank=same; simulate; valid; }
+    { rank=same; record; reject; }
+
+    transitions -> schedule;
+    schedule -> emit;
+    emit -> simulate;
+    simulate -> valid;
+    valid -> record [label="yes"];
+    valid -> reject [label="no"];
+  }
+
+  subgraph cluster_selection {
+    label="Candidate iteration and final selection";
+    labelloc=t;
+    labeljust=l;
+    color="#6B6B6B";
+    style="rounded,dashed";
+    penwidth=1.2;
+    margin=18;
+
+    more [
+      label="More heuristic\nconfigurations?",
+      shape=diamond,
+      color="#A97800",
+      fillcolor="#FFF4D6",
+      width=1.8,
+      height=0.92,
+      margin=0.04
+    ];
+    any_valid [
+      label="Any valid\nresults?",
+      shape=diamond,
+      color="#A97800",
+      fillcolor="#FFF4D6",
+      width=1.7,
+      height=0.9,
+      margin=0.04
+    ];
+    selected [
+      label="Select recorded plan\nwith smallest makespan\n→ Γ*",
+      color="#32834A",
+      fillcolor="#E8F7EC"
+    ];
+    infeasible [
+      label="Return infeasible ⊥",
+      color="#AA3333",
+      fillcolor="#FDE8E8"
+    ];
+
+    { rank=same; more; any_valid; }
+    { rank=same; selected; infeasible; }
+
+    more -> any_valid [label="no"];
+    any_valid -> selected [label="yes"];
+    any_valid -> infeasible [label="no"];
+  }
+
+  ready -> transitions;
+  legal -> reject [label="no"];
+  record -> more;
+  reject -> more;
+  more -> candidate [label="yes", constraint=false, minlen=2];
+}

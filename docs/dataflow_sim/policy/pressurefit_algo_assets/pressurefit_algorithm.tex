@@ -1,0 +1,68 @@
+\documentclass[10pt]{article}
+
+\usepackage[paperwidth=8.5in,paperheight=7.0in,margin=0.3in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{float}
+
+\pagestyle{empty}
+
+\begin{document}
+\setcounter{algorithm}{1}
+\begin{algorithm}[H]
+\caption{PressureFit planning}
+\label{alg:pressurefit}
+\small
+\begin{algorithmic}[1]
+\Require $\mathcal W$: ordered tasks, object accesses and sizes, runtimes,
+  and initial/final locations
+\Statex \hspace{\algorithmicindent}$\mathcal H$: memory capacities,
+  directional bandwidths, and deterministic event semantics
+\Statex \hspace{\algorithmicindent}$\Theta$: finite implementation-supplied
+  heuristic configurations; each $\theta$ fixes
+\Statex \hspace{\algorithmicindent}$\mathsf{CutScore}_\theta(g;\mathcal W,\mathcal H,P,b)$:
+  a totally ordered heuristic key (lower is preferred)
+\Statex \hspace{\algorithmicindent}$\mathsf{PrefetchRule}_\theta(\mathcal W,\mathcal H,P,X)\to\phi$:
+  one enqueue boundary $\phi(x)\in\mathsf{Window}(x)$ for each prefetch $x$
+\Ensure Fastest simulator-valid annotated plan $\Gamma^\star$, or $\bot$
+\State $(\mathcal B,\mathcal A,q)\gets\mathsf{Analyze}(\mathcal W)$
+  \Comment{Boundaries, required residency, task-reserved bytes}
+\State $\mathsf{FastBytes}_P(b)\equiv
+  q_b+\sum_{o\in\mathcal O}s_o\mathbf 1[b\in P_o]$
+  \Comment{Bytes that must fit at boundary $b$}
+\State $(\Gamma^\star,m^\star)\gets(\bot,\infty)$
+\ForAll{$\theta\in\Theta$}
+  \State $P\gets\{o\mapsto\operatorname{Hull}(\mathcal A_o):o\in\mathcal O\}$
+    \Comment{Start with continuous residency}
+  \While{$\max_{b\in\mathcal B}\mathsf{FastBytes}_P(b)>C_{\mathrm F}$}
+    \Comment{Some boundary exceeds capacity}
+  \State Choose $b^\star\in\mathcal B$ with largest $\mathsf{FastBytes}_P(b)$
+  \State $G \gets \mathsf{LegalCuts}(P,b^\star)$
+  \If{$G=\varnothing$}
+    \State $P\gets\bot$; \textbf{break}
+  \EndIf
+  \State Choose $g^\star\in G$ with smallest
+    $\mathsf{CutScore}_\theta(g;\mathcal W,\mathcal H,P,b^\star)$
+    \Comment{Heuristic: which residency gap to remove}
+  \State $P \gets \mathsf{Cut}(P,g^\star)$
+    \Comment{Remove optional residency}
+  \EndWhile
+  \If{$P\ne\bot$}
+    \State $X\gets\mathsf{Transitions}(\mathcal W,P)$
+      \Comment{Release/offload choices and prefetch windows}
+    \State $\phi\gets\mathsf{PrefetchRule}_\theta(\mathcal W,\mathcal H,P,X)$
+      \Comment{Choose one enqueue boundary per prefetch}
+    \State $\Gamma\gets\mathsf{Emit}(\mathcal W,X,\phi)$
+      \Comment{Attach movement annotations to tasks}
+    \State $(v,m)\gets\mathsf{Simulate}(\Gamma;\mathcal H)$
+      \Comment{Exact feasibility and makespan}
+    \If{$v\land m<m^\star$}
+      \State $(\Gamma^\star,m^\star)\gets(\Gamma,m)$
+    \EndIf
+  \EndIf
+\EndFor
+\State \Return $\Gamma^\star$
+\end{algorithmic}
+\end{algorithm}
+\end{document}
