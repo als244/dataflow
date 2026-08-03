@@ -1,4 +1,9 @@
-"""Fast-profile configuration and bounded PCIe contender accounting."""
+"""Fast-profile configuration and bounded PCIe contender accounting.
+
+Tests:
+- test_pytest_uses_the_fast_profile_configuration: pytest selects the fast, non-contending profile policy.
+- test_contender_rounding_never_builds_an_unbounded_backlog: fractional DMA coverage stays below one chunk.
+"""
 
 from dataflow_training.run.profiling import (DEFAULT_CONTEND_PCIE,
                                              DEFAULT_REPEATS,
