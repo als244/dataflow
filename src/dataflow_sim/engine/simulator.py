@@ -11,7 +11,8 @@ import sys
 from dataclasses import dataclass
 
 from dataflow_sim.core.reference_stream import compute_reference_stream
-from dataflow_sim.core.validate import ValidationError, validate_chain
+from dataflow_sim.core.validate import validate_chain
+from dataflow_sim.engine.errors import SimulationCapacityError
 from dataflow_sim.core.schema import (
     ActiveTask,
     Event,
@@ -537,9 +538,20 @@ def _run_impl(
             free += src_size
             if free >= needed:
                 return end
-        raise ValueError(
+        capacity = chain.fast_memory_capacity
+        actual_need = capacity + needed - free
+        message = (
             f"task {task_id!r} cannot satisfy fast memory need of {needed} bytes "
-            f"(current free + all scheduled offloads = {free}, capacity={chain.fast_memory_capacity})"
+            f"(current free + all scheduled offloads = {free}, capacity={capacity})"
+        )
+        raise SimulationCapacityError(
+            message,
+            kind="fast-output-reservation",
+            task_id=task_id,
+            location="fast",
+            capacity_bytes=capacity,
+            actual_need_bytes=actual_need,
+            overage_bytes=actual_need - capacity,
         )
 
     # ---------- main loop ----------
@@ -604,9 +616,27 @@ def _run_impl(
                             f"fast memory {used}+{compute_outputs_size} bytes > cap "
                             f"{chain.fast_memory_capacity}, no offloads in flight"
                         )
-                raise ValueError(
+                message = (
                     f"task {task.id!r} deadlocked at t={target_start}: "
                     + "; ".join(msg)
+                )
+                capacity = chain.fast_memory_capacity
+                actual_need = None
+                overage = None
+                if capacity is not None and compute_outputs_size > 0:
+                    used = loc_total["fast"]
+                    if used + compute_outputs_size > capacity:
+                        actual_need = used + compute_outputs_size
+                        overage = actual_need - capacity
+                raise SimulationCapacityError(
+                    message,
+                    kind="fast-deadlock",
+                    task_id=task.id,
+                    location="fast",
+                    capacity_bytes=capacity,
+                    actual_need_bytes=actual_need,
+                    overage_bytes=overage,
+                    missing_object_ids=tuple(missing_inputs),
                 )
             target_start = next_end
             advance(target_start, i)

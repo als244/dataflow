@@ -43,6 +43,7 @@ Tests:
 import pytest
 
 from dataflow_sim.core.schema import Object, OutputAlloc, Task, TaskChain, TransferTrigger
+from dataflow_sim.engine import SimulationCapacityError
 from dataflow_sim.engine.simulator import run
 
 
@@ -316,8 +317,17 @@ def test_fast_memory_capacity_enforced():
         ],
         fast_memory_capacity=10,
     )
-    with pytest.raises(ValueError, match="cannot satisfy fast memory"):
-        run(chain)
+    with pytest.raises(
+        SimulationCapacityError, match="cannot satisfy fast memory",
+    ) as exc_info:
+        run(chain, validate=False)
+    error = exc_info.value
+    assert error.kind == "fast-output-reservation"
+    assert error.task_id == "t0"
+    assert error.location == "fast"
+    assert error.capacity_bytes == 10
+    assert error.actual_need_bytes == 13
+    assert error.overage_bytes == 3
 
 
 def test_backing_memory_capacity_enforced_on_initial_memory():
