@@ -2,7 +2,7 @@
 
 Tests:
 - test_simulate_keeps_exact_training_step_count: simulate preserves the exact training step count (task f_3_0_0 present at num_steps=4) with positive makespan and diagnostics.
-- test_simulate_exposes_pressurefit_diagnostics: simulate exposes PressureFit diagnostics with four candidates and a selected one.
+- test_simulate_exposes_pressurefit_diagnostics: simulate exposes PressureFit diagnostics with a bounded candidate portfolio and a selected one.
 - test_simulate_accepts_asymmetric_transfer_bandwidths: simulate carries asymmetric from/to-slow bandwidths through to the chain, scaled to KB/s.
 - test_simulate_accepts_fractional_fast_memory_budget: a fractional fast-memory budget in GB converts to the exact byte capacity.
 - test_simulate_recompute_toggle_off_matches_default_and_can_change_makespan: recompute off matches omitting the field, recompute on never loses and here lowers makespan while preserving effective flops.
@@ -171,7 +171,7 @@ def test_simulate_exposes_pressurefit_diagnostics():
     body = simulate(SimulationParams.model_validate(_payload()))
     diagnostics = body["policy_diagnostics"]
 
-    assert diagnostics["candidate_count"] == 4
+    assert 1 <= diagnostics["candidate_count"] <= 40
     assert diagnostics["selected_candidate"]
     assert any(c["selected"] for c in diagnostics["candidates"])
 
@@ -228,7 +228,7 @@ def test_simulate_recompute_toggle_off_matches_default_and_can_change_makespan()
     # Recompute never loses (it seeds the no-recompute plan) and here helps.
     assert on["summary"]["makespan_us"] <= off["summary"]["makespan_us"]
     # PressureFit diagnostics still surface under recompute.
-    assert on["policy_diagnostics"]["candidate_count"] == 4
+    assert 1 <= on["policy_diagnostics"]["candidate_count"] <= 40
     recompute_blocks = [
         block for block in on["breakdown"]["compute_blocks"]
         if block["category"] == "recompute" and block["total_runtime_us"] > 0

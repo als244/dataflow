@@ -3,25 +3,33 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
 
 from dataflow_sim.policies._common import _object_sizes
+from dataflow_sim.policies.pressurefit_aux.types import (
+    _ResidencyAnchor,
+    _ResidencySpan,
+)
 from dataflow_sim.core.schema import TaskChain
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class _Facts:
     n: int
     sizes: dict[str, int]
     producer: dict[str, int]
-    uses: dict[str, list[int]]
-    mutators: dict[str, set[int]]
+    uses: dict[str, tuple[int, ...]]
+    mutators: dict[str, tuple[int, ...]]
     backing_ids: set[str]
     compute_ids: set[str]
     final_locations: dict[str, str]
+    task_index: dict[str, int]
     task_start: list[int]
     task_end: list[int]
     next_outputs: list[int]
+    inbound_bandwidth: int | None
+    outbound_bandwidth: int | None
 
 
 def _build_facts(chain: TaskChain) -> _Facts:
@@ -59,14 +67,17 @@ def _build_facts(chain: TaskChain) -> _Facts:
         n=n,
         sizes=sizes,
         producer=producer,
-        uses={k: sorted(v) for k, v in uses.items()},
-        mutators=mutators,
+        uses={k: tuple(sorted(v)) for k, v in uses.items()},
+        mutators={k: tuple(sorted(v)) for k, v in mutators.items()},
         backing_ids={o.id for o in chain.initial_memory if o.location == "backing"},
         compute_ids={o.id for o in chain.initial_memory if o.location == "fast"},
         final_locations=dict(chain.final_locations),
+        task_index={task.id: index for index, task in enumerate(chain.tasks)},
         task_start=task_start,
         task_end=task_end,
         next_outputs=next_outputs,
+        inbound_bandwidth=chain.bandwidth_from_slow,
+        outbound_bandwidth=chain.bandwidth_to_slow,
     )
 
 
@@ -76,35 +87,75 @@ def _transfer_time(size: int, bandwidth: int | None) -> int:
     return max(1, math.ceil(size / bandwidth))
 
 
-def _anchors(oid: str, facts: _Facts) -> list[int]:
-    out: set[int] = set()
+def _anchor_records(oid: str, facts: _Facts) -> tuple[_ResidencyAnchor, ...]:
+    """Return every mandatory fast-residency point for ``oid``.
+
+    Final fast residency is a first-class liveness anchor.  Omitting it was
+    the root modeling error behind the retained-state PressureFit failure.
+    """
+    out: set[_ResidencyAnchor] = set()
     if oid in facts.compute_ids:
-        out.add(-1)
+        out.add(_ResidencyAnchor(-1, "initial", None))
     p = facts.producer.get(oid, -1)
     if p >= 0:
-        out.add(p)
+        out.add(_ResidencyAnchor(p, "producer", p))
     for u in facts.uses.get(oid, []):
-        out.add(u - 1)
-    return sorted(out)
+        out.add(_ResidencyAnchor(u - 1, "use", u))
+    if facts.final_locations.get(oid) == "fast":
+        out.add(_ResidencyAnchor(max(-1, facts.n - 1), "final_fast", None))
+    return tuple(sorted(out, key=lambda anchor: (anchor.boundary, anchor.kind)))
 
 
-def _effective_a(a: int, producer: int) -> int:
-    if a > -1 and a != producer:
-        return a - 1
-    return a
+def _anchors(oid: str, facts: _Facts) -> list[int]:
+    """Return unique anchor boundaries for the reducer's hot path."""
+    return sorted({anchor.boundary for anchor in _anchor_records(oid, facts)})
+
+
+def _pressure_start(
+    oid: str,
+    span_start: int,
+    facts: _Facts,
+    *,
+    prefetch_headroom: bool = True,
+) -> int:
+    """Return the boundary charged by one analytical pressure view."""
+    producer = facts.producer.get(oid, -1)
+    if prefetch_headroom and span_start > -1 and span_start != producer:
+        return span_start - 1
+    return span_start
 
 
 def _pool_size(
     facts: _Facts,
-    intervals: dict[str, list[tuple[int, int]]],
+    intervals: dict[str, list[_ResidencySpan]],
+    *,
+    prefetch_headroom: bool = True,
 ) -> list[int]:
-    pool = [0] * (facts.n + 1)
+    # Difference-array range addition preserves the exact inclusive boundary
+    # totals while reducing seed construction from O(total span length) to
+    # O(spans + boundaries).
+    delta = [0] * (facts.n + 2)
     for oid, ivs in intervals.items():
-        p = facts.producer.get(oid, -1)
         for a, b in ivs:
-            real_a = _effective_a(a, p)
-            for k in range(max(-1, real_a), min(facts.n - 1, b) + 1):
-                pool[k + 1] += facts.sizes[oid]
+            start = max(
+                -1,
+                _pressure_start(
+                    oid,
+                    a,
+                    facts,
+                    prefetch_headroom=prefetch_headroom,
+                ),
+            ) + 1
+            end = min(facts.n - 1, b) + 1
+            if start > end:
+                continue
+            delta[start] += facts.sizes[oid]
+            delta[end + 1] -= facts.sizes[oid]
+    pool = [0] * (facts.n + 1)
+    running = 0
+    for index in range(facts.n + 1):
+        running += delta[index]
+        pool[index] = running
     return pool
 
 
@@ -114,16 +165,22 @@ def _fire_task_for_interval(
     b: int,
     facts: _Facts,
 ) -> int | None:
-    cands: list[int] = []
+    candidate = -1
     p = facts.producer.get(oid, -1)
     if p >= 0 and a <= p <= b:
-        cands.append(p)
-    for u in facts.uses.get(oid, []):
-        if a <= u - 1 <= b:
-            cands.append(u)
-    if not cands:
-        return None
-    return min(facts.n - 1, max(cands))
+        candidate = p
+    uses = facts.uses.get(oid, ())
+    hi = bisect_right(uses, b + 1)
+    if hi and uses[hi - 1] >= a + 1:
+        candidate = max(candidate, uses[hi - 1])
+    if candidate >= 0:
+        return min(facts.n - 1, candidate)
+    # Initial residency is an anchor even when a split segment contains no
+    # producer/use. TaskChain triggers fire only after tasks, so task 0 is the
+    # earliest legal departure point.
+    if a == -1 and facts.n:
+        return 0
+    return None
 
 
 def _first_use_in_interval(
@@ -132,25 +189,36 @@ def _first_use_in_interval(
     b: int,
     facts: _Facts,
 ) -> int | None:
-    for u in facts.uses.get(oid, []):
-        if a <= u - 1 <= b:
-            return u
+    uses = facts.uses.get(oid, ())
+    pos = bisect_left(uses, a + 1)
+    if pos < len(uses) and uses[pos] <= b + 1:
+        return uses[pos]
     return None
 
 
 def _departing_before_next(
     facts: _Facts,
-    intervals: dict[str, list[tuple[int, int]]],
+    intervals: dict[str, list[_ResidencySpan]],
     idx: int,
+    *,
+    prefetch_headroom: bool = True,
 ) -> int:
     boundary = idx - 1
     if boundary < 0 or boundary >= facts.n - 1:
         return 0
     total = 0
     for oid, ivs in intervals.items():
-        p = facts.producer.get(oid, -1)
         for a, b in ivs:
-            if not (_effective_a(a, p) <= boundary <= b):
+            if not (
+                _pressure_start(
+                    oid,
+                    a,
+                    facts,
+                    prefetch_headroom=prefetch_headroom,
+                )
+                <= boundary
+                <= b
+            ):
                 continue
             if _fire_task_for_interval(oid, a, b, facts) == boundary:
                 total += facts.sizes[oid]
@@ -159,8 +227,10 @@ def _departing_before_next(
 
 def _nonblocking_arrivals_before_next(
     facts: _Facts,
-    intervals: dict[str, list[tuple[int, int]]],
+    intervals: dict[str, list[_ResidencySpan]],
     idx: int,
+    *,
+    prefetch_headroom: bool = True,
 ) -> int:
     boundary = idx - 1
     if boundary < 0 or boundary >= facts.n - 1:
@@ -169,7 +239,17 @@ def _nonblocking_arrivals_before_next(
     for oid, ivs in intervals.items():
         p = facts.producer.get(oid, -1)
         for a, b in ivs:
-            if a <= -1 or a == p or _effective_a(a, p) != boundary:
+            if (
+                a <= -1
+                or a == p
+                or _pressure_start(
+                    oid,
+                    a,
+                    facts,
+                    prefetch_headroom=prefetch_headroom,
+                )
+                != boundary
+            ):
                 continue
             first_use = _first_use_in_interval(oid, a, b, facts)
             if first_use is None or first_use > boundary + 1:
@@ -179,15 +259,31 @@ def _nonblocking_arrivals_before_next(
 
 def _modeled_boundary_need(
     facts: _Facts,
-    intervals: dict[str, list[tuple[int, int]]],
+    intervals: dict[str, list[_ResidencySpan]],
     idx: int,
     pool: list[int] | None = None,
+    *,
+    prefetch_headroom: bool = True,
 ) -> int:
     if pool is None:
-        pool = _pool_size(facts, intervals)
+        pool = _pool_size(
+            facts,
+            intervals,
+            prefetch_headroom=prefetch_headroom,
+        )
     return (
         pool[idx]
-        - _departing_before_next(facts, intervals, idx)
-        - _nonblocking_arrivals_before_next(facts, intervals, idx)
+        - _departing_before_next(
+            facts,
+            intervals,
+            idx,
+            prefetch_headroom=prefetch_headroom,
+        )
+        - _nonblocking_arrivals_before_next(
+            facts,
+            intervals,
+            idx,
+            prefetch_headroom=prefetch_headroom,
+        )
         + facts.next_outputs[idx]
     )

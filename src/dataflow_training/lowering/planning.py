@@ -101,7 +101,7 @@ def plan_program(
     recompute: bool = False,
     build_variant: BuildVariant | None = None,
     max_iters: int = 8,
-    pressurefit_schedules: tuple[str, ...] | None = None,
+    pressurefit_prefetch_rules: tuple[str, ...] | None = None,
     max_wall_s: float | None = None,
     preplace: str = "task0",
 ) -> PlannedProgram:
@@ -141,7 +141,7 @@ def plan_program(
     def policy_fn(chain: Any) -> Any:
         return apply_pressurefit_policy(
             chain, fast_memory_capacity=cap, preplace=preplace,
-            schedules=pressurefit_schedules,
+            prefetch_rules=pressurefit_prefetch_rules,
         )
 
     if recompute:

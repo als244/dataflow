@@ -6,7 +6,7 @@ from dataclasses import replace
 
 from dataflow_sim.policies._common import _UseEvent
 from dataflow_sim.policies.pressurefit_aux.core import _Facts, _build_facts
-from dataflow_sim.policies.pressurefit_aux.types import _IntervalSet
+from dataflow_sim.policies.pressurefit_aux.types import _IntervalSet, _ResidencySpan
 from dataflow_sim.core.schema import TaskChain
 
 
@@ -127,11 +127,17 @@ def _initial_residency(
     for oid in sorted(all_ids):
         p = facts.producer.get(oid, -1)
         uses = facts.uses.get(oid, [])
+        final_fast = facts.final_locations.get(oid) == "fast"
+        final_boundary = max(-1, facts.n - 1)
         if oid in facts.backing_ids:
-            if not uses:
+            if not uses and not final_fast:
                 continue
-            a = -1 if oid in initial_compute else uses[0] - 1
-            b = uses[-1] - 1
+            a = (
+                -1
+                if oid in initial_compute
+                else (uses[0] - 1 if uses else final_boundary)
+            )
+            b = uses[-1] - 1 if uses else a
         elif oid in facts.compute_ids:
             a = -1
             b = uses[-1] - 1 if uses else -1
@@ -140,9 +146,14 @@ def _initial_residency(
                 continue
             a = p
             b = uses[-1] - 1 if uses else p
-        intervals[oid] = [(a, b)]
+        if final_fast:
+            b = max(b, final_boundary)
+        intervals[oid] = [_ResidencySpan(a, b)]
     return intervals
 
 
 def _copy_intervals(seed: _IntervalSet) -> _IntervalSet:
-    return {oid: list(ivs) for oid, ivs in seed.items()}
+    return {
+        oid: [_ResidencySpan(*span) for span in spans]
+        for oid, spans in seed.items()
+    }

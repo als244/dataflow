@@ -4,26 +4,21 @@ Standalone planner built around deterministic greedy pressure reduction:
   1. derive schema-level facts from the TaskChain;
   2. choose initial residency and build one seed interval set from liveness
      anchors;
-  3. cut optional non-anchor residency gaps until every boundary satisfies
-     the capacity inequality (pressure reduction);
-  4. emit release/offload/prefetch triggers from the reduced intervals under
-     each of four inbound schedules (packed-fifo, packed-fit, interval-entry,
-     latest-safe);
+  3. reduce copies under a small portfolio of pressure views and deterministic
+     cut scores;
+  4. emit release/offload/prefetch triggers from each reduced interval set
+     under four prefetch rules, with ordinary and clean-gap-
+     coalesced forms;
   5. verify each annotated chain with the simulator, translating bounded
      capacity contradictions back into boundary pressure and re-reducing;
   6. return the fastest valid annotated chain.
 
-The four inbound schedules are the policy's only branching: residency
-planning is shared and deterministic, but the best moment to fire a prefetch
-depends on FIFO congestion vs. memory pressure, which the analytic model
-cannot rank without replay. Packed-fifo coordinates transfers backward from
-their deadlines (best under inbound congestion), packed-fit adds a pressure
-clamp so packing never fires a trigger into boundaries whose modeled bytes
-leave no room for the destination (best at tight caps and on long chains),
-interval-entry extends interval entries earlier when strict pressure allows
-(best when lead time is scarce), and latest-safe places each transfer
-independently as late as possible (most conservative arrivals; the variant
-that survives extreme pressure).
+The bounded portfolio exists because conservative prefetch headroom,
+capacity-tight feasibility, transfer work, and overlap do not dominate one
+another across all chains. Packed-fifo coordinates transfers backward from
+their deadlines, packed-fit adds a pressure clamp, interval-entry extends
+entries earlier where pressure permits, and latest-safe places transfers
+independently. Simulator replay remains the physical arbiter.
 
 The policy is name-agnostic. It uses object source availability, size, uses,
 producer, and explicit mutation metadata.
@@ -42,86 +37,77 @@ from dataflow_sim.policies.pressurefit_aux.core import (
     _Facts,
     _build_facts,
 )
+from dataflow_sim.policies.pressurefit_aux.candidate import _verify_candidate
 from dataflow_sim.policies.pressurefit_aux.diagnostics import (
     PressureFitCandidateDiagnostic,
     PressureFitDiagnostics,
     _candidate_diagnostic,
 )
-from dataflow_sim.policies.pressurefit_aux.emit import (
-    _emit_chain,
-)
-from dataflow_sim.policies.pressurefit_aux.inbound_schedules import _extend_inbound_lead_time
 from dataflow_sim.policies.pressurefit_aux.seeds import (
     _copy_intervals,
     _initial_residency,
     _pressure_initial_placement,
 )
-from dataflow_sim.policies.pressurefit_aux.types import _IntervalSet, _ScheduleSpec
-from dataflow_sim.policies.pressurefit_aux.physical_repair import (
-    _PHYSICAL_REPAIR_LIMIT,
-    _apply_physical_repair,
+from dataflow_sim.policies.pressurefit_aux.types import (
+    _IntervalSet,
+    _ResidencySpec,
+    _PrefetchRuleSpec,
 )
 from dataflow_sim.policies.pressurefit_aux.reducer import _reduce_to_fit
 from dataflow_sim.core.schema import TaskChain
-from dataflow_sim.engine.simulator import run as simulator_run
 
-# The four inbound schedules, in tie-break priority order: when two produce
-# the same simulated makespan, the earlier entry is selected.
-_SCHEDULES: tuple[_ScheduleSpec, ...] = (
-    _ScheduleSpec("packed-fifo", pack_inbound=True),
-    _ScheduleSpec("packed-fit", pack_inbound=True, clamp_inbound=True),
-    _ScheduleSpec(
-        "interval-entry",
-        extend_inbound=True,
-        respect_interval_start=True,
-    ),
-    _ScheduleSpec("latest-safe"),
+# Prefetch rules in tie-break priority order. The second half repeats the four
+# boundary-selection rules while allowing clean zero-width gaps to coalesce.
+_PREFETCH_RULES: tuple[_PrefetchRuleSpec, ...] = (
+    _PrefetchRuleSpec("packed-fifo", "packed-fifo"),
+    _PrefetchRuleSpec("packed-fit", "packed-fit"),
+    _PrefetchRuleSpec("interval-entry", "interval-entry"),
+    _PrefetchRuleSpec("latest-safe", "latest-safe"),
+    _PrefetchRuleSpec("packed-fifo-coalesced", "packed-fifo", True),
+    _PrefetchRuleSpec("packed-fit-coalesced", "packed-fit", True),
+    _PrefetchRuleSpec("interval-entry-coalesced", "interval-entry", True),
+    _PrefetchRuleSpec("latest-safe-coalesced", "latest-safe", True),
+)
+
+# PressureFit deliberately races a conservative view that reserves one
+# prefetch-destination boundary against a capacity-tight view that charges
+# only required residency.  Each is reduced with two deterministic greedy
+# cut scores; simulator replay chooses the physically fastest valid result.
+_RESIDENCY_SPECS: tuple[_ResidencySpec, ...] = (
+    _ResidencySpec("headroom-stall", True, "min-stall"),
+    _ResidencySpec("headroom-transfer", True, "min-transfer"),
+    _ResidencySpec("tight-stall", False, "min-stall"),
+    _ResidencySpec("tight-transfer", False, "min-transfer"),
+    _ResidencySpec("relaxed-stall", False, "min-stall", False),
 )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class _CandidateResult:
-    makespan_us: int
+    makespan_us: float
     chain: TaskChain
     name: str
 
 
-def apply_pressurefit_policy(
+def pressurefit(
     bare: TaskChain,
     *,
     fast_memory_capacity: int | None = None,
     preplace: str = "greedy",
-    schedules: tuple[str, ...] | None = None,
-) -> TaskChain:
-    """Return an annotated chain using the standalone PressureFit policy.
-
-    ``preplace`` controls t=0 fast residency for backing-initial objects:
-    ``"greedy"`` (default) fills spare capacity with the earliest-used
-    objects — free in simulated time, but an executor that must realize
-    that placement pays the upload synchronously before the chain starts;
-    ``"task0"`` pre-places only what task 0 needs and lets everything else
-    arrive through planned (charged, overlappable) prefetches — the honest
-    mode when the chain is replayed in a loop and t=0 state is not free.
-    """
-    chain, _diagnostics = plan_pressurefit_policy(
-        bare, fast_memory_capacity=fast_memory_capacity, preplace=preplace,
-        schedules=schedules,
-    )
-    return chain
-
-
-def plan_pressurefit_policy(
-    bare: TaskChain,
-    *,
-    fast_memory_capacity: int | None = None,
-    preplace: str = "greedy",
-    schedules: tuple[str, ...] | None = None,
+    prefetch_rules: tuple[str, ...] | None = None,
 ) -> tuple[TaskChain, PressureFitDiagnostics]:
-    """Return an annotated chain and per-schedule planning diagnostics.
+    """Run the PressureFit algorithm and return its plan plus diagnostics.
 
-    The algorithm spine is:
-      facts -> seed intervals -> shared pressure reduction -> four inbound
-      schedules -> fastest valid annotated chain.
+    This is the implementation's algorithm-shaped spine: analyze the bare
+    workload, construct seed residency, reduce one copy per residency
+    strategy, realize and simulate every selected PrefetchRule, and return the
+    valid candidate with minimum makespan. Physical repair remains inside
+    candidate verification.
+
+    ``preplace="greedy"`` fills spare initial fast memory; ``"task0"``
+    preplaces only task 0 inputs and realizes later objects through charged
+    prefetches. ``prefetch_rules`` optionally restricts evaluation to exact
+    names from the built-in portfolio.
     """
     planning_start = time.perf_counter()
     if fast_memory_capacity is not None:
@@ -129,33 +115,82 @@ def plan_pressurefit_policy(
     if preplace not in ("greedy", "task0"):
         raise ValueError(f"preplace must be 'greedy' or 'task0', got {preplace!r}")
 
+    # Analyze(W, H).
     ideal = _compute_ideal_starts(bare)
+    compute_lower_bound_us = (
+        ideal[bare.tasks[-1].id] + bare.tasks[-1].runtime
+        if bare.tasks
+        else 0.0
+    )
     sizes = _object_sizes(bare)
     uses_by_task = _object_uses_by_task_idx(bare, ideal)
     initial_compute = _pressure_initial_placement(
         bare, bare.fast_memory_capacity, sizes, uses_by_task, mode=preplace,
     )
     facts = _build_facts(bare)
-    seed = _initial_residency(facts, initial_compute)
-    # All schedules start from the same pressure-fit interval set (same seed,
-    # zero extra pressure), so reduce once and hand each schedule a copy.
-    base_fit = _copy_intervals(seed)
-    _reduce_to_fit(facts, base_fit, bare.fast_memory_capacity)
 
-    specs = _SCHEDULES
-    if schedules is not None:
-        # planner trial mode: evaluate a subset of the four inbound
-        # schedules (the full race only matters for plans that are kept)
-        specs = tuple(sp for sp in _SCHEDULES if sp.name in schedules)
-        if not specs:
-            raise ValueError(f"no known schedules in {schedules!r}")
-    results, candidate_diagnostics, first_error = _evaluate_schedules(
-        bare, facts, base_fit, specs,
-    )
+    # Build the seed residency P0 and select the requested heuristic family.
+    seed = _initial_residency(facts, initial_compute)
+    prefetch_rule_specs = _PREFETCH_RULES
+    if prefetch_rules is not None:
+        # Planner trial mode: evaluate a subset of the named prefetch-rule
+        # candidates (the full race only matters for plans that are kept).
+        prefetch_rule_specs = tuple(
+            rule for rule in _PREFETCH_RULES if rule.name in prefetch_rules
+        )
+        if not prefetch_rule_specs:
+            raise ValueError(f"no known prefetch rules in {prefetch_rules!r}")
+    results: list[_CandidateResult] = []
+    candidate_diagnostics: list[PressureFitCandidateDiagnostic] = []
+    first_error: Exception | None = None
+
+    # For each configuration: reduce residency, realize transitions and
+    # prefetches, emit a plan, and validate it with Simulate.
+    for residency in _RESIDENCY_SPECS:
+        base_fit = _copy_intervals(seed)
+        try:
+            _reduce_to_fit(
+                facts,
+                base_fit,
+                bare.fast_memory_capacity,
+                cut_score=residency.cut_score,
+                prefetch_headroom=residency.prefetch_headroom,
+                continue_headroom_cuts=residency.continue_headroom_cuts,
+            )
+        except Exception as error:
+            if first_error is None:
+                first_error = error
+            continue
+
+        (
+            variant_results,
+            variant_diagnostics,
+            variant_error,
+            reached_lower_bound,
+        ) = _evaluate_prefetch_rules(
+            bare,
+            facts,
+            base_fit,
+            residency,
+            prefetch_rule_specs,
+            compute_lower_bound_us=compute_lower_bound_us,
+        )
+        results.extend(variant_results)
+        candidate_diagnostics.extend(variant_diagnostics)
+        if first_error is None and variant_error is not None:
+            first_error = variant_error
+        # Compute tasks are serialized, so their transfer-free completion time
+        # is a global makespan lower bound. Once a verified candidate reaches
+        # it, evaluating any remaining portfolio member cannot improve the
+        # selected makespan or the stable first-candidate tie break.
+        if reached_lower_bound:
+            break
 
     if not results:
         assert first_error is not None
         raise first_error
+
+    # Return the simulator-valid plan with minimum makespan.
     results.sort(key=lambda x: x.makespan_us)
     selected = results[0]
     selected_candidates = [
@@ -178,101 +213,91 @@ def plan_pressurefit_policy(
     return selected.chain, diagnostics
 
 
-def _reduce_intervals(
+def apply_pressurefit_policy(
     bare: TaskChain,
-    facts: _Facts,
-    intervals: _IntervalSet,
-    spec: _ScheduleSpec,
-    extra_pressure: list[int],
-) -> None:
-    _reduce_to_fit(facts, intervals, bare.fast_memory_capacity, extra_pressure)
-    if spec.extend_inbound:
-        _extend_inbound_lead_time(
-            facts, intervals, bare.fast_memory_capacity, bare.bandwidth_from_slow,
-            extra_pressure,
-        )
-
-
-def _simulated_makespan_us(annotated: TaskChain) -> int:
-    log = simulator_run(annotated, snapshots=False)
-    return max(iv.end for iv in log.task_intervals)
-
-
-def _verify_schedule_plan(
-    bare: TaskChain,
-    facts: _Facts,
-    base_fit: _IntervalSet,
-    spec: _ScheduleSpec,
-) -> tuple[int, TaskChain]:
-    intervals = _copy_intervals(base_fit)
-    extra_pressure = [0] * (facts.n + 1)
-    # `base_fit` is already pressure-fit with zero extra pressure; only the
-    # interval-entry schedule has per-schedule planning work left up front.
-    if spec.extend_inbound:
-        _extend_inbound_lead_time(
-            facts, intervals, bare.fast_memory_capacity, bare.bandwidth_from_slow,
-            extra_pressure,
-        )
-
-    for _ in range(_PHYSICAL_REPAIR_LIMIT):
-        annotated = _emit_chain(
-            bare, facts, intervals,
-            pack_inbound=spec.pack_inbound,
-            respect_interval_start=spec.respect_interval_start,
-            clamp_inbound=spec.clamp_inbound,
-            extra_pressure=extra_pressure,
-        )
-        try:
-            return _simulated_makespan_us(annotated), annotated
-        except ValueError as e:
-            repaired = _apply_physical_repair(
-                str(e), bare, facts, intervals, extra_pressure,
-            )
-            if not repaired:
-                raise
-            _reduce_intervals(bare, facts, intervals, spec, extra_pressure)
-
-    annotated = _emit_chain(
-        bare, facts, intervals,
-        pack_inbound=spec.pack_inbound,
-        respect_interval_start=spec.respect_interval_start,
-        clamp_inbound=spec.clamp_inbound,
-        extra_pressure=extra_pressure,
+    *,
+    fast_memory_capacity: int | None = None,
+    preplace: str = "greedy",
+    prefetch_rules: tuple[str, ...] | None = None,
+) -> TaskChain:
+    """Return only the annotated chain selected by :func:`pressurefit`."""
+    chain, _diagnostics = pressurefit(
+        bare,
+        fast_memory_capacity=fast_memory_capacity,
+        preplace=preplace,
+        prefetch_rules=prefetch_rules,
     )
-    return _simulated_makespan_us(annotated), annotated
+    return chain
 
 
-def _evaluate_schedules(
+def plan_pressurefit_policy(
+    bare: TaskChain,
+    *,
+    fast_memory_capacity: int | None = None,
+    preplace: str = "greedy",
+    prefetch_rules: tuple[str, ...] | None = None,
+) -> tuple[TaskChain, PressureFitDiagnostics]:
+    """Return PressureFit's annotated chain and candidate diagnostics."""
+    return pressurefit(
+        bare,
+        fast_memory_capacity=fast_memory_capacity,
+        preplace=preplace,
+        prefetch_rules=prefetch_rules,
+    )
+
+
+def _evaluate_prefetch_rules(
     bare: TaskChain,
     facts: _Facts,
     base_fit: _IntervalSet,
-    specs: tuple[_ScheduleSpec, ...] = _SCHEDULES,
-) -> tuple[list[_CandidateResult], list[PressureFitCandidateDiagnostic], Exception | None]:
+    residency: _ResidencySpec,
+    prefetch_rules: tuple[_PrefetchRuleSpec, ...],
+    *,
+    compute_lower_bound_us: float,
+) -> tuple[
+    list[_CandidateResult],
+    list[PressureFitCandidateDiagnostic],
+    Exception | None,
+    bool,
+]:
     results: list[_CandidateResult] = []
     diagnostics: list[PressureFitCandidateDiagnostic] = []
     first_error: Exception | None = None
+    reached_lower_bound = False
 
-    for spec in specs:
+    for prefetch_rule in prefetch_rules:
         t0 = time.perf_counter()
+        candidate_name = f"{residency.name}/{prefetch_rule.name}"
         try:
-            makespan, annotated = _verify_schedule_plan(bare, facts, base_fit, spec)
+            makespan, annotated = _verify_candidate(
+                bare,
+                facts,
+                base_fit,
+                residency,
+                prefetch_rule,
+            )
             wall = time.perf_counter() - t0
-            results.append(_CandidateResult(makespan, annotated, spec.name))
+            results.append(
+                _CandidateResult(makespan, annotated, candidate_name),
+            )
             diagnostics.append(_candidate_diagnostic(
-                spec,
+                candidate_name,
                 status="valid",
                 wall_time_s=wall,
                 makespan_us=makespan,
             ))
+            if makespan == compute_lower_bound_us:
+                reached_lower_bound = True
+                break
         except Exception as e:
             wall = time.perf_counter() - t0
             if first_error is None:
                 first_error = e
             diagnostics.append(_candidate_diagnostic(
-                spec,
+                candidate_name,
                 status="error",
                 wall_time_s=wall,
                 error=f"{type(e).__name__}: {e}",
             ))
 
-    return results, diagnostics, first_error
+    return results, diagnostics, first_error, reached_lower_bound

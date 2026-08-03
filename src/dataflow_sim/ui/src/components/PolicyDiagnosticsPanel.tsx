@@ -5,10 +5,6 @@ export interface PressureFitCandidateDiagnostic {
   makespan_us: number | null;
   wall_time_s: number;
   error: string | null;
-  pack_inbound: boolean;
-  extend_inbound: boolean;
-  respect_interval_start: boolean;
-  clamp_inbound: boolean;
 }
 
 export interface PressureFitDiagnostics {
@@ -34,15 +30,6 @@ function fmtWall(s: number): string {
   if (s >= 1) return `${s.toFixed(3)} s`;
   if (s >= 0.001) return `${(s * 1000).toFixed(2)} ms`;
   return `${(s * 1_000_000).toFixed(0)} us`;
-}
-
-function scheduleKnobs(c: PressureFitCandidateDiagnostic): string {
-  const knobs: string[] = [];
-  if (c.pack_inbound) knobs.push("packed");
-  if (c.clamp_inbound) knobs.push("pressure-clamped");
-  if (c.extend_inbound) knobs.push("extend-inbound");
-  if (c.respect_interval_start) knobs.push("interval-entry");
-  return knobs.join(", ") || "latest-safe";
 }
 
 function orderCandidates(
@@ -100,11 +87,10 @@ export function PolicyDiagnosticsPanel({
           <table className="data-table diagnostics-table">
             <thead>
               <tr>
-                <th>inbound schedule</th>
+                <th>candidate</th>
                 <th>status</th>
                 <th>makespan</th>
                 <th>wall</th>
-                <th>knobs</th>
                 <th>note</th>
               </tr>
             </thead>
@@ -124,7 +110,6 @@ export function PolicyDiagnosticsPanel({
                   <td>{c.status}</td>
                   <td className="num">{fmtTimeUs(c.makespan_us)}</td>
                   <td className="num">{fmtWall(c.wall_time_s)}</td>
-                  <td>{scheduleKnobs(c)}</td>
                   <td className="diagnostics-note" title={c.error ?? ""}>
                     {c.error ?? "-"}
                   </td>
