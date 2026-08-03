@@ -13,15 +13,17 @@ Tests:
 - test_session_status_tracks_calls: session_status reports the client name, call count, and the last op and its status.
 - test_engine_status_lists_all_client_sessions: engine_status lists every connected session and one client observes another's queued work.
 - test_shutdown_terminates_daemon: shutdown() returns ok and serve_forever exits.
+- test_protocol_handoff_preserves_read_ahead: synchronous handshake parsing hands an already-coalesced next frame to the asynchronous reader instead of dropping it.
 """
 from __future__ import annotations
 
+import socket
 import time
 
 import pytest
 
 from dataflow.service import EngineClient, EngineConfig, Server, ServiceError
-from dataflow.service.wire import SCHEMA_VERSION
+from dataflow.service.wire import Conn, SCHEMA_VERSION
 from tests.support.service import start_server_thread, stop_server_thread
 
 
@@ -50,6 +52,22 @@ def test_handshake_and_health(daemon):
         assert c.engine_info["schema_version"] == SCHEMA_VERSION
         h = c.health()
         assert h["ok"] and h["uptime_s"] >= 0
+
+
+def test_protocol_handoff_preserves_read_ahead():
+    sender, receiver = socket.socketpair()
+    try:
+        sender.sendall(
+            b'{"kind":"HELLO"}\n'
+            b'{"kind":"RDMA_INFO","qpn":7}\n'
+        )
+        conn = Conn(receiver)
+        assert conn.recv().msg == {"kind": "HELLO"}
+        assert conn.take_buffered() == b'{"kind":"RDMA_INFO","qpn":7}\n'
+        assert conn.take_buffered() == b""
+    finally:
+        sender.close()
+        receiver.close()
 
 
 def test_schema_skew_rejected(daemon, monkeypatch):

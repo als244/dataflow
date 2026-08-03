@@ -543,7 +543,10 @@ class NetworkManager:
 
     def reader_loop(self, link: PeerLink) -> None:
         sock = link.conn.sock
-        buf = b""
+        # connect()/accept_loop() synchronously consume HELLO before handing
+        # the Conn to this thread.  Preserve anything that recv() read beyond
+        # HELLO (most importantly an immediately coalesced RDMA_INFO).
+        buf = link.conn.take_buffered()
         while link.alive and not self.stop_flag.is_set():
             # read one JSON header line
             while b"\n" not in buf:

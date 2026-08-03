@@ -117,6 +117,17 @@ class Conn:
             payload = self._read_exact(n)
         return Frame(msg, payload)
 
+    def take_buffered(self) -> bytes:
+        """Transfer read-ahead bytes when ownership moves to a new reader.
+
+        Handshakes call :meth:`recv` synchronously and then hand the same
+        connection to a reader thread.  A socket read may already contain the
+        first post-handshake frame; the new reader must begin with those bytes
+        rather than reading past and silently dropping them.
+        """
+        buffered, self._rbuf = self._rbuf, b""
+        return buffered
+
     def _read_line(self) -> bytes | None:
         while b"\n" not in self._rbuf:
             chunk = self.sock.recv(1 << 16)
