@@ -25,7 +25,12 @@ from .presets import cfg_dict, tokens_per_step
 from .recipe import Recipe
 from .checkpointing import save_checkpoint, distribute_artifacts, resolve_resume
 from ..distributed.grouped_lowering import GroupedBuildVariant, lower_with_group
-from ..distributed.hosts import repo_path, run_on, uds_forward
+from ..distributed.hosts import (
+    close_uds_forward,
+    repo_path,
+    run_on,
+    uds_forward,
+)
 from ..distributed import daemons
 from ..distributed.ranks import HostRig, RankState, wait_client
 from ..distributed.hosts import fetch_file
@@ -405,6 +410,8 @@ def run(global_cfg, recipe: Recipe, pipeline, steps: int, *,
             except Exception as e:
                 log(f"[fleet] teardown {rig.host.name}: {e}")
             if rig.forward is not None:
-                rig.forward.terminate()
-
+                try:
+                    close_uds_forward(rig.forward, rig.sock)
+                except Exception as e:
+                    log(f"[fleet] forward teardown {rig.host.name}: {e}")
 

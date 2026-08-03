@@ -65,6 +65,23 @@ def uds_forward(host: HostSpec, remote_sock: str, local_sock: str):
         stderr=subprocess.DEVNULL)
 
 
+def close_uds_forward(process, local_sock: str,
+                      *, timeout: float = 10.0) -> None:
+    """Stop and reap a UDS forwarder, then remove its local socket."""
+    try:
+        if process is None:
+            return
+        if process.poll() is None:
+            process.terminate()
+        try:
+            process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5.0)
+    finally:
+        Path(local_sock).unlink(missing_ok=True)
+
+
 def fetch_file(host: HostSpec, remote_path: str, local_path: str) -> bool:
     """Copy a file from the host to the conductor's filesystem."""
     Path(local_path).parent.mkdir(parents=True, exist_ok=True)
