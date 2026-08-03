@@ -13,6 +13,18 @@ central probes (`tests/conftest.py`): `gpu`, `sim`, `corpus`,
 `topology_remote`, `rdma`, `ncclbind`, `vram(gib=N)`, `fleet`. A machine
 that lacks something skips with a precise reason instead of failing.
 
+The standard lane has a 180-second per-test timeout, including fixture setup
+and teardown. This is more than twice the slowest healthy test on the Chicago
+and Tübingen reference runs, but bounds a wedged GPU call, daemon, or child
+process. A deliberately longer test must declare an explicit
+`@pytest.mark.timeout(...)` override. Every test that owns a thread, server,
+or process must stop it in fixture teardown or `finally`, wait for termination,
+and assert termination; daemon threads and process exit are not substitutes
+for cleanup. `DataFeed` and `Packer` are context managers; callers that create
+one directly must close it. The suite teardown gate stops and reports leaked
+ingest workers and rejects unjoined in-process servers before CUDA allocator
+hygiene can run.
+
 | directory | scope |
 |---|---|
 | `tests/dataflow/core/` | Program schema, validation, serialization |

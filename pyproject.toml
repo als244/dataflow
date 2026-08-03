@@ -45,6 +45,10 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q -m 'not fleet'"   # fleet lane is opt-in: pytest -m fleet
+# Bound a wedged GPU call, daemon, or child process. Healthy reference-box
+# tests are below 80 seconds; exceptional tests can opt into a larger limit.
+timeout = 180
+timeout_method = "signal"
 filterwarnings = [
     # test/helper code must never convert a grad-tracking tensor to a
     # Python scalar (float()/int()) — detach at the call site. Errored so

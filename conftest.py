@@ -31,6 +31,11 @@ def cuda_test_hygiene(request):
     torch = sys.modules.get("torch")
     if torch is None or not torch.cuda.is_available():
         return
+    # Even Python GC can finalize CUDA views while a server thread is
+    # concurrently closing its pools. Defer all allocator/GC hygiene until
+    # the server-owning fixture has joined that thread.
+    if in_process_server_live():
+        return
     try:
         from dataflow.tasks.interop import clear_view_cache
         clear_view_cache()
@@ -67,6 +72,32 @@ def cuda_test_hygiene(request):
     torch.cuda.empty_cache()
 
 
+@pytest.fixture(autouse=True)
+def background_test_hygiene(request, cuda_test_hygiene):
+    """Stop/reject test-owned workers before CUDA teardown begins.
+
+    Depending on ``cuda_test_hygiene`` makes this teardown run first: no
+    CUDA GC/drain may begin while test-owned background work is alive.
+    """
+    yield
+    feed_mod = sys.modules.get("dataflow_training.data.feed")
+    worker_type = getattr(feed_mod, "IngestWorker", ()) if feed_mod else ()
+    leaked = [thread for thread in __import__("threading").enumerate()
+              if worker_type and isinstance(thread, worker_type)]
+    for worker in leaked:
+        worker.stop()
+    if leaked:
+        pytest.fail(
+            f"test leaked {len(leaked)} datafeed ingest worker(s); "
+            "close the Packer/DataFeed in a context manager or finally")
+    nodeid = request.node.nodeid
+    if not nodeid.startswith(("tests/dataflow/service", "tests/fleet")) \
+            and in_process_server_live():
+        pytest.fail(
+            "test leaked an in-process engine server; its owner must "
+            "request shutdown and join the server thread in finally")
+
+
 def in_process_server_live() -> bool:
     """True while any thread of THIS process is inside serve_forever
     (cleanup included) — draining backends under it corrupts the heap."""
@@ -97,7 +128,9 @@ def cuda_module_hygiene(request):
                               "tests/examples")):
         return
     if in_process_server_live():
-        return                  # a rig leaked its server; never race it
+        pytest.fail(
+            "module leaked an in-process engine server; refusing CUDA "
+            "cleanup because it would race the live server thread")
     try:
         from dataflow.runtime.device.cuda import drain_all_backends
 
