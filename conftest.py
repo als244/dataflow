@@ -2,6 +2,7 @@
 ``reference_models/`` package (isolated ground-truth models, deliberately outside
 the installed ``src/`` tree) is importable in tests without a pip reinstall.
 """
+import os
 import sys
 from pathlib import Path
 
@@ -9,8 +10,37 @@ _ROOT = str(Path(__file__).parent)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
+# The suite validates correctness and lifecycle behavior; it never publishes
+# task prices.  Production profiling deliberately samples every signature for
+# 2.5 seconds of sustained load, which turns an invalidated profile cache into
+# roughly nine minutes of unrelated test work.  Pin the test process to the
+# burst-profile path before any dataflow_training module can read the setting.
+# Production processes retain profiling.py's 2.5-second default.
+os.environ["DATAFLOW_SAMPLE_FLOOR_S"] = "0"
+os.environ["DATAFLOW_PROFILE_SOAK_S"] = "0"
+os.environ["DATAFLOW_PROFILE_CONTEND_PCIE"] = "0"
+os.environ["DATAFLOW_PROFILE_REPEATS"] = "1"
 
-import pytest
+
+import pytest  # noqa: E402
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    """Explain signal-timeout tracebacks without hiding their useful frame."""
+    outcome = yield
+    report = outcome.get_result()
+    if call.when != "call" or call.excinfo is None:
+        return
+    if not str(call.excinfo.value).startswith("Timeout (>"):
+        return
+    report.sections.append((
+        "timeout interpretation",
+        "The test body exceeded its timeout. The traceback above identifies "
+        "the frame interrupted by SIGALRM; it is not a secondary cleanup "
+        "failure. The timeout timer is now canceled and fixture teardown runs "
+        "afterward. Any teardown failure is reported separately.",
+    ))
 
 
 @pytest.fixture(autouse=True)

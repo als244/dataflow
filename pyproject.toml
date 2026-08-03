@@ -49,6 +49,10 @@ addopts = "-q -m 'not fleet'"   # fleet lane is opt-in: pytest -m fleet
 # tests are below 80 seconds; exceptional tests can opt into a larger limit.
 timeout = 180
 timeout_method = "signal"
+# Time only setup-free test execution.  A timeout exception must be allowed to
+# unwind into fixture teardown so workers, servers, and subprocess daemons can
+# stop and join without a second timer masking the original failure.
+timeout_func_only = true
 filterwarnings = [
     # test/helper code must never convert a grad-tracking tensor to a
     # Python scalar (float()/int()) — detach at the call site. Errored so

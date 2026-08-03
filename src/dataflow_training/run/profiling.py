@@ -60,6 +60,7 @@ MEMORY LIFECYCLE CONTRACT (device):
 """
 from __future__ import annotations
 
+import math
 import os as _os
 import statistics
 from dataclasses import dataclass, replace
@@ -244,6 +245,17 @@ def profiling_streams(backend):
     return shared_streams(backend, "profiling")
 
 
+def _cover_count(expected_us: float, chunk_us: float,
+                 credit_us: float) -> tuple[int, float]:
+    """Copies to cover one interval, carrying sub-chunk excess forward."""
+    if expected_us <= 0:
+        return 0, max(credit_us, 0.0)
+    needed_us = max(expected_us - credit_us, 0.0)
+    copies = math.ceil(needed_us / chunk_us) if needed_us else 0
+    credit_us = max(credit_us + copies * chunk_us - expected_us, 0.0)
+    return copies, credit_us
+
+
 class _PcieContender:
     """Keeps bidirectional PCIe DMA grinding while tasks are timed.
 
@@ -273,12 +285,50 @@ class _PcieContender:
         self.pinned = backend.alloc("backing", self.CHUNK)
         self.dev_in = backend.alloc("fast", self.CHUNK)
         self.dev_out = backend.alloc("fast", self.CHUNK)
-        self.chunk_us = self.CHUNK / (30e9 / 1e6)  # ~30 GB/s per direction
+        self.h2d_chunk_us, self.d2h_chunk_us = self._calibrate_chunk_us()
+        self.h2d_credit_us = 0.0
+        self.d2h_credit_us = 0.0
+
+    def _calibrate_chunk_us(self) -> tuple[float, float]:
+        """Measure this box's concurrent per-direction transfer time.
+
+        GPU model names do not encode PCIe generation or lane width.  A fixed
+        30 GB/s assumption overfilled the queue by more than 5x on a 3090
+        measuring 16.5/18.7 GB/s, and the useless backlog surfaced as minutes
+        spent in the next cudaFree.  Calibrate while both directions are live,
+        which is the exact state this contender is meant to create.
+        """
+        from cuda.bindings import runtime as cudart
+
+        from dataflow.runtime.device.cuda import _check
+
+        copies = 4
+        h2d_start = self.backend.record_event(self.h2d)
+        d2h_start = self.backend.record_event(self.d2h)
+        for _ in range(copies):
+            self.backend.memcpy_async(
+                self.dev_in, self.pinned, self.CHUNK, self.h2d)
+            self.backend.memcpy_async(
+                self.pinned, self.dev_out, self.CHUNK, self.d2h)
+        h2d_end = self.backend.record_event(self.h2d)
+        d2h_end = self.backend.record_event(self.d2h)
+        _check(cudart.cudaEventSynchronize(h2d_end.raw))
+        _check(cudart.cudaEventSynchronize(d2h_end.raw))
+        h2d_us = ((self.backend.event_time_us(h2d_end)
+                   - self.backend.event_time_us(h2d_start)) / copies)
+        d2h_us = ((self.backend.event_time_us(d2h_end)
+                   - self.backend.event_time_us(d2h_start)) / copies)
+        return max(h2d_us, 1.0), max(d2h_us, 1.0)
 
     def cover(self, expected_us: float) -> None:
-        n = max(4, int(expected_us / self.chunk_us * 1.5) + 2)
-        for _ in range(n):
+        """Queue at most one measured interval of bidirectional traffic."""
+        h2d_copies, self.h2d_credit_us = _cover_count(
+            expected_us, self.h2d_chunk_us, self.h2d_credit_us)
+        d2h_copies, self.d2h_credit_us = _cover_count(
+            expected_us, self.d2h_chunk_us, self.d2h_credit_us)
+        for _ in range(h2d_copies):
             self.backend.memcpy_async(self.dev_in, self.pinned, self.CHUNK, self.h2d)
+        for _ in range(d2h_copies):
             self.backend.memcpy_async(self.pinned, self.dev_out, self.CHUNK, self.d2h)
 
     def close(self) -> None:
@@ -312,6 +362,12 @@ PRODUCTION_SAMPLE_SECONDS = float(_os.environ.get(
 # The cheap default: stop as soon as `repeats` brackets are in hand. Callers
 # that need a defensible PRICE opt in to PRODUCTION_SAMPLE_SECONDS above.
 DEFAULT_SAMPLE_SECONDS = 0.0
+DEFAULT_SOAK_SECONDS = float(_os.environ.get(
+    "DATAFLOW_PROFILE_SOAK_S", "1.0"))
+DEFAULT_CONTEND_PCIE = _os.environ.get(
+    "DATAFLOW_PROFILE_CONTEND_PCIE", "1").strip().lower() \
+    not in {"0", "false", "no", "off"}
+DEFAULT_REPEATS = int(_os.environ.get("DATAFLOW_PROFILE_REPEATS", "9"))
 
 
 def profile_program(
@@ -320,10 +376,10 @@ def profile_program(
     backend,
     *,
     warmup: int = 2,
-    repeats: int = 9,
+    repeats: int = DEFAULT_REPEATS,
     min_sample_seconds: float = DEFAULT_SAMPLE_SECONDS,
-    soak_seconds: float = 1.0,
-    contend_pcie: bool = True,
+    soak_seconds: float = DEFAULT_SOAK_SECONDS,
+    contend_pcie: bool = DEFAULT_CONTEND_PCIE,
     int32_fill: int = 0,
     have: dict[tuple, TaskProfile] | None = None,
 ) -> dict[tuple, TaskProfile]:
@@ -540,7 +596,7 @@ def profile_program(
                 times.append(span / inner)
                 elapsed_us += span
                 if contender is not None:
-                    contender.cover(span * 2.0)
+                    contender.cover(span)
                 if len(times) >= repeats and elapsed_us >= budget_us:
                     break
             profiles[sig] = TaskProfile(
@@ -843,11 +899,11 @@ def load_or_profile(
     env = {
         "kernel_set": kernel_set or {},
         "device": torch.cuda.get_device_name() if torch.cuda.is_available() else "cpu",
-        "soak_seconds": kwargs.get("soak_seconds", 1.0),
+        "soak_seconds": kwargs.get("soak_seconds", DEFAULT_SOAK_SECONDS),
         "min_sample_seconds": kwargs.get("min_sample_seconds",
                                  DEFAULT_SAMPLE_SECONDS),
-        "contend_pcie": kwargs.get("contend_pcie", True),
-        "repeats": kwargs.get("repeats", 9),
+        "contend_pcie": kwargs.get("contend_pcie", DEFAULT_CONTEND_PCIE),
+        "repeats": kwargs.get("repeats", DEFAULT_REPEATS),
         "torch": torch.__version__,
         "code_rev": PROFILE_CACHE_REV,
         "impl": impl_fingerprint(),

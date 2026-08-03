@@ -14,9 +14,11 @@ central probes (`tests/conftest.py`): `gpu`, `sim`, `corpus`,
 that lacks something skips with a precise reason instead of failing.
 
 The standard lane has a 180-second per-test timeout, including fixture setup
-and teardown. This is more than twice the slowest healthy test on the Chicago
-and Tübingen reference runs, but bounds a wedged GPU call, daemon, or child
-process. A deliberately longer test must declare an explicit
+body. This is more than twice the slowest healthy test on the Chicago and
+Tübingen reference runs, but bounds a wedged GPU call, daemon, or child
+process. Fixture teardown is deliberately outside the timer: the timeout
+exception must unwind into cleanup without a second timer masking the primary
+failure. A deliberately longer test must declare an explicit
 `@pytest.mark.timeout(...)` override. Every test that owns a thread, server,
 or process must stop it in fixture teardown or `finally`, wait for termination,
 and assert termination; daemon threads and process exit are not substitutes
@@ -24,6 +26,17 @@ for cleanup. `DataFeed` and `Packer` are context managers; callers that create
 one directly must close it. The suite teardown gate stops and reports leaked
 ingest workers and rejects unjoined in-process servers before CUDA allocator
 hygiene can run.
+
+The suite also selects a cheap, deterministic profiling mode before importing
+training code: `DATAFLOW_SAMPLE_FLOOR_S=0`,
+`DATAFLOW_PROFILE_SOAK_S=0`, `DATAFLOW_PROFILE_CONTEND_PCIE=0`, and
+`DATAFLOW_PROFILE_REPEATS=1`. Tests need representative task costs to exercise
+lowering, planning, and execution; they do not publish production prices and
+must never pay for sustained-load sampling, thermal soak, saturated PCIe
+contention, or statistical repeatability. The workspace probe already runs
+each executable before timing. Tests of the production under-sampling guard
+pass the required floor explicitly. Commands outside pytest retain the
+production defaults.
 
 | directory | scope |
 |---|---|

@@ -21,16 +21,17 @@ import pytest
 from dataflow.core import validate_program
 from dataflow_training.lowering.planning import plan_program, simulate_program
 from dataflow_training.lowering.shaped_program import hardware_preset
-
-# fixture pricing: planner-BEHAVIOR assertions must be
-# machine-independent, so lowerings here price with a named preset
-HW = hardware_preset("rtx 5090")
-from dataflow_training.model_families.llama3 import ShapedLlamaConfig, build_shaped_llama3
+from dataflow_training.model_families.llama3 import (ShapedLlamaConfig,
+                                                     build_shaped_llama3)
 from dataflow_training.run.profiling import (PRODUCTION_SAMPLE_SECONDS,
                                              MissingProfileError, TaskProfile,
                                              UnderSampledProfileError,
                                              _signature, apply_measured_costs,
                                              recompute_level_pins)
+
+# fixture pricing: planner-BEHAVIOR assertions must be
+# machine-independent, so lowerings here price with a named preset
+HW = hardware_preset("rtx 5090")
 
 TINY_CAP = 600_000  # bytes; tight enough to force movement on the tiny config
 
@@ -79,7 +80,7 @@ def test_recompute_fires_under_starved_interconnect():
     PCIe the same config correctly chooses zero recompute — transfers hide
     under compute; verified in tools/export_program.py runs.)"""
     from dataclasses import replace
-    from dataflow_training.lowering.shaped_program import ShapedHardware, hardware_preset
+    from dataflow_training.lowering.shaped_program import hardware_preset
 
     cfg = ShapedLlamaConfig.llama3_8b()
     hw = replace(hardware_preset("rtx 5090"), pcie_gbs=10.0)
@@ -230,6 +231,12 @@ def test_burst_sampled_profiles_are_refused_as_a_production_price():
     production reproduces the sustained figure), so a plan built from burst
     numbers is optimistic and entirely plausible-looking — exactly the kind of
     silent wrongness MissingProfileError exists to prevent for absent costs."""
+    # Pytest globally selects the zero-floor correctness path so no test pays
+    # production's 2.5 seconds per signature.  Keep this contract test pinned
+    # to the real production requirement rather than the test-process setting.
+    production_floor = 2.5
+    assert PRODUCTION_SAMPLE_SECONDS == 0.0
+
     cfg = ShapedLlamaConfig.tiny()
     program = build_shaped_llama3(cfg, hw=HW)
     sizes = program.object_sizes()
@@ -246,14 +253,14 @@ def test_burst_sampled_profiles_are_refused_as_a_production_price():
     legacy = {_signature(t, program.object_sizes()): TaskProfile(
         runtime_us=100.0, workspace_bytes=0, repeats=9) for t in program.tasks}
     apply_measured_costs(program, legacy,
-                         require_sample_seconds=PRODUCTION_SAMPLE_SECONDS)
+                         require_sample_seconds=production_floor)
     # so is a production price built from production-sampled sigs
-    apply_measured_costs(program, table(PRODUCTION_SAMPLE_SECONDS),
-                         require_sample_seconds=PRODUCTION_SAMPLE_SECONDS)
+    apply_measured_costs(program, table(production_floor),
+                         require_sample_seconds=production_floor)
 
     with pytest.raises(UnderSampledProfileError) as excinfo:
         apply_measured_costs(program, table(0.05),
-                             require_sample_seconds=PRODUCTION_SAMPLE_SECONDS)
+                             require_sample_seconds=production_floor)
     assert program.tasks[0].id in str(excinfo.value)
 
 
