@@ -9,7 +9,6 @@ Tests:
 - test_rdma_crossbox_throughput_matches_probed_bw: a 256 MiB zero-copy send completes within a small factor of size / probed-rdma-bandwidth, catching any staging copy.
 """
 import hashlib
-import threading
 import time
 
 import pytest
@@ -57,7 +56,7 @@ def remote_py(code: str, *, timeout: float = 120.0) -> str:
 
 
 @pytest.fixture(scope="module")
-def rig(tmp_path_factory):
+def rig(tmp_path_factory, server_threads, daemon_lanes):
     # the remote must expose pyverbs + an ACTIVE RoCE v2 GID on its
     # ib_dev; an unreachable or rdma-less peer degrades to a clean skip
     remote_probe = (
@@ -71,6 +70,7 @@ def rig(tmp_path_factory):
     if not remote_ok:
         pytest.skip("remote host lacks pyverbs or an ACTIVE RoCE v2 GID")
     daemons.kill(REMOTE, lane=LANE)
+    daemon_lanes.own(REMOTE, LANE)
     daemons.launch(REMOTE, lane=LANE, backing_gib=0.5, peer_port=PORT,
                   extra_flags=f"--peer-rdma-device {REMOTE.ib_dev}")
     deadline = time.time() + 90
@@ -92,7 +92,7 @@ def rig(tmp_path_factory):
         socket_path=sock, fake=False, slab_backing_gib=0.5,
         peer_name=LOCAL.name, peer_listen=LOCAL.peer_addr(PORT),
         peer_rdma_device=LOCAL.ib_dev))
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    server_threads.start(server)
     for _ in range(600):
         try:
             EngineClient(sock, client_name="probe").close()

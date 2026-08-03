@@ -87,7 +87,7 @@ def run_both(client, remote_sock, args) -> tuple:
 
 
 @pytest.fixture(scope="module")
-def rig(tmp_path_factory):
+def rig(tmp_path_factory, daemon_lanes, fleet_forwarders):
     # the nccl lane needs libnccl on the REMOTE member too (the local
     # side is gated by the ncclbind marker); an unreachable or nccl-less
     # peer degrades to a clean skip
@@ -102,12 +102,13 @@ def rig(tmp_path_factory):
         pytest.skip("libnccl unavailable on the remote host")
     for host in (LOCAL, REMOTE):
         daemons.kill(host, lane=LANE)
+        daemon_lanes.own(host, LANE)
         daemons.launch(host, lane=LANE, backing_gib=4.0, peer_port=PORT)
     remote_sock = daemons.paths(REMOTE, LANE)["sock"]
     local_sock = daemons.paths(LOCAL, LANE)["sock"]
     tmp = tmp_path_factory.mktemp(LANE)
     fwd_sock = str(tmp / "remote.sock")
-    fwd = uds_forward(REMOTE, remote_sock, fwd_sock)
+    fwd = fleet_forwarders.own(uds_forward(REMOTE, remote_sock, fwd_sock))
     deadline = time.time() + 120
     client = None
     while time.time() < deadline:

@@ -76,12 +76,12 @@ def step_tokens(cfg, step: int):
     return tok, tgt
 
 
-def boot(tmp, name, peer_port):
+def boot(tmp, name, peer_port, server_threads):
     sock = str(tmp / f"{name}.sock")
     server = Server(EngineConfig(
         socket_path=sock, fake=False, slab_backing_gib=0.4,
         peer_name=name, peer_listen=f"127.0.0.1:{peer_port}"))
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    server_threads.start(server)
     for _ in range(600):
         try:
             EngineClient(sock, client_name="probe").close()
@@ -117,13 +117,13 @@ class RankRun:
             self.err = e
 
 
-def run_config(tmp_path, label: str, parallels) -> dict:
+def run_config(tmp_path, label: str, parallels, server_threads) -> dict:
     """Boot a two-daemon pair, train STEPS steps, return final W bytes
     per rank, per-step per-rank losses, and O object sizes."""
     cfg = make_cfg()
     pa, pb = PORTS[label]
-    ca = boot(tmp_path, f"{label}-a", pa)
-    cb = boot(tmp_path, f"{label}-b", pb)
+    ca = boot(tmp_path, f"{label}-a", pa, server_threads)
+    cb = boot(tmp_path, f"{label}-b", pb, server_threads)
     clients = (ca, cb)
     out = {"w": [], "losses": [], "o_bytes": []}
     try:
@@ -194,7 +194,7 @@ def run_config(tmp_path, label: str, parallels) -> dict:
                 pass
 
 
-def test_zero1_bitwise_equals_plain_dp(tmp_path):
+def test_zero1_bitwise_equals_plain_dp(tmp_path, server_threads):
     cfg = make_cfg()
     plan = zero1_halves(layer_fields_by_root(cfg), "dp", 2,
                         replicate_below_bytes=256)
@@ -203,9 +203,10 @@ def test_zero1_bitwise_equals_plain_dp(tmp_path):
     assert any(a.owner != "all" for a in plan.assignments), \
         "plan degenerated to fully replicated — gate is vacuous"
 
-    plain = run_config(tmp_path, "plain", [None, None])
+    plain = run_config(tmp_path, "plain", [None, None], server_threads)
     zero1 = run_config(tmp_path, "zero1",
-                       [ParallelConfig("dp", r, 2, plan) for r in (0, 1)])
+                       [ParallelConfig("dp", r, 2, plan) for r in (0, 1)],
+                       server_threads)
 
     # per-rank losses identical across configs, step by step
     assert zero1["losses"] == plain["losses"], (

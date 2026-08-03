@@ -27,13 +27,13 @@ pytestmark = [pytest.mark.fleet, pytest.mark.gpu]
 PA, PB = 29471, 29472      # peer-plane ports (loopback)
 
 
-def boot(tmp, name, peer_port):
+def boot(tmp, name, peer_port, server_threads):
     sock = str(tmp / f"{name}.sock")
     server = Server(EngineConfig(
         socket_path=sock, fake=False, slab_backing_gib=0.5,
         peer_name=name, peer_listen=f"127.0.0.1:{peer_port}",
         peer_chunk_bytes=1 << 20))
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    server_threads.start(server)
     for _ in range(600):
         try:
             EngineClient(sock, client_name="probe").close()
@@ -44,10 +44,10 @@ def boot(tmp, name, peer_port):
 
 
 @pytest.fixture(scope="module")
-def rig(tmp_path_factory):
+def rig(tmp_path_factory, server_threads):
     tmp = tmp_path_factory.mktemp("p1")
-    server_a, client_a = boot(tmp, "alpha", PA)
-    server_b, client_b = boot(tmp, "beta", PB)
+    server_a, client_a = boot(tmp, "alpha", PA, server_threads)
+    server_b, client_b = boot(tmp, "beta", PB, server_threads)
     client_a.peer_connect("beta", f"127.0.0.1:{PB}")
     yield {"sa": server_a, "ca": client_a, "sb": server_b, "cb": client_b}
     for c in (client_a, client_b):

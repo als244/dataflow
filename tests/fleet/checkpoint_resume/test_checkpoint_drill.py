@@ -17,7 +17,6 @@ drill names the missing field.
 Tests:
 - test_checkpoint_resume_bitwise: a fresh daemon that restores the K-boundary snapshot, re-registers the same content-derived program, and resumes reproduces the uninterrupted tail bitwise, and restoring into a non-empty store is refused.
 """
-import threading
 import time
 
 import pytest
@@ -70,11 +69,11 @@ def step_tokens(cfg, step: int):
     return tok, tgt
 
 
-def boot(tmp, name):
+def boot(tmp, name, server_threads):
     sock = str(tmp / f"{name}.sock")
     server = Server(EngineConfig(socket_path=sock, fake=False,
                                  slab_backing_gib=0.4))
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    server_threads.start(server)
     for _ in range(600):
         try:
             EngineClient(sock, client_name="probe").close()
@@ -110,7 +109,7 @@ def register(client, cfg, prog_dict) -> str:
     return reg["prog_id"]
 
 
-def test_checkpoint_resume_bitwise(tmp_path):
+def test_checkpoint_resume_bitwise(tmp_path, server_threads):
     cfg = make_cfg()
     planned = plan_program(lower_with_group(cfg, "dp"),
                            fast_memory_capacity=96 * 1024 * 1024)
@@ -118,7 +117,7 @@ def test_checkpoint_resume_bitwise(tmp_path):
     snap_dir = tmp_path / "ck"
 
     # ---- truth daemon: train through, snapshot at the K boundary ----
-    ca = boot(tmp_path, "ck-a")
+    ca = boot(tmp_path, "ck-a", server_threads)
     try:
         init_model(ca, "llama3", cfg_dict(cfg), seed=SEED)
         put_step(ca, cfg, 0)
@@ -141,7 +140,7 @@ def test_checkpoint_resume_bitwise(tmp_path):
             pass
 
     # ---- fresh daemon: restore, re-register, resume ----
-    cb = boot(tmp_path, "ck-b")
+    cb = boot(tmp_path, "ck-b", server_threads)
     try:
         res = cb.restore_snapshot(snap_dir)
         meta = res["client_meta"]

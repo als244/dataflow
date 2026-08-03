@@ -29,13 +29,14 @@ SIZES = (4096, 1 << 20, 8 << 20)
 ITERS = 3
 
 
-def test_p2p_bench_local_pair():
+def test_p2p_bench_local_pair(daemon_lanes):
     topo = local_pair_topology(ports=PORTS)
     ranks = [topo.host("local0"), topo.host("local1")]
     clients = []
     try:
         for host, lane in zip(ranks, LANES):
             daemons.kill(host, lane=lane)
+            daemon_lanes.own(host, lane)
             daemons.launch(
                 host, lane=lane, backing_gib=0.5,
                 peer_port=int(host.peer_listen.rsplit(":", 1)[1]))

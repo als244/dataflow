@@ -103,12 +103,12 @@ def single_box_reference(cfg_rank, t_step):
     return out
 
 
-def boot(tmp, name, peer_port):
+def boot(tmp, name, peer_port, server_threads):
     sock = str(tmp / f"{name}.sock")
     server = Server(EngineConfig(
         socket_path=sock, fake=False, slab_backing_gib=0.4,
         peer_name=name, peer_listen=f"127.0.0.1:{peer_port}"))
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    server_threads.start(server)
     for _ in range(600):
         try:
             EngineClient(sock, client_name="probe").close()
@@ -139,7 +139,7 @@ class RankRun:
 @pytest.mark.parametrize("family_name", ["llama3", "gpt2",
                                          "qwen35", "qwen3moe"])
 def test_two_daemon_dp_step_replicas_bitwise_and_match_single_engine(
-        tmp_path, family_name):
+        tmp_path, family_name, server_threads):
     register_all()
     from dataflow_training.model_families.families import _FAMILIES
 
@@ -154,8 +154,8 @@ def test_two_daemon_dp_step_replicas_bitwise_and_match_single_engine(
     tok, tgt = master_tokens(cfg, t_step)
 
     pa, pb = PORTS[family_name]
-    sa, ca = boot(tmp_path, f"{family_name}-a", pa)
-    sb, cb = boot(tmp_path, f"{family_name}-b", pb)
+    sa, ca = boot(tmp_path, f"{family_name}-a", pa, server_threads)
+    sb, cb = boot(tmp_path, f"{family_name}-b", pb, server_threads)
     try:
         ca.peer_connect(f"{family_name}-b", f"127.0.0.1:{pb}")
         per = t_step // 2

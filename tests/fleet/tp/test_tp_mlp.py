@@ -196,7 +196,7 @@ def check_pair(got, ref, hetero_ranks=()):
     assert y_band < 3e-2 and dx_band < 3e-2, (y_band, dx_band)
 
 
-def test_tp_mlp_hostmem_pair_matches_reference_bitwise():
+def test_tp_mlp_hostmem_pair_matches_reference_bitwise(daemon_lanes):
     # REAL child-process daemons, one per rank (the local_pair
     # pattern): in-process cohabitation shares one CUDA context,
     # where a parked collective stream can block the OTHER rank's
@@ -213,6 +213,7 @@ def test_tp_mlp_hostmem_pair_matches_reference_bitwise():
     try:
         for host, lane in zip(ranks, lanes):
             daemons.kill(host, lane=lane)
+            daemon_lanes.own(host, lane)
             daemons.launch(
                 host, lane=lane, backing_gib=0.4,
                 peer_port=int(host.peer_listen.rsplit(":", 1)[1]),
@@ -250,7 +251,8 @@ def test_tp_mlp_hostmem_pair_matches_reference_bitwise():
                 pass
 
 
-def test_tp_mlp_crossbox_auto_matches_reference_within_ulp():
+def test_tp_mlp_crossbox_auto_matches_reference_within_ulp(
+        daemon_lanes, fleet_forwarders):
     from dataflow_training.distributed import daemons
     from dataflow_training.distributed.hosts import run_py, uds_forward
     from dataflow_training.distributed.topology import load_topology_or_none
@@ -265,14 +267,15 @@ def test_tp_mlp_crossbox_auto_matches_reference_within_ulp():
     try:
         for host in (local, remote):
             daemons.kill(host, lane=lane)
+            daemon_lanes.own(host, lane)
             daemons.launch(
                 host, lane=lane, backing_gib=2.0, peer_port=port,
                 extra_flags="--plugin dataflow_training.model_families.tp_mlp")
         import tempfile
 
         fwd_sock = tempfile.mktemp(suffix=".sock", prefix="tpfwd-")
-        fwd = uds_forward(remote, daemons.paths(remote, lane)["sock"],
-                          fwd_sock)
+        fwd = fleet_forwarders.own(uds_forward(
+            remote, daemons.paths(remote, lane)["sock"], fwd_sock))
         deadline = time.time() + 120
         ca = cb = None
         while time.time() < deadline:

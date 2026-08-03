@@ -12,8 +12,135 @@ clean up: a stray daemon may be someone's running work, and killing it to make
 a test pass is not this file's decision to make.
 """
 import subprocess
+import threading
+import time
 
 import pytest
+
+
+class _ServerThreads:
+    """Own every in-process server thread started by one test module."""
+
+    def __init__(self):
+        self._servers = []
+        self._errors = []
+
+    def start(self, server):
+        def run():
+            try:
+                server.serve_forever()
+            except BaseException as exc:  # surface background failures
+                self._errors.append((server.config.socket_path, exc))
+
+        thread = threading.Thread(
+            target=run,
+            name=f"fleet-server:{server.config.socket_path}",
+            daemon=True,
+        )
+        self._servers.append((server, thread))
+        thread.start()
+        return thread
+
+    def close(self):
+        # Client.shutdown() normally requested this already.  Set the same
+        # signals here as a backstop when fixture setup or the test body fails
+        # before it acquires a client or reaches its own finally block.
+        for server, thread in self._servers:
+            if not thread.is_alive():
+                continue
+            server.state.shutdown_requested.set()
+            server.dispatcher.stop()
+
+        deadline = time.monotonic() + 30.0
+        for _server, thread in self._servers:
+            thread.join(max(0.0, deadline - time.monotonic()))
+
+        alive = [thread.name for _server, thread in self._servers
+                 if thread.is_alive()]
+        if alive:
+            pytest.fail("in-process fleet server teardown exceeded 30s: "
+                        + ", ".join(alive))
+        if self._errors:
+            details = "; ".join(f"{path}: {exc!r}"
+                                for path, exc in self._errors)
+            pytest.fail(f"in-process fleet server thread failed: {details}")
+
+
+@pytest.fixture(scope="module")
+def server_threads():
+    """Start and synchronously retire a module's in-process servers."""
+    group = _ServerThreads()
+    yield group
+    group.close()
+
+
+class _DaemonLanes:
+    """Fallback cleanup for daemon lanes explicitly launched by a module."""
+
+    def __init__(self):
+        self._lanes = []
+
+    def own(self, host, lane):
+        key = (host, lane)
+        if key not in self._lanes:
+            self._lanes.append(key)
+
+    def close(self):
+        from dataflow_training.distributed import daemons
+
+        errors = []
+        for host, lane in reversed(self._lanes):
+            try:
+                daemons.kill(host, lane=lane)
+            except Exception as exc:
+                errors.append(f"{host.name}:{lane}: {exc!r}")
+        if errors:
+            pytest.fail("fleet daemon cleanup failed: " + "; ".join(errors))
+
+
+@pytest.fixture(scope="module")
+def daemon_lanes():
+    """Retire test-owned daemon lanes even when fixture setup fails."""
+    lanes = _DaemonLanes()
+    yield lanes
+    lanes.close()
+
+
+class _Forwarders:
+    """Terminate and reap SSH UDS-forwarding subprocesses."""
+
+    def __init__(self):
+        self._processes = []
+
+    def own(self, process):
+        self._processes.append(process)
+        return process
+
+    def close(self):
+        for process in self._processes:
+            if process.poll() is None:
+                process.terminate()
+        deadline = time.monotonic() + 10.0
+        alive = []
+        for process in self._processes:
+            try:
+                process.wait(timeout=max(0.0, deadline - time.monotonic()))
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+            if process.poll() is None:
+                alive.append(str(process.pid))
+        if alive:
+            pytest.fail("SSH forwarder cleanup failed for pid(s): "
+                        + ", ".join(alive))
+
+
+@pytest.fixture(scope="module")
+def fleet_forwarders():
+    """Own SSH forwarders for both successful and failed setup paths."""
+    forwarders = _Forwarders()
+    yield forwarders
+    forwarders.close()
 
 
 def stray_daemons() -> list[str]:

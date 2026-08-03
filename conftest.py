@@ -24,12 +24,16 @@ os.environ["DATAFLOW_PROFILE_REPEATS"] = "1"
 
 import pytest  # noqa: E402
 
+_SESSION_INTERRUPTED = False
+
 
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item, call):
     """Explain signal-timeout tracebacks without hiding their useful frame."""
     outcome = yield
     report = outcome.get_result()
+    if call.when == "call":
+        item._dataflow_call_failed = report.failed
     if call.when != "call" or call.excinfo is None:
         return
     if not str(call.excinfo.value).startswith("Timeout (>"):
@@ -41,6 +45,12 @@ def pytest_runtest_makereport(item, call):
         "failure. The timeout timer is now canceled and fixture teardown runs "
         "afterward. Any teardown failure is reported separately.",
     ))
+
+
+def pytest_keyboard_interrupt(excinfo):
+    """Let teardown clean resources without masking the interruption."""
+    global _SESSION_INTERRUPTED
+    _SESSION_INTERRUPTED = True
 
 
 @pytest.fixture(autouse=True)
@@ -117,9 +127,14 @@ def background_test_hygiene(request, cuda_test_hygiene):
     for worker in leaked:
         worker.stop()
     if leaked:
-        pytest.fail(
-            f"test leaked {len(leaked)} datafeed ingest worker(s); "
-            "close the Packer/DataFeed in a context manager or finally")
+        message = (f"test leaked {len(leaked)} datafeed ingest worker(s); "
+                   "cleanup stopped them")
+        if _SESSION_INTERRUPTED or getattr(
+                request.node, "_dataflow_call_failed", False):
+            request.node.add_report_section("teardown", "cleanup", message)
+        else:
+            pytest.fail(message + "; close the Packer/DataFeed in a context "
+                        "manager or finally")
     nodeid = request.node.nodeid
     if not nodeid.startswith(("tests/dataflow/service", "tests/fleet")) \
             and in_process_server_live():

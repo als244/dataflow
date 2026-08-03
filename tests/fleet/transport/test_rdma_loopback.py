@@ -47,13 +47,13 @@ def free_port():
         return probe.getsockname()[1]
 
 
-def boot(tmp, name, peer_port):
+def boot(tmp, name, peer_port, server_threads):
     sock = str(tmp / f"{name}.sock")
     server = Server(EngineConfig(
         socket_path=sock, fake=False, slab_backing_gib=0.5,
         peer_name=name, peer_listen=f"127.0.0.1:{peer_port}",
         peer_chunk_bytes=1 << 20, peer_rdma_device=DEV))
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    server_threads.start(server)
     for _ in range(600):
         try:
             EngineClient(sock, client_name="probe").close()
@@ -64,11 +64,11 @@ def boot(tmp, name, peer_port):
 
 
 @pytest.fixture(scope="module")
-def rig(tmp_path_factory):
+def rig(tmp_path_factory, server_threads):
     tmp = tmp_path_factory.mktemp("p2rdma")
     pa, pb = free_port(), free_port()
-    sa, ca = boot(tmp, "rd-alpha", pa)
-    sb, cb = boot(tmp, "rd-beta", pb)
+    sa, ca = boot(tmp, "rd-alpha", pa, server_threads)
+    sb, cb = boot(tmp, "rd-beta", pb, server_threads)
     ca.peer_connect("rd-beta", f"127.0.0.1:{pb}")
     deadline = time.time() + 10
     rdma_up = []

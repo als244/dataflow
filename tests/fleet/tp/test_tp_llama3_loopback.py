@@ -82,12 +82,12 @@ def step_tokens(cfg, step: int):
     return tok, tgt
 
 
-def boot(tmp, name, peer_port):
+def boot(tmp, name, peer_port, server_threads):
     sock = str(tmp / f"{name}.sock")
     server = Server(EngineConfig(
         socket_path=sock, fake=False, slab_backing_gib=0.4,
         peer_name=name, peer_listen=f"127.0.0.1:{peer_port}"))
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    server_threads.start(server)
     for _ in range(600):
         try:
             EngineClient(sock, client_name="probe").close()
@@ -167,14 +167,14 @@ def run_steps(clients, prog_ids, cfg) -> list:
     return losses
 
 
-def test_tp_llama3_two_daemons_vs_plain(tmp_path):
+def test_tp_llama3_two_daemons_vs_plain(tmp_path, server_threads):
     cfg = make_cfg()
     plan = tp_mlp_shards(layer_fields_by_root(cfg), "dp", 2)
     plan.validate()
     plan.consumable("tp")
 
     # ---- plain single-daemon reference over the SAME tokens --------
-    ref = boot(tmp_path, "tpref", PORTS[2])
+    ref = boot(tmp_path, "tpref", PORTS[2], server_threads)
     try:
         planned_ref = plan_program(lower_with_group(cfg, "dp"),
                                    fast_memory_capacity=96 * 1024 * 1024)
@@ -187,8 +187,8 @@ def test_tp_llama3_two_daemons_vs_plain(tmp_path):
             pass
 
     # ---- the TP pair ------------------------------------------------
-    ca = boot(tmp_path, "tp-a", PORTS[0])
-    cb = boot(tmp_path, "tp-b", PORTS[1])
+    ca = boot(tmp_path, "tp-a", PORTS[0], server_threads)
+    cb = boot(tmp_path, "tp-b", PORTS[1], server_threads)
     try:
         ca.peer_connect("tp-b", f"127.0.0.1:{PORTS[1]}")
         parallels = [ParallelConfig("dp", r, 2, plan) for r in (0, 1)]

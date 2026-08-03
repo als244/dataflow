@@ -28,12 +28,12 @@ pytestmark = [pytest.mark.fleet, pytest.mark.gpu]
 PA, PB = 29501, 29502
 
 
-def boot(tmp, name, peer_port):
+def boot(tmp, name, peer_port, server_threads):
     sock = str(tmp / f"{name}.sock")
     server = Server(EngineConfig(
         socket_path=sock, fake=False, slab_backing_gib=0.25,
         peer_name=name, peer_listen=f"127.0.0.1:{peer_port}"))
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    server_threads.start(server)
     for _ in range(600):
         try:
             EngineClient(sock, client_name="probe").close()
@@ -44,10 +44,10 @@ def boot(tmp, name, peer_port):
 
 
 @pytest.fixture(scope="module")
-def rig(tmp_path_factory):
+def rig(tmp_path_factory, server_threads):
     tmp = tmp_path_factory.mktemp("hostmem")
-    sa, ca = boot(tmp, "hm-a", PA)
-    sb, cb = boot(tmp, "hm-b", PB)
+    sa, ca = boot(tmp, "hm-a", PA, server_threads)
+    sb, cb = boot(tmp, "hm-b", PB, server_threads)
     ca.peer_connect("hm-b", f"127.0.0.1:{PB}")
     ca._call("create_peer_group",
              {"name": "dp", "members": ["hm-a", "hm-b"],
@@ -204,4 +204,3 @@ def test_stream_parks_until_worker_releases(rig):
     hb.allreduce(t_b)                        # ...until rank 1 joins
     synced(ha, hb)
     assert float(t_a[0]) == 2.0 == float(t_b[0])
-

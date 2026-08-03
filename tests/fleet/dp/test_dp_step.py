@@ -131,12 +131,12 @@ def single_box_reference():
     return out
 
 
-def boot(tmp, name, peer_port):
+def boot(tmp, name, peer_port, server_threads):
     sock = str(tmp / f"{name}.sock")
     server = Server(EngineConfig(
         socket_path=sock, fake=False, slab_backing_gib=0.4,
         peer_name=name, peer_listen=f"127.0.0.1:{peer_port}"))
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    server_threads.start(server)
     for _ in range(600):
         try:
             EngineClient(sock, client_name="probe").close()
@@ -162,7 +162,8 @@ class RankRun:
             self.err = e
 
 
-def test_two_daemon_dp_step_replicas_bitwise_and_match_single_engine(tmp_path):
+def test_two_daemon_dp_step_replicas_bitwise_and_match_single_engine(
+        tmp_path, server_threads):
     cfg = dp_cfg(1, world=2)            # 64 tokens per rank, ga=1
     planned = plan_program(lower_with_group(cfg, "dp"),
                            fast_memory_capacity=96 * 1024 * 1024)
@@ -171,8 +172,8 @@ def test_two_daemon_dp_step_replicas_bitwise_and_match_single_engine(tmp_path):
                 "cfg": cfg_dict(cfg)}
     tok, tgt = master_tokens()
 
-    sa, ca = boot(tmp_path, "dp-a", PA)
-    sb, cb = boot(tmp_path, "dp-b", PB)
+    sa, ca = boot(tmp_path, "dp-a", PA, server_threads)
+    sb, cb = boot(tmp_path, "dp-b", PB, server_threads)
     try:
         ca.peer_connect("dp-b", f"127.0.0.1:{PB}")
         per = T_STEP // 2

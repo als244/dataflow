@@ -15,7 +15,6 @@ Tests:
 - test_crossbox_capacity_backpressure: an object exceeding the remote's free slab NACKs CAPACITY, retries with backoff, then fails loud with nothing left on the remote.
 """
 import hashlib
-import threading
 import time
 
 import pytest
@@ -55,13 +54,14 @@ def remote_py(code: str, *, timeout: float = 120.0) -> str:
 
 
 @pytest.fixture(scope="module")
-def rig(tmp_path_factory):
+def rig(tmp_path_factory, server_threads, daemon_lanes):
     # a configured-but-unreachable peer degrades to a clean skip
     try:
         run_on(REMOTE, "true", timeout=15)
     except Exception as exc:
         pytest.skip(f"remote host unreachable: {exc}")
     daemons.kill(REMOTE, lane=LANE)
+    daemon_lanes.own(REMOTE, LANE)
     daemons.launch(REMOTE, lane=LANE, backing_gib=0.5, peer_port=PORT)
     deadline = time.time() + 90
     while time.time() < deadline:
@@ -82,7 +82,7 @@ def rig(tmp_path_factory):
         socket_path=sock, fake=False, slab_backing_gib=0.5,
         peer_name=LOCAL.name, peer_listen=LOCAL.peer_addr(PORT),
         peer_chunk_bytes=8 << 20))
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    server_threads.start(server)
     for _ in range(600):
         try:
             EngineClient(sock, client_name="probe").close()

@@ -108,13 +108,15 @@ def run_pattern(rig, sizes, reps=REPS) -> dict:
     return {"local": local.out, "remote": remote.out}
 
 
-def build_rig(tmp_path_factory, lane, port, rdma: bool):
+def build_rig(tmp_path_factory, lane, port, rdma: bool, server_threads,
+              daemon_lanes):
     # a configured-but-unreachable peer degrades to a clean skip
     try:
         run_on(REMOTE, "true", timeout=15)
     except Exception as exc:
         pytest.skip(f"remote host unreachable: {exc}")
     daemons.kill(REMOTE, lane=lane)
+    daemon_lanes.own(REMOTE, lane)
     extra = ""
     if rdma:
         extra = f"--peer-rdma-device {REMOTE.ib_dev}"
@@ -142,7 +144,7 @@ def build_rig(tmp_path_factory, lane, port, rdma: bool):
         socket_path=sock, fake=False, slab_backing_gib=4.0,
         peer_name=LOCAL.name, peer_listen=LOCAL.peer_addr(port),
         peer_rdma_device=LOCAL.ib_dev if rdma else None))
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    server_threads.start(server)
     for _ in range(600):
         try:
             EngineClient(sock, client_name="probe").close()
@@ -169,8 +171,10 @@ def build_rig(tmp_path_factory, lane, port, rdma: bool):
 
 
 @pytest.fixture(scope="module")
-def sock_rig(tmp_path_factory):
-    rig = build_rig(tmp_path_factory, "gxs", 29620, rdma=False)
+def sock_rig(tmp_path_factory, server_threads, daemon_lanes):
+    rig = build_rig(tmp_path_factory, "gxs", 29620, rdma=False,
+                    server_threads=server_threads,
+                    daemon_lanes=daemon_lanes)
     yield rig
     try:
         rig["client"].shutdown()
@@ -180,7 +184,7 @@ def sock_rig(tmp_path_factory):
 
 
 @pytest.fixture(scope="module")
-def rdma_rig(tmp_path_factory):
+def rdma_rig(tmp_path_factory, server_threads, daemon_lanes):
     pytest.importorskip("pyverbs")
     from dataflow.service.peer.rdma import roce_v2_ipv4_gid
     if LOCAL.ib_dev is None or REMOTE.ib_dev is None:
@@ -197,7 +201,9 @@ def rdma_rig(tmp_path_factory):
         pytest.skip(f"remote rdma probe failed: {exc}")
     if not remote_ok:
         pytest.skip("remote host lacks pyverbs or an ACTIVE RoCE v2 GID")
-    rig = build_rig(tmp_path_factory, "gxr", 29630, rdma=True)
+    rig = build_rig(tmp_path_factory, "gxr", 29630, rdma=True,
+                    server_threads=server_threads,
+                    daemon_lanes=daemon_lanes)
     yield rig
     try:
         rig["client"].shutdown()

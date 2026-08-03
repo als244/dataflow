@@ -74,12 +74,12 @@ def step_tokens(cfg, step: int):
     return tok, tgt
 
 
-def boot(tmp, name, peer_port):
+def boot(tmp, name, peer_port, server_threads):
     sock = str(tmp / f"{name}.sock")
     server = Server(EngineConfig(
         socket_path=sock, fake=False, slab_backing_gib=0.4,
         peer_name=name, peer_listen=f"127.0.0.1:{peer_port}"))
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    server_threads.start(server)
     for _ in range(600):
         try:
             EngineClient(sock, client_name="probe").close()
@@ -115,11 +115,11 @@ class RankRun:
             self.err = e
 
 
-def run_config(tmp_path, label: str, zero1rs: bool) -> dict:
+def run_config(tmp_path, label: str, zero1rs: bool, server_threads) -> dict:
     cfg = make_cfg()
     pa, pb = PORTS[label]
-    ca = boot(tmp_path, f"{label}-a", pa)
-    cb = boot(tmp_path, f"{label}-b", pb)
+    ca = boot(tmp_path, f"{label}-a", pa, server_threads)
+    cb = boot(tmp_path, f"{label}-b", pb, server_threads)
     clients = (ca, cb)
     out = {"losses": [], "w": [], "o_bytes": []}
     progs = []
@@ -188,14 +188,16 @@ def run_config(tmp_path, label: str, zero1rs: bool) -> dict:
                 pass
 
 
-def test_zero1rs_bitwise_equals_plain_dp(tmp_path):
+def test_zero1rs_bitwise_equals_plain_dp(tmp_path, server_threads):
     cfg = make_cfg()
     rs_params = zero1rs_block_params(layer_fields_by_root(cfg),
                                      derive_dims(cfg), 2)
     assert rs_params, "no root is rs-eligible — gate is vacuous"
 
-    plain = run_config(tmp_path, "plain", zero1rs=False)
-    rs = run_config(tmp_path, "rs", zero1rs=True)
+    plain = run_config(tmp_path, "plain", zero1rs=False,
+                       server_threads=server_threads)
+    rs = run_config(tmp_path, "rs", zero1rs=True,
+                    server_threads=server_threads)
 
     # per-rank losses identical across configs, step by step
     assert rs["losses"] == plain["losses"], (
