@@ -24,6 +24,7 @@ from dataflow_training.distributed.hosts import run_py, uds_forward
 from dataflow_training.distributed import daemons
 from dataflow_training.distributed.topology import load_topology_or_none  # noqa: E402
 from dataflow.service import EngineClient  # noqa: E402
+from tests.support.threads import join_threads  # noqa: E402
 
 TOPO = load_topology_or_none()
 if TOPO is None or not TOPO.remotes():
@@ -50,7 +51,7 @@ class LocalBench:
     def __call__(self):
         try:
             self.out = self.client._call("coll_bench", self.args,
-                                         timeout=300)
+                                         timeout=120)
         except Exception as e:
             self.err = e
 
@@ -68,9 +69,9 @@ class RemoteBench:
                 "import sys, json; sys.path.insert(0, 'src'); "
                 "from dataflow.service import EngineClient; "
                 f"c = EngineClient('{self.sock}', client_name='nb'); "
-                f"r = c._call('coll_bench', {self.args!r}, timeout=300); "
+                f"r = c._call('coll_bench', {self.args!r}, timeout=120); "
                 "print(json.dumps(r)); c.close()")
-            self.out = json.loads(run_py(REMOTE, code, timeout=360))
+            self.out = json.loads(run_py(REMOTE, code, timeout=150))
         except Exception as e:
             self.err = e
 
@@ -80,7 +81,9 @@ def run_both(client, remote_sock, args) -> tuple:
     b = RemoteBench(remote_sock, args)
     ta = threading.Thread(target=a)
     tb = threading.Thread(target=b)
-    ta.start(); tb.start(); ta.join(400); tb.join(400)
+    ta.start()
+    tb.start()
+    join_threads((ta, tb), 160, label="cross-box NCCL collective")
     assert a.err is None, a.err
     assert b.err is None, b.err
     return a.out, b.out

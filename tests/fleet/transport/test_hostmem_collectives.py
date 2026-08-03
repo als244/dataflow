@@ -22,6 +22,7 @@ if not torch.cuda.is_available():
     pytest.skip("no GPU", allow_module_level=True)
 
 from dataflow.service import EngineClient, EngineConfig, Server  # noqa: E402
+from tests.support.threads import join_threads  # noqa: E402
 
 pytestmark = [pytest.mark.fleet, pytest.mark.gpu]
 
@@ -77,7 +78,9 @@ def both(fn_a, fn_b):
             err.append(e)
     ta = threading.Thread(target=run, args=(fn_a,))
     tb = threading.Thread(target=run, args=(fn_b,))
-    ta.start(); tb.start(); ta.join(30); tb.join(30)
+    ta.start()
+    tb.start()
+    join_threads((ta, tb), 30, label="loopback hostmem collective")
     assert not err, err
 
 

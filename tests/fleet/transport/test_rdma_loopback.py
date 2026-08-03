@@ -24,6 +24,7 @@ pytest.importorskip("pyverbs")
 from dataflow_training.distributed.topology import load_topology_or_none  # noqa: E402
 from dataflow.service import EngineClient, EngineConfig, Server  # noqa: E402
 from dataflow.service.peer.rdma import roce_v2_ipv4_gid  # noqa: E402
+from tests.support.threads import join_threads  # noqa: E402
 
 pytestmark = [pytest.mark.fleet, pytest.mark.gpu]
 
@@ -191,7 +192,9 @@ def test_rdma_allreduce_zero_copy_from_registered_slab(rig):
     torch.cuda.default_stream().synchronize()   # producer contract
     ja = threading.Thread(target=post, args=(ha, ta))
     jb = threading.Thread(target=post, args=(hb, tb))
-    ja.start(); jb.start(); ja.join(30); jb.join(30)
+    ja.start()
+    jb.start()
+    join_threads((ja, jb), 30, label="loopback RDMA allreduce")
     assert not err, err
     ha.stream.synchronize(); hb.stream.synchronize()
     assert torch.equal(ta, tb), "replicas diverged"

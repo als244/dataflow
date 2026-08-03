@@ -30,6 +30,7 @@ from dataflow_training.distributed.hosts import run_on, run_py
 from dataflow_training.distributed import daemons
 from dataflow_training.distributed.topology import load_topology_or_none  # noqa: E402
 from dataflow.service import EngineClient, EngineConfig, Server  # noqa: E402
+from tests.support.threads import join_threads  # noqa: E402
 
 TOPO = load_topology_or_none()
 if TOPO is None or not TOPO.remotes():
@@ -90,7 +91,7 @@ class RemoteBench:
                 "print(json.dumps(r)); c.close()")
             import json
 
-            self.out = json.loads(run_py(REMOTE, code, timeout=300))
+            self.out = json.loads(run_py(REMOTE, code, timeout=150))
         except Exception as e:
             self.err = e
 
@@ -102,7 +103,9 @@ def run_pattern(rig, sizes, reps=REPS) -> dict:
     remote = RemoteBench(rig["remote_sock"], rig["group"], sizes, reps)
     ta = threading.Thread(target=local)
     tb = threading.Thread(target=remote)
-    ta.start(); tb.start(); ta.join(400); tb.join(400)
+    ta.start()
+    tb.start()
+    join_threads((ta, tb), 160, label="cross-box gradient exchange")
     assert local.err is None, local.err
     assert remote.err is None, remote.err
     return {"local": local.out, "remote": remote.out}

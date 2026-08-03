@@ -40,6 +40,7 @@ from dataflow_training.model_families.llama3 import (  # noqa: E402
 from dataflow_training.lowering.planning import plan_program  # noqa: E402
 from dataflow_training.register import register_all  # noqa: E402
 from dataflow_training.run.driver import init_model  # noqa: E402
+from tests.support.threads import join_threads  # noqa: E402
 
 pytestmark = [pytest.mark.fleet, pytest.mark.gpu]
 
@@ -163,8 +164,7 @@ def run_config(tmp_path, label: str, zero1rs: bool, server_threads) -> dict:
             threads = [threading.Thread(target=r) for r in runs]
             for t in threads:
                 t.start()
-            for t in threads:
-                t.join(180)
+            join_threads(threads, 60, label=f"{label} step {step}")
             for r in runs:
                 assert r.err is None, (label, step, r.err)
                 assert r.out.get("state") == "done", (label, step, r.out)

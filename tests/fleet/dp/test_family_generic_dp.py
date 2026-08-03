@@ -40,6 +40,7 @@ from dataflow_training.register import register_all  # noqa: E402
 from dataflow_training.run.driver import init_model  # noqa: E402
 from dataflow_training.run.presets import cfg_dict, resolver_family  # noqa: E402
 from dataflow_training.testing.gradcheck import rel_l2  # noqa: E402
+from tests.support.threads import join_threads  # noqa: E402
 
 pytestmark = pytest.mark.fleet
 
@@ -189,8 +190,7 @@ def test_two_daemon_dp_step_replicas_bitwise_and_match_single_engine(
         threads = [threading.Thread(target=r) for r in runs]
         for t in threads:
             t.start()
-        for t in threads:
-            t.join(180)
+        join_threads(threads, 60, label=f"{family_name} DP step")
         for r in runs:
             assert r.err is None, r.err
             assert r.out.get("state") == "done", r.out

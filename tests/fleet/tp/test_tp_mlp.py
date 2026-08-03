@@ -36,6 +36,7 @@ from dataflow_training.lowering.planning import plan_program  # noqa: E402
 from dataflow_training.register import register_all  # noqa: E402
 from dataflow_training.run.driver import init_model  # noqa: E402
 from dataflow_training.testing.gradcheck import rel_l2  # noqa: E402
+from tests.support.threads import join_threads  # noqa: E402
 
 pytestmark = [pytest.mark.fleet, pytest.mark.gpu]
 
@@ -122,8 +123,7 @@ def drive_pair(clients, members, group_backend: str) -> list:
     threads = [threading.Thread(target=r) for r in runs]
     for t in threads:
         t.start()
-    for t in threads:
-        t.join(180)
+    join_threads(threads, 120, label="two-rank TP MLP")
     for r in runs:
         assert r.err is None, r.err
         assert r.out.get("state") == "done", r.out

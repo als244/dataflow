@@ -21,6 +21,7 @@ if not torch.cuda.is_available():
 pytest.importorskip("cuda.bindings")
 
 from dataflow.service import EngineClient, EngineConfig, Server  # noqa: E402
+from tests.support.threads import join_threads  # noqa: E402
 
 pytestmark = [pytest.mark.fleet, pytest.mark.gpu]
 
@@ -129,7 +130,7 @@ def test_inbound_lands_while_receiver_dispatcher_busy(rig):
         if row["state"] == "done":
             break
         time.sleep(0.02)
-    hold.join()
+    join_threads((hold,), 10, label="dispatcher hold")
     assert row["state"] == "done", row
     assert moving_done_at is not None and moving_done_at < 2.0, \
         f"payload waited out the dispatcher hold ({moving_done_at})"
