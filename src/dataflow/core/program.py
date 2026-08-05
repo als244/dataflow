@@ -91,6 +91,11 @@ class TaskSpec:
     exist twice (no output transient + capture copy). A program is
     all-host or all-device (registration rejects a mix), and the
     engine refuses host tasks — they execute on the service host path.
+
+    ``workspace_bytes`` is a planner-facing upper bound for opaque scratch
+    used only while this task executes. It is not a declared object and is
+    intentionally ignored by the engine's object allocator; the framework or
+    kernel allocator owns the actual transient allocation.
     """
 
     id: str
@@ -98,6 +103,7 @@ class TaskSpec:
     outputs: tuple[OutputSpec, ...] = ()
     mutates: tuple[str, ...] = ()
     runtime_us: float = 1.0
+    workspace_bytes: int = 0
     group: str = "compute"
     compute_block_key: str | None = None
     block_params: Mapping[str, Any] = field(default_factory=dict)

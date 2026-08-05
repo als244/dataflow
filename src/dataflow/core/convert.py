@@ -77,6 +77,7 @@ def to_sim_chain(program: Program) -> Any:
                     for out in t.outputs
                 ],
                 runtime=float(t.runtime_us),
+                workspace_bytes=int(t.workspace_bytes),
                 releases_after=list(t.releases_after),
                 offload_after=[
                     TransferTrigger(obj_id=x.object_id, runtime=x.runtime_us)
@@ -321,6 +322,7 @@ def from_sim_chain(chain: Any, *, name: str) -> Program:
                 ),
                 mutates=tuple(t.mutates_inputs),
                 runtime_us=float(t.runtime),
+                workspace_bytes=int(t.workspace_bytes),
                 releases_after=tuple(t.releases_after),
                 offload_after=tuple(
                     TransferDirective(object_id=x.obj_id, runtime_us=x.runtime)

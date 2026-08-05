@@ -71,6 +71,11 @@ def validate_id_resolution(chain: TaskChain) -> None:
         known.add(obj.id)
 
     for task in chain.tasks:
+        if task.workspace_bytes < 0:
+            raise ValidationError(
+                f"negative-workspace: task {task.id!r} declares "
+                f"workspace_bytes={task.workspace_bytes}; expected a nonnegative bound"
+            )
         # Duplicate ids within this task's inputs list.
         seen_in: set[str] = set()
         for inp in task.inputs:
@@ -385,24 +390,47 @@ def validate_capacity(chain: TaskChain) -> None:
     if chain.fast_memory_capacity is None:
         return
 
-    # Per-task forced footprint: sum of input sizes (all live on compute at
-    # dispatch) + sum of compute-located output sizes (reserved at dispatch).
+    # Per-task forced footprint: input objects (all live at dispatch), fresh
+    # fast outputs (reserved at dispatch), and opaque task-local workspace.
     # We need a size lookup that follows the same flow as id_resolution.
     size_of: dict[str, int] = {o.id: o.size for o in chain.initial_memory}
+    impossible_tasks: list[str] = []
     for task in chain.tasks:
         # Inputs must already be in size_of (id_resolution guaranteed it).
         input_bytes = sum(size_of.get(i, 0) for i in task.inputs)
         out_compute_bytes = sum(o.size for o in task.outputs if o.location == "fast")
-        forced = input_bytes + out_compute_bytes
+        forced = input_bytes + out_compute_bytes + task.workspace_bytes
         if forced > chain.fast_memory_capacity:
-            raise ValidationError(
-                f"forced-footprint-exceeds-fast_memory_capacity: task {task.id!r} requires "
+            impossible_tasks.append(
+                f"task {task.id!r} requires "
                 f"{input_bytes} bytes of inputs + {out_compute_bytes} bytes of compute "
-                f"outputs = {forced} > fast_memory_capacity={chain.fast_memory_capacity}; "
-                f"cannot satisfy fast memory need under any policy"
+                f"outputs + {task.workspace_bytes} bytes of workspace = {forced} > "
+                f"fast_memory_capacity={chain.fast_memory_capacity}"
             )
         for out in task.outputs:
             size_of[out.id] = out.size
+    if impossible_tasks:
+        details = "; ".join(impossible_tasks)
+        raise ValidationError(
+            "forced-footprint-exceeds-fast_memory_capacity: "
+            f"{len(impossible_tasks)} task(s) cannot satisfy fast memory need "
+            f"under any policy; {details}"
+        )
+
+
+def validate_planning_input(chain: TaskChain) -> None:
+    """Reject statically malformed or capacity-impossible planner inputs.
+
+    A bare chain intentionally has no release/offload/prefetch decisions yet,
+    so the complete annotated-chain validator is too strict at this boundary.
+    ID resolution and minimum capacity, however, are policy-independent.  In
+    particular, every task must simultaneously hold its unique inputs
+    (including the subset it mutates), fresh fast outputs, and opaque
+    workspace.  No residency or transfer policy can repair a violation of
+    that lower bound.
+    """
+    validate_id_resolution(chain)
+    validate_capacity(chain)
 
 
 # ---------------------------------------------------------------------------

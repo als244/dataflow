@@ -59,6 +59,8 @@ def _trigger_to_dict(t: TransferDirective) -> dict[str, Any]:
 
 def _task_to_dict(t: TaskSpec) -> dict[str, Any]:
     d: dict[str, Any] = {"id": t.id, "runtime_us": t.runtime_us}
+    if t.workspace_bytes:
+        d["workspace_bytes"] = t.workspace_bytes
     if t.inputs:
         d["inputs"] = list(t.inputs)
     if t.outputs:
@@ -173,6 +175,7 @@ def _task_from_dict(d: dict[str, Any]) -> TaskSpec:
         outputs=tuple(_output_from_dict(o) for o in d.get("outputs", ())),
         mutates=tuple(d.get("mutates", ())),
         runtime_us=float(d.get("runtime_us", 1.0)),
+        workspace_bytes=int(d.get("workspace_bytes", 0)),
         group=d.get("group", "compute"),
         compute_block_key=d.get("compute_block_key"),
         block_params=dict(d.get("block_params", {})),

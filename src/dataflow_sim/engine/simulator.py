@@ -206,6 +206,10 @@ def _run_impl(
     in_flight: dict[TransferDirection, _InFlight | None] = {"from_slow": None, "to_slow": None}
     queue: dict[TransferDirection, list[_Queued]] = {"from_slow": [], "to_slow": []}
     compute_busy_until = 0
+    # Opaque framework/kernel scratch for the active compute task. It is
+    # capacity pressure, not a pool entry: no object id, transfer, or retained
+    # lifetime exists for it.
+    active_workspace_bytes = 0
     # Prefetches waiting for their backing source to become live (because a to_slow
     # is still writing it). Keyed by the source obj_id; activated when the
     # corresponding to_slow completes inside `complete("to_slow", ...)`.
@@ -274,7 +278,8 @@ def _run_impl(
         cap = chain.fast_memory_capacity if loc == "fast" else chain.backing_memory_capacity
         if cap is None:
             return INF
-        return cap - loc_total[loc]
+        workspace = active_workspace_bytes if loc == "fast" else 0
+        return cap - loc_total[loc] - workspace
 
     def transfer_runtime(direction: TransferDirection, size: int, override: float | None) -> float:
         if override is not None:
@@ -310,7 +315,10 @@ def _run_impl(
         **kwargs,
     ) -> None:
         nonlocal peak_fast_memory_bytes, peak_backing_memory_bytes
-        peak_fast_memory_bytes = max(peak_fast_memory_bytes, loc_total["fast"])
+        peak_fast_memory_bytes = max(
+            peak_fast_memory_bytes,
+            loc_total["fast"] + active_workspace_bytes,
+        )
         peak_backing_memory_bytes = max(peak_backing_memory_bytes,
                                         loc_total["backing"])
         emit_memory_trace(t)
@@ -344,7 +352,8 @@ def _run_impl(
         # the same size, those bytes are already counted — don't double-count.
         if dst_cap is not None:
             already_counted = existing_dst.size if existing_dst is not None else 0
-            free = dst_cap - loc_total[dst_loc] + already_counted
+            workspace = active_workspace_bytes if dst_loc == "fast" else 0
+            free = dst_cap - loc_total[dst_loc] - workspace + already_counted
             if free < tx.src_size:
                 return  # block the queue head
 
@@ -526,7 +535,7 @@ def _run_impl(
             raise ValueError(f"input {inp!r} is reserved by another task (unexpected mid-chain)")
         raise ValueError(f"input {inp!r} has unknown state {entry.state!r}")
 
-    def compute_outputs_ready_t(needed: int, now: float, task_id: str) -> float:
+    def compute_reservation_ready_t(needed: int, now: float, task_id: str) -> float:
         if chain.fast_memory_capacity is None:
             return now
         free = loc_free(COMPUTE_INPUT_LOC)
@@ -546,6 +555,9 @@ def _run_impl(
         )
         raise SimulationCapacityError(
             message,
+            # Keep the established machine-readable kind: workspace extends
+            # the same task-start reservation rather than creating another
+            # recovery class.
             kind="fast-output-reservation",
             task_id=task_id,
             location="fast",
@@ -563,20 +575,26 @@ def _run_impl(
         for inp in task.inputs:
             target_start = max(target_start, input_ready_t(inp, readiness_probe_t))
         compute_outputs_size = sum(out.size for out in task.outputs if out.location == "fast")
-        if compute_outputs_size > 0:
+        compute_reservation_size = compute_outputs_size + task.workspace_bytes
+        if compute_reservation_size > 0:
             target_start = max(
                 target_start,
-                compute_outputs_ready_t(compute_outputs_size, readiness_probe_t, task.id),
+                compute_reservation_ready_t(
+                    compute_reservation_size,
+                    readiness_probe_t,
+                    task.id,
+                ),
             )
 
         # 2. advance time to target_start (emit any transfer events that complete in [now, target_start])
         advance(target_start, i)
 
         # 2b. After advance, re-verify the task can actually run: every input
-        # must be live in fast memory AND fast memory must have room for outputs.
-        # `predict_schedule` (used by input_ready_t / compute_outputs_ready_t)
-        # assumes queued transfers run back-to-back ignoring capacity, but a
-            # queued from_slow head can be BLOCKED until a to_slow completion frees fast
+        # must be live in fast memory AND fast memory must have room for the
+        # task's outputs plus opaque workspace. `predict_schedule` (used by
+        # input_ready_t / compute_reservation_ready_t) assumes queued transfers
+        # run back-to-back ignoring capacity, but a queued from_slow head can be
+        # BLOCKED until a to_slow completion frees fast
         # bytes. When that happens the optimistic prediction is too early —
         # drain in-flight transfers one at a time until the preconditions
         # actually hold.
@@ -585,8 +603,8 @@ def _run_impl(
                 e = pool.get((inp, COMPUTE_INPUT_LOC))
                 if e is None or e.state != "live":
                     return False
-            if compute_outputs_size > 0 and chain.fast_memory_capacity is not None:
-                if loc_total["fast"] + compute_outputs_size > chain.fast_memory_capacity:
+            if compute_reservation_size > 0 and chain.fast_memory_capacity is not None:
+                if loc_total["fast"] + compute_reservation_size > chain.fast_memory_capacity:
                     return False
             return True
 
@@ -609,11 +627,12 @@ def _run_impl(
                 msg = []
                 if missing_inputs:
                     msg.append(f"inputs {missing_inputs} not live in fast memory")
-                if compute_outputs_size > 0 and chain.fast_memory_capacity is not None:
+                if compute_reservation_size > 0 and chain.fast_memory_capacity is not None:
                     used = loc_total["fast"]
-                    if used + compute_outputs_size > chain.fast_memory_capacity:
+                    if used + compute_reservation_size > chain.fast_memory_capacity:
                         msg.append(
-                            f"fast memory {used}+{compute_outputs_size} bytes > cap "
+                            f"fast memory {used}+{compute_outputs_size} output bytes+"
+                            f"{task.workspace_bytes} workspace bytes > cap "
                             f"{chain.fast_memory_capacity}, no offloads in flight"
                         )
                 message = (
@@ -623,10 +642,10 @@ def _run_impl(
                 capacity = chain.fast_memory_capacity
                 actual_need = None
                 overage = None
-                if capacity is not None and compute_outputs_size > 0:
+                if capacity is not None and compute_reservation_size > 0:
                     used = loc_total["fast"]
-                    if used + compute_outputs_size > capacity:
-                        actual_need = used + compute_outputs_size
+                    if used + compute_reservation_size > capacity:
+                        actual_need = used + compute_reservation_size
                         overage = actual_need - capacity
                 raise SimulationCapacityError(
                     message,
@@ -649,7 +668,8 @@ def _run_impl(
                 f"used={loc_total['backing']}, capacity={chain.backing_memory_capacity}"
             )
 
-        # 4. reserve outputs
+        # 4. reserve opaque task workspace and declared outputs
+        active_workspace_bytes = task.workspace_bytes
         for out in task.outputs:
             out_key: PoolKey = (out.id, out.location)
             if out_key in pool:
@@ -664,13 +684,13 @@ def _run_impl(
 
         # Hard invariant: after reserving outputs, fast memory must not
         # exceed capacity. The drain loop above should have ensured this;
-        # this assertion catches any subtle bug in the drain/prediction
-            # logic where a plan slipped past unchecked and over-committed
-            # fast memory. Without this, the simulator could silently keep running
+        # this assertion catches any subtle bug in the drain/prediction logic
+        # where a plan slipped past unchecked and over-committed fast memory.
+        # Without this, the simulator could silently keep running
         # with pool > cap (subsequent triggers would emit weird errors
         # later, far from the root cause).
         if chain.fast_memory_capacity is not None:
-            used = loc_total["fast"]
+            used = loc_total["fast"] + active_workspace_bytes
             if used > chain.fast_memory_capacity:
                 raise ValueError(
                     f"task {task.id!r} over-committed fast memory: pool={used} bytes "
@@ -690,7 +710,8 @@ def _run_impl(
         # 6. advance to end_t (transfers may complete during compute)
         advance(end_t, i + 1)
 
-        # 7. mark outputs live, emit task_end
+        # 7. task-local workspace dies with compute; outputs become live.
+        active_workspace_bytes = 0
         for out in task.outputs:
             pool[(out.id, out.location)].state = "live"
         emit("task_end", end_t, i + 1, task_id=task.id)

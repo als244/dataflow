@@ -327,7 +327,7 @@ Catches every statically-computable invariant from [policy/principles.md](policy
 - **ID resolution** — every `obj_id` in `inputs` / `releases_after` / `offload_after` / `prefetch_after` / `mutates_inputs` resolves to either `initial_memory` or a prior task's output; output ids are fresh; no `(id, location)` collision with existing pool entries.
 - **Trigger validity** — prefetch only on objects statically not-on-compute; offload only on objects statically on-compute; no duplicate prefetches/offloads on the same anchor; no `prefetch + offload` of the same object on the same task.
 - **Release, mutation, and final placement** — bare release is forbidden if the object has a later use and is dirty (mutated since last offload) or lacks a backing copy; objects listed in `final_locations` must end in the requested location with latest bytes.
-- **Capacity** — `initial_memory` compute/backing sums ≤ cap; forced footprint at every task boundary (inputs + outputs, which must coexist) ≤ `fast_memory_capacity`.
+- **Capacity** — `initial_memory` compute/backing sums ≤ cap; forced footprint at every task boundary (inputs + outputs + that task's workspace, which must coexist) ≤ `fast_memory_capacity`.
 - **Topology** — every input resolves to some producer; no self-cycles; duplicate input ids in the same task forbidden.
 
 Does **not** check runtime properties: transit-byte residency timing, stream FIFO contention, stall amounts, makespan. "Bad-but-runnable" chains pass — they reveal themselves as idle time during simulation, not as validation failures.
@@ -373,6 +373,7 @@ Class methods: `TaskChain.from_dict(d)`, `TaskChain.load(path)` — round-trip w
 | `inputs` | `list[str]` | required | Object ids read by this task. Must all be `live` in fast memory at task start. |
 | `outputs` | `list[OutputAlloc]` | required | Fresh object ids produced by this task. |
 | `runtime` | `int` | required | Deterministic compute time (ticks). |
+| `workspace_bytes` | `int` | `0` | Opaque fast-memory capacity charged only while this task executes. It is not an object, output, placement, or transfer. |
 | `releases_after` | `list[str]` | `[]` | Object ids the simulator releases (bare drop) at this task's end. Filled by policy. |
 | `offload_after` | `list[TransferTrigger]` | `[]` | to-slow transfers enqueued at this task's end. Filled by policy. |
 | `prefetch_after` | `list[TransferTrigger]` | `[]` | from-slow transfers enqueued at this task's end. Filled by policy. |
@@ -408,7 +409,7 @@ Per-task trigger that enqueues a transfer when the task ends.
 |---|---|---|
 | `task_intervals` | `list[TaskInterval]` | Start/end per compute task and per transfer. `iv.track` ∈ {`compute`, `from_slow`, `to_slow`}. |
 | `events` | `list[Event]` | Full timeline of events when `run(..., snapshots=True)`; empty when `snapshots=False`. Each event carries a `Snapshot` of pool state. |
-| `peak_fast_memory_bytes` | `int` | Maximum fast-memory bytes observed during simulation. Populated even when `snapshots=False`. |
+| `peak_fast_memory_bytes` | `int` | Maximum object bytes plus active task-local workspace observed during simulation. Populated even when `snapshots=False`. Event snapshots describe the object pool; workspace is represented only in the aggregate peak/capacity accounting. |
 | `memory_trace` | `list[MemoryTracePoint]` | Compact fast-memory plot samples when `run(..., memory_trace=True)`; empty otherwise. |
 
 Methods: `to_dict()` for JSON-safe export; `dump(path)` writes formatted JSON.

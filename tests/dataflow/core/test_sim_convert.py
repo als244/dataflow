@@ -2,6 +2,8 @@
 
 Tests:
 - test_to_sim_chain_preserves_ids_and_sizes: to_sim_chain keeps task ids, initial-memory ids, and per-output sizes.
+- test_sim_roundtrip_preserves_task_workspace: conversion preserves each task's
+  ephemeral workspace requirement in both directions.
 - test_annotated_chain_validates: a pressurefit-annotated chain passes the sim's location-aware validate_chain.
 - test_from_sim_chain_roundtrip: from_sim_chain then to_sim_chain reproduces the original chain (sim-visible content lossless).
 - test_annotation_join_is_lossless: program to chain to pressurefit to joined program preserves annotations and capacity and yields the same chain.
@@ -38,6 +40,20 @@ def test_to_sim_chain_preserves_ids_and_sizes(tiny_program):
     for t in chain.tasks:
         for out in t.outputs:
             assert out.size == sizes[out.id]
+
+
+def test_sim_roundtrip_preserves_task_workspace(tiny_program):
+    from dataclasses import replace
+
+    task = replace(tiny_program.tasks[0], workspace_bytes=12345)
+    program = replace(
+        tiny_program,
+        tasks=(task, *tiny_program.tasks[1:]),
+    )
+
+    chain = to_sim_chain(program)
+    assert chain.tasks[0].workspace_bytes == 12345
+    assert from_sim_chain(chain, name=program.name).tasks[0].workspace_bytes == 12345
 
 
 def test_annotated_chain_validates(tiny_program):

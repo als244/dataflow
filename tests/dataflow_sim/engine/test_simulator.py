@@ -16,6 +16,10 @@ Tests:
 - test_compute_rejects_backing_only_input: a compute task fed a backing-only input raises 'backing only' under validate=False.
 - test_same_id_on_backing_and_compute_coexist: an id present on both backing and fast coexists without release, both entries visible in the snapshot.
 - test_fast_memory_capacity_enforced: a task that cannot fit its output with no in-flight offload raises 'cannot satisfy fast memory'.
+- test_task_workspace_is_ephemeral_capacity_pressure: task-local workspace is
+  charged while the task runs and released at task end.
+- test_active_workspace_blocks_overlapping_prefetch_until_task_end: an inbound
+  transfer cannot reserve bytes occupied by an active task's workspace.
 - test_backing_memory_capacity_enforced_on_initial_memory: initial backing memory exceeding the backing cap raises 'cannot allocate'.
 - test_active_task_inputs_show_in_reference_stream_at_task_start: an active task's inputs show a next-ref of the current time at task start.
 - test_task_intervals_match_runtime_sum: consecutive tasks' intervals accumulate their runtimes.
@@ -151,6 +155,70 @@ def test_output_reserved_at_start_visible_at_end():
     end_snap = log.events[1].snapshot
     out_entry_end = next(m for m in end_snap.memory if m.id == "out")
     assert out_entry_end.state == "live"
+
+
+def test_task_workspace_is_ephemeral_capacity_pressure():
+    chain = TaskChain(
+        initial_memory=[Object(id="in", size=10, location="fast")],
+        tasks=[
+            Task(
+                id="t0",
+                inputs=["in"],
+                outputs=[OutputAlloc(id="out", size=5)],
+                runtime=3,
+                workspace_bytes=7,
+            ),
+        ],
+        fast_memory_capacity=22,
+    )
+
+    log = run(chain)
+
+    assert log.peak_fast_memory_bytes == 22
+    start = log.events[0].snapshot
+    assert {entry.id for entry in start.memory} == {"in", "out"}
+    assert start.total_size == 15  # workspace is pressure, never an object
+
+
+def test_active_workspace_blocks_overlapping_prefetch_until_task_end():
+    chain = TaskChain(
+        initial_memory=[
+            Object(id="x", size=6, location="fast"),
+            Object(id="a", size=5, location="backing"),
+            Object(id="b", size=6, location="backing"),
+        ],
+        tasks=[
+            Task(
+                id="enqueue",
+                inputs=["x"],
+                outputs=[],
+                runtime=1,
+                prefetch_after=[TransferTrigger("a"), TransferTrigger("b")],
+            ),
+            Task(
+                id="workspace",
+                inputs=["x"],
+                outputs=[],
+                runtime=10,
+                workspace_bytes=5,
+            ),
+            Task(id="consume", inputs=["b"], outputs=[], runtime=1),
+        ],
+        fast_memory_capacity=20,
+        bandwidth_from_slow=1,
+    )
+
+    log = run(chain, snapshots=False)
+    inbound = {
+        interval.task_id: interval
+        for interval in log.task_intervals
+        if interval.track == "from_slow"
+    }
+
+    assert inbound["from_slow:a"].start == 1
+    assert inbound["from_slow:a"].end == 6
+    assert inbound["from_slow:b"].start == 11
+    assert log.peak_fast_memory_bytes == 17
 
 
 def test_releases_after_emits_release_event_and_frees_memory():

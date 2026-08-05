@@ -65,6 +65,7 @@ dataclasses defined in `src/dataflow_sim/core/schema.py`.
 | `inputs`          | `list[str]`                | —      | Object ids that must be **live in fast memory** when the task starts. Read-only unless listed in `mutates_inputs`. |
 | `outputs`         | `list[OutputAlloc]`        | —      | Fresh allocations produced by this task. Output ids must not collide with anything else in the pool. |
 | `runtime`         | `int`                      | cycles | Wall-time for the compute step on the (single) compute stream. |
+| `workspace_bytes` | `int`                      | bytes  | Opaque fast-memory pressure charged only for this task's lifetime. Default `0`; not an object or transfer. |
 | `releases_after`  | `list[str]`                | —      | Object ids freed from fast memory immediately after `task_end`. Must be `live`. |
 | `offload_after`   | `list[TransferTrigger]`    | —      | Per-task to-slow transfers enqueued at `task_end`. |
 | `prefetch_after`  | `list[TransferTrigger]`    | —      | Per-task from-slow transfers enqueued at `task_end`. |
@@ -198,8 +199,8 @@ actual starts. The return value is an `EventLog` with:
 - `events: list[Event]` — every state transition, each carrying a
   `Snapshot` of the memory pool, the active task, and the remaining
   reference stream.
-- `peak_fast_memory_bytes: int` — maximum compute-pool bytes observed during
-  simulation.
+- `peak_fast_memory_bytes: int` — maximum object bytes plus active task-local
+  workspace observed during simulation.
 - `memory_trace: list[MemoryTracePoint]` — optional compact fast-memory plot
   samples when `run(..., memory_trace=True)`.
 
@@ -253,7 +254,8 @@ Key `Event.kind` values:
   in `final_locations`. Add `final_locations[obj_id] = "backing"` when the
   backing must receive the latest bytes at chain end.
 - **`fast_memory_capacity` over-commit raises.** If, after reserving a task's
-  outputs, the compute pool would exceed `fast_memory_capacity`, `run()` raises
+  outputs and charging its `workspace_bytes`, the fast footprint would exceed
+  `fast_memory_capacity`, `run()` raises
   with a "over-committed compute" error. That's a policy bug — your plan
   needs more aggressive offloads. The simulator does not silently spill.
 - **Backing has no stall.** If a task's `backing`-located output won't fit at

@@ -69,6 +69,11 @@ def validate_program(program: Program) -> None:
 
         if task.runtime_us < 0:
             err(f"{where}: runtime_us must be >= 0, got {task.runtime_us}")
+        if task.workspace_bytes < 0:
+            err(
+                f"{where}: workspace_bytes must be >= 0, "
+                f"got {task.workspace_bytes}"
+            )
 
         for inp in task.inputs:
             if inp not in created_at:

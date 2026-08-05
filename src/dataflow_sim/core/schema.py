@@ -59,11 +59,18 @@ class Task:
     existing input id as an output id. Mutation is the general workload
     primitive: planners don't need to know domain names such as "gradient" or
     "state", just which inputs are listed in `mutates_inputs`.
+
+    ``workspace_bytes`` is opaque, task-local fast-memory pressure. It is
+    charged only while this task is active and is never an object, transfer
+    target, or persistent allocation. The framework/kernel allocator owns the
+    actual workspace; the simulator and planner use this profiled or bounded
+    value only for capacity admission.
     """
     id: str
     inputs: list[str]
     outputs: list[OutputAlloc]
     runtime: Time
+    workspace_bytes: int = 0
     releases_after: list[str] = field(default_factory=list)
     offload_after: list[TransferTrigger] = field(default_factory=list)
     prefetch_after: list[TransferTrigger] = field(default_factory=list)
@@ -118,6 +125,7 @@ class TaskChain:
                     inputs=list(t.get("inputs", [])),
                     outputs=[_out(o) for o in t.get("outputs", [])],
                     runtime=float(t["runtime"]),
+                    workspace_bytes=int(t.get("workspace_bytes", 0)),
                     releases_after=list(t.get("releases_after", [])),
                     offload_after=[_trig(x) for x in t.get("offload_after", [])],
                     prefetch_after=[_trig(x) for x in t.get("prefetch_after", [])],
