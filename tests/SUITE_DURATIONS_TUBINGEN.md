@@ -4,6 +4,30 @@ Measured at commit `5f502c9` on tubingen (RTX 3090), single serial run of the ca
 
 Stack: torch 2.13.0+cu130 / triton 3.7.1 (upgraded from 2.12.1+cu130 immediately before measuring). Two consecutive full runs measured 19:02 (first post-upgrade) and 19:00 (this run, the table source) — cache warmth is negligible at suite scale and the wall is reproducible.
 
+## Latest validation
+
+Commit `fd0c24d` was validated on 2026-08-05 with the same serial command plus
+`--junitxml` so the result and per-test totals were retained. It completed in
+**19:22** (1162.65s): **1365 passed, 1 skipped, 58 deselected**. That is 22.65s
+(2.0%) above the 19:00 baseline while selecting 31 additional tests.
+
+- No test approached the timeout threshold; the slowest was 52.96s.
+- The largest structural increase is
+  `training/planning/test_planning.py`: 9 to 13 tests and 3.6s to 23.8s. Its
+  two deliberate large-geometry planner checks account for 20.54s.
+- `runtime/test_parity_vs_sim.py` rose from 2.0s to 11.3s; its starved-PCIe
+  recompute case accounts for 7.28s.
+- The largest existing-file fluctuation was the 22-test engine-family parity
+  file (298.8s to 341.2s). Faster model-family, engine-reference, and kernel
+  audit files offset most of that variance, leaving the whole-suite movement
+  at 2.0%.
+- The run left no pytest, torchrun, test daemon, or test worker processes
+  behind.
+
+The detailed tables below remain the stable `5f502c9` baseline. The retained
+JUnit report for this validation was `/tmp/dataflow_full_fd0c24d.xml` on
+Tübingen; it is a transient test artifact rather than repository input.
+
 ## Summary
 
 - **Wall time: 19:00** (1140s) — 1334 passed, 1 skipped.
