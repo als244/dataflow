@@ -161,7 +161,7 @@ class _PressureReducer:
     def _strict_overflow(self, idx: int) -> int:
         return (
             self.pool[idx]
-            + self.facts.next_outputs[idx]
+            + self.facts.next_reservations[idx]
             + self.extra_pressure[idx]
             - self.cap
         )
@@ -171,7 +171,7 @@ class _PressureReducer:
             self.pool[idx]
             - self.departing[idx]
             - self.nonblocking[idx]
-            + self.facts.next_outputs[idx]
+            + self.facts.next_reservations[idx]
             + self.extra_pressure[idx]
             - self.cap
         )

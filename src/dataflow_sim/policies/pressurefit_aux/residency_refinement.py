@@ -99,7 +99,7 @@ def _first_fitting_entry(
         if all(
             pool[boundary + 1]
             + size
-            + facts.next_outputs[boundary + 1]
+            + facts.next_reservations[boundary + 1]
             + extra_pressure[boundary + 1]
             <= cap
             for boundary in range(new_pressure_start, old_pressure_start)

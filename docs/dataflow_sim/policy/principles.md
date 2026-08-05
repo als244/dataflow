@@ -19,7 +19,7 @@ These are invariants. Violating any of them produces a buggy plan: the simulator
 - **Prefetch of X is valid only when X's compute entry is absent or in-flight outbound;** offload of X is valid only when compute entry is `live` and any backing entry is `live` with matching size. WHY: stale, mid-flight, or size-mismatched transfer triggers raise.
 - **Output ids must be fresh — no `(id, location)` collision with any existing pool entry.** WHY: output-key collision raises.
 - **An offload of X is forbidden if a later task consumes X without an intervening re-prefetch being scheduled.** WHY: a task consuming a `pending_outbound` or `outbound` input with no re-prefetch raises.
-- **Transit memory counts against `fast_memory_capacity`.** Bytes in states `inbound`, `pending_outbound`, and `outbound` all occupy compute pool until the transfer completes. WHY: ignoring transit footprint is how a plan that "looks feasible" produces runtime overflow.
+- **Transit memory and active task workspace count against simulator `fast_memory_capacity`.** Bytes in states `inbound`, `pending_outbound`, and `outbound` occupy the compute pool until transfer completion; `Task.workspace_bytes` is charged only from task start through task end. PressureFit itself plans an object-only projection against `program budget - max workspace - leeway`, then restores workspaces for final replay. WHY: this keeps the residency heuristic workload-agnostic and simple while the simulator remains the physical feasibility authority.
 - **Plans must terminate.** No policy may produce a chain that deadlocks with empty queues and missing inputs. WHY: the simulator's last-resort deadlock detector raises rather than hanging.
 
 ---

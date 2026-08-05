@@ -19,7 +19,10 @@ class PressureFitDiagnostics:
     planning_time_s: float
     task_count: int
     object_count: int
+    program_memory_capacity: int | None
     fast_memory_capacity: int | None
+    max_task_workspace_bytes: int
+    program_leeway_bytes: int
     candidate_count: int
     valid_candidate_count: int
     selected_candidate: str

@@ -27,7 +27,7 @@ class _Facts:
     task_index: dict[str, int]
     task_start: list[int]
     task_end: list[int]
-    next_outputs: list[int]
+    next_reservations: list[int]
     inbound_bandwidth: int | None
     outbound_bandwidth: int | None
 
@@ -56,10 +56,10 @@ def _build_facts(chain: TaskChain) -> _Facts:
         t += task.runtime
         task_end.append(t)
 
-    next_outputs = [0] * (n + 1)
+    next_reservations = [0] * (n + 1)
     for b in range(-1, n - 1):
         task = chain.tasks[b + 1]
-        next_outputs[b + 1] = sum(
+        next_reservations[b + 1] = sum(
             out.size for out in task.outputs if out.location == "fast"
         )
 
@@ -75,7 +75,7 @@ def _build_facts(chain: TaskChain) -> _Facts:
         task_index={task.id: index for index, task in enumerate(chain.tasks)},
         task_start=task_start,
         task_end=task_end,
-        next_outputs=next_outputs,
+        next_reservations=next_reservations,
         inbound_bandwidth=chain.bandwidth_from_slow,
         outbound_bandwidth=chain.bandwidth_to_slow,
     )
@@ -285,5 +285,5 @@ def _modeled_boundary_need(
             idx,
             prefetch_headroom=prefetch_headroom,
         )
-        + facts.next_outputs[idx]
+        + facts.next_reservations[idx]
     )

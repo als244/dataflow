@@ -47,7 +47,7 @@ def _pressure_initial_placement(
     must_bytes = sum(sizes[o] for o in placement)
     if initial_fast_bytes + must_bytes + task0_outputs > cap:
         raise ValueError(
-            "infeasible: task 0 inputs plus compute output reservation exceed "
+            "infeasible: task 0 inputs plus output reservation exceed "
             f"fast_memory_capacity ({initial_fast_bytes}+{must_bytes}+"
             f"{task0_outputs}>{cap})"
         )

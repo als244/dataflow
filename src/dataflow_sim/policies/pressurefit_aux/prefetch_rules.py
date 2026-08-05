@@ -222,7 +222,7 @@ def _pressure_clamped_fire(
         if (
             pool[idx]
             + job.size
-            + facts.next_outputs[idx]
+            + facts.next_reservations[idx]
             + extra_pressure[idx]
             > cap
         ):

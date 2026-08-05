@@ -21,6 +21,15 @@ Tests:
 - test_pressurefit_retains_unused_produced_terminal_fast_object: an unused produced object required fast at exit is retained without release or offload.
 - test_pressurefit_reuses_clean_backing_copy_after_first_writeback: a produced object is written back once and later clean departures use release.
 - test_pressurefit_rewrites_backing_copy_after_mutation: mutating a re-prefetched object invalidates backing and forces another writeback.
+- test_pressurefit_plans_objects_after_global_workspace_reserve: PressureFit
+  subtracts the maximum task workspace once, plans only object residency, and
+  restores the original task workspace metadata for final simulation.
+- test_pressurefit_fails_fast_on_policy_independent_task_footprint: planning
+  identifies every task whose object-only lower bound exceeds the reduced
+  object capacity before running any residency heuristic.
+- test_pressurefit_rejects_workspace_and_leeway_larger_than_budget: the
+  object-only projection rejects when maximum workspace plus fixed leeway
+  consumes the complete program budget.
 - test_preplace_rejects_unknown_mode: an unknown preplace mode raises ValueError.
 """
 from __future__ import annotations
@@ -116,6 +125,115 @@ def test_pressurefit_prefetches_late_object_instead_of_preplacing():
         trig.obj_id == "late"
         for task in annotated.tasks
         for trig in task.prefetch_after
+    )
+
+
+def test_pressurefit_plans_objects_after_global_workspace_reserve():
+    bare = TaskChain(
+        initial_memory=[
+            Object(id="early", size=4, location="backing"),
+            Object(id="late", size=5, location="backing"),
+        ],
+        tasks=[
+            Task(
+                id="scratch-heavy",
+                inputs=["early"],
+                outputs=[],
+                runtime=10,
+                workspace_bytes=3,
+            ),
+            Task(
+                id="object-heavy",
+                inputs=["late"],
+                outputs=[],
+                runtime=1,
+                workspace_bytes=1,
+            ),
+        ],
+        fast_memory_capacity=9,
+        backing_memory_capacity=20,
+        bandwidth_from_slow=5,
+        bandwidth_to_slow=5,
+    )
+
+    annotated, diagnostics = plan_pressurefit_policy(
+        bare,
+        preplace="task0",
+        program_leeway_bytes=1,
+    )
+    log = run(annotated, snapshots=False)
+
+    assert diagnostics.program_memory_capacity == 9
+    assert diagnostics.fast_memory_capacity == 5
+    assert diagnostics.max_task_workspace_bytes == 3
+    assert diagnostics.program_leeway_bytes == 1
+    assert annotated.fast_memory_capacity == 8
+    assert [task.workspace_bytes for task in annotated.tasks] == [3, 1]
+    assert log.peak_fast_memory_bytes == 7
+    assert {obj.id for obj in annotated.initial_memory if obj.location == "fast"} == {
+        "early"
+    }
+    assert any(
+        trigger.obj_id == "late"
+        for task in annotated.tasks
+        for trigger in task.prefetch_after
+    )
+
+
+def test_pressurefit_rejects_workspace_and_leeway_larger_than_budget():
+    bare = TaskChain(
+        initial_memory=[],
+        tasks=[Task(id="task", inputs=[], outputs=[], runtime=1, workspace_bytes=8)],
+        fast_memory_capacity=10,
+    )
+
+    with pytest.raises(ValueError, match="maximum task workspace plus program leeway"):
+        apply_pressurefit_policy(bare, program_leeway_bytes=3)
+
+
+def test_pressurefit_fails_fast_on_policy_independent_task_footprint():
+    bare = TaskChain(
+        initial_memory=[
+            Object(id="state", size=6, location="backing"),
+            Object(id="other", size=1, location="backing"),
+        ],
+        tasks=[
+            Task(id="feasible", inputs=["other"], outputs=[], runtime=1),
+            Task(
+                id="impossible-update",
+                inputs=["state"],
+                mutates_inputs=["state"],
+                outputs=[OutputAlloc(id="fresh", size=3)],
+                runtime=1,
+                workspace_bytes=2,
+            ),
+            Task(
+                id="second-impossible",
+                inputs=["state"],
+                outputs=[OutputAlloc(id="fresh-again", size=4)],
+                runtime=1,
+                workspace_bytes=3,
+            ),
+        ],
+        fast_memory_capacity=10,
+        backing_memory_capacity=20,
+        bandwidth_from_slow=5,
+        bandwidth_to_slow=5,
+    )
+
+    with pytest.raises(ValueError) as caught:
+        apply_pressurefit_policy(bare, preplace="task0")
+    message = str(caught.value)
+    assert "2 task(s) cannot satisfy fast memory need" in message
+    assert (
+        "task 'impossible-update' requires 6 bytes of inputs + 3 bytes of "
+        "compute outputs + 0 bytes of workspace = 9 > fast_memory_capacity=7"
+        in message
+    )
+    assert (
+        "task 'second-impossible' requires 6 bytes of inputs + 4 bytes of "
+        "compute outputs + 0 bytes of workspace = 10 > fast_memory_capacity=7"
+        in message
     )
 
 

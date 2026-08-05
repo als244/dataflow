@@ -55,6 +55,8 @@ from dataflow_sim.policies.pressurefit_aux.types import (
 )
 from dataflow_sim.policies.pressurefit_aux.reducer import _reduce_to_fit
 from dataflow_sim.core.schema import TaskChain
+from dataflow_sim.core.validate import validate_planning_input
+from dataflow_sim.engine.simulator import run as simulate
 
 # Prefetch rules in tie-break priority order. The second half repeats the four
 # boundary-selection rules while allowing clean zero-width gaps to coalesce.
@@ -89,12 +91,66 @@ class _CandidateResult:
     name: str
 
 
+def _object_planning_chain(
+    bare: TaskChain,
+    *,
+    program_memory_capacity: int | None,
+    program_leeway_bytes: int,
+) -> tuple[TaskChain, int]:
+    """Project one workload onto PressureFit's object-only capacity model."""
+    if program_leeway_bytes < 0:
+        raise ValueError("program_leeway_bytes must be nonnegative")
+    max_workspace = max(
+        (task.workspace_bytes for task in bare.tasks),
+        default=0,
+    )
+    if program_memory_capacity is None:
+        object_capacity = None
+    else:
+        object_capacity = (
+            program_memory_capacity - max_workspace - program_leeway_bytes
+        )
+        if object_capacity < 0:
+            raise ValueError(
+                "infeasible: program memory capacity is smaller than the "
+                "maximum task workspace plus program leeway "
+                f"({program_memory_capacity} < {max_workspace} + "
+                f"{program_leeway_bytes})"
+            )
+    return (
+        replace(
+            bare,
+            fast_memory_capacity=object_capacity,
+            tasks=[replace(task, workspace_bytes=0) for task in bare.tasks],
+        ),
+        max_workspace,
+    )
+
+
+def _restore_execution_workspace(
+    planned: TaskChain,
+    source: TaskChain,
+    *,
+    execution_memory_capacity: int | None,
+) -> TaskChain:
+    workspace_by_task = {task.id: task.workspace_bytes for task in source.tasks}
+    return replace(
+        planned,
+        fast_memory_capacity=execution_memory_capacity,
+        tasks=[
+            replace(task, workspace_bytes=workspace_by_task[task.id])
+            for task in planned.tasks
+        ],
+    )
+
+
 def pressurefit(
     bare: TaskChain,
     *,
     fast_memory_capacity: int | None = None,
     preplace: str = "greedy",
     prefetch_rules: tuple[str, ...] | None = None,
+    program_leeway_bytes: int = 0,
 ) -> tuple[TaskChain, PressureFitDiagnostics]:
     """Run the PressureFit algorithm and return its plan plus diagnostics.
 
@@ -112,8 +168,20 @@ def pressurefit(
     planning_start = time.perf_counter()
     if fast_memory_capacity is not None:
         bare = replace(bare, fast_memory_capacity=fast_memory_capacity)
+    program_memory_capacity = bare.fast_memory_capacity
+    source = bare
+    bare, max_task_workspace_bytes = _object_planning_chain(
+        bare,
+        program_memory_capacity=program_memory_capacity,
+        program_leeway_bytes=program_leeway_bytes,
+    )
     if preplace not in ("greedy", "task0"):
         raise ValueError(f"preplace must be 'greedy' or 'task0', got {preplace!r}")
+
+    # Admission(W, H): fail before seed construction or heuristic search when
+    # one task's policy-independent object footprint exceeds the object budget.
+    # Workspace has already been conservatively removed from that budget.
+    validate_planning_input(bare)
 
     # Analyze(W, H).
     ideal = _compute_ideal_starts(bare)
@@ -193,6 +261,20 @@ def pressurefit(
     # Return the simulator-valid plan with minimum makespan.
     results.sort(key=lambda x: x.makespan_us)
     selected = results[0]
+    restored = _restore_execution_workspace(
+        selected.chain,
+        source,
+        execution_memory_capacity=(
+            None
+            if program_memory_capacity is None
+            else program_memory_capacity - program_leeway_bytes
+        ),
+    )
+    if program_memory_capacity is not None:
+        # Keep B-L on the returned execution chain. Transfer-start admission
+        # is capacity-sensitive: validating at B-L and then restoring B could
+        # legally start prefetches earlier and consume the reserved leeway.
+        simulate(restored, snapshots=False)
     selected_candidates = [
         replace(diag, selected=diag.name == selected.name)
         for diag in candidate_diagnostics
@@ -201,7 +283,10 @@ def pressurefit(
         planning_time_s=time.perf_counter() - planning_start,
         task_count=facts.n,
         object_count=len(facts.sizes),
+        program_memory_capacity=program_memory_capacity,
         fast_memory_capacity=bare.fast_memory_capacity,
+        max_task_workspace_bytes=max_task_workspace_bytes,
+        program_leeway_bytes=program_leeway_bytes,
         candidate_count=len(selected_candidates),
         valid_candidate_count=sum(
             1 for diag in selected_candidates if diag.status == "valid"
@@ -210,7 +295,7 @@ def pressurefit(
         selected_makespan_us=selected.makespan_us,
         candidates=selected_candidates,
     )
-    return selected.chain, diagnostics
+    return restored, diagnostics
 
 
 def apply_pressurefit_policy(
@@ -219,6 +304,7 @@ def apply_pressurefit_policy(
     fast_memory_capacity: int | None = None,
     preplace: str = "greedy",
     prefetch_rules: tuple[str, ...] | None = None,
+    program_leeway_bytes: int = 0,
 ) -> TaskChain:
     """Return only the annotated chain selected by :func:`pressurefit`."""
     chain, _diagnostics = pressurefit(
@@ -226,6 +312,7 @@ def apply_pressurefit_policy(
         fast_memory_capacity=fast_memory_capacity,
         preplace=preplace,
         prefetch_rules=prefetch_rules,
+        program_leeway_bytes=program_leeway_bytes,
     )
     return chain
 
@@ -236,6 +323,7 @@ def plan_pressurefit_policy(
     fast_memory_capacity: int | None = None,
     preplace: str = "greedy",
     prefetch_rules: tuple[str, ...] | None = None,
+    program_leeway_bytes: int = 0,
 ) -> tuple[TaskChain, PressureFitDiagnostics]:
     """Return PressureFit's annotated chain and candidate diagnostics."""
     return pressurefit(
@@ -243,6 +331,7 @@ def plan_pressurefit_policy(
         fast_memory_capacity=fast_memory_capacity,
         preplace=preplace,
         prefetch_rules=prefetch_rules,
+        program_leeway_bytes=program_leeway_bytes,
     )
 
 
