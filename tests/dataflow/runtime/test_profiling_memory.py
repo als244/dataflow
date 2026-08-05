@@ -14,6 +14,8 @@ Tests:
   back-to-back (cold disk cache) leaves torch's reserved memory at the
   baseline after EVERY table — the per-table release holds and nothing
   accumulates with table count.
+- test_workspace_excludes_first_launch_session_allocation: persistent first-use
+  CUDA state is warmed before task-local allocator measurement.
 """
 import pytest
 
@@ -52,3 +54,53 @@ def test_tables_leave_no_reserved_memory(tmp_path):
             f"{(reserved - baseline) / 2**20:.0f} MiB reserved — the "
             f"per-table release regressed and a long sweep will strand "
             f"memory per table again")
+
+
+def test_workspace_excludes_first_launch_session_allocation():
+    import torch
+
+    from dataflow.core import OutputSpec, Program, TaskSpec
+    from dataflow.runtime.device.cuda import CudaBackend
+    from dataflow_training.run.profiling import profile_program
+
+    class Executable:
+        session_allocation = None
+
+        def launch(self, _ctx):
+            if self.session_allocation is None:
+                self.session_allocation = torch.empty(
+                    8 << 20,
+                    dtype=torch.uint8,
+                    device="cuda",
+                )
+            scratch = torch.empty(16 << 20, dtype=torch.uint8, device="cuda")
+            scratch.fill_(1)
+
+    executable = Executable()
+    try:
+        program = Program(
+            name="steady-workspace",
+            tasks=(
+                TaskSpec(
+                    id="task",
+                    compute_block_key="steady_workspace",
+                    outputs=(OutputSpec("output", 4),),
+                ),
+            ),
+            final_locations={"output": "fast"},
+        )
+        profiles = profile_program(
+            program,
+            lambda _task: executable,
+            CudaBackend(),
+            warmup=1,
+            repeats=1,
+            min_sample_seconds=0.0,
+            soak_seconds=0.0,
+            contend_pcie=False,
+        )
+        workspace = next(iter(profiles.values())).workspace_bytes
+        assert 16 << 20 <= workspace < 32 << 20
+    finally:
+        executable.session_allocation = None
+        torch.cuda.empty_cache()

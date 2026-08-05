@@ -27,13 +27,18 @@ The plan's measurement-over-estimation principle, mechanized:
   std 1.28 to 63.3, saturated its CE softmax, left 99.9% of dlogits exactly
   zero, and under-priced head_loss ~20% on H100 (155 ms profiled vs 187 ms in
   a real step) — a near-idle datapath holding a clock the run never sees.
-- **Workspace**: the torch caching-allocator peak delta around one launch —
-  exactly the scratch-lane bytes the executable used beyond runtime-owned
-  buffers (runtime buffers come from our pool, invisible to torch's
-  allocator, so the delta isolates op-internal scratch).
+- **Workspace**: after the task's warmup launches, the torch caching-allocator
+  peak delta around one additional launch — exactly the steady-state scratch
+  bytes beyond runtime-owned buffers. First-call JIT, handle, and stream-local
+  allocations are session preparation, not task-lifetime workspace.
+- **PCIe load**: task timing is taken on an idle host link by default.  The
+  optional saturated-link stress mode is deliberately not a production price:
+  it cannot isolate a compound entrypoint that synchronizes the device, because
+  that synchronization drains the synthetic DMA queues and charges their wait
+  to the task.  Real transfer pressure belongs in the schedule simulator.
 
-`apply_measured_costs` returns a program with measured `runtime_us` per task
-and metadata `{"measured": {"runtime_us", "workspace_bytes", ...}}`; re-plan
+`apply_measured_costs` returns a program with measured `runtime_us` and
+`workspace_bytes` per task plus detailed measurement metadata; re-plan
 it with `plan_program` before headline runs (final planning on measured
 costs).
 
@@ -257,23 +262,21 @@ def _cover_count(expected_us: float, chunk_us: float,
 
 
 class _PcieContender:
-    """Keeps bidirectional PCIe DMA grinding while tasks are timed.
+    """Keep bidirectional PCIe DMA busy during an opt-in stress profile.
 
-    Real training overlaps kernels with prefetch/offload traffic that
-    competes for DRAM bandwidth; timing on an idle bus under-prices
-    memory-bound kernels. Measured on bs4/ga4 @ 18 GiB (fused kernels):
-    idle-bus profiling -> tasks +5..7% slower in-run; SATURATED bidi
-    contention (this mode) -> tasks 3..6% FASTER in-run, i.e. the bound
-    from the other side (the real bus duty cycle was ~34%/21%, not 100%).
-    DEFAULT ON (locked 2026-07-06): between the two available biases,
-    saturated contention is the better default — the error is smaller
-    (+3..6% vs -5..-7% per task) and CONSERVATIVE (sim under-promises,
-    real over-delivers), and the planner internalizes contention, which
-    profiling showed is the direction reality rewards (recompute
-    keeps winning at generous budgets BECAUSE it avoids unpriced
-    contention). The unbiased fix remains duty-cycle-matched contention
-    (2-pass: plan -> re-profile at the plan's duty cycle), not yet built.
-    Scheduling fidelity is unaffected either way (replay gap ~0.4%)."""
+    This is a diagnostic upper-load condition, not the default pricing mode.
+    It models neither a candidate plan's transfer duty cycle nor exact transfer
+    placement.  More importantly, CUDA-event attribution is invalid when a
+    compound task synchronizes the device while these copies are queued: the
+    task's host call waits for unrelated DMA and the end event cannot be
+    submitted until that wait returns.  Qwen 3.5's FLA chunk-index preparation
+    exposed this failure mode (a roughly 80 ms task was once cached at 829 ms,
+    with 79--2,085 ms samples).
+
+    Enable only for deliberate stress diagnostics with
+    ``DATAFLOW_PROFILE_CONTEND_PCIE=1``.  Ordinary pricing measures the task
+    alone; the simulator accounts for the actual plan's PCIe transfers.
+    """
 
     CHUNK = 256 * 1024 * 1024
 
@@ -365,7 +368,7 @@ DEFAULT_SAMPLE_SECONDS = 0.0
 DEFAULT_SOAK_SECONDS = float(_os.environ.get(
     "DATAFLOW_PROFILE_SOAK_S", "1.0"))
 DEFAULT_CONTEND_PCIE = _os.environ.get(
-    "DATAFLOW_PROFILE_CONTEND_PCIE", "1").strip().lower() \
+    "DATAFLOW_PROFILE_CONTEND_PCIE", "0").strip().lower() \
     not in {"0", "false", "no", "off"}
 DEFAULT_REPEATS = int(_os.environ.get("DATAFLOW_PROFILE_REPEATS", "9"))
 
@@ -541,14 +544,6 @@ def profile_program(
                 fill(ctx)
                 torch.cuda.synchronize()
 
-            # workspace: allocator peak delta around one launch
-            torch.cuda.synchronize()
-            torch.cuda.reset_peak_memory_stats()
-            base = torch.cuda.memory_allocated()
-            executable.launch(ctx)
-            torch.cuda.synchronize()
-            workspace = max(0, torch.cuda.max_memory_allocated() - base)
-
             if contender is not None:
                 # initial guess only — topped up per repeat below from
                 # MEASURED durations, so neither the plan's estimate nor
@@ -580,6 +575,27 @@ def profile_program(
                 executable.launch(ctx)
                 b = backend.record_event(stream)
                 _check(cudart.cudaEventSynchronize(b.raw))
+
+            # Workspace is a steady-state task-local RESERVED-memory peak.
+            # One-shot JIT, cuBLAS-handle, and stream-local allocations belong
+            # to resolver/session preparation and may persist after the first
+            # launch; measuring before warmup would falsely charge them to
+            # every task use. Warm first, then measure one more invocation.
+            torch.cuda.synchronize()
+            # Return inactive warmup scratch first. Persistent context/library
+            # state remains live and is covered by the program-wide leeway;
+            # any new caching-allocator reservation made by this invocation is
+            # the conservative task workspace used by planning.
+            torch.cuda.empty_cache()
+            torch.cuda.reset_peak_memory_stats()
+            base_reserved = torch.cuda.memory_reserved()
+            executable.launch(ctx)
+            torch.cuda.synchronize()
+            workspace = max(
+                0,
+                torch.cuda.max_memory_reserved() - base_reserved,
+            )
+
             one_us = max(backend.event_time_us(b) - backend.event_time_us(a),
                          1.0)
             inner = max(1, min(MAX_INNER, int(BRACKET_US / one_us)))
@@ -776,11 +792,13 @@ def apply_measured_costs(program: Program, profiles: dict[tuple, TaskProfile],
         new_tasks.append(replace(
             task,
             runtime_us=p.runtime_us,
+            workspace_bytes=p.workspace_bytes,
             metadata={
                 **task.metadata,
                 "measured": {
                     "runtime_us": p.runtime_us,
                     "workspace_bytes": p.workspace_bytes,
+                    "workspace_measurement": "allocator_reserved_growth",
                     "repeats": p.repeats,
                     "mean_us": p.mean_us,
                     "stdev_us": p.stdev_us,
@@ -793,9 +811,6 @@ def apply_measured_costs(program: Program, profiles: dict[tuple, TaskProfile],
     return replace(program, tasks=tuple(new_tasks))
 
 
-# bump when task-internals change measured behavior (runtime or workspace):
-# the cache key cannot see code, so this is the manual invalidation lever.
-# rev 2: BlockRecompute stops at w1/w3 (down-proj/swiglu/y removed).
 def host_backing_cap_bytes(*, reserve_gib: float = 10.0) -> int:
     """Planning cap for pinned-host backing, derived from the host's
     CURRENTLY AVAILABLE memory (MemAvailable) minus a flat leeway
@@ -825,7 +840,9 @@ def host_backing_cap_bytes(*, reserve_gib: float = 10.0) -> int:
     return int(max(0, avail - reserve_gib * 1024 ** 3))
 
 
-PROFILE_CACHE_REV = "7"  # manual override; impl_fingerprint() below
+# Bump when task internals or measurement semantics change. Rev 8 switches
+# workspace from allocated growth to allocator-reserved growth.
+PROFILE_CACHE_REV = "8"  # manual override; impl_fingerprint() below
 # auto-invalidates on ANY kernel/block source change (the muon bf16
 # migration changed optimizer cost 11x without touching an impl_id or
 # this rev — a stale 414 ms profile priced a 37 ms task until the
@@ -905,6 +922,7 @@ def load_or_profile(
         "contend_pcie": kwargs.get("contend_pcie", DEFAULT_CONTEND_PCIE),
         "repeats": kwargs.get("repeats", DEFAULT_REPEATS),
         "torch": torch.__version__,
+        "cuda_allocator_config": os.environ.get("PYTORCH_CUDA_ALLOC_CONF"),
         "code_rev": PROFILE_CACHE_REV,
         "impl": impl_fingerprint(),
     }
