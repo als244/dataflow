@@ -133,8 +133,6 @@ class PackedLayout:
 
     def unpack_tensor(self, flat) -> dict:
         """Views into a flat uint8 torch tensor (golden-reference side)."""
-        import torch
-
         from dataflow.runtime.interop import TORCH_DTYPE_BY_NAME
 
         out = {}
@@ -883,6 +881,16 @@ class Qwen35Dims:
     # populated by the family derive_dims (dims alone don't know n_layers). DATA, indexed.
     kinds: tuple[str, ...] = ()
 
+    @property
+    def segment_chunk_sizes(self) -> tuple[int, ...]:
+        """Round metadata required by the Gated-DeltaNet entrypoints.
+
+        The round prologue materializes these chunk maps once. Forward,
+        recompute, and backward consume them without deriving counts from a
+        CUDA tensor (which would introduce a hidden device synchronization).
+        """
+        return (64,)
+
 
 def _qwen35_lin_attn_specs(dims) -> list[tuple[str, tuple[int, ...]]]:
     """DeltaNet attention-part weight fields (shared by the dense and MoE
@@ -1168,4 +1176,3 @@ def head_weight_layout(dims) -> PackedLayout:
         ("w", (dims.vocab_size, dims.d_model)),
         ("final_norm_w", (dims.d_model,)),
     ], ns="head"))
-

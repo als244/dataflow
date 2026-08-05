@@ -37,7 +37,6 @@ import torch
 
 from dataflow.core import TaskSpec
 
-from ...blocks import ops
 from ...kernels import KernelSet, resolve_kernels
 from ...blocks.layouts import (
     PackedLayout,
@@ -55,16 +54,24 @@ from ..llama3.blocks import BlockBwd, BlockFwd, BlockRecompute
 
 
 def _cu_seqlens(seg) -> tuple:
-    """(cu_seqlens int64, chunk_indices) for packed rounds — from the round's
-    Segments; (None, None) for a single sequence (fla's non-varlen path). cu
-    is a device->device cast of the already-materialized ``seg.cu`` (int32) —
-    no host->device build / hidden sync."""
+    """Read the FLA varlen metadata prepared by the round prologue.
+
+    ``prepare_chunk_indices(seg.cu, 64)`` is intentionally forbidden here:
+    FLA's CUDA-count path uses ``repeat_interleave`` and reads the total count
+    on the host, synchronizing the device on every compound task launch.  The
+    workload-owned :class:`Segments` instead materializes both tensors once
+    from host lengths before any block dispatches.
+    """
     if len(seg.lengths) == 1:
         return None, None
-    from fla.modules.conv.triton.ops import prepare_chunk_indices
-
-    cu = seg.cu.to(torch.int64)
-    return cu, prepare_chunk_indices(cu, 64)
+    chunk_indices = seg.chunk_indices.get(64)
+    if seg.cu_int64 is None or chunk_indices is None:
+        raise RuntimeError(
+            "Qwen 3.5 round metadata was not prepared: the round prologue "
+            "must materialize int64 cumulative lengths and 64-token chunk "
+            "indices before block execution"
+        )
+    return seg.cu_int64, chunk_indices
 
 
 # ---------------------------------------------------------------------------
@@ -433,7 +440,6 @@ class Qwen35AttnBlockFwd(BlockFwd):
     @staticmethod
     def _stage_gate_o(kctx, K, d, st):
         # linear-triple conversion pending (exemplar: llama3)
-        t = st["x"].shape[0]
         gated = st.pop("attn_out") * torch.sigmoid(st.pop("gate").float()).to(torch.bfloat16)
         a = st["a"]
         if a is not None:
