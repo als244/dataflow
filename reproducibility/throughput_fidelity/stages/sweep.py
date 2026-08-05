@@ -151,6 +151,13 @@ def save_plan_artifact(path, planned):
            "peak_backing_bytes": planned.peak_backing_bytes,
            "recompute_levels": dict(planned.recompute_levels or {}),
            "transfer_stats": planned.transfer_stats or {},
+           "program_leeway_bytes": planned.program_leeway_bytes,
+           "max_task_workspace_bytes": planned.max_task_workspace_bytes,
+           "object_memory_capacity": planned.object_memory_capacity,
+           "user_memory_capacity": planned.user_memory_capacity,
+           "packing_reserve_bytes": planned.packing_reserve_bytes,
+           "static_extent_bytes": planned.static_extent_bytes,
+           "static_extent_replans": planned.static_extent_replans,
            "program": pd}
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with gzip.open(path, "wt") as fh:
@@ -173,7 +180,14 @@ def load_plan_artifact(path):
         peak_fast_bytes=art["peak_fast_bytes"],
         recompute_levels=art["recompute_levels"],
         peak_backing_bytes=art["peak_backing_bytes"],
-        transfer_stats=art["transfer_stats"])
+        transfer_stats=art["transfer_stats"],
+        program_leeway_bytes=art.get("program_leeway_bytes", 0),
+        max_task_workspace_bytes=art.get("max_task_workspace_bytes", 0),
+        object_memory_capacity=art.get("object_memory_capacity"),
+        user_memory_capacity=art.get("user_memory_capacity"),
+        packing_reserve_bytes=art.get("packing_reserve_bytes", 0),
+        static_extent_bytes=art.get("static_extent_bytes"),
+        static_extent_replans=art.get("static_extent_replans", 0))
     return art, planned
 
 

@@ -267,6 +267,19 @@ def stage_measure(cfg: Config, env: dict) -> None:
     """Run the selected cells on the real engine and report each measurement
     beside the prediction from its saved plan artifact — the same program,
     by construction and by prog_id gate; measure performs no planning."""
+    cells = json.loads(cfg.cells_json.read_text()) \
+        if cfg.cells_json.exists() else []
+    if not cells:
+        # An entirely infeasible prediction slice is valid evidence. Selection
+        # writes an empty list because there is nothing executable to measure;
+        # invoking sweep.py with that list would return failure and prevent the
+        # launcher from continuing to independent budgets.
+        say("measure — no feasible selected cells; skipped")
+        for opt in cfg.opts:
+            out = cfg.data / f"measure_{opt}.jsonl"
+            if not cfg.resume or not out.exists():
+                out.write_text("")
+        return
     for opt in cfg.opts:
         say(f"measure ({opt})")
         out = cfg.data / f"measure_{opt}.jsonl"

@@ -218,6 +218,8 @@ def section_frontier_truth(run: Run, opt: str) -> str:
     for r in pred:
         slots.setdefault((r["seq"], r["t_step"], r["budget"]), []).append(r)
     contested = [s for s, rows in slots.items() if len(rows) > 1]
+    if not contested:
+        return ""
     robust = 0
     for s in contested:
         ordered = sorted(slots[s], key=lambda r: -r["tok_s"])

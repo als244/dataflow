@@ -383,6 +383,7 @@ def main():
     env = {
         "host": os.uname().nodename,
         "device": props.name,
+        "cuda_allocator_config": os.environ.get("PYTORCH_CUDA_ALLOC_CONF"),
         "device_gib": round(device_bytes / GIB, 1),
         "link": link,
         "host_limit_gib": round(host_bytes / GIB, 1),
