@@ -109,6 +109,18 @@ def combo_row_from_plan(cfg, budget: float, planned) -> dict:
         "eff_tfs": eff / planned.makespan_us / 1e6,
         "hw_tfs": hwf / planned.makespan_us / 1e6,
         "peak_gib": planned.peak_fast_bytes / 1024 ** 3,
+        "object_capacity_gib": (
+            None
+            if planned.object_memory_capacity is None
+            else planned.object_memory_capacity / 1024**3
+        ),
+        "packing_reserve_gib": planned.packing_reserve_bytes / 1024**3,
+        "static_extent_gib": (
+            None
+            if planned.static_extent_bytes is None
+            else planned.static_extent_bytes / 1024**3
+        ),
+        "static_extent_replans": planned.static_extent_replans,
         "pred_peak_backing_gib": planned.peak_backing_bytes / 1024 ** 3,
         "h2d_gb": (planned.transfer_stats.get("from_slow", {})
                    .get("bytes", 0) / 1e9),

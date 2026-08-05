@@ -9,7 +9,10 @@ from dataclasses import replace
 from pathlib import Path
 
 from dataflow.core.jsonio import program_to_dict
-from dataflow_training.lowering.planning import plan_program
+from dataflow_training.lowering.planning import (
+    DEFAULT_PROGRAM_LEEWAY_BYTES,
+    plan_program,
+)
 
 from .driver import RunResult, init_model
 from .presets import cfg_dict, tokens_per_step
@@ -179,7 +182,8 @@ def fleet_loop(ranks, gspec, recipe, pipeline, steps, *, budgets, seed,
             fast_memory_capacity=int(budgets[i] * 1024 ** 3),
             backing_capacity=backing_bytes or None,
             recompute=True,
-            build_variant=variant)
+            build_variant=variant,
+            program_leeway_bytes=DEFAULT_PROGRAM_LEEWAY_BYTES)
         extra_slots = [s.id for s in planned.program.initial_objects
                        if s.id.startswith("tokens_") and
                        not s.id.startswith("tokens_0_")]

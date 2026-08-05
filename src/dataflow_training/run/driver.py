@@ -641,20 +641,49 @@ def plan_at_budget(cfg, budget_gib: float, *, recompute: bool = True,
     calls, so a sweep re-profiles per geometry, never per budget."""
     import functools
 
+    from dataflow.service import prepare_placement
     from dataflow_training.model_families.families import resolve_family
-    from dataflow_training.lowering.planning import plan_program
+    from dataflow_training.lowering.planning import (
+        DEFAULT_PROGRAM_LEEWAY_BYTES,
+        fit_static_extent,
+        plan_program,
+    )
 
     fam = resolve_family(cfg)
     cache = profile_cache if profile_cache is not None else {}
     backing_cap = int(backing_gib * 1024 ** 3) if backing_gib else None
+    user_capacity = int(budget_gib * 1024**3)
+    fixed_leeway = DEFAULT_PROGRAM_LEEWAY_BYTES
+
+    def admit_static_extent(planned, replan_for_capacity):
+        def extent(program):
+            placement, _demand, _index = prepare_placement(program, {})
+            return placement.extent_bytes
+
+        return fit_static_extent(
+            planned,
+            user_memory_capacity=user_capacity,
+            physical_extent=extent,
+            fixed_program_leeway_bytes=fixed_leeway,
+            fallback_replan_for_capacity=replan_for_capacity,
+        )
+
     if not measured:
         variant = (functools.partial(roofline_variant, fam, cfg, hw)
                    if recompute else None)
         base = fam.lower(cfg, hw=hw) if hw is not None else fam.lower(cfg)
-        return plan_program(base,
-                            fast_memory_capacity=int(budget_gib * 1024 ** 3),
-                            backing_capacity=backing_cap,
-                            recompute=recompute, build_variant=variant)
+        def replan_for_capacity(capacity):
+            return plan_program(
+                base,
+                fast_memory_capacity=capacity,
+                backing_capacity=backing_cap,
+                recompute=recompute,
+                build_variant=variant,
+                program_leeway_bytes=fixed_leeway,
+            )
+
+        planned = replan_for_capacity(user_capacity)
+        return admit_static_extent(planned, replan_for_capacity)
     profiles, resolver, pcie = measured_pricing_inputs(
         cfg, recompute=recompute, profile_cache=cache,
         require_cached=require_cached)
@@ -664,10 +693,18 @@ def plan_at_budget(cfg, budget_gib: float, *, recompute: bool = True,
     from dataflow_training.run.profiling import measured_program
 
     base = measured_program(fam, cfg, profiles, resolver, pcie)
-    return plan_program(base,
-                        fast_memory_capacity=int(budget_gib * 1024 ** 3),
-                        backing_capacity=backing_cap,
-                        recompute=recompute, build_variant=variant)
+    def replan_for_capacity(capacity):
+        return plan_program(
+            base,
+            fast_memory_capacity=capacity,
+            backing_capacity=backing_cap,
+            recompute=recompute,
+            build_variant=variant,
+            program_leeway_bytes=fixed_leeway,
+        )
+
+    planned = replan_for_capacity(user_capacity)
+    return admit_static_extent(planned, replan_for_capacity)
 
 
 def run_engine(client, cfg, recipe: Recipe, pipeline, steps: int, *,

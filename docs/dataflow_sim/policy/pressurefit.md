@@ -59,7 +59,8 @@ The input is a bare `TaskChain` containing:
 - ordered task runtimes, inputs, outputs, and `mutates_inputs` metadata;
 - object byte sizes and initial/final locations;
 - inbound and outbound bandwidths; and
-- `fast_memory_capacity`.
+- the total `fast_memory_capacity`, optional task `workspace_bytes`, and an
+  optional fixed `program_leeway_bytes`.
 
 The returned `TaskChain` preserves the workload and adds executable movement
 annotations:
@@ -71,6 +72,31 @@ annotations:
 The simulator, not the analytic pressure model, is the physical authority for
 capacity, FIFO transfer timing, and makespan. Every selected plan has passed a
 full simulator replay.
+
+PressureFit deliberately has no task-local workspace logic. Its wrapper first
+derives one object-only capacity:
+
+```text
+object capacity = total capacity - max(task.workspace_bytes) - program leeway
+```
+
+It then sets task workspaces to zero for heuristic search and candidate
+simulation. After selecting a plan, the wrapper restores the original
+workspace declarations and performs one final simulator replay against
+`total capacity - program leeway`; the returned execution chain retains that
+capacity because transfer-start timing is capacity-sensitive. This conservative split keeps the residency
+algorithm simple while still proving `objects + active workspace + leeway <=
+total capacity`. Workspace remains opaque, receives no placement or transfer
+annotations, and exists only for the duration of its task.
+
+A static-arena executor adds one deployment check above PressureFit. The
+physicalizer computes the exact packed object extent of the selected annotated
+chain. If `extent + max workspace + leeway` exceeds the user's program budget,
+the excess becomes a packing reserve and the caller reruns PressureFit at the
+reduced capacity. The normal path preserves the selected task/recompute
+variant; a complete recompute search is a fallback only when that fixed variant
+cannot fit. This feedback belongs to lowering/physicalization rather than the
+workload-agnostic PressureFit algorithm.
 
 ## Planner behavior
 

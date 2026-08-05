@@ -6,13 +6,20 @@ internals. Swapping the policy later means swapping ``policy_fn`` here.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Mapping
 
 from dataflow.core import Program
 from dataflow.core.convert import apply_chain_annotations, to_sim_chain
 
 BuildVariant = Callable[[Mapping[str, int]], Program]
+PhysicalExtent = Callable[[Program], int]
+ReplanForCapacity = Callable[[int], "PlannedProgram"]
+
+# Fixed program-wide allowance for CUDA context, loaded framework/kernel
+# modules, persistent streams/handles, and small allocator effects. Geometry
+# feedback is accounted separately through ``packing_reserve_bytes``.
+DEFAULT_PROGRAM_LEEWAY_BYTES = 3 << 29  # 1.5 GiB
 
 
 @dataclass(frozen=True)
@@ -28,6 +35,13 @@ class PlannedProgram:
     transfer_stats: dict = field(default_factory=dict)
     diagnostics: Any = None          # policy diagnostics (policy-specific)
     recompute_result: Any = None     # sim RecomputePlanResult when recompute ran
+    program_leeway_bytes: int = 0
+    max_task_workspace_bytes: int = 0
+    object_memory_capacity: int | None = None
+    user_memory_capacity: int | None = None
+    packing_reserve_bytes: int = 0
+    static_extent_bytes: int | None = None
+    static_extent_replans: int = 0
 
 
 def transfer_summary(log: Any, program: Program) -> dict:
@@ -86,6 +100,129 @@ def _to_sim_rewrites(program: Program) -> list[Any]:
     ]
 
 
+def strip_plan_annotations(program: Program) -> Program:
+    """Recover the priced bare variant from one annotated plan.
+
+    Replanning static geometry must preserve the selected task/recompute ABIs
+    while removing only residency decisions. Initial fast copies duplicated
+    from backing by PressureFit are likewise planner annotations.
+    """
+    backing_ids = {
+        value.id for value in program.initial_objects if value.location == "backing"
+    }
+    initial = tuple(
+        value
+        for value in program.initial_objects
+        if not (value.location == "fast" and value.id in backing_ids)
+    )
+    tasks = tuple(
+        replace(
+            task,
+            releases_after=(),
+            offload_after=(),
+            prefetch_after=(),
+        )
+        for task in program.tasks
+    )
+    return replace(program, initial_objects=initial, tasks=tasks)
+
+
+def fit_static_extent(
+    planned: PlannedProgram,
+    *,
+    user_memory_capacity: int,
+    physical_extent: PhysicalExtent,
+    fixed_program_leeway_bytes: int,
+    fallback_replan_for_capacity: ReplanForCapacity | None = None,
+    maximum_replans: int = 8,
+    minimum_reserve_step_bytes: int = 64 << 20,
+    preplace: str = "task0",
+) -> PlannedProgram:
+    """Constrain a selected plan to one executor's static arena geometry.
+
+    PressureFit bounds dynamic object residency. A static arena physicalizer
+    may need a larger contiguous extent. Measure that exact extent and convert
+    any excess into a monotonically increasing packing reserve. The common
+    path reruns only PressureFit over the already selected/priced task variant.
+    If that variant cannot fit the reduced capacity and
+    ``fallback_replan_for_capacity`` is supplied, the caller's complete
+    planning search is retried. Profiling is never repeated.
+    """
+    if user_memory_capacity <= 0:
+        raise ValueError("user_memory_capacity must be positive")
+    if fixed_program_leeway_bytes < 0:
+        raise ValueError("fixed_program_leeway_bytes must be nonnegative")
+    if maximum_replans < 0 or minimum_reserve_step_bytes <= 0:
+        raise ValueError("static-extent retry bounds must be positive")
+
+    from dataflow_sim.core.validate import ValidationError
+    from dataflow_sim.engine.errors import SimulationCapacityError
+
+    current = planned
+    selected_levels = dict(planned.recompute_levels)
+    selected_recompute_result = planned.recompute_result
+    packing_reserve = 0
+    for attempt in range(maximum_replans + 1):
+        max_workspace = max(
+            (task.workspace_bytes for task in current.program.tasks),
+            default=0,
+        )
+        extent = int(physical_extent(current.program))
+        if extent < 0:
+            raise ValueError("physical extent must be nonnegative")
+        required = extent + max_workspace + fixed_program_leeway_bytes
+        if required <= user_memory_capacity:
+            return replace(
+                current,
+                recompute_levels=selected_levels,
+                recompute_result=selected_recompute_result,
+                program_leeway_bytes=fixed_program_leeway_bytes,
+                max_task_workspace_bytes=max_workspace,
+                user_memory_capacity=user_memory_capacity,
+                packing_reserve_bytes=packing_reserve,
+                static_extent_bytes=extent,
+                static_extent_replans=attempt,
+            )
+        if attempt == maximum_replans:
+            break
+        excess = required - user_memory_capacity
+        packing_reserve += max(excess, minimum_reserve_step_bytes)
+        planning_capacity = user_memory_capacity - packing_reserve
+        if planning_capacity <= fixed_program_leeway_bytes + max_workspace:
+            break
+        bare = strip_plan_annotations(current.program)
+        try:
+            current = plan_program(
+                bare,
+                fast_memory_capacity=planning_capacity,
+                backing_capacity=bare.backing_memory_capacity,
+                recompute=False,
+                preplace=preplace,
+                program_leeway_bytes=fixed_program_leeway_bytes,
+            )
+            # The task ABIs remain fixed, but the prior recompute search's
+            # annotated chain is no longer the plan being returned.
+            selected_recompute_result = None
+        except (SimulationCapacityError, ValidationError) as error:
+            if isinstance(error, ValidationError) and not str(error).startswith(
+                "forced-footprint-exceeds-fast_memory_capacity:"
+            ):
+                raise
+            if fallback_replan_for_capacity is None:
+                raise
+            current = fallback_replan_for_capacity(planning_capacity)
+            selected_levels = dict(current.recompute_levels)
+            selected_recompute_result = current.recompute_result
+
+    raise ValueError(
+        "static-extent admission is infeasible after "
+        f"{maximum_replans} replans: user_budget={user_memory_capacity}, "
+        f"fixed_leeway={fixed_program_leeway_bytes}, "
+        f"max_task_workspace={max_workspace}, "
+        f"packing_reserve={packing_reserve}"
+    )
+
+
 def simulate_program(program: Program, *, snapshots: bool = False, memory_trace: bool = False) -> Any:
     """Run the simulator on an (annotated) program; returns the sim EventLog."""
     from dataflow_sim.engine.simulator import run
@@ -104,6 +241,7 @@ def plan_program(
     pressurefit_prefetch_rules: tuple[str, ...] | None = None,
     max_wall_s: float | None = None,
     preplace: str = "task0",
+    program_leeway_bytes: int = 0,
 ) -> PlannedProgram:
     """Annotate a bare program with PressureFit (+ optional recompute planning).
 
@@ -128,6 +266,8 @@ def plan_program(
     from dataflow_sim.policies.pressurefit import apply_pressurefit_policy
 
     cap = fast_memory_capacity if fast_memory_capacity is not None else program.fast_memory_capacity
+    if program_leeway_bytes < 0:
+        raise ValueError("program_leeway_bytes must be nonnegative")
 
     def to_chain(prog: Program) -> Any:
         """Program -> sim chain, carrying the backing ceiling when set —
@@ -142,7 +282,20 @@ def plan_program(
         return apply_pressurefit_policy(
             chain, fast_memory_capacity=cap, preplace=preplace,
             prefetch_rules=pressurefit_prefetch_rules,
+            program_leeway_bytes=program_leeway_bytes,
         )
+
+    def memory_terms(prog: Program) -> tuple[int, int | None]:
+        maximum_workspace = max(
+            (task.workspace_bytes for task in prog.tasks),
+            default=0,
+        )
+        object_capacity = (
+            None
+            if cap is None
+            else cap - maximum_workspace - program_leeway_bytes
+        )
+        return maximum_workspace, object_capacity
 
     if recompute:
         if build_variant is None:
@@ -168,6 +321,7 @@ def plan_program(
         chosen = variants.get(tuple(sorted(result.levels.items()))) or build_variant(result.levels)
         annotated = apply_chain_annotations(chosen, result.chain)
         log = run(result.chain, snapshots=False)
+        maximum_workspace, object_capacity = memory_terms(chosen)
         return PlannedProgram(
             program=annotated,
             makespan_us=result.makespan_us,
@@ -176,6 +330,10 @@ def plan_program(
             transfer_stats=transfer_summary(log, annotated),
             recompute_levels=dict(result.levels),
             recompute_result=result,
+            program_leeway_bytes=program_leeway_bytes,
+            max_task_workspace_bytes=maximum_workspace,
+            object_memory_capacity=object_capacity,
+            user_memory_capacity=cap,
         )
 
     bare_chain = to_chain(program)
@@ -183,6 +341,7 @@ def plan_program(
     log = run(annotated_chain, snapshots=False)
     annotated = apply_chain_annotations(program, annotated_chain)
     makespan = max((iv.end for iv in log.task_intervals), default=0.0)
+    maximum_workspace, object_capacity = memory_terms(program)
     return PlannedProgram(
         program=annotated,
         makespan_us=makespan,
@@ -190,4 +349,8 @@ def plan_program(
         peak_backing_bytes=log.peak_backing_memory_bytes,
         transfer_stats=transfer_summary(log, annotated),
         recompute_levels={},
+        program_leeway_bytes=program_leeway_bytes,
+        max_task_workspace_bytes=maximum_workspace,
+        object_memory_capacity=object_capacity,
+        user_memory_capacity=cap,
     )

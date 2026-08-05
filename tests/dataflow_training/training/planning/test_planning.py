@@ -4,6 +4,9 @@ recompute.
 
 Tests:
 - test_pressurefit_plan_tiny: the plan is annotated, fits the cap with positive makespan, and re-simulates to exactly the planner's makespan and peak.
+- test_plan_program_reports_object_capacity_and_fixed_leeway: planning reports the exact total, workspace, leeway, and derived object-only capacities.
+- test_static_extent_feedback_replans_only_residency: a packing deficit reruns PressureFit on the selected task variant and returns an exactly admitted physical extent.
+- test_static_extent_feedback_does_not_rerun_search_when_variant_fits: a feasible fixed-variant correction does not invoke the expensive complete-search fallback.
 - test_plan_with_recompute_tiny: recompute-enabled planning fits the cap, covers all saved contexts, and each variant carries a recompute task iff its level is 1.
 - test_recompute_fires_under_starved_interconnect: slow PCIe drives the planner to pick recompute and beat the save-all plan while staying under cap.
 - test_capacity_sweep_monotone_tiny: looser memory budgets never yield a larger makespan.
@@ -14,12 +17,17 @@ Tests:
 - test_recompute_never_plans_slower_than_saving_everything: offering recompute never yields a slower plan than the save-everything baseline it starts from, at any budget.
 - test_measured_programs_are_built_in_one_place: nothing outside the profiling module assembles a measured program itself, so profiled costs and measured bandwidths cannot be applied by halves.
 """
+from dataclasses import replace
 from functools import partial
 
 import pytest
 
 from dataflow.core import validate_program
-from dataflow_training.lowering.planning import plan_program, simulate_program
+from dataflow_training.lowering.planning import (
+    fit_static_extent,
+    plan_program,
+    simulate_program,
+)
 from dataflow_training.lowering.shaped_program import hardware_preset
 from dataflow_training.model_families.llama3 import (ShapedLlamaConfig,
                                                      build_shaped_llama3)
@@ -49,6 +57,78 @@ def test_pressurefit_plan_tiny():
     log = simulate_program(planned.program)
     assert max(iv.end for iv in log.task_intervals) == planned.makespan_us
     assert log.peak_fast_memory_bytes == planned.peak_fast_bytes
+
+
+def test_plan_program_reports_object_capacity_and_fixed_leeway():
+    program = build_shaped_llama3(ShapedLlamaConfig.tiny(), hw=HW)
+    leeway = 1_024
+    planned = plan_program(
+        program,
+        fast_memory_capacity=TINY_CAP,
+        program_leeway_bytes=leeway,
+    )
+
+    assert planned.program_leeway_bytes == leeway
+    assert planned.object_memory_capacity == (
+        TINY_CAP - planned.max_task_workspace_bytes - leeway
+    )
+    assert planned.peak_fast_bytes + leeway <= TINY_CAP
+
+
+def test_static_extent_feedback_replans_only_residency():
+    program = build_shaped_llama3(ShapedLlamaConfig.tiny(), hw=HW)
+    leeway = 1_024
+    planned = plan_program(
+        program,
+        fast_memory_capacity=TINY_CAP,
+        program_leeway_bytes=leeway,
+    )
+
+    fitted = fit_static_extent(
+        planned,
+        user_memory_capacity=TINY_CAP,
+        fixed_program_leeway_bytes=leeway,
+        physical_extent=lambda candidate: (
+            candidate.fast_memory_capacity + 10_000
+        ),
+        minimum_reserve_step_bytes=1,
+    )
+
+    assert fitted.packing_reserve_bytes == 10_000
+    assert fitted.static_extent_replans == 1
+    assert fitted.static_extent_bytes + leeway == TINY_CAP
+    assert fitted.program.fast_memory_capacity == TINY_CAP - leeway - 10_000
+
+
+def test_static_extent_feedback_does_not_rerun_search_when_variant_fits():
+    program = build_shaped_llama3(ShapedLlamaConfig.tiny(), hw=HW)
+    leeway = 1_024
+    capacities = []
+
+    def replan(capacity):
+        capacities.append(capacity)
+        candidate = plan_program(
+            program,
+            fast_memory_capacity=capacity,
+            program_leeway_bytes=leeway,
+        )
+        return replace(candidate, recompute_levels={"choice": capacity})
+
+    planned = replan(TINY_CAP)
+    fitted = fit_static_extent(
+        planned,
+        user_memory_capacity=TINY_CAP,
+        fixed_program_leeway_bytes=leeway,
+        physical_extent=lambda candidate: (
+            candidate.fast_memory_capacity + 10_000
+        ),
+        fallback_replan_for_capacity=replan,
+        minimum_reserve_step_bytes=1,
+    )
+
+    assert capacities == [TINY_CAP]
+    assert fitted.recompute_levels == {"choice": TINY_CAP}
+    assert fitted.static_extent_replans == 1
 
 
 def test_plan_with_recompute_tiny():

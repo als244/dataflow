@@ -41,17 +41,17 @@ arguments; they describe the contents of \(\mathcal W\), \(\mathcal H\), and
 
 | Notation | Definition |
 |---|---|
-| \(\mathcal T=(\tau_1,\ldots,\tau_n)\), \(d_i\) | Ordered tasks and the runtime of task \(\tau_i\). Each task declares object inputs, outputs, and mutations. |
+| \(\mathcal T=(\tau_1,\ldots,\tau_n)\), \(d_i\), \(w_i\) | Ordered tasks, and the runtime and opaque task-local workspace bytes of task \(\tau_i\). Each task declares object inputs, outputs, and mutations. The simulator uses \(w_i\); PressureFit receives an object-only projection with \(w_i=0\). |
 | \(\mathcal O\), \(o\), \(s_o\) | Movable objects, one object, and its byte size. |
 | \(\lambda^0,\lambda^f\) | Initial object locations and required final locations. |
 | \(\mathcal W=(\mathcal T,d,\mathcal O,s,\lambda^0,\lambda^f)\) | Complete workload. |
-| \(C_{\mathrm F},C_{\mathrm B}\) | Fast- and backing-memory capacities. |
+| \(C_{\mathrm P},C_{\mathrm F},C_{\mathrm B}\) | Total program budget, PressureFit's object-only fast-memory capacity, and backing-memory capacity. The caller derives \(C_{\mathrm F}=C_{\mathrm P}-L-\max_i w_i\), where \(L\) is fixed program leeway. |
 | \(\beta_{\mathrm{in}},\beta_{\mathrm{out}}\) | Bandwidths into and out of fast memory. |
 | \(\mathcal E\) | Deterministic compute/transfer ordering, overlap, allocation, and lifetime semantics. |
 | \(\mathcal H=(C_{\mathrm F},C_{\mathrm B},\beta_{\mathrm{in}},\beta_{\mathrm{out}},\mathcal E)\) | Complete machine model. |
 | \(\mathcal B=\{0,\ldots,n\}\), \(b\) | Task boundaries and one boundary. Boundary \(0\) precedes all tasks; boundary \(i\) follows \(\tau_i\). |
 | \(\mathcal A_o\) | Boundaries at which object \(o\) must reside in fast memory. |
-| \(q_b\) | Fast-memory bytes reserved at \(b\) for needs outside object residency, including the next task's outputs. |
+| \(q_b\) | Fresh fast-output bytes that must be reserved at boundary \(b\), outside input-object residency. |
 | \(P_o\), \(P\) | Fast-residency intervals for object \(o\), and the mapping for all objects. |
 | \(\mathsf{FastBytes}_P(b)\) | Bytes that must fit in fast memory at boundary \(b\): resident objects plus task-reserved bytes. |
 | \(\mathbf 1[\cdot]\) | Indicator: \(1\) when its condition is true and \(0\) otherwise. |
@@ -79,9 +79,9 @@ arguments; they describe the contents of \(\mathcal W\), \(\mathcal H\), and
 | \(\mathsf{Simulate}(\Gamma;\mathcal H)\) | Replay \(\Gamma\) on \(\mathcal H\) and return \((v,m)\). |
 | \(\mathsf{StaticValid}(\Gamma)\) | Check plan structure before event replay. |
 | \(\mathsf{Initialize}(\Gamma,\mathcal H)\) | Construct initial simulation state \(\Sigma\). |
-| \(\mathsf{Ready}(\Sigma,\tau)\) | Test whether inputs are current in fast memory and outputs can be reserved. |
+| \(\mathsf{Ready}(\Sigma,\tau)\) | Test whether inputs are current in fast memory and outputs plus task-local workspace fit. |
 | \(\mathsf{AdvanceNextEvent}(\Sigma,\mathcal H)\) | Commit the next deterministic transfer event; return false on deadlock. |
-| \(\mathsf{ExecuteTask}(\Sigma,\tau,\mathcal H)\) | Reserve outputs, run \(\tau\) while transfers progress, commit results, and enqueue its annotations. |
+| \(\mathsf{ExecuteTask}(\Sigma,\tau,\mathcal H)\) | Reserve outputs, charge workspace for the task lifetime, run \(\tau\) while transfers progress, commit results, release workspace, and enqueue annotations. |
 | \(\mathsf{TransfersPending}(\Sigma)\) | Test whether either directional transfer stream has unfinished work. |
 | \(\mathsf{FinalStateValid}(\Sigma)\) | Check required final locations and clean/dirty state. |
 | \(\mathsf{Makespan}(\Sigma)\) | Latest compute or transfer completion time. |
@@ -119,9 +119,10 @@ user-managed version numbers.
 
 #### Admission and memory semantics
 
-- A task starts when its inputs are live in fast memory and its outputs can be
-  reserved; output storage is reserved at task start and becomes live at task
-  completion.
+- A task starts when its inputs are live in fast memory and its outputs plus
+  opaque task-local workspace fit. Output storage is reserved at task start and
+  becomes live at completion; workspace is charged only during execution and
+  is then released. It is neither a persistent object nor a transfer target.
 - Post-task annotations release objects or enqueue transfers. A queued transfer
   reserves its destination only when it reaches the FIFO head and starts; a
   blocked head cannot be bypassed.
@@ -152,11 +153,27 @@ placement.
 [PDF](pressurefit_algo_assets/pressurefit_simulator.pdf)
 
 `AdvanceNextEvent` commits the earliest deterministic transfer event.
-`ExecuteTask` reserves outputs, advances the task together with independent
-transfers, commits task results, and enqueues its post-task annotations. These
-subroutines preserve the semantics above.
+`ExecuteTask` reserves outputs, charges task-local workspace, advances the task
+together with independent transfers, releases workspace, commits task results,
+and enqueues its post-task annotations. These subroutines preserve the
+semantics above.
 
 ### A.3 PressureFit model
+
+PressureFit receives an object-only projection of the executable workload.
+Its fast capacity is conservatively derived before the algorithm runs:
+
+\[
+C_{\mathrm F}=C_{\mathrm P}-L-\max_i w_i.
+\]
+
+All projected task workspaces are zero. Candidate simulation therefore checks
+object residency and movement only. After selection, the implementation
+restores \(w_i\) and performs a final ordinary simulation at capacity
+\(C_{\mathrm P}-L\); the returned executable plan retains that capacity.
+This wrapper-level validation is equivalent to enforcing
+objects plus active workspace plus leeway within the total program budget; it
+is not part of the core residency algorithm.
 
 Consider an ordered computation
 \(\mathcal{T}=(\tau_1,\ldots,\tau_n)\) and the boundary set
@@ -304,11 +321,11 @@ names, or object names.
 
 | Surface | Contract |
 |---|---|
-| `pressurefit(bare, *, fast_memory_capacity=None, preplace="greedy", prefetch_rules=None)` | Algorithm-shaped core: return the selected annotated chain and diagnostics. |
-| `apply_pressurefit_policy(bare, *, fast_memory_capacity=None, preplace="greedy", prefetch_rules=None)` | Return the selected annotated `TaskChain`. `prefetch_rules` optionally restricts the implementation portfolio by exact rule name. |
+| `pressurefit(bare, *, fast_memory_capacity=None, preplace="greedy", prefetch_rules=None, program_leeway_bytes=0)` | Algorithm-shaped core: derive object capacity, select the annotated chain, restore workspaces, and return diagnostics. |
+| `apply_pressurefit_policy(bare, *, fast_memory_capacity=None, preplace="greedy", prefetch_rules=None, program_leeway_bytes=0)` | Return the selected annotated `TaskChain`. `prefetch_rules` optionally restricts the implementation portfolio by exact rule name. |
 | `plan_pressurefit_policy(...)` | Policy-convention wrapper returning `(annotated_chain, diagnostics)`. |
 | `TaskChain` | Ordered tasks, initial objects, final locations, transfer bandwidths, and fast-memory capacity. |
-| `Task` | Runtime, object inputs/outputs, mutations, and emitted release/offload/prefetch triggers. |
+| `Task` | Runtime, opaque task-local workspace bytes, object inputs/outputs, mutations, and emitted release/offload/prefetch triggers. PressureFit restores workspace after object planning; the simulator enforces it. |
 | `Object` | Opaque identifier, byte size, and location. `Object.type` is preserved but never used for planning. |
 
 The entry points live in
@@ -320,6 +337,7 @@ The repository realizes the abstract algorithm as this pipeline:
 
 ```text
 TaskChain
+  -> derive object capacity; zero task workspaces
   -> pressurefit: Analyze + seed residency
   -> _PressureReducer: CutScore-guided residency
   -> _verify_candidate
@@ -327,10 +345,20 @@ TaskChain
        -> _build_transitions       -> _TransitionPlan
        -> _apply_prefetch_rule     -> _PrefetchAssignments
        -> _emit_chain              -> annotated TaskChain
-       -> simulator replay
+       -> object-only simulator replay
        -> optional pressure repair and re-reduction
-  -> minimum-makespan valid candidate + PressureFitDiagnostics
+  -> minimum-makespan valid candidate
+  -> restore task workspaces; final replay at total budget - leeway
+  -> annotated TaskChain + PressureFitDiagnostics
 ```
+
+Static-arena deployment performs a separate post-policy feedback step:
+physicalize the annotated chain, measure its exact packed extent, and feed any
+budget excess back as a reduced PressureFit capacity. This is intentionally not
+part of the research-paper PressureFit algorithm: it is an executor-layout
+constraint. The implementation first retries the selected task/recompute
+variant and invokes the full recompute search only if that variant has no valid
+reduced-capacity placement.
 
 | Internal type | Role |
 |---|---|

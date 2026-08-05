@@ -61,11 +61,13 @@ resolution, not mid-launch (see `ToyResolver` below).
 
 `src/dataflow/runtime/executable.py`: the runtime hands an executable
 everything it may touch and nothing else — buffers for the declared
-inputs/outputs/mutates (+ optional workspace), the compute stream, the
-backend, and the opaque per-run values. `launch(ctx)` may only
+inputs/outputs/mutates, the compute stream, the backend, and opaque per-run
+values. `launch(ctx)` may only
 **enqueue device work on `ctx.stream`** — no synchronization, no
-globals; scratch allocation only through torch's caching allocator,
-declared via the kernel registry's `allocates=`/`workspace=` fields. The full rulebook (with the measured
+globals. Temporary scratch may use the framework caching allocator; its
+profiled peak is recorded as `TaskSpec.workspace_bytes` for planning and is
+not an engine-owned object or buffer. Provider declarations in the kernel
+registry describe that allocation behavior. The full rulebook (with the measured
 incidents behind each rule) is [task-contract.md](task-contract.md).
 
 ### 4. Buffers bind positionally
@@ -97,6 +99,12 @@ sanity including `size_bytes >= 1` and that a declared dense
 `TensorMeta` matches `size_bytes`; the service additionally binds each
 initial object to a resident by STRICT size match at register/run time
 (`BINDING_MISMATCH` in `src/dataflow/service/handlers_runs.py`).
+
+`TaskSpec.workspace_bytes` is a separate nonnegative task-local planning term.
+The simulator charges it from task start through task end, including against
+overlapping transfer admission; the runtime does not allocate, bind, move, or
+retain it. The executable remains responsible for its opaque temporary
+allocations through the framework allocator.
 
 ### 7. Objects are opaque bytes
 

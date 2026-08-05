@@ -14,7 +14,7 @@
 \label{alg:simulate}
 \small
 \begin{algorithmic}[1]
-\Require $\Gamma$: ordered tasks, runtimes, object sizes/locations, and movement triggers
+\Require $\Gamma$: ordered tasks, runtimes/workspaces, object sizes/locations, and movement triggers
 \Statex \hspace{\algorithmicindent}$\mathcal H$: memory capacities,
   directional bandwidths, and deterministic event semantics
 \Ensure Validity $v\in\{\mathsf{false},\mathsf{true}\}$ and makespan
@@ -30,7 +30,7 @@
     \EndIf
   \EndWhile
   \State $\Sigma\gets\mathsf{ExecuteTask}(\Sigma,\tau_i,\mathcal H)$
-    \Comment{Reserve outputs; overlap transfers}
+    \Comment{Reserve outputs/workspace; overlap transfers}
 \EndFor
 \While{$\mathsf{TransfersPending}(\Sigma)$}
   \If{$\neg\mathsf{AdvanceNextEvent}(\Sigma,\mathcal H)$}

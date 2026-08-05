@@ -22,6 +22,18 @@ been violated at least once by accident, and the cost was measured, so the
    invisible to the cost model and will surface as plan-dependent
    real-vs-sim error.
 
+The same rule applies to opaque temporary memory. A task's measured
+`workspace_bytes` is a task-local simulator/executor capacity term. The
+PressureFit caller conservatively subtracts the maximum declared workspace
+before object-residency planning, then restores the per-task values for final
+simulation. The engine does not allocate a workspace object or pass a
+workspace buffer; the executable may obtain scratch from the framework
+caching allocator and must not retain it after the task completes.
+For a static object arena, lowering additionally physicalizes the selected plan
+and verifies `packed extent + max workspace + fixed leeway <= program budget`.
+Any packing deficit reduces planner capacity and causes a genuine replan; it is
+not represented as workspace or synthetic simulator stall.
+
 ## The contract
 
 Three nested layers sign it: kernel implementations (`dataflow_training/kernels/registry.py`
