@@ -44,6 +44,37 @@ from ..distributed.sharding import (
 from ..distributed.topology import load_topology
 from .loop import fleet_loop
 
+
+_FLEET_CODE_PATHS = ("src", "tests", "pyproject.toml", "conftest.py")
+
+
+def _fleet_surface_status(root: str | Path) -> str:
+    """Return tracked or untracked edits that can affect a fleet run.
+
+    Reference models, documentation, experiment outputs, and other unrelated
+    worktree state do not execute in the production fleet path. Requiring the
+    entire repository to be clean prevents valid tests without improving the
+    mixed-version safety guarantee.
+    """
+    import subprocess
+
+    return subprocess.run(
+        [
+            "git",
+            "-C",
+            str(root),
+            "status",
+            "--porcelain",
+            "--untracked-files=all",
+            "--",
+            *_FLEET_CODE_PATHS,
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+
 def check_fleet_versions(hosts, log) -> None:
     """Refuse a MIXED-VERSION fleet: every member's repo must sit on
     the same commit as the conductor's. Version skew produces the
@@ -54,16 +85,12 @@ def check_fleet_versions(hosts, log) -> None:
     step 0)."""
     import subprocess
 
-    from ..distributed.hosts import run_on
     from ..distributed.topology import repo_root
 
     local_rev = subprocess.run(
         ["git", "-C", str(repo_root()), "rev-parse", "HEAD"],
         capture_output=True, text=True, check=True).stdout.strip()
-    dirty = subprocess.run(
-        ["git", "-C", str(repo_root()), "status", "--porcelain",
-         "--untracked-files=no"],
-        capture_output=True, text=True, check=True).stdout.strip()
+    dirty = _fleet_surface_status(repo_root())
     import torch
 
     local_env = (f"torch {torch.__version__} cuda {torch.version.cuda} "
@@ -82,13 +109,22 @@ def check_fleet_versions(hosts, log) -> None:
                 f"before launching (mixed-version collectives hang or "
                 f"corrupt silently)")
         if dirty:
-            # local uncommitted edits CANNOT be on the remote — the
-            # exact skew that caused the incident
             raise RuntimeError(
                 f"fleet version skew: the conductor repo has "
-                f"uncommitted tracked changes that {host.name} cannot "
+                f"uncommitted fleet-code changes that {host.name} cannot "
                 f"have:\n{dirty}\ncommit+push+pull (or stash) before "
                 f"a fleet run")
+        remote_dirty = run_on(
+            host,
+            f"git -C {host.repo} status --porcelain --untracked-files=all "
+            f"-- {' '.join(_FLEET_CODE_PATHS)}",
+        ).strip()
+        if remote_dirty:
+            raise RuntimeError(
+                f"fleet version skew: {host.name} has uncommitted "
+                f"fleet-code changes:\n{remote_dirty}\ncommit or restore "
+                f"them before a fleet run"
+            )
         env = run_on(host, f"cd {host.repo} && {host.python} -c "
                            f"'{env_probe}'").strip()
         if env != local_env:
@@ -414,4 +450,3 @@ def run(global_cfg, recipe: Recipe, pipeline, steps: int, *,
                     close_uds_forward(rig.forward, rig.sock)
                 except Exception as e:
                     log(f"[fleet] forward teardown {rig.host.name}: {e}")
-
