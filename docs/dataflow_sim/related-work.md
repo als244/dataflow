@@ -848,6 +848,69 @@ Reading of the table:
   simpler transfer model, and does not handle general object sets, in-place
   mutation, or FIFO queue contention.
 
+### 7.1 Coverage matrix: training systems × memory-planning aspects
+
+The workload-specificity of prior training systems, made countable. Columns:
+which object classes the system can manage (**Acts** = activations/feature
+maps, **Wts** = parameters, **Grd** = gradients, **Opt** = optimizer state,
+**Any** = arbitrary named objects, no DNN semantics), which mechanisms it has
+(**Off** = offload/swap, **Rem** = recomputation), and its planning character
+(**Plan** = offline plan vs online/reactive, **Time** = schedules *when*
+transfers fire rather than only *what* moves, **Gap** = reports distance to
+an optimum). `✓` yes, `–` no, `~` partial / config-dependent / restricted.
+
+| System | Acts | Wts | Grd | Opt | Any | Off | Rem | Plan | Time | Gap | Scope in one line |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| vDNN (MICRO'16) | ✓ | – | – | – | – | ✓ | – | ✓ | ~ | – | conv feature maps + workspaces only |
+| moDNN (DATE'18) | ✓ | – | – | – | – | ✓ | – | ✓ | ✓ | – | activations; sub-batch size co-chosen |
+| TFLMS (ISMM'19) | ✓ | – | – | – | – | ✓ | – | ✓ | ~ | – | graph-rewrite activation swaps |
+| SuperNeurons (PPoPP'18) | ✓ | – | – | – | – | ✓ | ✓ | – | – | – | conv offload, cheap-layer remat, by layer class |
+| SwapAdvisor (ASPLOS'20) | ✓ | ✓ | ~ | – | – | ✓ | – | ✓ | ✓ | – | any graph tensor; GA over a simulator |
+| AutoTM (ASPLOS'20) | ✓ | ✓ | ✓ | ~ | – | ✓ | – | ✓ | ~ | ~ | DRAM↔PMM ILP; exact in a coarse model |
+| Capuchin (ASPLOS'20) | ✓ | – | – | – | – | ✓ | ✓ | – | ~ | – | per-tensor swap-vs-remat, profiled online |
+| FlashNeuron (FAST'21) | ✓ | – | – | – | – | ✓ | – | ✓ | ~ | – | activations→SSD, overlap-budgeted selection |
+| SSDTrain (DAC'25) | ✓ | – | – | – | – | ✓ | – | – | ~ | – | adaptive activation fraction→SSD |
+| Checkmate (MLSys'20) | ✓ | – | – | – | – | – | ✓ | ✓ | – | ~ | remat-only MILP; exact, no transfers |
+| DTR (ICLR'21) | ✓ | – | – | – | – | – | ✓ | – | – | – | online remat |
+| Rockmate / HiRemate (ICML'23/'25) | ✓ | – | – | – | – | – | ✓ | ✓ | – | ~ | remat-only ILP+DP |
+| Melon (MobiSys'22) | ✓ | – | – | – | – | – | ✓ | ✓ | – | – | on-device remat + micro-batch + layout |
+| MegTaiChi (ICS'22) / Coop (NeurIPS'23) | ✓ | – | – | – | – | – | ✓ | – | – | – | evict/remat coupled to allocator |
+| Megatron-LM (sel. remat MLSys'23 + Core offload knobs) | ✓ | – | – | ✓ | – | ✓ | ✓ | ~ | – | – | hand-set knobs; acts/opt only, never W/G |
+| POFO (NeurIPS'21) | ✓ | – | – | – | – | ✓ | ✓ | ✓ | ✓ | ~ | chain DP; fwd-only offload, divisible transfers |
+| POET (ICML'22) | ✓ | – | – | – | – | ✓ | ✓ | ✓ | ~ | ~ | edge remat+paging MILP, energy objective |
+| XEngine (TACO'23) | ✓ | – | – | – | – | ~ | ✓ | ✓ | – | ~ | remat + device placement MIQP |
+| ZeRO-Offload (ATC'21) | – | – | ✓ | ✓ | – | ✓ | – | ~ | ~ | – | one fixed split: grads+opt→CPU Adam |
+| ZeRO-Infinity (SC'21) | ~ | ✓ | ✓ | ✓ | – | ✓ | ~ | ~ | ~ | – | static rules over CPU/NVMe tiers |
+| L2L (arXiv'20) | – | ✓ | – | – | – | ✓ | – | ✓ | – | – | one-layer window, params only |
+| STRONGHOLD (SC'22) | – | ✓ | ✓ | ~ | – | ✓ | – | ✓ | ✓ | – | layer working-window, rate-matched |
+| PatrickStar (TPDS'22) | – | ✓ | ✓ | ✓ | – | ✓ | – | – | – | – | chunked model states, trace-driven |
+| Harmony (PVLDB'22) | ~ | ✓ | ✓ | ✓ | – | ✓ | – | ✓ | ✓ | – | multi-GPU task+swap co-scheduling |
+| Mobius (ASPLOS'23) | – | ✓ | ✓ | ✓ | – | ✓ | – | ✓ | ✓ | – | stage-granular, PCIe-contention-aware |
+| Angel-PTM (PVLDB'23) | ~ | ✓ | ✓ | ✓ | – | ✓ | ~ | – | ~ | – | page pool + lookahead, production |
+| Deep Optimizer States (Middleware'24) | – | – | – | ✓ | – | ✓ | – | – | ✓ | – | optimizer shards into idle bandwidth windows |
+| LoHan (ICDE'25) | ✓ | ✓ | ✓ | ✓ | – | ✓ | – | ~ | ~ | – | SSD-CPU-GPU pipelines, cost-model volumes |
+| G10 (MICRO'23) | ✓ | ✓ | ✓ | ~ | – | ✓ | – | ✓ | ✓ | – | vitality-planned migrations, host+flash |
+| DeepUM (ASPLOS'23) | ~ | ~ | ~ | ~ | ~ | ✓ | – | – | – | – | UM pages, semantics-blind, correlation prefetch |
+| StarPU + DARTS (IPDPS'22–JPDC'25) | – | – | – | – | ✓ | ✓ | – | – | ~ | – | generic task graphs, online runtime |
+| **dataflow** (this repo) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | named objects; layered simulator-priced remat; oracle+LB gaps |
+
+**The counts** (excluding the two general rows): of ~30 DNN-training
+systems, **~15 manage activations only**, **~6 manage model states only**
+(weights/grads/optimizer — the ZeRO/window/chunk family), and only **~8
+touch both sides of the ledger** — mostly with `~`s. By mechanism, **~7 are
+recompute-only**, **~17 offload-only**, and **~6 co-decide both**. Only the
+runtime-systems line (StarPU) is workload-agnostic, and it is online and
+DNN-blind rather than plan-ahead. **No row other than this repo fills the
+object-generality, both-mechanism, transfer-timing, and optimality-gap
+columns at once** — which is the one-table version of the positioning
+argument.
+
+Caveats: cells are condensed from the §6.6–§6.7 entries; `~` cells
+(especially Megatron's offload knobs, SwapAdvisor's gradient coverage,
+ZeRO-Infinity's activation checkpoint offload, Angel-PTM's recompute)
+should be re-verified against current releases before a camera-ready
+table.
+
 ## 8. What to import (concrete, near-term)
 
 1. **Name and reuse the conservative↔aggressive axis.** The prefetch-rule

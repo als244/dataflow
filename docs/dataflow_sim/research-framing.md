@@ -116,6 +116,15 @@ independently derived a latest-safe-then-advance prefetch rule; SwapAdvisor
 independently chose search-over-a-simulator; the StarPU line independently
 adapted Belady to task sets.)
 
+The second table the paper needs — the **coverage matrix**
+([related-work.md §7.1](related-work.md)): training systems as rows,
+object classes (activations / weights / grads / optimizer state /
+arbitrary objects) and mechanisms (offload / recompute / transfer timing /
+gap reporting) as checkbox columns. Its headline: of ~30 training systems,
+~15 manage activations only, ~6 manage model states only, ~8 touch both
+(mostly partially), ~7 are recompute-only, and none is workload-agnostic —
+the generality claim, made countable.
+
 ## 6. What the theory buys (support, not the story)
 
 - **Hardness licenses the architecture.** Offloading on a chain with
@@ -178,9 +187,13 @@ evaluation harness; the paper's tables come from it.
 - **Fixed task order.** MODeL/SwapAdvisor show reordering buys memory;
   the chain contract buys determinism, checkpointing, and parity testing.
   State the trade; reordering is future work.
-- **Single-accelerator planning.** Fleets are data-parallel around the
-  planner; model-parallel offload (Mobius/Harmony territory) is out of
-  scope.
+- **Distribution enters through tasks, not the planner.** Collective and
+  p2p communication are baked into task runtimes — each rank plans its own
+  chain, and comm time is simply part of `R_t` — so multi-accelerator
+  execution is in scope without the planner knowing about it. What the
+  planner does *not* yet do: treat peer-GPU HBM as an explicit backing
+  tier, model comm links as additional plannable FIFO resources, or
+  co-plan movement decisions across ranks (Mobius/Harmony territory).
 - **Strict per-direction FIFO.** Real copy engines allow more (TURNIP
   deliberately exploits reordering); FIFO is a modeling choice that keeps
   plans executable and deterministic — quantify what it costs via the
