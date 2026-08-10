@@ -892,42 +892,23 @@ Reading of the table:
    deadline), potentially unifying the `packed-fifo` machinery across both
    directions.
 
-## 9. Precision notes on the existing docs
+## 9. Doc alignment (notes applied)
 
-Collegial nits on [problem.md](problem.md) / [research-framing.md](research-framing.md),
-so the eventual paper cites cleanly:
+The precision notes this survey originally raised have been applied
+in-tree: [problem.md](problem.md) §5.1–5.2 now distinguish weighted
+caching (polynomial) from general caching (strongly NP-hard, the regime
+that applies here), §5.3 cites the red-blue game and its one-shot
+complexity instead of black-white pebbling, and §9.2 scopes the EDF
+claim; [research-framing.md](research-framing.md) was rewritten for
+systems venues, with the Belady-gap question kept as an open problem
+scoped by §4.3 of this note.
 
-- **Weighted vs general caching** ([problem.md §5.2](problem.md)): weighted
-  caching with *uniform sizes* is polynomial offline (min-cost-flow /
-  offline k-server); the NP-hardness kicks in with *variable sizes* (general
-  caching — strongly NP-hard even with uniform miss costs, "fault model"),
-  with a local-ratio 4-approximation. The doc's current sentence merges the
-  two regimes.
-- **Pebbling citations** ([problem.md §5.3](problem.md)): PSPACE-completeness
-  of black pebbling is Gilbert–Lengauer–Tarjan (1980) — Hopcroft–Paul–Valiant
-  is the time-space simulation theorem, not the completeness result. More
-  importantly, the game matching offload/prefetch is Hong–Kung's **red-blue**
-  pebble game (I/O between fast/slow levels), not black-white pebbling
-  (whose white pebbles model nondeterministic guessing, not storage); the
-  no-recomputation ("one-shot") red-blue variant is this problem's discrete
-  skeleton, and its hardness/inapproximability results (Demaine–Liu;
-  Papp–Wattenhofer) are the ones to cite.
-- **"EDF is provably optimal"** ([problem.md §9.2](problem.md)): with
-  nonpreemptive transfers and release times (a transfer cannot start before
-  its producing boundary), even single-channel feasibility is strongly
-  NP-complete in general; EDF exactness holds under preemption or equal
-  transfer lengths. At the scale of one chain the distinction is academic,
-  but the paper claim should be scoped.
-- **The Greedy-Belady conjecture** ([research-framing.md](research-framing.md)):
-  as stated over all instances it collides with general-caching hardness at
-  fine additive granularity (§4.3); scope it to the structured training
-  subclass or to resource-augmented comparisons.
-- **Framing strength**: the claim "no exact match in the literature"
-  ([problem.md §5](problem.md)) survives this survey — with the sharpening
-  that the *objective* has a mature theory home (integrated
-  prefetching+caching / stall minimization) whose open frontier (variable
-  sizes, duplex channels, write-back, reservation) is precisely this
-  problem. That is a stronger and more citable position than "no match".
+One positioning line worth preserving for the paper: rather than "no
+exact match in the literature", the stronger and more citable statement
+is that the *objective* has a mature theory home — stall minimization /
+integrated prefetching-and-caching — whose open frontier (variable
+sizes, duplex channels, write-back, output reservation) is precisely
+this problem.
 
 ## 10. Provenance
 

@@ -109,25 +109,25 @@ H and D are independent in terms of bandwidth (no contention between them) but c
 
 ## 5. Relation to known computer-science problems
 
-There is **no exact match** in the classical literature. The closest analogues, with the gaps:
+There is **no exact match** in the classical literature. The closest analogues, with the gaps (full survey with verified citations and a complexity map: [related-work.md](related-work.md)):
 
 ### 5.1 Offline paging (Belady, 1966)
 **The classic**: given a sequence of page references and a cache of `k` pages, minimize the number of cache misses. Belady's rule (evict the page used furthest in future) is optimal in polynomial time.
 
 **Why it doesn't fit**:
-- **Uniform page size** vs. our MB–GB variable-size objects → ours is a *weighted* problem (NP-hard even offline when sizes are arbitrary; this is **Weighted Caching**, solvable optimally via LP but not in linear time and the value model is different).
+- **Uniform page size** vs. our MB–GB variable-size objects → with arbitrary sizes this is **General Caching**, strongly NP-hard offline even with uniform miss costs (Chrobak–Woeginger–Makino–Xu 2012); weighted costs at *uniform* sizes would stay polynomial.
 - **Instantaneous misses** vs. our bandwidth-bound transfers → minimizing miss *count* ≠ minimizing makespan. A single huge miss can be worse than many small ones.
 - **One operation at a time** vs. our compute+from-slow+to-slow parallelism → Belady doesn't address overlap.
 
-### 5.2 Weighted caching / k-server
-Generalizes Belady to weighted pages. Offline optimum solvable via LP (assignment-style). Still assumes instantaneous fetches and a single serial machine — same gap as 5.1 on the parallelism and continuous-time fronts.
+### 5.2 Weighted and general caching
+Weighted caching (uniform sizes, per-page fetch costs) stays polynomial offline via min-cost flow (Chrobak–Karloff–Payne–Vishwanathan 1991). **General caching** (variable sizes) is strongly NP-hard even with uniform miss costs, with a local-ratio 4-approximation (Bar-Noy et al. 2001) and practical flow-based OPT bounds (FOO, SIGMETRICS 2018) — our sizes are variable, so this is the regime that applies. Both still assume instantaneous fetches and a single serial machine — same gap as 5.1 on the parallelism and continuous-time fronts.
 
-### 5.3 Pebble games (black-white pebbling)
-Models recomputation: pebbles = memory slots, moves = compute steps; black pebbles = recomputable values, white pebbles = stored values. Black-white pebbling models offload+reload.
+### 5.3 Pebble games (red-blue pebbling)
+The game matching offload/prefetch is Hong–Kung's **red-blue pebble game** (STOC 1981): red pebbles = fast memory (≤ S), blue = backing; blue→red = prefetch, red→blue = offload. (Black-white pebbling is a different game — white pebbles model nondeterministic guessing, not storage.)
 
-**Closer than paging** because it captures the "recompute vs store" tradeoff and the cap. But:
-- Even **single-machine** pebbling is **PSPACE-complete** for general DAGs (Hopcroft-Paul-Valiant variants). For trees / series-parallel graphs there are poly algorithms — our DAG is *nearly* a chain, so this is encouraging, but the variable-size and bandwidth aspects aren't modeled at all.
-- **Pebble moves are unit-cost**; we have weighted moves (bytes/bandwidth).
+**Closer than paging** because it captures the cap and the transfer count. But:
+- Playing it optimally is hard: black pebbling is PSPACE-complete (Gilbert–Lengauer–Tarjan 1980), the red-blue trade-off is PSPACE-complete in general (Demaine–Liu 2018), and our regime — every task computed exactly once, recompute handled in a separate layer — is the **one-shot** variant: NP-hard and UGC-hard to approximate below factor 2 (Papp–Wattenhofer 2020). For trees / series-parallel graphs peak-memory versions have poly algorithms — our DAG is *nearly* a chain, so this is encouraging, but the variable-size and bandwidth aspects aren't modeled at all.
+- **Pebble moves are unit-cost and serial**; we have weighted, timed moves on two channels overlapping compute.
 
 ### 5.4 Resource-Constrained Project Scheduling (RCPSP)
 DAG of tasks with durations, renewable resource pool (e.g., `R` units of resource type `r`), minimize makespan subject to "resource consumption at every instant ≤ `R`".
@@ -277,7 +277,7 @@ Solve the full integer program. **Not pursued** for production; useful only as a
 
 ### 9.2 Optimal-given-residency-plan
 **Tractable.** Given a fixed residency plan (which objects are resident over which intervals), the question "what is the best ordering of transfers on H and D to make this plan happen with minimum makespan" has known polynomial solutions in pieces:
-- For a single stream with hard deadlines: **EDF (earliest-deadline-first) is provably optimal** (Liu & Layland, 1973; for our case: one stream as a single-machine real-time problem).
+- For a single stream with hard deadlines: EDF is exact under preemption or equal transfer lengths; with non-preemptive, unequal-length transfers and release times (a transfer can't start before its producing boundary), even single-stream feasibility is strongly NP-complete in the worst case (Garey–Johnson SS1). At our scale (~dozens of transfers) EDF-ordered search with pruning is cheap — a formal caveat, not a practical obstacle.
 - For two streams with shared cap: combined heuristics, but the search space is small (`|H|! × |D|!`) at our scale and pruneable.
 
 This is the regime `max_reduce`'s trigger-placement phase operates in (from_slow only). Extending to to_slow and adding contention-aware guards would close most of the gap.
