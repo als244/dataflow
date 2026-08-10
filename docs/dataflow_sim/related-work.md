@@ -13,9 +13,9 @@ This note does three things:
 It pairs with [problem.md](problem.md) (the concrete simulator contract and
 solver-formulation options) and [research-framing.md](research-framing.md)
 (decision axes and positioning). Recomputation planning — the layer that
-chooses task runtimes and object sizes — is deliberately **out of scope**
-here; tasks and sizes are fixed, as in [problem.md](problem.md). See
-[recompute.md](recompute.md) for that layer.
+chooses task runtimes and object sizes — is held **fixed** in the
+formulation (§1–5); §6.7 surveys that layer's literature and positions the
+repo's recompute planner. See [recompute.md](recompute.md) for its design.
 
 ---
 
@@ -573,53 +573,96 @@ GreedySnake (SSD-offload scheduling with optimizer overlap), TURNIP
 pommDNN (FGCS 2024, the moDNN-lineage journal formulation nearest this
 objective).
 
-### 6.7 Joint recomputation + offloading planners (the parked layer)
+### 6.7 Recomputation: planners, behavior dimensions, and this repo's layer
 
-The recompute axis is deliberately out of scope here ([recompute.md](recompute.md)
-runs *before* PressureFit), but this is the literature where exact
-formulations of budgeted memory planning live, and where the joint problem —
-this problem plus per-object recompute levels — is already partially mapped:
+Recomputation is planned here by a pre-pass that runs *before* PressureFit
+([recompute.md](recompute.md)); the §1–5 formulation holds tasks and sizes
+fixed. This section maps the recompute literature, the dimensions along
+which "recompute behavior" actually varies, and where the repo's layer sits.
 
-- Chen, Xu, Zhang, Guestrin. arXiv 2016 — √n segment checkpointing, the
-  baseline every planner must beat; its ancestor is optimal binomial
-  checkpointing for adjoint computation (Griewank & Walther's REVOLVE).
+**The planners:**
+
+- Griewank 1992; Griewank & Walther, ACM TOMS 2000 (**REVOLVE**) — optimal
+  binomial checkpointing for reverse-mode autodiff: the exact-DP ancestor of
+  everything below, for uniform chains.
+- Chen, Xu, Zhang, Guestrin. arXiv 2016 — √n segment checkpointing; the
+  baseline heuristic.
+- Beaumont, Eyraud-Dubois, Herrmann, Shilova et al. (arXiv 2019) — optimal
+  checkpointing for *heterogeneous* chains (the `rotor` scheduler Rockmate
+  builds on).
 - Checkmate (Jain et al.). MLSys 2020 — store/recompute per stage as a
-  **MILP** under a memory budget; the exact-optimization template, no
-  transfers, ~hour solves near 100 nodes.
+  **MILP** under a memory budget; exact, no transfers, ~hour solves near
+  100 nodes.
 - DTR (Kirisame et al.). ICLR 2021 — online greedy eviction-for-recompute
-  with an Ω(√N)-memory guarantee; the runtime counterpoint.
+  scored by cost × staleness / size, with an Ω(√N)-memory guarantee.
+- Korthikanti et al. "Reducing Activation Recomputation in Large
+  Transformer Models". MLSys 2023 — Megatron's **selective** recompute:
+  recompute only the cheap-to-recreate, expensive-to-store parts of a layer
+  — an intermediate point on the (stored bytes, recompute time) curve,
+  chosen by hand per model.
 - **POFO** (Beaumont, Eyraud-Dubois, Shilova). NeurIPS 2021 — offload +
   recompute jointly on training chains by **dynamic programming**, provably
-  optimal *within its policy class* (offloading during forward only,
-  divisible transfers, chain graphs); the published proof that the joint
-  problem admits exact algorithms under structure.
+  optimal *within its policy class* (forward-only offload, divisible
+  transfers, chain graphs).
 - POET (Patil et al.). ICML 2022 — remat + paging in one **MILP** for edge
   devices (energy objective, per-timestep transfer slots).
 - XEngine (Schuler, Membarth, Slusallek). ACM TACO 2023 — Checkmate
   extended to device placement as an **MIQP**; no async overlap.
 - Moccasin (Bartan, Li, Teague, Lott, Dilkina). ICML 2023 — recompute
   scheduling as **constraint programming with O(n) interval end-time
-  variables** — an order of magnitude faster than boolean MILPs; the
-  encoding to borrow for residency intervals (note: remat-only, no I/O).
+  variables** — an order of magnitude faster than boolean MILPs (remat-only,
+  no I/O).
 - Rockmate (Zhao, Le Hellard, Eyraud-Dubois, Gusak, Beaumont). ICML 2023;
-  HiRemate (Gusak et al.). ICML 2025 — **hierarchical decomposition**:
-  ILP inside blocks, DP across the chain — the scaling trick for exact
-  methods on long chains, directly transplantable.
+  HiRemate (Gusak et al.). ICML 2025 — **hierarchical decomposition**: ILP
+  inside blocks, DP across the chain — the scaling trick for exact methods
+  on long chains.
 - MegTaiChi (Hu et al.). ICS 2022; Coop (Zhang et al.). NeurIPS 2023 —
   eviction/recompute coupled to allocator layout ("freed bytes are not
-  fungible") — the coupling the static-arena physicalizer handles here.
+  fungible").
 - MODeL (Steiner et al.). ICML 2023 — **ILP over operator order** +
-  lifetimes to minimize peak memory: the "choose the order" sibling of this
-  fixed-order problem.
-- Current thread (2024–26): overlapped recomputation (recompute scheduled
-  under communication), pipeline-stage remat planning (Beaumont group, HAL
-  2025), T-Control (ASPLOS 2026) — the remat line is still active at top
-  venues.
+  lifetimes for peak memory: the "choose the order" sibling.
+- Current threads (2024–26): recompute overlapped under communication
+  windows; pipeline-stage remat planning (Beaumont group, HAL 2025);
+  T-Control (ASPLOS 2026) — the line is active at top venues.
 
-Positioning note for the eventual paper: `dataflow_sim`'s K-level recompute
-curve ([research-framing.md](research-framing.md) axis 8) generalizes the
-binary store/recompute of this entire line; none of these works co-plan
-against a duplex-FIFO transfer timeline.
+**Dimensions of recompute behavior** — where systems actually differ, and
+the vocabulary the paper should use:
+
+| Dimension | The spectrum, with occupants |
+|---|---|
+| Decision granularity | whole-graph solve (Checkmate, MODeL) → per-block (Rockmate) → per-tensor (Capuchin, DTR) → per saved-activation *instance* (this repo: each (step, round, layer) decided independently) |
+| Levels | binary save/recompute (nearly everyone) → hand-picked intermediate points (Megatron selective) → **K-level (stored-size, recompute-time) curves as a first-class interface** (this repo's rewrite tables; binary today, levels added without interface change) |
+| Selection signal | static cost model (Checkmate, POET, rotor) → hardware profiling (Capuchin, DTR's runtime) → **simulator-replay blame**: stall and backlog time *attributed to the specific objects that caused it* (this repo's stall report; no published equivalent — Capuchin's FreeTime metric is the nearest cousin, measured on hardware rather than deterministically replayable) |
+| Interaction with offload | none (Checkmate, DTR, Rockmate) → joint but restricted class (POFO) → joint but coarse timeline (POET) → **competing regeneration paths priced by the same duplex-FIFO simulator** (this repo: recompute-vs-offload is decided by which variant simulates faster, not by a proxy cost model) |
+| Correctness under data dependence | assumed pure and deterministic (the entire remat literature); RNG state save/restore is engineering practice (PyTorch `preserve_rng_state`) — but **discrete data-dependent choices** (MoE router assignments, sparse-attention index selections) break the assumption: recompute must consume them **verbatim** both for gradient correctness and to keep task costs/object sizes deterministic for planning. This repo's `AuxTemp` objects pin those choices as first-class chain objects; no surveyed work addresses this |
+| Recompute cost knowledge | assumed = forward cost (common) → measured per layer (rotor, Capuchin) → declared per rewrite option (`.recompute` compute blocks here), so a level's runtime is a planning input, not an estimate |
+
+**This repo's layer, concretely** ([recompute.md](recompute.md)): three
+separated stages — (1) *mechanics*: workload builders emit chain variants
+from per-activation choices, publishing a rewrite table of discrete options
+per saved activation; a recompute task `r_i` re-produces `A_i` from
+`x_i, W_i (+ AuxTemp_i)` just before its backward; (2) *evidence*: the
+stall report converts a simulator run into per-object blame — input-wait
+vs capacity-wait, stream busy time, backlog windows; (3) *selection*: a
+seed family (none / all / every-other) plus an evidence loop from
+all-saved — rank activations by blame minus added recompute time, convert
+the best half of positive-net candidates, replan, accept only on simulated
+makespan improvement; best plan anywhere wins, in under a second per
+config. A recompute variant is *just another `TaskChain`* — residency
+planning is untouched, which is the factoring none of the joint planners
+have. Honest limits, kept visible: blame is transfer-based (a resident
+activation that would free headroom generates no evidence — the seed
+family covers that regime today), and the loop only converts, never
+un-converts.
+
+**Positioning sentence for the paper**: prior joint planners either ignore
+transfers (Checkmate line), restrict the policy class to stay solvable
+(POFO), or coarsen the timeline (POET); this repo instead keeps the machine
+model faithful and lets a replayable simulator arbitrate recompute against
+offload per instance — trading proof-of-optimality within a toy model for
+measured-gap-to-oracle within the real one. The open extension stays §4.3 /
+[research-framing.md §9](research-framing.md): fold `k_o` into a single
+joint solve instead of the layered pre-pass.
 
 ### 6.8 LLM inference offloading
 
