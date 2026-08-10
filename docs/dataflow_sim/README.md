@@ -2,6 +2,7 @@
 
 - [problem.md](problem.md) — the scheduling problem.
 - [research-framing.md](research-framing.md) — academic framing.
+- [related-work.md](related-work.md) — the problem as a mathematical program, complexity landscape, and literature survey across the five communities that studied its pieces.
 - [workload-recipe.md](workload-recipe.md) — how to ingest a workload via the simulator API.
 - [simulator-api.md](simulator-api.md) — Python API reference for schema, engine, and policies.
 - [datatypes.md](datatypes.md) — precise semantics for model-training dtype and compute-precision controls.
